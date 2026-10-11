@@ -12,13 +12,21 @@ php artisan app:create-admin
 npm run build
 ```
 
-For local development, run:
+For the Windows/XAMPP development and Cloudflare Tunnel stack, run:
 
 ```sh
-php artisan dev
+php artisan serve
 ```
 
-This starts Laravel, Vite, and the Reverb WebSocket server together. The development site uses port 8081 and Reverb uses port 8080. To open the development site on a phone, connect the phone and computer to the same Wi-Fi and browse to the computer's LAN address (for example, `http://192.168.1.52:8081`). On Windows, `scripts/run-likhae-continuously.ps1` starts the same services with these ports. Laravel binds to the local network for this workflow. If Windows Firewall prompts, allow PHP/Node on your private network. `VITE_HMR_HOST` can be set in `.env` to override the automatically detected LAN address when the computer has multiple network interfaces. `composer run dev` remains an alternative.
+This single command starts and supervises the complete origin: Apache/Cloudflare proxy on port 8000, Laravel on port 8001, Reverb on port 8080, and Vite on port 5173. Cloudflare Tunnel must continue targeting `http://127.0.0.1:8000`. To open the development site directly on another device, connect it to the same Wi-Fi and browse to the computer's LAN address on port 8000 (for example, `http://192.168.1.52:8000`). If Windows Firewall prompts, allow Apache, PHP, and Node on your private network. `VITE_HMR_HOST` can be set in `.env` when the computer has multiple network interfaces.
+
+Verify the full proxy-to-Reverb broadcast path with:
+
+```sh
+node scripts/check-reverb.mjs 127.0.0.1 8000
+```
+
+The command returns success only after Laravel publishes an event and a WebSocket client subscribed through the Apache proxy receives it. `scripts/run-likhae-continuously.ps1` keeps the complete stack running and restarts it after an unexpected supervisor exit.
 
 For production, run Reverb as a long-running process alongside Laravel and point the reverse proxy's WebSocket route to it:
 

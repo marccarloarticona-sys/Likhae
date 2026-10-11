@@ -25,16 +25,24 @@ if (
 ) {
     $serveArguments = array_slice($argv, 2);
     $hasHostOption = false;
+    $hasPortOption = false;
 
     foreach ($serveArguments as $argument) {
         if ($argument === '--host' || $argument === '-H' || str_starts_with($argument, '--host=')) {
             $hasHostOption = true;
-            break;
+        }
+
+        if ($argument === '--port' || $argument === '-p' || str_starts_with($argument, '--port=')) {
+            $hasPortOption = true;
         }
     }
 
     if (! $hasHostOption) {
         $serveArguments[] = '--host=0.0.0.0';
+    }
+
+    if (! $hasPortOption) {
+        $serveArguments[] = '--port=8001';
     }
 
     $serveCommand = 'php artisan serve';
@@ -47,7 +55,21 @@ if (
 
     \Illuminate\Foundation\DevCommands::register($supervisedServeCommand, 'server');
     \Illuminate\Foundation\DevCommands::artisan('reverb:start', 'reverb');
-    \Illuminate\Foundation\DevCommands::only('server', 'vite', 'reverb');
+    $developmentServices = ['server', 'vite', 'reverb'];
+    $apacheExecutable = 'C:/xampp/apache/bin/httpd.exe';
+    $apacheConfig = 'deploy/apache/likhae-reverse-proxy.conf';
+
+    if (is_file($apacheExecutable) && is_file(__DIR__.'/'.$apacheConfig)) {
+        \Illuminate\Foundation\DevCommands::register(
+            'php scripts/run-apache-proxy.php',
+            'proxy'
+        );
+        $developmentServices[] = 'proxy';
+    }
+
+    \Illuminate\Foundation\DevCommands::only(...$developmentServices);
+    // Laravel's dev runner supervises and restarts the application server,
+    // reverse proxy, Vite, and Reverb processes automatically.
     putenv('LIKHAE_ARTISAN_DEV_SUPERVISED=1');
     $argv = array_slice($argv, 0, 2);
     $argv[1] = 'dev';

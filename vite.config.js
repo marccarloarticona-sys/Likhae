@@ -73,7 +73,10 @@ export default defineConfig(({ mode }) => {
         server: {
             host: '0.0.0.0',
             port: 5173,
-            strictPort: false,
+            // Keep the development URL deterministic. Silently moving to
+            // 5174+ leaves already-open pages attached to a stale Vite/Echo
+            // process and makes Reverb failures very hard to diagnose.
+            strictPort: true,
             hmr: {
                 host: env.VITE_HMR_HOST || getLanAddress(),
             },
