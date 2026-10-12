@@ -20,6 +20,7 @@ use App\Services\Communication\ConversationService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
@@ -28,6 +29,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -634,6 +636,10 @@ class BuyerApiController extends Controller
 
     private function orderPayload(Order $order): array
     {
+        $actionState = app(BuyerOrderActionService::class)->state(
+            $order,
+            Schema::hasTable('return_refund_requests') && Schema::hasTable('return_refund_request_items'),
+        );
         $items = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->items->map(fn ($item): array => [
             'id' => $item->id,
             'product_id' => $item->product_id,
@@ -650,20 +656,6 @@ class BuyerApiController extends Controller
         );
         $events = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
             ->sortBy('occurred_at')->values();
-        $allShipmentsDelivered = $order->sellerOrders->isNotEmpty()
-            && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true));
-        $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
-            ->where('status', 'DELIVERED')
-            ->max('occurred_at');
-        $insideReturnWindow = $deliveredAt
-            && now()->lte($deliveredAt->copy()->addDays(5));
-        $canRequestReturn = ! $activeReturnRequest
-            && in_array($order->status, ['PROCESSING', 'COMPLETED'], true)
-            && $allShipmentsDelivered
-            && $insideReturnWindow;
-
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
@@ -698,10 +690,9 @@ class BuyerApiController extends Controller
             ]),
             'created_at' => $order->placed_at?->toIso8601String(),
             'allow_cancel' => in_array($order->status, ['PLACED', 'PROCESSING'], true),
-            'allow_mark_received' => $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment?->current_status === 'DELIVERED'),
+            'allow_mark_received' => $actionState['can_confirm_received'],
             'allow_review' => $order->status === 'COMPLETED',
-            'allow_return_request' => $canRequestReturn,
+            'allow_return_request' => $actionState['can_request_return'],
             'has_active_return_request' => (bool) $activeReturnRequest,
         ];
     }

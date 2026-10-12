@@ -35,6 +35,11 @@ class SellerCatalogService
                 }
 
                 $status = strtoupper((string) $request->input('status', 'DRAFT'));
+                if ($product->exists && $product->status === 'SUSPENDED' && $status !== 'SUSPENDED') {
+                    // Sellers may correct the listing while it is suspended, but
+                    // only Admin can reinstate or republish it.
+                    $status = 'SUSPENDED';
+                }
 
                 $product->fill([
                     'seller_profile_id' => $seller->id,
@@ -77,6 +82,7 @@ class SellerCatalogService
     public function archiveOrRestore(SellerProfile $seller, Product $product): Product
     {
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
+        abort_unless($product->status !== 'SUSPENDED', 403, 'Suspended listings require Admin review before they can be reinstated.');
 
         $newStatus = $product->status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED';
         $product->update([

@@ -312,6 +312,7 @@ class ProductCatalogService
     {
         return Category::query()
             ->where('is_active', true)
+            ->whereNull('archived_at')
             ->with('parent')
             ->withCount(['products' => fn (Builder $products) => $products->visible()])
             ->orderBy('name')

@@ -57,7 +57,7 @@ class WorkspaceSettingsController extends Controller
                 ],
             ],
             'admin' => [
-                'view' => 'Admin.system-settings', 'center' => 'Admin Center', 'account_route' => 'admin.account',
+            'view' => 'Admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
                 'update_route' => 'admin.system-settings.update',
                 'show_ai' => false,
                 'description' => 'Control operational alerts and your personal Admin workspace experience.',

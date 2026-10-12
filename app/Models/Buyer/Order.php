@@ -92,4 +92,16 @@ class Order extends Model
     {
         return $this->hasMany(ReturnRefundRequest::class);
     }
+
+    public function sellerReturnRefundRequests(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            \App\Models\Seller\SellerReturnRefundRequest::class,
+            \App\Models\Buyer\ReturnRefundRequest::class,
+            'order_id',
+            'return_refund_request_id',
+            'id',
+            'id',
+        );
+    }
 }

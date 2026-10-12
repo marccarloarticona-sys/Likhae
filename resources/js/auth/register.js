@@ -1653,6 +1653,49 @@ document.addEventListener('DOMContentLoaded', () => {
         postalCode?.dataset.oldValue
         ?? '';
 
+    const logisticsCenterSelect = document.getElementById('target_logistics_center_id');
+    const logisticsCenterStatus = document.querySelector('[data-logistics-center-status]');
+
+    function filterEligibleLogisticsCenters() {
+        if (!logisticsCenterSelect) return;
+
+        const selectedProvinceCode = String(provinceCode?.value || province?.selectedOptions?.[0]?.dataset.code || '').trim();
+        const selectedMunicipalityCode = String(municipalityCode?.value || municipality?.selectedOptions?.[0]?.dataset.code || '').trim();
+        const hasCanonicalMunicipality = selectedProvinceCode !== '' && selectedMunicipalityCode !== '';
+        let matches = 0;
+
+        [...logisticsCenterSelect.options]
+            .filter((option) => option.dataset.logisticsCenterOption === 'true')
+            .forEach((option) => {
+                const eligible = hasCanonicalMunicipality
+                    && option.dataset.provinceCode === selectedProvinceCode
+                    && option.dataset.municipalityCode === selectedMunicipalityCode;
+                option.hidden = !eligible;
+                option.disabled = !eligible;
+                if (eligible) matches += 1;
+            });
+
+        const selectedOption = logisticsCenterSelect.selectedOptions[0];
+        if (selectedOption?.dataset.logisticsCenterOption === 'true' && selectedOption.disabled) {
+            logisticsCenterSelect.value = '';
+        }
+
+        logisticsCenterSelect.setCustomValidity(
+            logisticsCenterSelect.value && logisticsCenterSelect.selectedOptions[0]?.disabled
+                ? 'Choose a logistics center that serves your selected municipality.'
+                : ''
+        );
+
+        if (!logisticsCenterStatus) return;
+        if (!hasCanonicalMunicipality) {
+            logisticsCenterStatus.textContent = 'Select your province and municipality to see eligible active logistics centers.';
+        } else if (matches === 0) {
+            logisticsCenterStatus.textContent = 'No eligible active logistics center is available for this municipality yet.';
+        } else {
+            logisticsCenterStatus.textContent = `${matches} eligible active logistics center${matches === 1 ? '' : 's'} available for this municipality.`;
+        }
+    }
+
     const addressRequests = {
         regions: null,
         provinces: null,
@@ -1890,6 +1933,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (barangayCode) barangayCode.value = '';
 
             resetPostalCode();
+            filterEligibleLogisticsCenters();
 
 
             if (!region.value) {
@@ -1968,6 +2012,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
 
             resetPostalCode();
+            filterEligibleLogisticsCenters();
 
 
             if (!province.value) {
@@ -2085,6 +2130,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
 
             resetPostalCode();
+            filterEligibleLogisticsCenters();
 
 
             if (!municipality.value) {
@@ -2243,7 +2289,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oldPostalCode && postalCode) {
             postalCode.value = oldPostalCode;
         }
+
+        filterEligibleLogisticsCenters();
     });
+
+    logisticsCenterSelect?.addEventListener('change', filterEligibleLogisticsCenters);
 
 
     window.addEventListener('pageshow', () => {

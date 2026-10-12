@@ -3,6 +3,7 @@
 use App\Http\Controllers\Buyer\BuyerController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
+use App\Http\Controllers\Buyer\BuyerReturnRefundController;
 use App\Http\Controllers\Buyer\CheckoutController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
@@ -44,7 +45,13 @@ Route::prefix('buyer')
         Route::get('/orders/success', [BuyerOrderController::class, 'success'])->name('orders.success');
         Route::get('/orders', [BuyerOrderController::class, 'index'])->name('orders');
         Route::get('/orders/stream', [BuyerOrderController::class, 'stream'])->name('orders.stream');
-        Route::get('/returns', [BuyerOrderController::class, 'returns'])->name('returns');
+        Route::get('/returns', [BuyerReturnRefundController::class, 'index'])->name('returns');
+        Route::get('/returns/request/{returnRequest}', [BuyerReturnRefundController::class, 'parentShow'])->name('returns.parent');
+        Route::get('/returns/{sellerRequest}', [BuyerReturnRefundController::class, 'show'])->name('returns.show');
+        Route::post('/returns/{sellerRequest}/confirm', [BuyerReturnRefundController::class, 'confirm'])->name('returns.confirm');
+        Route::post('/returns/{sellerRequest}/escalate', [BuyerReturnRefundController::class, 'escalate'])->name('returns.escalate');
+        Route::get('/returns/payouts/{payout}/proof', [BuyerReturnRefundController::class, 'payoutProof'])->name('returns.payout-proof');
+        Route::get('/returns/evidence/{evidence}', [BuyerReturnRefundController::class, 'evidence'])->name('returns.evidence');
         Route::get('/orders/{order}', [BuyerOrderController::class, 'show'])->name('orders.show');
         Route::post('/orders/{order}/seller-orders/{sellerOrder}/conversation', [BuyerOrderController::class, 'sellerConversation'])->name('orders.seller-conversation');
         Route::post('/orders/{order}/support/conversation', [BuyerOrderController::class, 'supportConversation'])->name('orders.support-conversation');

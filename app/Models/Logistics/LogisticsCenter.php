@@ -76,4 +76,18 @@ class LogisticsCenter extends Model
     {
         return $query->where('status', 'ACTIVE');
     }
+
+    public function scopeEligibleForRiderAddress(
+        Builder $query,
+        string $provinceCode,
+        string $municipalityCode,
+    ): Builder {
+        return $query
+            ->active()
+            ->whereHas('address', function (Builder $address) use ($provinceCode, $municipalityCode): void {
+                $address
+                    ->where('province_code', trim($provinceCode))
+                    ->where('municipality_code', trim($municipalityCode));
+            });
+    }
 }

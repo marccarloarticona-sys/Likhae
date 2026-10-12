@@ -14,7 +14,7 @@
         </div>
         <a class="ad-btn ad-btn-secondary" href="{{ route('admin.reports.export', $filters) }}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v4h14v-4"/></svg>
-            Download filtered CSV
+            Download filtered PDF
         </a>
     </header>
 

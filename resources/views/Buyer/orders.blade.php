@@ -19,6 +19,8 @@
     $orderCollection = isset($orders) && method_exists($orders, 'getCollection') ? $orders->getCollection() : collect($orders ?? []);
     $filter = strtoupper((string) request('status', ''));
     $returnRefundReady = $returnRefundReady ?? false;
+    $orderActionStates = $orderActionStates ?? collect();
+    $selectedOrderActionState = $selectedOrderActionState ?? [];
     $visibleOrders = in_array($filter, ['', 'ALL', 'RETURNS', 'DELIVERED'], true) ? $orderCollection : $orderCollection->where('status', $filter);
     $liveOrders = $mode === 'show' && isset($selectedOrder) ? collect([$selectedOrder]) : $orderCollection;
     $liveOrderIds = $liveOrders->pluck('id')->map(fn ($id) => (int) $id)->values();
@@ -65,18 +67,15 @@
             <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><div class="flex items-center justify-between"><h2 class="font-bold">{{ $sellerOrder->seller_order_number }}</h2><span class="text-xs font-semibold">{{ str($sellerOrder->status)->headline() }}</span></div><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex items-center justify-between gap-4 py-3 text-sm"><div class="flex items-center gap-3"><x-product-thumbnail :item="$item" size="64"/><div><strong>{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</span></div></div><strong>&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div><div class="mt-3 flex justify-between border-t border-stone-100 pt-3 text-sm"><span class="font-semibold">Order total</span><strong>&#8369;{{ number_format((float) $sellerOrder->grand_total, 2) }}</strong></div>@if($sellerOrder->shipment)<p class="mt-3 text-xs text-stone-500">Tracking: {{ $sellerOrder->shipment->tracking_number }} · {{ str($sellerOrder->shipment->current_status)->headline() }}</p>@endif</section>
         @endforeach
         @php
-            $allDelivered = $detailDelivered;
             $hasPickedUpParcel = $selectedOrder->sellerOrders->contains(fn ($sellerOrder) => in_array($sellerOrder->shipment?->current_status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true));
-            $deliveredAt = $selectedOrder->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())->where('status', 'DELIVERED')->max('occurred_at');
-            $returnEligible = in_array($selectedOrder->status, ['PROCESSING', 'COMPLETED'], true) && $allDelivered && $deliveredAt && now()->lte($deliveredAt->copy()->addDays(5));
-            $activeReturn = $selectedOrder->disputes->where('type', 'RETURN_REFUND')->whereIn('status', ['OPEN', 'UNDER_REVIEW'])->first();
-            $hasActiveReturn = (bool) $activeReturn;
+            $actionState = $selectedOrderActionState;
+            $returnRequest = $actionState['latest_request'] ?? null;
         @endphp
-        <div class="mt-5 flex flex-wrap justify-end gap-2">
+        <div class="lk-order-actions mt-5">
             @if(!$hasPickedUpParcel && in_array($selectedOrder->status, ['PLACED', 'PROCESSING'], true))<form method="POST" action="{{ route('buyer.orders.cancel', $selectedOrder) }}">@csrf<button class="lk-btn lk-btn-light" type="submit">Cancel Order</button></form>@endif
-            @if($returnEligible && !$hasActiveReturn)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}">Return / Refund</a>@endif
-            @if($hasActiveReturn)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">Return / Refund: {{ $activeReturn->returnRefundRequest?->request_number ?? 'Under Review' }}</a>@endif
-            @if($selectedOrder->status !== 'COMPLETED' && $allDelivered && !$hasActiveReturn)<form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}">@csrf<button class="lk-btn lk-btn-red" type="submit">Confirm Order Received</button></form>@endif
+            @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}">Return / Refund</a>@endif
+            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
+            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
         </div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 class="text-lg font-bold text-stone-900">Order and payment information</h2>
@@ -179,6 +178,7 @@
                     $previewItem = $order->sellerOrders->flatMap->items->first();
                     $itemCount = $order->sellerOrders->sum(fn ($sellerOrder) => $sellerOrder->items->sum('quantity'));
                     $returnRequest = $returnRefundReady ? $order->returnRefundRequests->sortByDesc('submitted_at')->first() : null;
+                    $actionState = $orderActionStates->get($order->id, []);
                 @endphp
                 <article class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" data-order-id="{{ $order->id }}">
                     <div class="flex flex-wrap items-start justify-between gap-3">
@@ -192,9 +192,14 @@
                         </div>
                         <span class="rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold" data-order-status-id="{{ $order->id }}">{{ $returnRequest ? 'Return / Refund · '.str($returnRequest->status)->headline() : str($displayStatus)->headline() }}</span>
                     </div>
-                    <div class="mt-4 flex items-end justify-between border-t border-stone-100 pt-4">
+                    <div class="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-stone-100 pt-4">
                         <div><span class="block text-xs text-stone-500">{{ $itemCount }} item(s)</span><strong>&#8369;{{ number_format((float) $order->grand_total, 2) }}</strong></div>
-                        <a class="lk-btn lk-btn-red" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
+                        <div class="lk-order-card-actions">
+                            @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Return / Refund</a>@endif
+                            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
+                            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $order) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
+                            <a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
+                        </div>
                     </div>
                 </article>
             @empty

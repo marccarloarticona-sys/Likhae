@@ -6,6 +6,7 @@ use App\Models\Buyer\Order;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Logistics\Shipment;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -71,5 +72,10 @@ class Dispute extends Model
     public function returnRefundRequest(): HasOne
     {
         return $this->hasOne(ReturnRefundRequest::class);
+    }
+
+    public function sellerReturnRefundRequest(): HasOne
+    {
+        return $this->hasOne(SellerReturnRefundRequest::class);
     }
 }

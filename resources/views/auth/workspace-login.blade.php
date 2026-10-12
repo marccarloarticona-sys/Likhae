@@ -179,7 +179,7 @@
                 </button>
             </form>
 
-            <p class="auth-switch" style="margin-top: 10px;"><a href="{{ route('password.request') }}">Forgot your password?</a></p>
+            <p class="auth-switch" style="margin-top: 10px;"><a href="{{ route('password.request', ['portal' => 'logistics']) }}">Forgot your password?</a></p>
 
             <p class="auth-switch">
                 Need a {{ strtolower($accountLabel) }} account?

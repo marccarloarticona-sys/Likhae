@@ -11,8 +11,10 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Support\AddressCoordinateValidator;
@@ -209,14 +211,52 @@ class CheckoutService
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
+            $lockedProducts = Product::query()
+                ->whereIn('id', $lockedVariants->pluck('product_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedSellers = SellerProfile::query()
+                ->whereIn('id', $lockedProducts->pluck('seller_profile_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedSellerUsers = User::query()
+                ->whereIn('id', $lockedSellers->pluck('user_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
 
             foreach ($items as $item) {
                 $variant = $lockedVariants->get($item->product_variant_id);
-                if (! $variant || ! $variant->is_active || $variant->stock < $item->quantity) {
+                $product = $variant ? $lockedProducts->get($variant->product_id) : null;
+                $seller = $product ? $lockedSellers->get($product->seller_profile_id) : null;
+                $sellerUser = $seller ? $lockedSellerUsers->get($seller->user_id) : null;
+
+                if (! $product
+                    || $product->status !== 'ACTIVE'
+                    || ! $seller
+                    || $seller->status !== 'ACTIVE'
+                    || ! $sellerUser
+                    || $sellerUser->status !== User::STATUS_ACTIVE) {
+                    throw ValidationException::withMessages([
+                        'cart' => 'One or more selected products are no longer available for checkout. Remove the unavailable item and try again.',
+                    ]);
+                }
+
+                if (! $variant->is_active || $variant->stock < $item->quantity) {
                     throw ValidationException::withMessages([
                         'cart' => 'One or more products no longer have enough stock.',
                     ]);
                 }
+
+                // Use the locked records for the totals and order snapshot. The
+                // cart relation may have been loaded before another request
+                // changed a price, stock, or listing status.
+                $seller->setRelation('user', $sellerUser);
+                $product->setRelation('sellerProfile', $seller);
+                $variant->setRelation('product', $product);
+                $item->setRelation('productVariant', $variant);
             }
 
             $preview = $this->preview($items, $voucherCodes, $buyer, $logisticsProvider);

@@ -10,6 +10,13 @@
     $defaultAddress = $addresses->firstWhere('is_default', true) ?? $addresses->first();
     $defaultLogisticsProvider = $logisticsProviders->first();
     $groups = collect(data_get($preview ?? [], 'groups', []));
+    $hasUnavailableStock = (bool) ($hasUnavailableStock ?? $cartItems->contains(function ($item): bool {
+        $variant = data_get($item, 'productVariant');
+
+        return ! $variant
+            || ! (bool) data_get($variant, 'is_active', false)
+            || (int) data_get($variant, 'stock', 0) < (int) data_get($item, 'quantity', 0);
+    }));
     $imageUrl = static function ($product, $variant = null): string {
         $assignedPath = data_get($variant, 'productImage.file_path');
         $image = collect(data_get($product, 'images', []))->firstWhere('is_primary', true) ?? collect(data_get($product, 'images', []))->first();
@@ -36,6 +43,14 @@
                         <li>{{ $error }}</li>
                     @endforeach
                 </ul>
+            </section>
+        @endif
+
+        @if($hasUnavailableStock)
+            <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm" role="alert">
+                <p class="font-semibold">One or more selected products no longer have enough stock.</p>
+                <p class="mt-1 text-xs">Return to your cart, remove the unavailable item or adjust its quantity, then try again.</p>
+                <a class="mt-3 inline-flex text-xs font-semibold underline" href="{{ route('buyer.cart') }}">Return to cart</a>
             </section>
         @endif
 
@@ -134,7 +149,7 @@
                 <section class="rounded-2xl border border-stone-200 bg-white shadow-sm"><div class="border-b border-stone-100 px-5 py-4"><h2 class="text-base font-bold text-stone-900">Payment Method</h2><p class="mt-1 text-xs text-stone-500">Select how you want to pay for your order.</p></div><div class="grid gap-3 p-5 sm:grid-cols-3"><label class="cursor-pointer"><input type="radio" name="payment_method" value="COD" class="peer sr-only" @checked(old('payment_method', 'COD') === 'COD')><span class="flex h-full items-start gap-3 rounded-xl border border-stone-200 p-4 peer-checked:border-red-800 peer-checked:bg-red-50"><span class="text-red-800">₱</span><span><strong class="block text-xs">Cash on Delivery</strong><small class="text-[10px] text-stone-500">Pay when your order arrives.</small></span></span></label><label class="cursor-pointer"><input type="radio" name="payment_method" value="ONLINE" class="peer sr-only" @checked(old('payment_method') === 'ONLINE')><span class="flex h-full items-start gap-3 rounded-xl border border-stone-200 p-4 peer-checked:border-red-800 peer-checked:bg-red-50"><span class="font-bold text-blue-700">G</span><span><strong class="block text-xs">GCash</strong><small class="text-[10px] text-stone-500">Pay using your GCash wallet.</small></span></span></label><label class="cursor-pointer"><input type="radio" name="payment_method" value="ONLINE" class="peer sr-only"><span class="flex h-full items-start gap-3 rounded-xl border border-stone-200 p-4 peer-checked:border-red-800 peer-checked:bg-red-50"><span class="text-red-800">▣</span><span><strong class="block text-xs">Debit/Credit Card</strong><small class="text-[10px] text-stone-500">Visa and Mastercard.</small></span></span></label></div>@error('payment_method')<p class="px-5 pb-5 text-xs font-semibold text-red-700">{{ $message }}</p>@enderror</section>
             </div>
 
-            <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 class="text-base font-bold text-stone-900">Order summary</h2><dl class="mt-4 space-y-3 text-sm"><div class="flex justify-between"><dt class="text-stone-500">Subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div><div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div></dl>@error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror<button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled($logisticsProviders->isEmpty())>{{ $logisticsProviders->isEmpty() ? 'Delivery unavailable' : 'Place Order' }}</button></aside>
+             <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 class="text-base font-bold text-stone-900">Order summary</h2><dl class="mt-4 space-y-3 text-sm"><div class="flex justify-between"><dt class="text-stone-500">Subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div><div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div></dl>@error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror<button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled($logisticsProviders->isEmpty() || $hasUnavailableStock)>{{ $logisticsProviders->isEmpty() ? 'Delivery unavailable' : 'Place Order' }}</button></aside>
         </form>
     @endif
 </div>

@@ -32,6 +32,7 @@
     @vite([
         'resources/css/logistic/app.css',
         'resources/css/shared/likhae-workspace-ai.css',
+        'resources/css/shared/workspace-sidebar.css',
         'resources/js/rider/app.js',
         'resources/js/shared/likhae-workspace-ai.js'
     ])

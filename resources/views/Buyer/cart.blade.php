@@ -85,6 +85,9 @@
     });
 
     $hasItems = $normalizedCartItems->isNotEmpty();
+    $hasUnavailableSelection = $normalizedCartItems->contains(
+        fn ($item) => $item['stock'] < $item['quantity']
+    );
     $availableVouchers = collect($availableVouchers ?? []);
 
     $subtotal = $normalizedCartItems->sum(
@@ -268,6 +271,7 @@
                             data-cart-item
                             data-item-id="{{ $item['id'] ?? '' }}"
                             data-item-price="{{ $item['price'] }}"
+                            data-item-stock="{{ $item['stock'] }}"
                             data-update-url="{{ route('buyer.cart.update', ['item' => $item['id']]) }}"
                             data-remove-url="{{ route('buyer.cart.remove', ['item' => $item['id']]) }}"
                         >
@@ -544,6 +548,14 @@
                         </svg>
                     </button>
 
+                    <p
+                        class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-center text-[11px] font-semibold leading-4 text-amber-800 {{ $hasUnavailableSelection ? '' : 'hidden' }}"
+                        data-stock-warning
+                        role="alert"
+                    >
+                        Remove unavailable items or reduce their quantity before checkout.
+                    </p>
+
                     <p class="mt-3 text-center text-[10px] leading-4 text-stone-400">
                         Review your delivery and payment details before placing the order.
                     </p>
@@ -578,6 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const discountElement = page.querySelector('[data-summary-discount]');
     const totalElement = page.querySelector('[data-summary-total]');
     const placeOrderButton = page.querySelector('[data-place-order]');
+    const stockWarning = page.querySelector('[data-stock-warning]');
 
     const getItems = () => {
         return Array.from(
@@ -652,6 +665,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let subtotal = 0;
         let selectedQuantity = 0;
+        let hasUnavailableStock = false;
 
         selectedItems.forEach((item) => {
             const price = Number(item.dataset.itemPrice) || 0;
@@ -661,6 +675,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const quantity = quantityInput
                 ? clampQuantity(quantityInput)
                 : 1;
+            const stock = Math.max(0, Number(item.dataset.itemStock) || 0);
+
+            if (stock < quantity) {
+                hasUnavailableStock = true;
+            }
 
             subtotal += price * quantity;
             selectedQuantity += quantity;
@@ -717,7 +736,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (placeOrderButton) {
             placeOrderButton.disabled =
-                selectedItems.length === 0;
+                selectedItems.length === 0 || hasUnavailableStock;
+        }
+
+        if (stockWarning) {
+            stockWarning.classList.toggle('hidden', !hasUnavailableStock);
         }
 
         if (selectAll) {

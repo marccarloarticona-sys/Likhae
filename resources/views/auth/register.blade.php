@@ -1172,23 +1172,31 @@
                                 <label for="vehicle_type">Vehicle Type <span>*</span></label>
                                 <select id="vehicle_type" name="vehicle_type" data-rider-required>
                                     <option value="">Select vehicle type</option>
-                                    @foreach(['motorcycle' => 'Motorcycle', 'car' => 'Car', 'van' => 'Van', 'truck' => 'Truck'] as $value => $label)
+                                    @foreach(\App\Support\RiderVehicleType::registrationOptions() as $value => $label)
                                         <option value="{{ $value }}" @selected(old('vehicle_type') === $value)>{{ $label }}</option>
                                     @endforeach
                                 </select>
+                                <small class="register-field__help">Motorcycle and Tricycle are for local barangay pickup and delivery. Van, Closed Van, and Truck are for future inter-logistics transfers; capacity depends on the approved vehicle. Car is retained for legacy records.</small>
                             </div>
                             <div class="register-field">
                                 <label for="plate_number">Plate Number <span>*</span></label>
                                 <input id="plate_number" name="plate_number" value="{{ old('plate_number') }}" maxlength="30" data-rider-required>
                             </div>
                             <div class="register-field">
-                                <label for="target_logistics_center_id">Logistics / Sorting Center <span>*</span></label>
-                                <select id="target_logistics_center_id" name="target_logistics_center_id" data-rider-required>
+                                <label for="target_logistics_center_id">Logistics / Sorting Center for your municipality <span>*</span></label>
+                                <select id="target_logistics_center_id" name="target_logistics_center_id" aria-describedby="logistics-center-status" data-rider-required>
                                     <option value="">Choose logistics center</option>
                                     @foreach($logisticsCenters ?? collect() as $center)
-                                        <option value="{{ $center->id }}" @selected((string) old('target_logistics_center_id') === (string) $center->id)>{{ $center->business_name }} ({{ $center->code }})</option>
+                                        <option
+                                            value="{{ $center->id }}"
+                                            data-logistics-center-option="true"
+                                            data-province-code="{{ $center->address?->province_code }}"
+                                            data-municipality-code="{{ $center->address?->municipality_code }}"
+                                            @selected((string) old('target_logistics_center_id') === (string) $center->id)
+                                        >{{ $center->business_name }} ({{ $center->code }})</option>
                                     @endforeach
                                 </select>
+                                <small id="logistics-center-status" class="register-field__help" data-logistics-center-status aria-live="polite">Select your province and municipality to see eligible active logistics centers.</small>
                             </div>
                             <div class="register-field">
                                 <label for="drivers_license_number">Driver's License Number <span>*</span></label>

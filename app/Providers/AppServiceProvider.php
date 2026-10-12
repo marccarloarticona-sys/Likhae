@@ -23,6 +23,8 @@ use App\Services\AccountNotificationService;
 use App\Policies\LogisticsCenterPolicy;
 use App\Policies\RiderProfilePolicy;
 use App\Policies\SellerProfilePolicy;
+use Illuminate\Auth\Notifications\ResetPassword;
+use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Vite;
@@ -38,6 +40,40 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        ResetPassword::createUrlUsing(function ($notifiable, string $token): string {
+            $request = request();
+            $portal = $request->hasSession()
+                ? $request->session()->get('password_reset_portal', 'marketplace')
+                : 'marketplace';
+            $portal = $portal === 'logistics' ? 'logistics' : 'marketplace';
+
+            return url(route('password.reset', [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+                'portal' => $portal,
+            ], false));
+        });
+
+        ResetPassword::toMailUsing(function ($notifiable, string $token): MailMessage {
+            $request = request();
+            $portal = $request->hasSession()
+                ? $request->session()->get('password_reset_portal', 'marketplace')
+                : 'marketplace';
+            $portal = $portal === 'logistics' ? 'logistics' : 'marketplace';
+            $resetUrl = url(route('password.reset', [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+                'portal' => $portal,
+            ], false));
+
+            return (new MailMessage)
+                ->subject('Reset Your LIKHAE Password')
+                ->view('emails.auth.reset-password', [
+                    'resetUrl' => $resetUrl,
+                    'expirationMinutes' => (int) config('auth.passwords.'.config('auth.defaults.passwords').'.expire'),
+                ]);
+        });
+
         // The local development server may use Vite's hot marker. Public
         // likhae.online requests must ignore it because it can point to a
         // private LAN address that public visitors cannot reach.

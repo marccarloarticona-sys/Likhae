@@ -15,6 +15,7 @@ class LookupApiController extends Controller
             'success' => true,
             'data' => Category::query()
                 ->where('is_active', true)
+                ->whereNull('archived_at')
                 ->orderBy('name')
                 ->get(['id', 'parent_id', 'name', 'slug', 'description'])
                 ->values(),

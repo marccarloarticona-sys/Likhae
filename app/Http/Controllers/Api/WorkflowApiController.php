@@ -15,8 +15,11 @@ use App\Models\Seller\SellerOrder;
 use App\Models\User;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Media\ImageOptimizationService;
+use App\Services\Marketplace\BuyerOrderActionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Throwable;
@@ -136,30 +139,43 @@ class WorkflowApiController extends Controller
         return response()->json(['success' => true, 'assignment' => $assignment->only(['id', 'assignment_type', 'status'])]);
     }
 
-    public function confirmReceipt(Request $request, Order $order): JsonResponse
+    public function confirmReceipt(Request $request, Order $order, BuyerOrderActionService $actions): JsonResponse
     {
         $user = $request->user();
         abort_unless($user->isAccountType(User::TYPE_BUYER) && (int) $order->buyer_user_id === (int) $user->id, 403);
-        $order->loadMissing('sellerOrders.shipment');
-        abort_unless($order->sellerOrders->isNotEmpty() && $order->sellerOrders->every(fn (SellerOrder $sellerOrder): bool => $sellerOrder->shipment?->current_status === 'DELIVERED'), 409, 'Receipt can only be confirmed after every parcel has been delivered.');
+        $request->validate([
+            'confirm_receipt' => ['required', 'accepted'],
+        ]);
 
-        $order->update(['status' => 'COMPLETED', 'completed_at' => now()]);
-        foreach ($order->sellerOrders as $sellerOrder) {
-            $sellerOrder->update(['status' => 'COMPLETED']);
-            $rate = PlatformSetting::commissionRate();
-            CommissionTransaction::query()->firstOrCreate(
-                ['seller_order_id' => $sellerOrder->id],
-                [
-                    'commission_rate' => $rate,
-                    'commissionable_amount' => $sellerOrder->grand_total,
-                    'commission_amount' => round((float) $sellerOrder->grand_total * $rate, 2),
-                    'status' => 'PENDING',
-                    'calculated_at' => now(),
-                ],
+        DB::transaction(function () use ($order, $actions, $user): void {
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $state = $actions->state(
+                $lockedOrder,
+                Schema::hasTable('return_refund_requests') && Schema::hasTable('return_refund_request_items'),
             );
-            $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
-            app(ShipmentWorkflowService::class)->recordEvent($sellerOrder->shipment, 'COMPLETED', $user, 'Buyer confirmed receipt.');
-        }
+            abort_if($state['active_dispute'], 409, 'Resolve the active return/refund request before confirming receipt.');
+            abort_unless($state['can_confirm_received'], 409, 'Receipt can only be confirmed once, after every parcel has been delivered.');
+
+            $lockedOrder->update(['status' => 'COMPLETED', 'completed_at' => now()]);
+            foreach ($lockedOrder->sellerOrders as $sellerOrder) {
+                $sellerOrder->update(['status' => 'COMPLETED']);
+                $rate = PlatformSetting::commissionRate();
+                CommissionTransaction::query()->firstOrCreate(
+                    ['seller_order_id' => $sellerOrder->id],
+                    [
+                        'commission_rate' => $rate,
+                        'commissionable_amount' => $sellerOrder->grand_total,
+                        'commission_amount' => round((float) $sellerOrder->grand_total * $rate, 2),
+                        'status' => 'PENDING',
+                        'calculated_at' => now(),
+                    ],
+                );
+                if ($sellerOrder->shipment) {
+                    $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
+                    app(ShipmentWorkflowService::class)->recordEvent($sellerOrder->shipment, 'COMPLETED', $user, 'Buyer confirmed receipt.');
+                }
+            }
+        });
 
         return response()->json(['success' => true, 'order_number' => $order->order_number, 'status' => 'COMPLETED']);
     }

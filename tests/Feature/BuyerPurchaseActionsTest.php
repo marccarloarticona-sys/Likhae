@@ -145,7 +145,7 @@ class BuyerPurchaseActionsTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
-        $product = Product::query()->with('variants')->where('status', 'ACTIVE')->sole();
+        $product = Product::query()->with('variants')->where('slug', 'sample-handmade-tote')->firstOrFail();
 
         return [$buyer, $product, (int) $product->variants->firstOrFail()->id];
     }

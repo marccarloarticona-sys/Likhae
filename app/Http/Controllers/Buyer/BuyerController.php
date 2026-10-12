@@ -121,7 +121,7 @@ class BuyerController extends Controller
         ]);
     }
 
-    public function addCart(Request $request, Product $product): RedirectResponse
+    public function addCart(Request $request, Product $product): RedirectResponse|JsonResponse
     {
         abort_unless($product->status === 'ACTIVE', 404);
 

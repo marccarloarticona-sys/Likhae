@@ -11,11 +11,20 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminOnboardingController extends Controller
 {
+    private const ADMIN_MANAGED_ACCOUNT_TYPES = [
+        User::TYPE_BUYER,
+        User::TYPE_SELLER,
+        User::TYPE_LOGISTICS,
+    ];
+
+    private const STATUS_NEEDS_REVIEW = 'NEEDS_REVIEW';
+
     public function __construct(
         private readonly RegistrationWorkflowService $workflow,
     ) {
@@ -25,51 +34,59 @@ class AdminOnboardingController extends Controller
     {
         $filters = $request->validate([
             'status' => ['nullable', Rule::in([
+                self::STATUS_NEEDS_REVIEW,
                 RegistrationApplication::STATUS_PENDING,
                 RegistrationApplication::STATUS_UNDER_REVIEW,
-                RegistrationApplication::STATUS_APPROVED,
-                RegistrationApplication::STATUS_REJECTED,
-                RegistrationApplication::STATUS_CANCELLED,
             ])],
             'type' => ['nullable', Rule::in([
-                User::TYPE_BUYER,
-                User::TYPE_SELLER,
-                User::TYPE_LOGISTICS,
+                ...self::ADMIN_MANAGED_ACCOUNT_TYPES,
             ])],
         ]);
 
-        $status = $filters['status'] ?? RegistrationApplication::STATUS_PENDING;
+        $status = $filters['status'] ?? self::STATUS_NEEDS_REVIEW;
         $type = $filters['type'] ?? null;
+        $statusFilter = match ($status) {
+            self::STATUS_NEEDS_REVIEW => [
+                RegistrationApplication::STATUS_PENDING,
+                RegistrationApplication::STATUS_UNDER_REVIEW,
+            ],
+            default => [$status],
+        };
 
-        $records = RegistrationApplication::query()
+        $managedApplications = RegistrationApplication::query()
+            ->whereHas('user', fn ($query) => $query->whereIn('account_type', self::ADMIN_MANAGED_ACCOUNT_TYPES));
+
+        $registrationCounts = (clone $managedApplications)
+            ->select('status')
+            ->selectRaw('COUNT(*) AS aggregate')
+            ->whereIn('status', [
+                RegistrationApplication::STATUS_PENDING,
+                RegistrationApplication::STATUS_UNDER_REVIEW,
+            ])
+            ->groupBy('status')
+            ->pluck('aggregate', 'status');
+
+        $records = (clone $managedApplications)
             ->with([
                 'user.addresses',
-                'documents',
                 'sellerData.category',
                 'logisticsData.businessAddress',
-                'riderData.targetLogisticsCenter',
-                'reviewer',
             ])
-            ->where('status', $status)
-            ->whereHas('user', function ($query) use ($type): void {
-                $query->whereIn('account_type', [
-                    User::TYPE_BUYER,
-                    User::TYPE_SELLER,
-                    User::TYPE_LOGISTICS,
-                ]);
-
-                if ($type) {
-                    $query->where('account_type', $type);
-                }
-            })
-            ->latest('submitted_at')
+            ->when($statusFilter !== null, fn ($query) => $query->whereIn('status', $statusFilter))
+            ->when($type, fn ($query) => $query->whereHas('user', fn ($userQuery) => $userQuery->where('account_type', $type)))
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
             ->paginate(20)
             ->withQueryString();
 
-        return view('Admin.onboarding.admin-queue', [
+        return view('Admin.registrations.index', [
             'records' => $records,
             'status' => $status,
             'type' => $type,
+            'registrationStats' => [
+                'pending' => (int) ($registrationCounts[RegistrationApplication::STATUS_PENDING] ?? 0),
+                'under_review' => (int) ($registrationCounts[RegistrationApplication::STATUS_UNDER_REVIEW] ?? 0),
+            ],
         ]);
     }
 
@@ -77,24 +94,19 @@ class AdminOnboardingController extends Controller
     {
         $application->load([
             'user.addresses',
-            'documents',
+            'documents.verifier',
             'sellerData.category',
             'logisticsData.businessAddress',
-            'riderData.targetLogisticsCenter',
             'reviewer',
         ]);
 
         abort_unless(
             $application->user
-                && in_array($application->user->account_type, [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_LOGISTICS], true),
+                && in_array($application->user->account_type, self::ADMIN_MANAGED_ACCOUNT_TYPES, true),
             404,
         );
 
-        if ($application->status === RegistrationApplication::STATUS_PENDING) {
-            $application->update(['status' => RegistrationApplication::STATUS_UNDER_REVIEW]);
-        }
-
-        return view('Admin.onboarding.admin-application', compact('application'));
+        return view('Admin.registrations.show', compact('application'));
     }
 
     public function approve(Request $request, RegistrationApplication $application): RedirectResponse
@@ -104,12 +116,16 @@ class AdminOnboardingController extends Controller
             'decision_notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $this->workflow->approveByAdmin(
-            application: $application,
-            reviewer: $request->user(),
-            notes: $data['decision_notes'] ?? null,
-            request: $request,
-        );
+        try {
+            $this->workflow->approveByAdmin(
+                application: $application,
+                reviewer: $request->user(),
+                notes: $data['decision_notes'] ?? null,
+                request: $request,
+            );
+        } catch (ValidationException $exception) {
+            return back()->withErrors($exception->errors())->withInput();
+        }
 
         return redirect()
             ->route('admin.registrations.show', $application)
@@ -121,15 +137,19 @@ class AdminOnboardingController extends Controller
         $this->ensureAdminReviewable($application);
 
         $data = $request->validate([
-            'reason' => ['required', 'string', 'max:1000'],
+            'reason' => ['required', 'string', 'min:3', 'max:1000'],
         ]);
 
-        $this->workflow->reject(
-            application: $application,
-            reviewer: $request->user(),
-            reason: $data['reason'],
-            request: $request,
-        );
+        try {
+            $this->workflow->reject(
+                application: $application,
+                reviewer: $request->user(),
+                reason: $data['reason'],
+                request: $request,
+            );
+        } catch (ValidationException $exception) {
+            return back()->withErrors($exception->errors())->withInput();
+        }
 
         return redirect()
             ->route('admin.registrations.show', $application)
@@ -164,6 +184,54 @@ class AdminOnboardingController extends Controller
         );
     }
 
+    public function verifyDocument(
+        Request $request,
+        RegistrationApplication $application,
+        ApplicationDocument $document,
+    ): RedirectResponse {
+        $this->ensureAdminReviewable($application);
+        $this->ensureDocumentBelongsToApplication($application, $document);
+
+        try {
+            $this->workflow->verifyDocument(
+                application: $application,
+                document: $document,
+                reviewer: $request->user(),
+                request: $request,
+            );
+        } catch (ValidationException $exception) {
+            return back()->withErrors($exception->errors());
+        }
+
+        return back()->with('success', 'Document marked as verified.');
+    }
+
+    public function rejectDocument(
+        Request $request,
+        RegistrationApplication $application,
+        ApplicationDocument $document,
+    ): RedirectResponse {
+        $this->ensureAdminReviewable($application);
+        $this->ensureDocumentBelongsToApplication($application, $document);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:3', 'max:1000'],
+        ]);
+
+        try {
+            $this->workflow->rejectDocument(
+                application: $application,
+                document: $document,
+                reviewer: $request->user(),
+                reason: $data['reason'],
+                request: $request,
+            );
+        } catch (ValidationException $exception) {
+            return back()->withErrors($exception->errors())->withInput();
+        }
+
+        return back()->with('success', 'Document marked as rejected.');
+    }
+
     public function sellers(): RedirectResponse
     {
         return redirect()->route('admin.registrations', ['type' => User::TYPE_SELLER]);
@@ -180,8 +248,15 @@ class AdminOnboardingController extends Controller
 
         abort_unless(
             $application->user
-                && in_array($application->user->account_type, [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_LOGISTICS], true),
+                && in_array($application->user->account_type, self::ADMIN_MANAGED_ACCOUNT_TYPES, true),
             404,
         );
+    }
+
+    private function ensureDocumentBelongsToApplication(
+        RegistrationApplication $application,
+        ApplicationDocument $document,
+    ): void {
+        abort_unless((int) $document->registration_application_id === (int) $application->id, 404);
     }
 }

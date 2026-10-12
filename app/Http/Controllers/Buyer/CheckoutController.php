@@ -55,6 +55,17 @@ class CheckoutController extends Controller
                 ->withInput(['voucher_code' => $voucherCode]);
         }
 
+        // Stock can change after an item is added to the cart. Keep the
+        // checkout action disabled for an item that is no longer available;
+        // placeOrder() still performs the authoritative locked stock check.
+        $hasUnavailableStock = $items->contains(function ($item): bool {
+            $variant = $item->productVariant;
+
+            return ! $variant
+                || ! $variant->is_active
+                || (int) $variant->stock < (int) $item->quantity;
+        });
+
         return view('Buyer.checkout', [
             'cartItems' => $items,
             'addresses' => $request->user()->addresses()->orderByDesc('is_default')->latest()->get(),
@@ -62,6 +73,7 @@ class CheckoutController extends Controller
             'logisticsProviders' => $this->checkoutService->availableLogisticsProviders(),
             'preview' => $preview,
             'voucherCode' => $voucherCode,
+            'hasUnavailableStock' => $hasUnavailableStock,
         ]);
     }
 

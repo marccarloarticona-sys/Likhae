@@ -44,7 +44,7 @@ class SellerProductEditPageTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'single',
@@ -66,7 +66,7 @@ class SellerProductEditPageTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'variations',

@@ -7365,3 +7365,32 @@ html.dark .lk-landing-body .lk-carousel__slide::before {
         gap: 10px !important;
     }
 }
+.lk-order-actions,
+.lk-order-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.lk-order-actions form,
+.lk-order-card-actions form {
+    display: inline-flex;
+}
+
+@media (max-width: 639px) {
+    .lk-order-actions,
+    .lk-order-card-actions {
+        width: 100%;
+    }
+
+    .lk-order-actions > *,
+    .lk-order-card-actions > * {
+        flex: 1 1 100%;
+    }
+
+    .lk-order-actions .lk-btn,
+    .lk-order-card-actions .lk-btn {
+        width: 100%;
+    }
+}

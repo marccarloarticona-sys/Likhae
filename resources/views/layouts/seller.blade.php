@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    @vite(['resources/css/seller/seller.css', 'resources/css/shared/likhae-workspace-ai.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/likhae-workspace-ai.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @vite(['resources/css/seller/seller.css', 'resources/css/shared/likhae-workspace-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/likhae-workspace-ai.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
     @stack('head')
     <script>
         (function(){var t=localStorage.getItem('likhae-theme');document.documentElement.classList.toggle('dark',t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches))})();

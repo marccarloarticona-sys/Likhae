@@ -4,13 +4,43 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Admin\AuditLog;
+use App\Models\Admin\Notification;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class AdminUserController extends Controller
 {
+    private const ACCOUNT_WARNING_CATEGORIES = [
+        User::TYPE_BUYER => [
+            'REPEATED_CANCELLATIONS' => 'Repeated unjustified cancellations',
+            'VERIFIED_NONPAYMENT' => 'Verified failure to pay an owed amount',
+            'FRAUDULENT_ORDER_ATTEMPTS' => 'Fraudulent order attempts',
+            'ABUSIVE_MARKETPLACE_USE' => 'Abusive use of marketplace features',
+            'REPEATED_POLICY_VIOLATIONS' => 'Repeated substantiated policy violations',
+            'OTHER' => 'Other',
+        ],
+        User::TYPE_SELLER => [
+            'SELLER_CANCELLATIONS' => 'Repeated Seller-caused cancellations without valid reason',
+            'PROHIBITED_PRODUCTS' => 'Prohibited product listings',
+            'MISLEADING_LISTINGS' => 'Misleading listings',
+            'UNRESOLVED_COMPLIANCE' => 'Repeated unresolved compliance warnings',
+            'FRAUDULENT_ACTIVITY' => 'Substantiated fraudulent marketplace activity',
+            'REFUND_NONCOOPERATION' => 'Failure to cooperate with valid complaints or refund obligations',
+            'OTHER' => 'Other',
+        ],
+        User::TYPE_LOGISTICS => [
+            'DELIVERY_FAILURES' => 'Repeated unexplained delivery failures',
+            'INACCURATE_TRACKING' => 'Inaccurate tracking updates',
+            'PARCEL_INCIDENTS' => 'Unresolved parcel-handling incidents',
+            'SERVICE_POLICY_VIOLATIONS' => 'Repeated substantiated service-policy violations',
+            'OTHER' => 'Other',
+        ],
+    ];
+
     public function index(Request $request): View
     {
         $accountTypes = [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_ADMIN, User::TYPE_LOGISTICS];
@@ -46,8 +76,9 @@ class AdminUserController extends Controller
                     }
                 });
             })
-            ->latest()
-            ->paginate(20)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate(10)
             ->withQueryString();
 
         $stats = [
@@ -57,12 +88,12 @@ class AdminUserController extends Controller
             'delivery' => User::query()->where('account_type', User::TYPE_LOGISTICS)->count(),
         ];
 
-        return view('Admin.users', compact('users', 'role', 'status', 'search', 'stats'));
+        return view('Admin.users.index', compact('users', 'role', 'status', 'search', 'stats'));
     }
 
     public function show(User $user): View
     {
-        $this->ensureAdminManaged($user);
+        $this->ensureViewable($user);
         $user->load(['addresses', 'sellerProfile', 'logisticsCenter', 'registrationApplications.documents']);
         $changes = AuditLog::query()
             ->with('actor')
@@ -70,31 +101,204 @@ class AdminUserController extends Controller
             ->where('auditable_id', $user->id)
             ->latest('created_at')
             ->paginate(10);
+        $warnings = AuditLog::query()
+            ->with('actor')
+            ->where('event', 'ACCOUNT_WARNING')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->latest('created_at')
+            ->paginate(10, ['*'], 'warnings_page');
 
-        return view('Admin.user-details', compact('user', 'changes'));
+        return view('Admin.users.show', [
+            'user' => $user,
+            'changes' => $changes,
+            'warnings' => $warnings,
+            'warningCategories' => self::ACCOUNT_WARNING_CATEGORIES[$user->account_type] ?? [],
+        ]);
     }
 
-    public function suspend(User $user): RedirectResponse
+    public function issueWarning(Request $request, User $user): RedirectResponse
     {
         $this->ensureAdminManaged($user);
-        $user->update(['status' => 'SUSPENDED']);
-        $user->sellerProfile?->update(['status' => 'SUSPENDED']);
-        $user->logisticsCenter?->update(['status' => 'SUSPENDED']);
+        $categories = self::ACCOUNT_WARNING_CATEGORIES[$user->account_type] ?? [];
+        $data = $request->validate([
+            'category' => ['required', 'string', Rule::in(array_keys($categories))],
+            'reason' => ['required', 'string', 'min:10', 'max:5000'],
+            'corrective_action' => ['required', 'string', 'min:5', 'max:5000'],
+            'reference' => ['nullable', 'string', 'max:2000'],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
 
-        return back()->with('status', 'User suspended.');
+        $newValues = [
+            'account_type' => $user->account_type,
+            'category' => $data['category'],
+            'category_label' => $categories[$data['category']],
+            'reason' => trim($data['reason']),
+            'corrective_action' => trim($data['corrective_action']),
+            'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+            'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
+            'status' => 'OPEN',
+        ];
+
+        $duplicateWarning = AuditLog::query()
+            ->where('event', 'ACCOUNT_WARNING')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->get(['new_values'])
+            ->first(function (AuditLog $warning) use ($newValues): bool {
+                $values = $warning->new_values ?? [];
+
+                return data_get($values, 'category') === $newValues['category']
+                    && trim((string) data_get($values, 'reason')) === $newValues['reason']
+                    && in_array(data_get($values, 'status', 'OPEN'), ['OPEN', 'UNDER_REVIEW'], true);
+            });
+
+        if ($duplicateWarning) {
+            return back()->with('status', 'This account warning is already recorded and remains open for review.');
+        }
+
+        AuditLog::create([
+            'actor_user_id' => $request->user()->id,
+            'event' => 'ACCOUNT_WARNING',
+            'auditable_type' => User::class,
+            'auditable_id' => $user->id,
+            'new_values' => $newValues,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'created_at' => now(),
+        ]);
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => 'ACCOUNT_WARNING',
+            'title' => 'Account warning from LIKHAE',
+            'message' => 'Your account received a warning for '.$newValues['category_label'].'. Reason: '.$newValues['reason'].' Corrective action: '.$newValues['corrective_action'],
+            'reference_type' => User::class,
+            'reference_id' => $user->id,
+            'action_url' => null,
+        ]);
+
+        return back()->with('status', 'Account warning recorded and notification sent.');
     }
 
-    public function reactivate(User $user): RedirectResponse
+    public function reviewWarning(Request $request, User $user, AuditLog $warning): RedirectResponse
     {
         $this->ensureAdminManaged($user);
-        $user->update(['status' => 'ACTIVE']);
-        $user->sellerProfile?->update(['status' => 'ACTIVE']);
-        $user->logisticsCenter?->update(['status' => 'ACTIVE']);
+        abort_unless(
+            $warning->event === 'ACCOUNT_WARNING'
+                && $warning->auditable_type === User::class
+                && (int) $warning->auditable_id === (int) $user->id,
+            404,
+        );
+        $data = $request->validate([
+            'status' => ['required', 'string', 'in:OPEN,UNDER_REVIEW,RESOLVED,CLOSED'],
+            'note' => ['nullable', 'string', 'max:5000'],
+        ]);
+        $values = $warning->new_values ?? [];
+        $values['status'] = $data['status'];
+        $values['resolution_note'] = filled($data['note'] ?? null) ? trim($data['note']) : null;
+        $values['reviewed_by'] = $request->user()->id;
+        $values['reviewed_at'] = now()->toISOString();
+        $warning->update(['new_values' => $values]);
+        AuditLog::create([
+            'actor_user_id' => $request->user()->id,
+            'event' => 'ACCOUNT_WARNING_REVIEWED',
+            'auditable_type' => User::class,
+            'auditable_id' => $user->id,
+            'new_values' => [
+                'warning_id' => $warning->id,
+                'status' => $data['status'],
+                'note' => $values['resolution_note'],
+            ],
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'created_at' => now(),
+        ]);
 
-        return back()->with('status', 'User reactivated.');
+        return back()->with('status', 'Account warning review saved.');
     }
 
-    private function ensureAdminManaged(User $user): void
+    public function suspend(Request $request, User $user): RedirectResponse
+    {
+        $this->ensureAdminManaged($user);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'reference' => ['nullable', 'string', 'max:2000'],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
+        abort_unless($user->status === User::STATUS_ACTIVE, 422, 'Only active accounts can be suspended.');
+        $oldStatus = $user->status;
+        DB::transaction(function () use ($request, $user, $data, $oldStatus): void {
+            $user->update(['status' => User::STATUS_SUSPENDED]);
+            $user->sellerProfile?->update(['status' => User::STATUS_SUSPENDED]);
+            $user->logisticsCenter?->update(['status' => User::STATUS_SUSPENDED]);
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'ACCOUNT_SUSPENDED',
+                'auditable_type' => User::class,
+                'auditable_id' => $user->id,
+                'old_values' => ['status' => $oldStatus],
+                'new_values' => [
+                    'status' => User::STATUS_SUSPENDED,
+                    'reason' => trim($data['reason']),
+                    'reference' => $data['reference'] ?? null,
+                    'evidence' => $data['evidence'] ?? null,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => 'ACCOUNT_SUSPENDED',
+            'title' => 'Account suspended',
+            'message' => 'Your LIKHAE account was suspended by Admin. Reason: '.trim($data['reason']),
+            'reference_type' => User::class,
+            'reference_id' => $user->id,
+            'action_url' => null,
+        ]);
+
+        return back()->with('status', 'User suspended and the change was recorded.');
+    }
+
+    public function reactivate(Request $request, User $user): RedirectResponse
+    {
+        $this->ensureAdminManaged($user);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+        ]);
+        abort_unless($user->status === User::STATUS_SUSPENDED, 422, 'Only suspended accounts can be reactivated.');
+        $oldStatus = $user->status;
+        DB::transaction(function () use ($request, $user, $data, $oldStatus): void {
+            $user->update(['status' => User::STATUS_ACTIVE]);
+            $user->sellerProfile?->update(['status' => User::STATUS_ACTIVE]);
+            $user->logisticsCenter?->update(['status' => User::STATUS_ACTIVE]);
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'ACCOUNT_REACTIVATED',
+                'auditable_type' => User::class,
+                'auditable_id' => $user->id,
+                'old_values' => ['status' => $oldStatus],
+                'new_values' => ['status' => User::STATUS_ACTIVE, 'reason' => trim($data['reason'])],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => 'ACCOUNT_REACTIVATED',
+            'title' => 'Account reactivated',
+            'message' => 'Your LIKHAE account was reactivated by Admin. Reason: '.trim($data['reason']),
+            'reference_type' => User::class,
+            'reference_id' => $user->id,
+            'action_url' => null,
+        ]);
+
+        return back()->with('status', 'User reactivated and the change was recorded.');
+    }
+
+    private function ensureViewable(User $user): void
     {
         abort_unless(in_array($user->account_type, [
             User::TYPE_BUYER,
@@ -102,5 +306,14 @@ class AdminUserController extends Controller
             User::TYPE_ADMIN,
             User::TYPE_LOGISTICS,
         ], true), 404);
+    }
+
+    private function ensureAdminManaged(User $user): void
+    {
+        abort_unless(in_array($user->account_type, [
+            User::TYPE_BUYER,
+            User::TYPE_SELLER,
+            User::TYPE_LOGISTICS,
+        ], true), 403);
     }
 }

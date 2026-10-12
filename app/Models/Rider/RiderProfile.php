@@ -4,6 +4,7 @@ namespace App\Models\Rider;
 
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\User;
+use App\Support\RiderVehicleType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -68,5 +69,10 @@ class RiderProfile extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('status', 'ACTIVE');
+    }
+
+    public function vehicleRole(): string
+    {
+        return RiderVehicleType::role($this->vehicle_type);
     }
 }

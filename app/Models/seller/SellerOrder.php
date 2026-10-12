@@ -91,4 +91,9 @@ class SellerOrder extends Model
     {
         return $query->whereNotIn('status', ['COMPLETED', 'CANCELLED']);
     }
+
+    public function sellerReturnRefundRequests(): HasMany
+    {
+        return $this->hasMany(SellerReturnRefundRequest::class);
+    }
 }

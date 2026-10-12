@@ -50,4 +50,9 @@ class SellerComplianceCase extends Model
     {
         return $this->hasMany(SellerComplianceAction::class)->orderBy('performed_at');
     }
+
+    public function responses(): HasMany
+    {
+        return $this->hasMany(SellerComplianceResponse::class)->latest('submitted_at');
+    }
 }

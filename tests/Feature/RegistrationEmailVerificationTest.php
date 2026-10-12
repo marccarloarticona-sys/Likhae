@@ -44,12 +44,13 @@ class RegistrationEmailVerificationTest extends TestCase
             'municipality_code' => 'municipality',
             'barangay' => 'Barangay',
             'barangay_code' => 'barangay',
+            'postal_code' => '1000',
             'street' => 'Test Street',
             'latitude' => '14.5995',
             'longitude' => '120.9842',
             'valid_id' => UploadedFile::fake()->create('valid-id.pdf', 10, 'application/pdf'),
-            'password' => 'StrongPass123',
-            'password_confirmation' => 'StrongPass123',
+            'password' => 'StrongPass123!',
+            'password_confirmation' => 'StrongPass123!',
             'terms' => '1',
         ])->assertSessionHasErrors('birthday');
 
@@ -117,12 +118,13 @@ class RegistrationEmailVerificationTest extends TestCase
             'municipality_code' => 'municipality',
             'barangay' => 'Barangay',
             'barangay_code' => 'barangay',
+            'postal_code' => '1000',
             'street' => 'Test Street',
             'latitude' => '14.5995',
             'longitude' => '120.9842',
             'valid_id' => UploadedFile::fake()->create('valid-id.pdf', 10, 'application/pdf'),
-            'password' => 'StrongPass123',
-            'password_confirmation' => 'StrongPass123',
+            'password' => 'StrongPass123!',
+            'password_confirmation' => 'StrongPass123!',
             'terms' => '1',
         ])->assertSessionHasErrors('email');
 
