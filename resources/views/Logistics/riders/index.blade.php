@@ -18,7 +18,7 @@
         </a>
     </section>
 
-    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         @foreach($stats as $stat)
             <article class="rounded-xl border border-line bg-surface p-4">
                 <span class="text-[9px] text-muted">{{ $stat['label'] }}</span>
@@ -41,7 +41,7 @@
                     <strong class="block text-[11px] font-semibold text-ink">{{ $rider->user?->name ?? 'Rider' }}</strong>
                     <span class="mt-1 block text-[9px] text-muted">{{ $rider->user?->email ?? 'No email recorded' }}</span>
                     <span class="mt-1 block text-[8px] text-muted">RID-{{ str_pad((string) $rider->id, 4, '0', STR_PAD_LEFT) }} · {{ $activeArea ?: 'Unassigned' }}</span>
-                    <span class="mt-1 block text-[8px] text-muted">{{ $rider->active_assignments_count }} active assignments</span>
+                    <span class="mt-1 block text-[8px] text-muted">{{ $rider->active_pickup_assignments_count }} / 10 active pickup parcels</span>
                 </div>
 
                 <div class="flex items-center gap-2">

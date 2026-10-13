@@ -2,6 +2,7 @@
 
 namespace App\Models\Rider;
 
+use App\Models\Admin\AuditLog;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -65,8 +66,15 @@ class RiderProfile extends Model
         return $this->hasMany(RiderEarning::class);
     }
 
+    public function moderationLogs(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'auditable_id')
+            ->where('auditable_type', self::class)
+            ->latest('created_at');
+    }
+
     public function scopeActive(Builder $query): Builder
     {
-        return $query->where('status', 'ACTIVE');
+        return $query->whereIn('status', ['ACTIVE', 'WARNED']);
     }
 }

@@ -15,7 +15,7 @@ class EnsureActiveRider
 
         abort_unless(
             $user?->isAccountType(User::TYPE_RIDER)
-            && $user->riderProfile()->where('status', 'ACTIVE')->exists(),
+            && $user->riderProfile()->whereIn('status', ['ACTIVE', 'WARNED'])->exists(),
             403,
             'An active rider account is required.',
         );

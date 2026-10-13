@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Logistics;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Auth\RegistrationApplication;
+use App\Models\Admin\AuditLog;
 use App\Models\Buyer\Address;
 use App\Models\Communication\Conversation;
 use App\Models\Logistics\ServiceArea;
@@ -14,6 +15,7 @@ use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
+use App\Services\AccountNotificationService;
 use App\Services\Communication\ConversationService;
 use App\Services\RegistrationWorkflowService;
 use App\Services\RiderRatingService;
@@ -45,7 +47,7 @@ class LogisticsPortalController extends Controller
                 'for_receive' => Shipment::where('logistics_center_id', $center->id)->whereIn('current_status', ['PICKED_UP', 'READY_FOR_PICKUP'])->count(),
                 'for_sorting' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'AT_SORTING_CENTER')->count(),
                 'for_dispatch' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'SORTED')->count(),
-                'active_riders' => $center->riders()->where('status', 'ACTIVE')->count(),
+                'active_riders' => $center->riders()->whereIn('status', ['ACTIVE', 'WARNED'])->count(),
             ],
             'recentShipments' => Shipment::where('logistics_center_id', $center->id)->with(['sellerOrder.order.address'])->latest()->limit(10)->get(),
         ]);
@@ -128,7 +130,9 @@ class LogisticsPortalController extends Controller
         $riders = (clone $riderQuery)
             ->with(['user', 'areaAssignments.serviceArea'])
             ->withCount([
-                'assignments as active_assignments_count' => fn ($query) => $query->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']),
+                'assignments as active_pickup_assignments_count' => fn ($query) => $query
+                    ->where('assignment_type', 'PICKUP')
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']),
             ])
             ->latest()
             ->orderByDesc('id')
@@ -136,9 +140,10 @@ class LogisticsPortalController extends Controller
 
         $stats = [
             ['label' => 'Total Riders', 'value' => (clone $riderQuery)->count()],
-            ['label' => 'Active', 'value' => (clone $riderQuery)->where('status', 'ACTIVE')->count()],
+            ['label' => 'Active', 'value' => (clone $riderQuery)->whereIn('status', ['ACTIVE', 'WARNED'])->count()],
+            ['label' => 'Warned', 'value' => (clone $riderQuery)->where('status', 'WARNED')->count()],
             ['label' => 'Pending', 'value' => (clone $riderQuery)->where('status', 'PENDING')->count()],
-            ['label' => 'Inactive', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'DEACTIVATED'])->count()],
+            ['label' => 'Suspended / Banned', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])->count()],
         ];
 
         return view('Logistics.riders.index', compact('riders', 'center', 'stats'));
@@ -149,8 +154,12 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter;
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
-        $rider->load(['user', 'areaAssignments.serviceArea', 'assignments.shipment.sellerOrder.sellerProfile.businessAddress', 'assignments.shipment.sellerOrder.order.address', 'assignments.shipment.riderAssignments.liveLocation', 'assignments.shipment.logisticsCenter.address', 'assignments.liveLocation', 'earnings']);
+        $rider->load(['user', 'areaAssignments.serviceArea', 'assignments.shipment.sellerOrder.sellerProfile.businessAddress', 'assignments.shipment.sellerOrder.order.address', 'assignments.shipment.riderAssignments.liveLocation', 'assignments.shipment.logisticsCenter.address', 'assignments.liveLocation', 'earnings', 'moderationLogs.actor']);
         $rider->setAttribute('active_assignments_count', $rider->assignments
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->count());
+        $rider->setAttribute('active_pickup_assignments_count', $rider->assignments
+            ->where('assignment_type', 'PICKUP')
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->count());
         $ratingSummary = $riderRatings->summary($rider);
@@ -220,24 +229,62 @@ class LogisticsPortalController extends Controller
 
     public function activateRider(Request $request, RiderProfile $rider): RedirectResponse
     {
-        $center = $request->user()->logisticsCenter;
-        abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
-
-        $rider->update(['status' => 'ACTIVE']);
-        $rider->user?->update(['status' => 'ACTIVE']);
-
-        return back()->with('status', 'Rider activated.');
+        return $this->saveRiderModeration($request, $rider, 'ACTIVE', 'Rider reactivated by the logistics center.');
     }
 
     public function deactivateRider(Request $request, RiderProfile $rider): RedirectResponse
     {
+        return $this->saveRiderModeration($request, $rider, 'SUSPENDED', 'Rider suspended by the logistics center.');
+    }
+
+    public function moderateRider(Request $request, RiderProfile $rider): RedirectResponse
+    {
+        $data = $request->validate([
+            'status' => ['required', Rule::in(['ACTIVE', 'WARNED', 'SUSPENDED', 'BANNED'])],
+            'reason' => ['required_unless:status,ACTIVE', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        return $this->saveRiderModeration(
+            $request,
+            $rider,
+            $data['status'],
+            trim((string) ($data['reason'] ?? 'Rider reactivated by the logistics center.')),
+        );
+    }
+
+    private function saveRiderModeration(Request $request, RiderProfile $rider, string $status, string $reason): RedirectResponse
+    {
         $center = $request->user()->logisticsCenter;
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
-        $rider->update(['status' => 'SUSPENDED']);
-        $rider->user?->update(['status' => 'SUSPENDED']);
+        $rider->loadMissing('user');
+        $oldStatus = $rider->status;
+        $userStatus = match ($status) {
+            'SUSPENDED' => 'SUSPENDED',
+            'BANNED' => 'DEACTIVATED',
+            default => 'ACTIVE',
+        };
 
-        return back()->with('status', 'Rider suspended.');
+        DB::transaction(function () use ($request, $rider, $status, $userStatus, $reason, $oldStatus): void {
+            $rider->update(['status' => $status]);
+            $rider->user?->update(['status' => $userStatus]);
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'rider.'.strtolower($status),
+                'auditable_type' => RiderProfile::class,
+                'auditable_id' => $rider->id,
+                'old_values' => ['status' => $oldStatus],
+                'new_values' => ['status' => $status, 'reason' => $reason],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+
+            app(AccountNotificationService::class)->riderModerationChanged($rider, $status, $reason);
+        });
+
+        return back()->with('status', 'Rider status updated to '.str($status)->headline().'.');
     }
 
     public function deliveryAreas(Request $request): View
@@ -251,7 +298,7 @@ class LogisticsPortalController extends Controller
             ->orderBy('name')
             ->get();
 
-        $riders = RiderProfile::where('logistics_center_id', $center->id)->where('status', 'ACTIVE')->with('user')->get();
+        $riders = RiderProfile::where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->with('user')->get();
 
         $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center->loadMissing('address'))]);
         return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'mapMarkers'));
@@ -293,7 +340,7 @@ class LogisticsPortalController extends Controller
 
         if (! empty($data['rider_profile_id'])) {
             abort_unless(
-                RiderProfile::query()->whereKey($data['rider_profile_id'])->where('logistics_center_id', $center->id)->where('status', 'ACTIVE')->exists(),
+                RiderProfile::query()->whereKey($data['rider_profile_id'])->where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->exists(),
                 403,
             );
         }

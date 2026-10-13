@@ -51,7 +51,7 @@ class RiderLocationService
         $assignment->loadMissing('riderProfile', 'shipment');
         abort_unless(
             $user->isActive()
-            && $user->riderProfile?->status === 'ACTIVE'
+            && in_array($user->riderProfile?->status, ['ACTIVE', 'WARNED'], true)
             && (int) $assignment->riderProfile?->user_id === (int) $user->id,
             403,
             'An active rider account with ownership of this assignment is required.',

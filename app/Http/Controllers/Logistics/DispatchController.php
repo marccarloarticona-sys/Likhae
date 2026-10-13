@@ -80,11 +80,14 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $riders = RiderProfile::query()
-            ->where('status', 'ACTIVE')
+            ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
             ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->withCount(['assignments as active_pickup_assignments_count' => fn ($query) => $query
+                ->where('assignment_type', 'PICKUP')
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->orderBy('id')
             ->get();
@@ -95,7 +98,9 @@ class DispatchController extends Controller
         ]);
         $pickupEligibleRiderIds = $pickups->getCollection()->mapWithKeys(fn ($pickup) => [
             $pickup->shipment_id => $riders
-                ->filter(fn (RiderProfile $rider) => $workflow->riderCoversSellerPickupArea($pickup->shipment, $rider))
+                ->filter(fn (RiderProfile $rider) =>
+                    (int) $rider->active_pickup_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS
+                    && $workflow->riderCoversSellerPickupArea($pickup->shipment, $rider))
                 ->pluck('id')
                 ->values(),
         ]);
@@ -167,7 +172,7 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $riders = RiderProfile::query()
-            ->where('status', 'ACTIVE')
+            ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
@@ -276,7 +281,7 @@ class DispatchController extends Controller
         if ($coverageOverride && $pickupArea) {
             $hasCoveredRider = RiderProfile::query()
                 ->where('logistics_center_id', $center->id)
-                ->where('status', 'ACTIVE')
+                ->whereIn('status', ['ACTIVE', 'WARNED'])
                 ->whereHas('areaAssignments', fn ($query) => $query
                     ->where('service_area_id', $pickupArea->id)
                     ->where('is_active', true))
@@ -298,6 +303,53 @@ class DispatchController extends Controller
         }
 
         return back()->with('status', 'Pickup rider assigned.');
+    }
+
+    public function autoAssignPickup(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        $this->ensureShipmentBelongsToCenter($shipment, $center);
+
+        $pickup = $shipment->pickupRequests()->whereIn('status', ['PENDING', 'APPROVED'])->latest()->firstOrFail();
+        if (str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:')) {
+            return back()->withErrors(['rider_profile_id' => 'Seller drop-off parcels are received at the center and cannot be auto-assigned for pickup.']);
+        }
+
+        $pickupArea = $workflow->sellerPickupServiceArea($shipment, $center);
+        $rider = RiderProfile::query()
+            ->where('logistics_center_id', $center->id)
+            ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->whereHas('user', fn ($query) => $query
+                ->where('account_type', \App\Models\User::TYPE_RIDER)
+                ->where('status', \App\Models\User::STATUS_ACTIVE))
+            ->withCount(['assignments as active_pickup_assignments_count' => fn ($query) => $query
+                ->where('assignment_type', 'PICKUP')
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
+            ->with(['user', 'areaAssignments.serviceArea.locations'])
+            ->get()
+            ->filter(fn (RiderProfile $candidate): bool =>
+                (int) $candidate->active_pickup_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS
+                && $workflow->riderCoversSellerPickupArea($shipment, $candidate))
+            ->sortBy('active_pickup_assignments_count')
+            ->first();
+
+        if (! $rider) {
+            return back()->withErrors(['rider_profile_id' => $pickupArea
+                ? 'No eligible rider covers this pickup area and has capacity for another parcel.'
+                : 'The seller pickup address is not covered by an active service area.']);
+        }
+
+        try {
+            if ($pickup->status === 'PENDING') {
+                $workflow->approvePickup($pickup, $request->user());
+            }
+            $workflow->assignRider($shipment, $rider, 'PICKUP', $request->user());
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['rider_profile_id' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Pickup auto-assigned to '.$rider->user?->name.'.');
     }
 
     public function approvePickup(Request $request, PickupRequest $pickupRequest, ShipmentWorkflowService $workflow): RedirectResponse

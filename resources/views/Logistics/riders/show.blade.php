@@ -28,6 +28,7 @@
         ['Delivery Area', $activeAreas->join(', ') ?: 'Unassigned'],
         ['Status', $rider->status ? str($rider->status)->headline() : 'Not recorded'],
         ['Active Deliveries', $activeAssignments],
+        ['Active Pickup Parcels', (int) ($rider->active_pickup_assignments_count ?? 0).' / 10'],
     ];
 @endphp
 
@@ -73,6 +74,37 @@
                     <strong class="mt-2 block break-words text-[10px] font-semibold text-ink">{{ $item[1] }}</strong>
                 </div>
             @endforeach
+        </div>
+    </section>
+
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <h2 class="text-[13px] font-semibold text-ink">Rider Status and Discipline</h2>
+        <p class="mt-1 text-[10px] leading-5 text-muted">Warned riders may continue working. Suspended and banned riders lose access and cannot receive new assignments. Add a reason for warnings and restrictions.</p>
+        <form method="POST" action="{{ route('logistics.riders.moderation.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end">
+            @csrf
+            @method('PATCH')
+            <label class="text-[10px] font-semibold text-ink">Status
+                <select name="status" required class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-3 text-[10px] font-normal">
+                    @foreach(['ACTIVE' => 'Active', 'WARNED' => 'Warned', 'SUSPENDED' => 'Suspended', 'BANNED' => 'Banned'] as $value => $label)
+                        <option value="{{ $value }}" @selected($rider->status === $value)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </label>
+            <label class="text-[10px] font-semibold text-ink">Reason
+                <textarea name="reason" rows="2" maxlength="1000" class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-[10px] font-normal" placeholder="Required for warn, suspend, or ban"></textarea>
+            </label>
+            <button type="submit" class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Save Status</button>
+        </form>
+        <div class="mt-5 border-t border-line pt-4">
+            <h3 class="text-[11px] font-semibold text-ink">Moderation History</h3>
+            @forelse($rider->moderationLogs as $log)
+                <div class="mt-3 flex flex-col gap-1 border-b border-line pb-3 text-[9px] last:border-0">
+                    <span class="font-semibold text-ink">{{ str(str_replace('rider.', '', $log->event))->headline() }} · {{ $log->created_at?->format('M j, Y g:i A') }}</span>
+                    <span class="text-muted">By {{ $log->actor?->name ?? 'Former staff member' }}{{ data_get($log->new_values, 'reason') ? ' — '.data_get($log->new_values, 'reason') : '' }}</span>
+                </div>
+            @empty
+                <p class="mt-2 text-[9px] text-muted">No moderation actions recorded.</p>
+            @endforelse
         </div>
     </section>
 

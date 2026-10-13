@@ -2,14 +2,20 @@
 
 namespace App\Services;
 
+use App\Mail\AccountAlert;
 use App\Models\Admin\Notification;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\Review;
 use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
+use App\Models\Rider\RiderProfile;
 use App\Models\Seller\SellerOrder;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use Throwable;
 
 class AccountNotificationService
 {
@@ -118,6 +124,30 @@ class AccountNotificationService
             'RIDER_ASSIGNMENT',
             $assignment->id,
             '/rider/dashboard',
+            email: true,
+        );
+    }
+
+    public function riderModerationChanged(RiderProfile $rider, string $status, string $reason): void
+    {
+        $rider->loadMissing('user');
+        $label = $this->label($status);
+        $reasonText = trim($reason);
+        $message = 'Your rider account status is now '.$label.'.';
+        if ($reasonText !== '') {
+            $message .= ' Reason: '.$reasonText;
+        }
+
+        $this->record(
+            $rider->user,
+            'RIDER_MODERATION_'.strtoupper($status),
+            'Rider account: '.$label,
+            $message,
+            'RIDER_MODERATION',
+            $rider->id,
+            in_array($status, ['SUSPENDED', 'BANNED'], true) ? null : '/notifications',
+            email: true,
+            allowInactive: true,
         );
     }
 
@@ -133,6 +163,7 @@ class AccountNotificationService
             'RIDER_ASSIGNMENT_STATUS',
             $assignment->id,
             '/rider/dashboard',
+            email: true,
         );
     }
 
@@ -176,13 +207,23 @@ class AccountNotificationService
         );
     }
 
-    private function record(?User $user, string $type, string $title, string $message, string $referenceType, int $referenceId, string $actionUrl): void
+    private function record(
+        ?User $user,
+        string $type,
+        string $title,
+        string $message,
+        string $referenceType,
+        int $referenceId,
+        ?string $actionUrl,
+        bool $email = false,
+        bool $allowInactive = false,
+    ): void
     {
-        if (! $user || ! $user->isActive()) {
+        if (! $user || (! $user->isActive() && ! $allowInactive)) {
             return;
         }
 
-        Notification::query()->firstOrCreate(
+        $notification = Notification::query()->firstOrCreate(
             [
                 'user_id' => $user->id,
                 'type' => $type,
@@ -195,6 +236,27 @@ class AccountNotificationService
                 'action_url' => $actionUrl,
             ],
         );
+
+        if ($email && $notification->wasRecentlyCreated && $user->email_verified_at !== null && filled($user->email)) {
+            DB::afterCommit(function () use ($user, $notification): void {
+                try {
+                    Mail::to($user->email)->send(new AccountAlert(
+                        type: $notification->type,
+                        title: $notification->title,
+                        message: $notification->message,
+                        actionUrl: $notification->action_url ?: '/notifications',
+                        actionLabel: 'View notification',
+                        userName: $user->name,
+                    ));
+                } catch (Throwable $exception) {
+                    Log::warning('Account alert email could not be sent.', [
+                        'notification_id' => $notification->id,
+                        'user_id' => $user->id,
+                        'exception' => $exception->getMessage(),
+                    ]);
+                }
+            });
+        }
     }
 
     private function label(?string $value): string

@@ -25,6 +25,8 @@ use RuntimeException;
 
 class ShipmentWorkflowService
 {
+    public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = 10;
+
     public function sellerTransition(SellerOrder $sellerOrder, string $action, User $actor): SellerOrder
     {
         return DB::transaction(function () use ($sellerOrder, $action, $actor): SellerOrder {
@@ -150,8 +152,9 @@ class ShipmentWorkflowService
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
 
-            $rider->loadMissing('user');
-            if ($rider->status !== 'ACTIVE' || $rider->user?->status !== User::STATUS_ACTIVE) {
+            $rider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
+            $rider->load('user');
+            if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true) || $rider->user?->status !== User::STATUS_ACTIVE) {
                 throw new RuntimeException('Only active riders can receive assignments.');
             }
 
@@ -189,6 +192,18 @@ class ShipmentWorkflowService
                     'cancelled_at' => now(),
                     'rejection_reason' => 'Replaced by a newer assignment.',
                 ]);
+
+            if ($assignmentType === 'PICKUP') {
+                $activePickupAssignments = $rider->assignments()
+                    ->where('assignment_type', 'PICKUP')
+                    ->where('shipment_id', '<>', $shipment->id)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                    ->count();
+
+                if ($activePickupAssignments >= self::MAX_ACTIVE_PICKUP_ASSIGNMENTS) {
+                    throw new RuntimeException('This rider has reached the 10-parcel active pickup limit.');
+                }
+            }
 
             $assignment = RiderAssignment::create([
                 'shipment_id' => $shipment->id,

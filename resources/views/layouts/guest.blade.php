@@ -29,8 +29,8 @@
                     <x-likhae-logo context="Marketplace" class="likhae-logo--guest" />
                 </a>
                 <nav class="lk-guest-nav" aria-label="Main navigation">
-                    <a class="is-active" href="{{ route('home') }}">Home</a>
-                    <a href="{{ route('products') }}">Categories</a>
+                    <a @class(['is-active' => request()->routeIs('home')]) @if(request()->routeIs('home')) aria-current="page" @endif href="{{ route('home') }}">Home</a>
+                    <a @class(['is-active' => request()->routeIs('products', 'products.show', 'guest.home')]) @if(request()->routeIs('products', 'products.show', 'guest.home')) aria-current="page" @endif href="{{ route('products') }}">Categories</a>
                     <a href="{{ route('sell.create') }}">Seller Centre</a>
                     <a href="{{ route('logistics.home') }}">Logistics Centre</a>
                 </nav>

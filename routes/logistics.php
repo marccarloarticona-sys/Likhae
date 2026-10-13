@@ -41,6 +41,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/pickups', [DispatchController::class, 'pickups'])->name('pickups');
         Route::post('/pickups/{pickupRequest}/approve', [DispatchController::class, 'approvePickup'])->name('pickups.approve');
         Route::post('/pickups/{pickupRequest}/reject', [DispatchController::class, 'rejectPickup'])->name('pickups.reject');
+        Route::post('/pickups/{shipment}/auto-assign', [DispatchController::class, 'autoAssignPickup'])->name('pickups.auto-assign');
         Route::post('/pickups/{shipment}/assign', [DispatchController::class, 'assignPickup'])->name('pickups.assign');
 
         Route::get('/sorting', [DispatchController::class, 'sorting'])->name('sorting');
@@ -60,6 +61,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/riders/applications/{application}/approve', [LogisticsPortalController::class, 'approveRider'])->name('riders.approve');
         Route::post('/riders/applications/{application}/reject', [LogisticsPortalController::class, 'rejectRider'])->name('riders.reject');
         Route::get('/riders/{rider}', [LogisticsPortalController::class, 'riderShow'])->name('riders.show');
+        Route::patch('/riders/{rider}/moderation', [LogisticsPortalController::class, 'moderateRider'])->name('riders.moderation.update');
         Route::patch('/riders/{rider}/area', [LogisticsPortalController::class, 'reassignRiderArea'])->name('riders.area.update');
         Route::patch('/riders/{rider}/activate', [LogisticsPortalController::class, 'activateRider'])->name('riders.activate');
         Route::patch('/riders/{rider}/deactivate', [LogisticsPortalController::class, 'deactivateRider'])->name('riders.deactivate');
