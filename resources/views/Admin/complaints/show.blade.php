@@ -20,6 +20,7 @@
     $events = $parent?->events ?? collect();
     $canDecide = in_array($dispute->status, ['OPEN', 'UNDER_REVIEW'], true);
     $statusClass = str($dispute->status)->lower()->replace('_', '-');
+    $isCashCase = strtoupper((string) $parent?->refund_method) === 'CASH';
 @endphp
 
 <div class="ad-dispute-page" style="display:grid;gap:16px">
@@ -87,8 +88,8 @@
                     <header class="ad-card-head"><div><h3>Refund and affected items</h3><p>Confirm what the Seller must refund before recording the decision.</p></div></header>
                     <div class="ad-card-body">
                         <div class="ad-summary-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
-                            <div><small>GCash recipient</small><strong>{{ $parent->gcash_recipient_name ?: 'Not provided' }}</strong><span>{{ $parent->gcash_mobile ?: 'Not provided' }}</span></div>
-                            <div><small>Refund method</small><strong>{{ str($parent->refund_method ?: 'Not specified')->headline() }}</strong><span>Seller sends manually</span></div>
+                            <div><small>{{ $isCashCase ? 'Cash refund source' : 'GCash recipient' }}</small><strong>{{ $isCashCase ? 'Pending authorized payer policy' : ($parent->gcash_recipient_name ?: 'Not provided') }}</strong><span>{{ $isCashCase ? 'No online destination' : ($parent->gcash_mobile ?: 'Not provided') }}</span></div>
+                            <div><small>Refund method</small><strong>{{ str($parent->refund_method ?: 'Not specified')->headline() }}</strong><span>{{ $isCashCase ? 'Approval → custody → inspection → cash states' : 'Historical Seller payment report' }}</span></div>
                             <div><small>Parent requested</small><strong>PHP {{ number_format((float) $parent->requested_amount, 2) }}</strong><span>Eligible amount is item-scoped</span></div>
                         </div>
                         <div class="ad-table-wrap" style="margin-top:16px">
@@ -137,14 +138,14 @@
         <aside style="display:grid;gap:16px;position:sticky;top:16px">
             @if($sellerRefund && $canDecide)
                 <section class="ad-card">
-                    <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h3>Resolve this escalation</h3><p>Choose one accountable outcome. The Admin does not transfer GCash directly.</p></div></header>
+                    <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h3>Resolve this escalation</h3><p>Choose one accountable outcome. {{ $isCashCase ? 'Cash payout remains blocked until the authorized payer policy is configured.' : 'The Admin does not transfer GCash directly.' }}</p></div></header>
                     <div class="ad-card-body" style="display:grid;gap:14px">
                         <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--ad-border)">
                             @csrf
                             @method('PATCH')
                             <input type="hidden" name="status" value="RESOLVED">
                             <input type="hidden" name="admin_action" value="RETURN_TO_SELLER_REFUND">
-                            <label class="ad-field"><span>Solution: return to Seller and demand refund</span><textarea name="resolution" rows="4" required>Admin reviewed the escalation and requires the Seller to refund the eligible amount to the Buyer via GCash.</textarea></label>
+                            <label class="ad-field"><span>Solution: return to Seller and demand refund</span><textarea name="resolution" rows="4" required>Admin reviewed the escalation and requires the Seller to refund the eligible amount to the Buyer via {{ $isCashCase ? 'cash after return custody and inspection' : 'the historical GCash workflow' }}.</textarea></label>
                             <button class="ad-btn ad-btn-primary" type="submit">Return to Seller &amp; Require Refund</button>
                         </form>
                         <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px">
@@ -181,7 +182,7 @@
                 <header class="ad-card-head"><div><h3>What happens next</h3><p>Workflow responsibility after this decision.</p></div></header>
                 <div class="ad-card-body">
                     <ol style="display:grid;gap:9px;margin:0;padding-left:20px;font-size:10px">
-                        <li><strong>Return to Seller:</strong> the Seller sees Admin Refund Required, sends the GCash refund, and uploads protected payment proof.</li>
+                        <li><strong>Return to Seller:</strong> the Seller sees Admin Refund Required; {{ $isCashCase ? 'cash stays in the obligation workflow until an authorized payer is configured.' : 'historical online payment proof remains available.' }}</li>
                         <li><strong>Reject escalation:</strong> the Seller request is closed as rejected and the Buyer receives the recorded reason.</li>
                         <li><strong>Audit:</strong> the decision, actor, amount, and explanation are retained in the refund event history.</li>
                     </ol>

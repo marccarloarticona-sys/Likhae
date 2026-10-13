@@ -47,6 +47,15 @@
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
                         <label class="grid gap-2 text-sm font-semibold text-ink">
+                            Cash collected from buyer
+                            <input type="number" name="collected_amount" min="0" step="0.01" value="{{ old('collected_amount', preg_replace('/[^0-9.]/', '', $parcel['amount'])) }}" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm">
+                            <small class="font-normal text-muted">Enter the actual cash received. The server compares it with the authoritative COD amount; do not deduct rider earnings.</small>
+                        </label>
+                        <label class="grid gap-2 text-sm font-semibold text-ink">
+                            Collection reference <span class="font-normal text-muted">(optional)</span>
+                            <input type="text" name="collection_reference" maxlength="100" class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" placeholder="Receipt or handoff reference">
+                        </label>
+                        <label class="grid gap-2 text-sm font-semibold text-ink">
                             Proof of delivery photo
                             <input type="file" name="proof_file" accept="image/jpeg,image/png,image/webp" capture="environment" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-proof-input>
                             <small class="font-normal text-muted">Take a clear photo of the delivered parcel. Large photos are optimized automatically before upload.</small>

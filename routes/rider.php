@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\Rider\RiderController;
+use App\Http\Controllers\Rider\RiderRemittanceController;
 use App\Http\Controllers\Rider\RiderShipmentController;
+use App\Http\Controllers\Rider\RiderTripController;
+use App\Http\Controllers\Rider\RiderTransferController;
 use App\Http\Controllers\WorkspaceAiController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -33,6 +36,14 @@ Route::prefix('rider')
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'rider')->name('settings.update');
 
         Route::get('/shipments', [RiderShipmentController::class, 'index'])->name('shipments');
+        Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
+        Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');
+        Route::post('/trips/{trip}/load', [RiderTripController::class, 'load'])->name('trips.load');
+        Route::post('/trips/{trip}/start', [RiderTripController::class, 'start'])->name('trips.start');
+        Route::get('/transfers', [RiderTransferController::class, 'index'])->name('transfers');
+        Route::get('/transfers/{manifest}', [RiderTransferController::class, 'show'])->name('transfers.show');
+        Route::post('/transfers/{manifest}/accept', [RiderTransferController::class, 'accept'])->name('transfers.accept');
+        Route::post('/transfers/{manifest}/start', [RiderTransferController::class, 'start'])->name('transfers.start');
         Route::post('/assignments/{assignment}/location', [RiderShipmentController::class, 'updateLocation'])->name('assignments.location');
         Route::patch('/assignments/{assignment}', [RiderShipmentController::class, 'transition'])->name('assignments.transition');
         Route::patch('/shipments/{assignment}', [RiderShipmentController::class, 'transition'])->name('shipments.transition');
@@ -48,6 +59,8 @@ Route::prefix('rider')
         Route::get('/deliveries/{assignment}', [RiderController::class, 'deliveryShow'])->name('deliveries.show');
 
         Route::get('/earnings', [RiderController::class, 'earnings'])->name('earnings');
+        Route::get('/remittances', [RiderRemittanceController::class, 'index'])->name('remittances');
+        Route::post('/remittances', [RiderRemittanceController::class, 'store'])->name('remittances.store');
         Route::get('/history', [RiderController::class, 'history'])->name('history');
         Route::get('/profile', [RiderController::class, 'profile'])->name('profile');
         Route::get('/account', [RiderController::class, 'profile'])->name('account');

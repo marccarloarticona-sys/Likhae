@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Http\Requests\StoreRegistrationRequest;
+use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Admin\AuditLog;
 use App\Models\Auth\ApplicationDocument;
 use App\Models\Auth\RegistrationApplication;
@@ -263,7 +264,7 @@ class RegistrationWorkflowService
             throw ValidationException::withMessages(['application' => 'This is not a rider application.']);
         }
 
-        $center = $reviewer->logisticsCenter()->where('status', 'ACTIVE')->first();
+        $center = $reviewer->logisticsCenter()->approvedActive()->first();
         if (! $center || (int) $application->riderData?->target_logistics_center_id !== (int) $center->id) {
             abort(403, 'This rider application belongs to another logistics center.');
         }
@@ -350,7 +351,7 @@ class RegistrationWorkflowService
                 throw ValidationException::withMessages(['application' => 'Only pending applications can be approved.']);
             }
 
-            $application->loadMissing(['user.addresses', 'sellerData', 'logisticsData', 'riderData', 'documents']);
+            $application->loadMissing(['user.addresses', 'sellerData', 'logisticsData.businessAddress', 'riderData', 'documents']);
             $user = $application->user;
 
             if (! $user || $user->account_type !== $expectedType) {
@@ -389,6 +390,12 @@ class RegistrationWorkflowService
                     throw ValidationException::withMessages(['application' => 'Logistics application data is missing.']);
                 }
 
+                $centerAddress = $data->businessAddress ?: $defaultAddress;
+                $existingCenterId = LogisticsCenter::query()
+                    ->where('owner_user_id', $user->id)
+                    ->value('id');
+                $this->ensureUniqueActiveLogisticsCenter($centerAddress, $existingCenterId ? (int) $existingCenterId : null);
+
                 LogisticsCenter::updateOrCreate(
                     ['owner_user_id' => $user->id],
                     [
@@ -410,6 +417,8 @@ class RegistrationWorkflowService
                 if (! $data) {
                     throw ValidationException::withMessages(['application' => 'Rider application data is missing.']);
                 }
+
+                $this->ensureRiderApprovalEligibility($defaultAddress, $data);
 
                 RiderProfile::updateOrCreate(
                     ['user_id' => $user->id],
@@ -609,17 +618,108 @@ class RegistrationWorkflowService
             return;
         }
 
-        $eligible = LogisticsCenter::query()
+        $this->ensureCanonicalBarangay(
+            (string) ($data['municipality_code'] ?? ''),
+            (string) ($data['barangay_code'] ?? ''),
+            'barangay_code',
+        );
+
+        $eligibleCenters = LogisticsCenter::query()
             ->eligibleForRiderAddress(
                 (string) ($data['province_code'] ?? ''),
                 (string) ($data['municipality_code'] ?? ''),
             )
-            ->whereKey((int) ($data['target_logistics_center_id'] ?? 0))
-            ->exists();
+            ->get(['id']);
+
+        if ($eligibleCenters->count() > 1) {
+            throw ValidationException::withMessages([
+                'target_logistics_center_id' => 'The rider address matches multiple active logistics hubs. Routing ownership must be resolved before registration.',
+            ]);
+        }
+
+        $eligible = $eligibleCenters->contains(fn (LogisticsCenter $center): bool =>
+            (int) $center->id === (int) ($data['target_logistics_center_id'] ?? 0));
 
         if (! $eligible) {
             throw ValidationException::withMessages([
                 'target_logistics_center_id' => 'The selected logistics hub does not serve the rider address municipality.',
+            ]);
+        }
+    }
+
+    private function ensureRiderApprovalEligibility(?Address $address, RiderApplicationData $data): void
+    {
+        if (! $address
+            || blank($address->province_code)
+            || blank($address->municipality_code)
+            || blank($address->barangay_code)) {
+            throw ValidationException::withMessages([
+                'application' => 'The rider application has no complete canonical PSGC address for approval.',
+            ]);
+        }
+
+        $this->ensureCanonicalBarangay(
+            (string) $address->municipality_code,
+            (string) $address->barangay_code,
+            'application',
+        );
+
+        $eligibleCenters = LogisticsCenter::query()
+            ->eligibleForRiderAddress((string) $address->province_code, (string) $address->municipality_code)
+            ->get(['id']);
+
+        if ($eligibleCenters->count() !== 1
+            || (int) $eligibleCenters->first()?->id !== (int) $data->target_logistics_center_id) {
+            throw ValidationException::withMessages([
+                'application' => $eligibleCenters->count() > 1
+                    ? 'The rider address matches multiple active logistics hubs. Resolve the PSGC ownership before approval.'
+                    : 'The selected logistics hub no longer serves the rider address municipality.',
+            ]);
+        }
+    }
+
+    private function ensureCanonicalBarangay(string $municipalityCode, string $barangayCode, string $errorKey): void
+    {
+        $municipalityCode = trim($municipalityCode);
+        $barangayCode = trim($barangayCode);
+        if ($municipalityCode === '' || $barangayCode === '') {
+            throw ValidationException::withMessages([
+                $errorKey => 'A complete canonical PSGC municipality and barangay are required.',
+            ]);
+        }
+
+        $records = PhilippineAddressController::barangayRecordsForMunicipality($municipalityCode);
+        $matches = collect($records)->filter(fn ($record): bool =>
+            is_array($record) && trim((string) ($record['code'] ?? '')) === $barangayCode
+        );
+
+        if ($records === [] || $matches->count() !== 1) {
+            throw ValidationException::withMessages([
+                $errorKey => 'The selected barangay is not a canonical barangay of the selected municipality, or PSGC verification is unavailable.',
+            ]);
+        }
+    }
+
+    private function ensureUniqueActiveLogisticsCenter(?Address $address, ?int $excludeCenterId = null): void
+    {
+        if (! $address
+            || blank($address->province_code)
+            || blank($address->municipality_code)) {
+            throw ValidationException::withMessages([
+                'application' => 'The logistics center has no complete canonical PSGC municipality address.',
+            ]);
+        }
+
+        $query = LogisticsCenter::query()
+            ->eligibleForRiderAddress((string) $address->province_code, (string) $address->municipality_code);
+
+        if ($excludeCenterId) {
+            $query->where('id', '!=', $excludeCenterId);
+        }
+
+        if ($query->exists()) {
+            throw ValidationException::withMessages([
+                'application' => 'An active logistics hub already owns this province and municipality PSGC.',
             ]);
         }
     }

@@ -329,17 +329,6 @@ class BuyerOrderController extends Controller
 
             foreach ($lockedOrder->sellerOrders as $sellerOrder) {
             $sellerOrder->update(['status' => 'COMPLETED']);
-            $rate = PlatformSetting::commissionRate();
-            CommissionTransaction::query()->firstOrCreate(
-                ['seller_order_id' => $sellerOrder->id],
-                [
-                    'commission_rate' => $rate,
-                    'commissionable_amount' => $sellerOrder->grand_total,
-                    'commission_amount' => round((float) $sellerOrder->grand_total * $rate, 2),
-                    'status' => 'PENDING',
-                    'calculated_at' => now(),
-                ],
-            );
             if ($sellerOrder->shipment) {
                 $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
                 ShipmentEvent::query()->create([
@@ -414,9 +403,7 @@ class BuyerOrderController extends Controller
             'images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
             'video' => ['nullable', 'file', 'mimes:mp4,mov,webm', 'max:204800'],
             'buyer_email' => ['required', 'email', 'max:255'],
-            'gcash_recipient_name' => ['required', 'string', 'min:2', 'max:150'],
-            'gcash_mobile' => ['required', 'string', 'max:30'],
-            'confirm_gcash' => ['required', 'accepted'],
+            'confirm_cash' => ['required', 'accepted'],
             'confirm_request' => ['required', 'accepted'],
         ]);
 
@@ -424,7 +411,6 @@ class BuyerOrderController extends Controller
         abort_unless(in_array($data['issue_reason'], $issue['reasons'], true), 422, 'Choose a valid reason for the selected issue.');
 
         $order->loadMissing(['sellerOrders.items', 'payments']);
-        $gcashMobile = $workflow->normalizeGcashMobile($data['gcash_mobile']);
         $itemIds = collect($data['item_ids'])->map(fn ($id): int => (int) $id)->unique()->values();
         $items = $order->items()->whereIn('order_items.id', $itemIds)->get()->keyBy('id');
         abort_unless($items->count() === $itemIds->count(), 422, 'One or more selected items do not belong to this order.');
@@ -441,7 +427,7 @@ class BuyerOrderController extends Controller
             $totalRefund += $amount;
         }
 
-        $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $gcashMobile, $totalRefund, $selectedItems, $workflow, $proofs): ReturnRefundRequest {
+        $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $requestNumber = 'RR-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
@@ -483,17 +469,12 @@ class BuyerOrderController extends Controller
                 'issue_reason' => $data['issue_reason'],
                 'solution' => $issue['solution'],
                 'description' => $description,
-                'refund_method' => 'GCASH_TRANSFER',
+                'refund_method' => 'CASH',
                 'refundable_amount' => round($totalRefund, 2),
                 'requested_amount' => round($totalRefund, 2),
                 'buyer_email' => $data['buyer_email'],
                 'status' => 'REQUEST_SUBMITTED',
                 'submitted_at' => now(),
-                'gcash_recipient_name' => trim($data['gcash_recipient_name']),
-                'gcash_mobile' => $gcashMobile,
-                'gcash_mobile_last4' => substr($gcashMobile, -4),
-                'gcash_details_confirmed_at' => now(),
-                'gcash_details_confirmed_by_user_id' => $request->user()->id,
             ]);
 
             $selectedBySeller = collect($selectedItems)->groupBy(fn (array $selected): int => (int) $selected['item']->seller_order_id);
@@ -652,13 +633,7 @@ class BuyerOrderController extends Controller
 
     private function refundMethods(Order $order): array
     {
-        $payment = $order->payments()->whereIn('status', ['PAID', 'PENDING'])->latest()->first()
-            ?? $order->payments()->latest()->first();
-        if (! $payment) {
-            return [];
-        }
-
-        return [$payment->method => $payment->method === 'COD' ? 'Original payment method (Cash on Delivery)' : 'Original payment method (Online payment)'];
+        return ['CASH' => 'Cash after approval, return custody, and inspection'];
     }
 
     private function storeDisputeEvidence(Dispute $dispute, mixed $file, int $userId, string $notes): void

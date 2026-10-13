@@ -17,6 +17,10 @@ use App\Models\Admin\SellerComplianceCase;
 use App\Models\Admin\SellerComplianceResponse;
 use App\Models\Buyer\Payment;
 use App\Models\Communication\Conversation;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\RiderRemittance;
+use App\Models\Finance\SellerSettlement;
+use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
@@ -30,6 +34,7 @@ use App\Services\Communication\ConversationService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
+use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -348,11 +353,48 @@ class AdminOperationsController extends Controller
         return view('Admin.complaints.show', compact('dispute'));
     }
 
-    public function finance(): View
+    public function finance(FinanceSchemaReadiness $schema): View
     {
+        $financialTotals = [
+            'schema_ready' => $schema->ready(),
+            'expected_cod' => 0.0,
+            'cash_collected' => 0.0,
+            'cash_submitted' => 0.0,
+            'cash_verified' => 0.0,
+            'platform_commission' => 0.0,
+            'seller_payable' => 0.0,
+            'logistics_allocation' => 0.0,
+            'rider_allocation' => 0.0,
+            'unresolved_settlements' => 0,
+        ];
+        $sellerSettlements = null;
+        if ($schema->ready()) {
+            $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
+            $financialTotals['cash_collected'] = (float) CodCollection::query()
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])
+                ->sum('collected_amount');
+            $financialTotals['cash_submitted'] = (float) RiderRemittance::query()
+                ->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])
+                ->sum('submitted_amount');
+            $financialTotals['cash_verified'] = (float) RiderRemittance::query()
+                ->whereIn('status', [RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])
+                ->sum('verified_amount');
+            $financialTotals['platform_commission'] = (float) ShipmentFinancialAllocation::query()->sum('platform_commission');
+            $financialTotals['seller_payable'] = (float) ShipmentFinancialAllocation::query()->sum('seller_payable');
+            $financialTotals['logistics_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('logistics_allocation');
+            $financialTotals['rider_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('rider_allocation');
+            $financialTotals['unresolved_settlements'] = SellerSettlement::query()->where('payout_status', 'REVIEW_REQUIRED')->count();
+            $sellerSettlements = SellerSettlement::query()
+                ->with('sellerProfile')
+                ->latest()
+                ->paginate(15, ['*'], 'settlements_page');
+        }
+
         return view('Admin.finance.index', [
             'payments' => Payment::with('order.buyer')->latest()->paginate(15),
             'commissions' => CommissionTransaction::with('sellerOrder.sellerProfile.user')->latest()->paginate(15),
+            'sellerSettlements' => $sellerSettlements,
+            'financialTotals' => $financialTotals,
             'totals' => [
                 'payments' => (float) Payment::where('status', 'PAID')->sum('amount'),
                 'commission' => (float) CommissionTransaction::sum('commission_amount'),

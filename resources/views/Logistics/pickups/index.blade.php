@@ -39,6 +39,7 @@
                         <button class="bg-primary px-4 py-2 font-semibold text-white">Assign</button>
                         @if($pickupAreaId)
                             <label class="col-span-full flex items-start gap-2 text-[11px] font-semibold {{ $coverageShortage ? 'text-red-700' : 'text-amber-800' }}"><input type="checkbox" name="coverage_override" value="1" @checked((int) old('assignment_shipment_id') === (int) $shipment->id && old('coverage_override')) class="mt-0.5"><span>{{ $coverageShortage ? 'Required for the listed rider: no active rider covers this pickup area. Check to use the shortage override.' : 'Use only if an area-coverage override is required.' }}</span></label>
+                            <textarea name="coverage_override_reason" rows="2" maxlength="1000" class="col-span-full border border-line px-3 py-2 text-xs" placeholder="Reason for coverage override (required when checked)">{{ old('assignment_shipment_id') == $shipment->id ? old('coverage_override_reason') : '' }}</textarea>
                         @endif
                         @if((int) old('assignment_shipment_id') === (int) $shipment->id && $errors->has('rider_profile_id'))
                             <p class="col-span-full border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800" role="alert">{{ $errors->first('rider_profile_id') }}</p>

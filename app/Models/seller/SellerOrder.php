@@ -7,6 +7,7 @@ use App\Models\Admin\Dispute;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Communication\Conversation;
+use App\Models\Finance\SellerSettlement;
 use App\Models\Logistics\Shipment;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -29,6 +30,7 @@ class SellerOrder extends Model
         'voucher_discount',
         'shipping_fee',
         'grand_total',
+        'protection_total',
     ];
 
     protected function casts(): array
@@ -38,6 +40,7 @@ class SellerOrder extends Model
             'voucher_discount' => 'decimal:2',
             'shipping_fee' => 'decimal:2',
             'grand_total' => 'decimal:2',
+            'protection_total' => 'decimal:2',
         ];
     }
 
@@ -75,6 +78,11 @@ class SellerOrder extends Model
     public function commissionTransaction(): HasOne
     {
         return $this->hasOne(CommissionTransaction::class);
+    }
+
+    public function sellerSettlement(): HasOne
+    {
+        return $this->hasOne(SellerSettlement::class);
     }
 
     public function conversations(): HasMany

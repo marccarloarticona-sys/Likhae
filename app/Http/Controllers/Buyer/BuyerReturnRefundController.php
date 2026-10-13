@@ -10,13 +10,16 @@ use App\Models\Buyer\ReturnRefundEvidence;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Seller\RefundPayout;
 use App\Models\Seller\SellerReturnRefundRequest;
+use App\Models\Returns\CashRefundObligation;
 use App\Models\User;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
+use App\Services\Returns\CashRefundWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -52,6 +55,11 @@ class BuyerReturnRefundController extends Controller
             'payouts.submittedBy',
             'dispute.evidence',
         ]);
+        if (Schema::hasTable('cash_refund_obligations')) {
+            $sellerRequest->load('cashRefundObligation');
+        } else {
+            $sellerRequest->setRelation('cashRefundObligation', null);
+        }
         abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
 
         return view('Buyer.return-refund-show', compact('sellerRequest'));
@@ -98,6 +106,24 @@ class BuyerReturnRefundController extends Controller
         return $request->expectsJson()
             ? response()->json(['success' => true, 'status' => SellerReturnRefundRequest::STATUS_CONFIRMED])
             : back()->with('status', 'Refund receipt confirmed.');
+    }
+
+    public function confirmCash(Request $request, CashRefundObligation $obligation, CashRefundWorkflowService $cashRefunds): RedirectResponse|JsonResponse
+    {
+        $obligation->loadMissing('sellerRequest.request');
+        abort_unless((int) $obligation->buyer_user_id === (int) $request->user()->id, 403);
+        $request->validate(['confirm_receipt' => ['required', 'accepted']]);
+        try {
+            $cashRefunds->acknowledgeReceipt($obligation, $request->user());
+        } catch (\RuntimeException $exception) {
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => $exception->getMessage()], 422)
+                : back()->withErrors(['cash_refund' => $exception->getMessage()])->withInput();
+        }
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'status' => CashRefundObligation::COMPLETED])
+            : back()->with('status', 'Cash refund receipt confirmed.');
     }
 
     public function escalate(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow, RefundProofStorageService $proofs): RedirectResponse|JsonResponse

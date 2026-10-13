@@ -49,6 +49,7 @@ Route::prefix('buyer')
         Route::get('/returns/request/{returnRequest}', [BuyerReturnRefundController::class, 'parentShow'])->name('returns.parent');
         Route::get('/returns/{sellerRequest}', [BuyerReturnRefundController::class, 'show'])->name('returns.show');
         Route::post('/returns/{sellerRequest}/confirm', [BuyerReturnRefundController::class, 'confirm'])->name('returns.confirm');
+        Route::post('/returns/cash-refunds/{obligation}/confirm', [BuyerReturnRefundController::class, 'confirmCash'])->name('returns.cash-confirm');
         Route::post('/returns/{sellerRequest}/escalate', [BuyerReturnRefundController::class, 'escalate'])->name('returns.escalate');
         Route::get('/returns/payouts/{payout}/proof', [BuyerReturnRefundController::class, 'payoutProof'])->name('returns.payout-proof');
         Route::get('/returns/evidence/{evidence}', [BuyerReturnRefundController::class, 'evidence'])->name('returns.evidence');

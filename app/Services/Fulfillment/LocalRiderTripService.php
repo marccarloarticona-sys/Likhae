@@ -1,0 +1,334 @@
+<?php
+
+namespace App\Services\Fulfillment;
+
+use App\Http\Controllers\Auth\PhilippineAddressController;
+use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ServiceArea;
+use App\Models\Rider\RiderAssignment;
+use App\Models\Rider\RiderLocalTrip;
+use App\Models\Rider\RiderLocalTripItem;
+use App\Models\Rider\RiderProfile;
+use App\Models\User;
+use App\Support\LocalTripCapacityRules;
+use App\Support\RiderVehicleType;
+use Illuminate\Support\Facades\DB;
+use RuntimeException;
+
+final class LocalRiderTripService
+{
+    private const OPEN_ASSIGNMENT_STATUSES = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
+
+    public function __construct(
+        private readonly LogisticsSchemaReadiness $schema,
+        private readonly LocalRiderEligibilityService $eligibility,
+    ) {}
+
+    public function createTrip(User $actor, RiderProfile $rider, ServiceArea $area, string $tripType): RiderLocalTrip
+    {
+        $this->assertReady();
+        $tripType = strtoupper(trim($tripType));
+        if (! in_array($tripType, [RiderLocalTrip::TYPE_PICKUP, RiderLocalTrip::TYPE_DELIVERY], true)) {
+            throw new RuntimeException('A local trip must be a pickup or delivery trip.');
+        }
+
+        $actor->loadMissing('logisticsCenter');
+        $rider->loadMissing('user', 'logisticsCenter', 'areaAssignments');
+        $area->loadMissing('locations', 'logisticsCenter');
+        $this->assertActorAtCenter($actor, (int) $rider->logistics_center_id);
+        $location = $this->eligibility->assertRiderCanCoverArea($rider->logisticsCenter, $rider, $area);
+        if (! $rider->areaAssignments->contains(fn ($assignment): bool => $assignment->is_active && (int) $assignment->service_area_id === (int) $area->id)) {
+            throw new RuntimeException('The rider is not actively assigned to this service area.');
+        }
+        $this->assertCanonicalBarangay($rider->logisticsCenter, $location->province_code, $location->municipality_code, $location->barangay_code);
+        $capacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity);
+
+        return RiderLocalTrip::query()->create([
+            'rider_profile_id' => $rider->id,
+            'logistics_center_id' => $rider->logistics_center_id,
+            'trip_type' => $tripType,
+            'province_code' => trim((string) $location->province_code),
+            'municipality_code' => trim((string) $location->municipality_code),
+            'barangay_code' => trim((string) $location->barangay_code),
+            'approved_parcel_capacity' => $capacity,
+            'status' => RiderLocalTrip::LOADING,
+            'created_by_user_id' => $actor->id,
+        ]);
+    }
+
+    public function addAssignment(User $actor, RiderLocalTrip $trip, RiderAssignment $assignment): RiderLocalTripItem
+    {
+        $this->assertReady();
+
+        return DB::transaction(function () use ($actor, $trip, $assignment): RiderLocalTripItem {
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->lockForUpdate()->firstOrFail();
+            $assignment = RiderAssignment::query()->whereKey($assignment->id)->with([
+                'riderProfile.user', 'riderProfile.logisticsCenter',
+                'riderProfile.areaAssignments.serviceArea.locations',
+                'shipment.sellerOrder.sellerProfile.businessAddress',
+            ])->lockForUpdate()->firstOrFail();
+            $this->assertActorAtCenter($actor, (int) $trip->logistics_center_id);
+            $this->assertTripOpenForLoading($trip);
+            if ((int) $assignment->rider_profile_id !== (int) $trip->rider_profile_id
+                || (int) $assignment->riderProfile?->logistics_center_id !== (int) $trip->logistics_center_id) {
+                throw new RuntimeException('The assignment rider and logistics center do not match this trip.');
+            }
+            if (! in_array($assignment->status, self::OPEN_ASSIGNMENT_STATUSES, true)) {
+                throw new RuntimeException('Only an active rider assignment can be loaded onto a trip.');
+            }
+            if (($trip->trip_type === RiderLocalTrip::TYPE_PICKUP && $assignment->assignment_type !== RiderAssignment::TYPE_PICKUP)
+                || ($trip->trip_type === RiderLocalTrip::TYPE_DELIVERY && $assignment->assignment_type !== RiderAssignment::TYPE_DELIVERY)) {
+                throw new RuntimeException('The assignment type does not match this trip.');
+            }
+
+            [$provinceCode, $municipalityCode, $barangayCode] = $this->assignmentCodes($assignment);
+            if ($provinceCode !== trim((string) $trip->province_code)
+                || $municipalityCode !== trim((string) $trip->municipality_code)
+                || $barangayCode !== trim((string) $trip->barangay_code)) {
+                throw new RuntimeException('The assignment PSGC barangay does not match the trip barangay.');
+            }
+            $this->assertCanonicalBarangay($assignment->riderProfile->logisticsCenter, $provinceCode, $municipalityCode, $barangayCode);
+            if (! $this->riderHasExactArea($assignment->riderProfile, $provinceCode, $municipalityCode, $barangayCode)) {
+                throw new RuntimeException('The rider has no active service-area assignment for this exact barangay PSGC.');
+            }
+
+            $duplicate = RiderLocalTripItem::query()
+                ->where('rider_assignment_id', $assignment->id)
+                ->whereHas('trip', fn ($query) => $query->whereNotIn('status', [RiderLocalTrip::COMPLETED, RiderLocalTrip::CANCELLED, RiderLocalTrip::EXCEPTION]))
+                ->lockForUpdate()
+                ->exists();
+            if ($duplicate) {
+                throw new RuntimeException('This rider assignment is already loaded on an active local trip.');
+            }
+
+            $loadedCount = $trip->items()->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED])->count();
+            LocalTripCapacityRules::assertAvailable((int) $loadedCount, (int) $trip->approved_parcel_capacity);
+
+            return RiderLocalTripItem::query()->create([
+                'rider_local_trip_id' => $trip->id,
+                'rider_assignment_id' => $assignment->id,
+                'added_by_user_id' => $actor->id,
+                'status' => RiderLocalTripItem::QUEUED,
+            ]);
+        });
+    }
+
+    public function loadTrip(User $actor, RiderLocalTrip $trip): RiderLocalTrip
+    {
+        $this->assertReady();
+
+        return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
+            $this->assertTripActor($actor, $trip, true);
+            $this->assertTripOpenForLoading($trip);
+            if ($trip->items->isEmpty()) {
+                throw new RuntimeException('A local trip must contain at least one assignment before loading.');
+            }
+            $activeItems = $trip->items->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED]);
+            if ($activeItems->count() > (int) $trip->approved_parcel_capacity) {
+                throw new RuntimeException('The local trip exceeds its approved parcel capacity.');
+            }
+            if ($activeItems->contains(fn (RiderLocalTripItem $item): bool => ! in_array($item->riderAssignment?->status, self::OPEN_ASSIGNMENT_STATUSES, true))) {
+                throw new RuntimeException('Every trip item must have an active rider assignment before loading.');
+            }
+
+            $now = now();
+            $trip->items()->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED])->update([
+                'status' => RiderLocalTripItem::LOADED,
+                'loaded_at' => $now,
+                'verified_at' => $now,
+            ]);
+            $trip->update(['status' => RiderLocalTrip::READY]);
+
+            return $trip->refresh();
+        });
+    }
+
+    public function startTrip(User $actor, RiderLocalTrip $trip): RiderLocalTrip
+    {
+        $this->assertReady();
+
+        return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
+            $this->assertTripActor($actor, $trip, false);
+            if ($trip->status === RiderLocalTrip::IN_PROGRESS) {
+                return $trip;
+            }
+            if ($trip->status !== RiderLocalTrip::READY
+                || $trip->items->isEmpty()
+                || $trip->items->contains(fn (RiderLocalTripItem $item): bool => $item->status !== RiderLocalTripItem::LOADED)) {
+                throw new RuntimeException('A local trip must be fully scanned and ready before departure.');
+            }
+            $trip->update(['status' => RiderLocalTrip::IN_PROGRESS, 'started_at' => now()]);
+
+            return $trip->refresh();
+        });
+    }
+
+    public function startTripForAssignment(User $actor, RiderAssignment $assignment): void
+    {
+        if (! $this->schema->localTripsReady()) {
+            return;
+        }
+        $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->latest()->first();
+        if ($item) {
+            $this->startTrip($actor, $item->trip);
+        }
+    }
+
+    public function closeTrip(User $actor, RiderLocalTrip $trip, bool $exception = false, ?string $notes = null): RiderLocalTrip
+    {
+        $this->assertReady();
+
+        return DB::transaction(function () use ($actor, $trip, $exception, $notes): RiderLocalTrip {
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items')->lockForUpdate()->firstOrFail();
+            $this->assertTripActor($actor, $trip, true);
+            if (in_array($trip->status, [RiderLocalTrip::COMPLETED, RiderLocalTrip::CANCELLED], true)) {
+                return $trip;
+            }
+            if ($exception) {
+                $trip->update(['status' => RiderLocalTrip::EXCEPTION, 'exception_notes' => $notes, 'completed_at' => now()]);
+                return $trip->refresh();
+            }
+            if ($trip->items->contains(fn (RiderLocalTripItem $item): bool => ! in_array($item->status, [RiderLocalTripItem::COMPLETED, RiderLocalTripItem::FAILED, RiderLocalTripItem::CANCELLED], true))) {
+                throw new RuntimeException('A local trip cannot close while an item is still queued or loaded.');
+            }
+            $trip->update(['status' => RiderLocalTrip::COMPLETED, 'completed_at' => now()]);
+            return $trip->refresh();
+        });
+    }
+
+    public function syncAssignment(RiderAssignment $assignment): void
+    {
+        if (! $this->schema->localTripsReady()) {
+            return;
+        }
+
+        DB::transaction(function () use ($assignment): void {
+            $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->lockForUpdate()->latest()->first();
+            if (! $item || in_array($item->status, [RiderLocalTripItem::COMPLETED, RiderLocalTripItem::FAILED, RiderLocalTripItem::CANCELLED], true)) {
+                return;
+            }
+
+            $next = match ($assignment->status) {
+                'COMPLETED' => RiderLocalTripItem::COMPLETED,
+                'REJECTED' => RiderLocalTripItem::FAILED,
+                'CANCELLED' => RiderLocalTripItem::CANCELLED,
+                default => null,
+            };
+            if ($next === null) {
+                return;
+            }
+            $item->update([
+                'status' => $next,
+                'completed_at' => now(),
+                'failure_reason' => $next === RiderLocalTripItem::FAILED ? $assignment->rejection_reason : null,
+            ]);
+
+            $trip = RiderLocalTrip::query()->whereKey($item->rider_local_trip_id)->with('items')->lockForUpdate()->first();
+            if ($trip && $trip->items->every(fn (RiderLocalTripItem $row): bool => in_array($row->status, [RiderLocalTripItem::COMPLETED, RiderLocalTripItem::FAILED, RiderLocalTripItem::CANCELLED], true))) {
+                $trip->update(['status' => RiderLocalTrip::COMPLETED, 'completed_at' => now()]);
+            }
+        });
+    }
+
+    public function assertAssignmentMayStart(RiderAssignment $assignment): void
+    {
+        if (! $this->schema->localTripsReady()) {
+            return;
+        }
+        $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->latest()->first();
+        if (! $item || $item->status !== RiderLocalTripItem::LOADED
+            || ! in_array($item->trip?->status, [RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS], true)) {
+            throw new RuntimeException('This local assignment must be scanned onto an active rider trip before departure.');
+        }
+    }
+
+    private function assignmentCodes(RiderAssignment $assignment): array
+    {
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP) {
+            $address = $assignment->shipment?->sellerOrder?->sellerProfile?->businessAddress;
+            return $this->codesFrom($address);
+        }
+
+        return [
+            trim((string) $assignment->shipment?->destination_province_code),
+            trim((string) $assignment->shipment?->destination_municipality_code),
+            trim((string) $assignment->shipment?->destination_barangay_code),
+        ];
+    }
+
+    private function codesFrom(?object $address): array
+    {
+        return [
+            trim((string) $address?->province_code),
+            trim((string) $address?->municipality_code),
+            trim((string) $address?->barangay_code),
+        ];
+    }
+
+    private function assertCanonicalBarangay(LogisticsCenter $center, ?string $provinceCode, ?string $municipalityCode, ?string $barangayCode): void
+    {
+        if (blank($provinceCode) || blank($municipalityCode) || blank($barangayCode)
+            || ! $this->eligibility->centerCoversMunicipality($center, $provinceCode, $municipalityCode)) {
+            throw new RuntimeException('The trip requires a valid PSGC province, municipality, and barangay owned by the logistics center.');
+        }
+        $records = PhilippineAddressController::barangayRecordsForMunicipality(trim((string) $municipalityCode));
+        $valid = collect($records)->contains(fn (array $record): bool => trim((string) ($record['code'] ?? '')) === trim((string) $barangayCode));
+        if (! $valid) {
+            throw new RuntimeException('The selected barangay PSGC is not valid for the selected municipality.');
+        }
+    }
+
+    private function riderHasExactArea(RiderProfile $rider, string $provinceCode, string $municipalityCode, string $barangayCode): bool
+    {
+        return $rider->areaAssignments->contains(function ($assignment) use ($provinceCode, $municipalityCode, $barangayCode): bool {
+            if (! $assignment->is_active || ! $assignment->serviceArea?->is_active) {
+                return false;
+            }
+            return $assignment->serviceArea->locations->contains(fn ($location): bool =>
+                trim((string) $location->province_code) === $provinceCode
+                && trim((string) $location->municipality_code) === $municipalityCode
+                && trim((string) $location->barangay_code) === $barangayCode);
+        });
+    }
+
+    private function assertTripOpenForLoading(RiderLocalTrip $trip): void
+    {
+        if ($trip->status !== RiderLocalTrip::LOADING) {
+            throw new RuntimeException('Only a loading local trip can receive assignments.');
+        }
+        LocalTripCapacityRules::approvedCapacity((int) $trip->approved_parcel_capacity);
+    }
+
+    private function assertTripActor(User $actor, RiderLocalTrip $trip, bool $allowCenterOperator): void
+    {
+        $trip->loadMissing('rider');
+        $actor->loadMissing('logisticsCenter');
+        if ((int) $actor->id === (int) $trip->rider?->user_id) {
+            return;
+        }
+        if ($allowCenterOperator && $actor->account_type === User::TYPE_LOGISTICS
+            && $actor->status === User::STATUS_ACTIVE
+            && (int) $actor->logisticsCenter?->id === (int) $trip->logistics_center_id) {
+            return;
+        }
+        throw new RuntimeException('Only the assigned rider or an authorized home-hub operator can operate this trip.');
+    }
+
+    private function assertActorAtCenter(User $actor, int $centerId): void
+    {
+        if ((int) $actor->logisticsCenter?->id !== $centerId
+            || $actor->account_type !== User::TYPE_LOGISTICS
+            || $actor->status !== User::STATUS_ACTIVE) {
+            throw new RuntimeException('The authenticated user is not authorized for this logistics center.');
+        }
+    }
+
+    private function assertReady(): void
+    {
+        if (! $this->schema->localTripsReady()) {
+            throw new RuntimeException('Local trip schema and Step 4 custody dependencies are not installed; local-trip dispatch is disabled.');
+        }
+    }
+}

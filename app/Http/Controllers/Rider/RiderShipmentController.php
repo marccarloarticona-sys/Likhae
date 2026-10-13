@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Rider;
 use App\Http\Controllers\Controller;
 use App\Models\Rider\RiderAssignment;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Maps\RiderLocationService;
 use Illuminate\Http\RedirectResponse;
@@ -64,7 +65,7 @@ class RiderShipmentController extends Controller
         return view('Rider.shipments', compact('assignments', 'rider'));
     }
 
-    public function transition(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images): RedirectResponse
+    public function transition(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images, LocalRiderTripService $localTrips): RedirectResponse
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider && (int) $assignment->rider_profile_id === (int) $rider->id, 403);
@@ -96,6 +97,9 @@ class RiderShipmentController extends Controller
             'attempt_status' => ['nullable', 'string', 'in:FAILED,RESCHEDULED,RETURNED'],
             'next_attempt_at' => ['required_if:attempt_status,RESCHEDULED', 'nullable', 'date', 'after:now'],
             'reason' => ['nullable', 'string', 'max:1000'],
+            'collected_amount' => ['required_if:action,delivery_success', 'nullable', 'numeric', 'decimal:0,2', 'min:0'],
+            'collection_reference' => ['nullable', 'string', 'max:100'],
+            'notes' => ['nullable', 'string', 'max:1000'],
             // Keep below the active PHP upload_max_filesize (2 MB) so a
             // validation message is returned instead of PHP discarding it.
             'proof_file' => ['required_if:action,delivery_success', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:1536'],
@@ -120,7 +124,8 @@ class RiderShipmentController extends Controller
         }
 
         try {
-            $workflow->riderTransition($assignment, $data['action'], $request->user(), $data);
+            $result = $workflow->riderTransition($assignment, $data['action'], $request->user(), $data);
+            $localTrips->syncAssignment($result);
         } catch (RuntimeException $exception) {
             if ($proofPath) {
                 Storage::disk('public')->delete($proofPath);

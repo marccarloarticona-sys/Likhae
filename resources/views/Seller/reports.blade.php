@@ -32,6 +32,8 @@
         <x-seller.stat-card label="Completion rate" :value="$reportSummary['completion_rate'].'%'" icon="finance" />
     </section>
 
+    <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable and payout status</h2><p>Discount funding remains review-required until an authorized financial actor identifies who funds it.</p></div></header><div class="sl-mini-stats"><div><span>Original product gross</span><strong>₱{{ number_format($reportSummary['original_product_amount'] ?? 0, 2) }}</strong></div><div><span>Discounts</span><strong>₱{{ number_format($reportSummary['discounts'] ?? 0, 2) }}</strong></div><div><span>Commission</span><strong>₱{{ number_format($reportSummary['commission'] ?? 0, 2) }}</strong></div><div><span>Seller payable</span><strong>₱{{ number_format($reportSummary['seller_payable'] ?? 0, 2) }}</strong></div><div><span>Settled payouts</span><strong>₱{{ number_format($reportSummary['settled_payouts'] ?? 0, 2) }}</strong></div><div><span>Outstanding</span><strong>₱{{ number_format($reportSummary['outstanding_balance'] ?? 0, 2) }}</strong></div><div><span>Pending settlements</span><strong>{{ number_format($reportSummary['pending_settlement'] ?? 0) }}</strong></div></div></section>
+
     <section class="sl-card sl-report-builder">
         <nav class="sl-report-types" aria-label="Report types">
             @foreach($reportTypes as $key => $item)

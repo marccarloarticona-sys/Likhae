@@ -159,9 +159,11 @@ class BuyerApiController extends Controller
             'cart_item_ids' => ['required', 'array', 'min:1'],
             'cart_item_ids.*' => ['required', 'integer'],
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
-            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
+            'payment_method' => ['required', Rule::in(['COD'])],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['integer'],
         ]);
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
         $items = $cart->selectedItems($request->user(), $ids);
@@ -171,7 +173,20 @@ class BuyerApiController extends Controller
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
             ->all();
-        $order = $checkout->placeOrder($request->user(), $address, $items, $data['payment_method'], $voucherCodes);
+        $protectionItemIds = collect((array) ($data['protection_item_ids'] ?? []))
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+        $order = $checkout->placeOrder(
+            $request->user(),
+            $address,
+            $items,
+            $data['payment_method'],
+            $voucherCodes,
+            null,
+            $protectionItemIds,
+        );
 
         return response()->json([
             'success' => true,

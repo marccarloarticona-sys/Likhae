@@ -3,6 +3,9 @@
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminOnboardingController;
 use App\Http\Controllers\Admin\AdminOperationsController;
+use App\Http\Controllers\Admin\AdminFinanceController;
+use App\Http\Controllers\Admin\AdminProtectionRuleController;
+use App\Http\Controllers\Admin\AdminCashRefundController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use App\Http\Controllers\WorkspaceSettingsController;
@@ -54,6 +57,13 @@ Route::prefix('admin')
         Route::patch('/compliance/{case}', [AdminOperationsController::class, 'updateComplianceCase'])->name('compliance.update');
         Route::get('/complaints', [AdminOperationsController::class, 'complaints'])->name('complaints');
         Route::get('/finance', [AdminOperationsController::class, 'finance'])->name('finance');
+        Route::get('/protection-rules', [AdminProtectionRuleController::class, 'index'])->name('protection-rules');
+        Route::post('/protection-rules', [AdminProtectionRuleController::class, 'store'])->name('protection-rules.store');
+        Route::patch('/protection-rules/{protectionRule}', [AdminProtectionRuleController::class, 'update'])->name('protection-rules.update');
+        Route::patch('/protection-rules/{protectionRule}/toggle', [AdminProtectionRuleController::class, 'toggle'])->name('protection-rules.toggle');
+        Route::post('/finance/seller-settlements/{settlement}/authorize', [AdminFinanceController::class, 'authorizeSellerSettlement'])->name('finance.seller-settlements.authorize');
+        Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
+        Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [AdminOperationsController::class, 'messageStream'])->name('messages.stream');

@@ -27,7 +27,7 @@ class LookupApiController extends Controller
         return response()->json([
             'success' => true,
             'data' => LogisticsCenter::query()
-                ->where('status', 'ACTIVE')
+                ->approvedActive()
                 ->orderBy('business_name')
                 ->get(['id', 'code', 'business_name'])
                 ->values(),

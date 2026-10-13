@@ -10,9 +10,13 @@ use App\Models\Seller\RefundPayout;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
+use App\Services\Returns\CashRefundWorkflowService;
+use App\Services\Returns\ReturnCustodyService;
+use App\Models\Buyer\ReturnRefundRequestItem;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 
 class SellerReturnRefundController extends Controller
@@ -22,7 +26,7 @@ class SellerReturnRefundController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
 
-        $sellerRequest->load([
+        $relations = [
             'request.order.buyer',
             'request.evidence',
             'request.events.actor',
@@ -31,7 +35,13 @@ class SellerReturnRefundController extends Controller
             'items.orderItem',
             'payouts.submittedBy',
             'dispute',
-        ]);
+        ];
+        $sellerRequest->load($relations);
+        if (Schema::hasTable('cash_refund_obligations')) {
+            $sellerRequest->load('cashRefundObligation');
+        } else {
+            $sellerRequest->setRelation('cashRefundObligation', null);
+        }
 
         return view('Seller.return-refund-show', compact('sellerRequest'));
     }
@@ -58,7 +68,7 @@ class SellerReturnRefundController extends Controller
             $this->notifyBuyer($locked, 'Refund request approved', 'The Seller approved your request '.$locked->request->request_number.'.');
         });
 
-        return back()->with('status', 'Refund request approved. Record the manual GCash transfer after sending it.');
+        return back()->with('status', 'Refund request approved. The cash obligation remains pending physical return receipt, inspection, and an authorized cash payer.');
     }
 
     public function reject(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse
@@ -89,6 +99,8 @@ class SellerReturnRefundController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
+        $sellerRequest->loadMissing('request');
+        abort_unless(strtoupper((string) $sellerRequest->request?->refund_method) !== 'CASH', 409, 'New COD refunds are cash-only. GCash payment reports are retained only for historical online refund records.');
         $data = $request->validate([
             'amount_sent' => ['required', 'numeric', 'decimal:0,2', 'min:0.01'],
             'transaction_reference' => ['required', 'string', 'min:3', 'max:150'],
@@ -132,6 +144,56 @@ class SellerReturnRefundController extends Controller
         }
 
         return back()->with('status', 'Payment proof saved. The refund is awaiting Buyer confirmation.');
+    }
+
+    public function cashReady(Request $request, SellerReturnRefundRequest $sellerRequest, CashRefundWorkflowService $cashRefunds): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
+        $request->validate(['confirm_cash_ready' => ['required', 'accepted']]);
+        try {
+            $cashRefunds->markCashReady($sellerRequest, $request->user());
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Cash refund obligation is ready. Physical cash payment remains blocked until an authorized payer policy is configured.');
+    }
+
+    public function receiveReturn(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnCustodyService $custody): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
+        $request->validate(['confirm_received' => ['required', 'accepted'], 'notes' => ['nullable', 'string', 'max:2000']]);
+        try {
+            $custody->recordCustodyEvent($sellerRequest, $request->user(), 'SELLER_RECEIVED', ['from_party' => 'LOGISTICS_OR_RIDER', 'to_party' => 'SELLER_OR_FACILITY', 'notes' => $request->input('notes')]);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Seller/facility receipt recorded. Complete inspection before cash can be made ready.');
+    }
+
+    public function inspectReturn(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundRequestItem $item, ReturnCustodyService $custody): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
+        $data = $request->validate([
+            'inventory_disposition' => ['required', 'in:RESTOCKABLE,DAMAGED,QUARANTINED,NON_RESELLABLE'],
+            'received_condition' => ['nullable', 'string', 'max:80'],
+            'completeness_status' => ['nullable', 'string', 'max:80'],
+            'damage_notes' => ['nullable', 'string', 'max:2000'],
+            'missing_accessories' => ['nullable', 'string', 'max:2000'],
+            'identifier_result' => ['nullable', 'string', 'max:120'],
+            'notes' => ['nullable', 'string', 'max:2000'],
+        ]);
+        try {
+            $custody->recordInspection($sellerRequest, $item, $request->user(), $data);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Return inspection saved. Inventory was not automatically restocked.');
     }
 
     public function payoutProof(Request $request, RefundPayout $payout, RefundProofStorageService $proofs)

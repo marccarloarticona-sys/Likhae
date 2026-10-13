@@ -44,15 +44,44 @@ class CheckoutController extends Controller
             $request->session()->flash('buyer_notice', 'Checkout now accepts one voucher code. Choose one code to continue.');
         }
 
-        try {
-            $preview = $this->checkoutService->preview($items, $voucherCode, $request->user());
-        } catch (ValidationException $exception) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes']);
+        $addresses = $request->user()->addresses()->orderByDesc('is_default')->latest()->get();
+        $automaticRouting = $this->checkoutService->automaticRoutingReady();
+        $previewAddress = $addresses->firstWhere('is_default', true) ?? $addresses->first();
+        $selectedProtectionIds = array_map(
+            'intval',
+            (array) old('protection_item_ids', $request->session()->get('checkout_protection_item_ids', [])),
+        );
+        $previewError = null;
 
-            return redirect()
-                ->route('buyer.checkout')
-                ->withErrors($exception->errors())
-                ->withInput(['voucher_code' => $voucherCode]);
+        try {
+            $preview = $this->checkoutService->preview(
+                $items,
+                $voucherCode,
+                $request->user(),
+                null,
+                $automaticRouting ? $previewAddress : null,
+                $selectedProtectionIds,
+            );
+        } catch (ValidationException $exception) {
+            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_protection_item_ids']);
+
+            // Do not redirect back to this same GET action when the preview
+            // fails. A persistent routing/protection error would otherwise
+            // create an infinite /buyer/checkout redirect loop. Render the
+            // page with a neutral preview so the buyer can see the reason and
+            // correct the address or cart selection.
+            $previewError = collect($exception->errors())->flatten()->filter()->first()
+                ?: 'Checkout could not be prepared. Review your address and cart items before trying again.';
+            $voucherCode = '';
+            $selectedProtectionIds = [];
+            $preview = $this->checkoutService->preview(
+                $items,
+                '',
+                $request->user(),
+                null,
+                null,
+                [],
+            );
         }
 
         // Stock can change after an item is added to the cart. Keep the
@@ -68,12 +97,15 @@ class CheckoutController extends Controller
 
         return view('Buyer.checkout', [
             'cartItems' => $items,
-            'addresses' => $request->user()->addresses()->orderByDesc('is_default')->latest()->get(),
+            'addresses' => $addresses,
             'availableVouchers' => $this->checkoutService->availableVouchers($items, $request->user()),
             'logisticsProviders' => $this->checkoutService->availableLogisticsProviders(),
             'preview' => $preview,
             'voucherCode' => $voucherCode,
             'hasUnavailableStock' => $hasUnavailableStock,
+            'automaticRouting' => $automaticRouting,
+            'selectedProtectionIds' => $selectedProtectionIds,
+            'previewError' => $previewError,
         ]);
     }
 
@@ -121,6 +153,8 @@ class CheckoutController extends Controller
             'voucher_code' => ['nullable', 'string', 'max:80'],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['integer'],
         ]);
 
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
@@ -140,6 +174,13 @@ class CheckoutController extends Controller
         }
 
         $selectedItems = $this->cartService->selectedItems($request->user(), $ownedIds);
+        $protectionIds = collect((array) ($data['protection_item_ids'] ?? []))
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->intersect($ownedIds)
+            ->values()
+            ->all();
+        $request->session()->put('checkout_protection_item_ids', $protectionIds);
         if ($voucherCode !== '') {
             $request->session()->put('checkout_voucher_code', $voucherCode);
             $request->session()->forget('checkout_voucher_codes');
@@ -158,20 +199,26 @@ class CheckoutController extends Controller
 
     public function store(Request $request): RedirectResponse
     {
+        $automaticRouting = $this->checkoutService->automaticRoutingReady();
+        $logisticsRules = $automaticRouting
+            ? ['nullable', 'integer']
+            : ['required', 'integer', Rule::exists('logistics_centers', 'id')->where('status', 'ACTIVE')];
         $data = $request->validate([
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
-            'logistics_center_id' => ['required', 'integer', Rule::exists('logistics_centers', 'id')->where('status', 'ACTIVE')],
-            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
+            'logistics_center_id' => $logisticsRules,
+            'payment_method' => ['required', Rule::in(['COD'])],
             'voucher_code' => ['nullable', 'string', 'max:80'],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['integer'],
         ], [
             'address_id.required' => 'Select a delivery address.',
             'address_id.exists' => 'The selected delivery address is no longer available.',
             'logistics_center_id.required' => 'Select a logistics provider.',
             'logistics_center_id.exists' => 'The selected logistics provider is no longer active.',
             'payment_method.required' => 'Select a payment method.',
-            'payment_method.in' => 'Select a supported payment method.',
+            'payment_method.in' => 'Cash on Delivery is the only payment method available for new orders.',
         ]);
 
         $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
@@ -215,7 +262,8 @@ class CheckoutController extends Controller
                 $items,
                 $data['payment_method'],
                 $voucherCode,
-                (int) $data['logistics_center_id'],
+                isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null,
+                array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
             );
         } catch (ValidationException $exception) {
             if (array_key_exists('voucher_code', $exception->errors())) {
@@ -225,7 +273,7 @@ class CheckoutController extends Controller
             throw $exception;
         }
 
-        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes']);
+        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_protection_item_ids']);
 
         return redirect()
             ->route('buyer.orders.success', ['order' => $order->order_number])

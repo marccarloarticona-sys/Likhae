@@ -45,6 +45,16 @@
         @endforelse
     </section>
 
+    @php($financeSummary = $financeSummary ?? [])
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <div class="flex flex-wrap items-end justify-between gap-3"><div><span class="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Finance control</span><h2 class="mt-1 text-[16px] font-semibold text-ink">COD and earnings reconciliation</h2></div><a href="{{ route('logistics.remittances') }}" class="rounded-lg border border-line px-3 py-2 text-[9px] font-semibold text-ink">Review remittances</a></div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            @foreach([['Rider COD obligations', 'rider_cod_obligations'], ['Submitted cash', 'remittance_submitted'], ['Verified cash', 'verified_cash'], ['Discrepancies', 'discrepancies'], ['Logistics pool', 'logistics_pool'], ['Pending settlement', 'pending_settlement']] as [$label, $key])
+                <article class="rounded-lg bg-page-secondary p-3"><span class="block text-[8px] uppercase tracking-[0.08em] text-muted">{{ $label }}</span><strong class="mt-2 block text-[15px] text-ink">{{ $key === 'discrepancies' ? number_format((int) ($financeSummary[$key] ?? 0)) : 'PHP '.number_format((float) ($financeSummary[$key] ?? 0), 2) }}</strong></article>
+            @endforeach
+        </div>
+    </section>
+
     <section class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section class="overflow-hidden rounded-xl border border-line bg-surface">
             <div class="flex items-center justify-between gap-4 border-b border-line px-5 py-4">

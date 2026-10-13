@@ -14,6 +14,9 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Seller\SellerOrder;
 use App\Models\User;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Fulfillment\LocalRiderTripService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Models\Rider\RiderLocalTrip;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Marketplace\BuyerOrderActionService;
 use Illuminate\Http\JsonResponse;
@@ -30,7 +33,13 @@ class WorkflowApiController extends Controller
     {
         $user = $request->user();
         abort_unless($user->isAccountType(User::TYPE_SELLER), 403);
-        abort_unless($user->sellerProfile && (int) $sellerOrder->seller_profile_id === (int) $user->sellerProfile->id, 403);
+        abort_unless(
+            $user->sellerProfile
+                && $user->sellerProfile->status === 'ACTIVE'
+                && (int) $sellerOrder->seller_profile_id === (int) $user->sellerProfile->id,
+            403,
+            'An active seller profile is required.',
+        );
 
         $data = $request->validate(['action' => ['required', Rule::in(['confirm', 'prepare', 'ready', 'handover_confirm', 'cancel'])]]);
         $result = $workflow->sellerTransition($sellerOrder, $data['action'], $user);
@@ -38,7 +47,7 @@ class WorkflowApiController extends Controller
         return response()->json(['success' => true, 'seller_order' => $result->only(['id', 'seller_order_number', 'status'])]);
     }
 
-    public function riderAssignment(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images): JsonResponse
+    public function riderAssignment(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images, LocalRiderTripService $localTrips): JsonResponse
     {
         $user = $request->user();
         abort_unless($user->isAccountType(User::TYPE_RIDER), 403);
@@ -53,6 +62,9 @@ class WorkflowApiController extends Controller
             'attempt_status' => ['nullable', Rule::in(['FAILED', 'RESCHEDULED', 'RETURNED'])],
             'next_attempt_at' => ['required_if:attempt_status,RESCHEDULED', 'nullable', 'date', 'after:now'],
             'reason' => ['nullable', 'string', 'max:1000'],
+            'collected_amount' => ['required_if:action,delivery_success', 'nullable', 'numeric', 'decimal:0,2', 'min:0'],
+            'collection_reference' => ['nullable', 'string', 'max:100'],
+            'notes' => ['nullable', 'string', 'max:1000'],
             'proof_path' => ['nullable', 'string', 'max:500'],
             'proof_file' => ['required_if:action,delivery_success', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
         ]);
@@ -64,6 +76,7 @@ class WorkflowApiController extends Controller
 
         try {
             $result = $workflow->riderTransition($assignment, $data['action'], $user, $data);
+            $localTrips->syncAssignment($result);
         } catch (Throwable $exception) {
             if ($proofPath) {
                 Storage::disk('public')->delete($proofPath);
@@ -117,7 +130,7 @@ class WorkflowApiController extends Controller
         return response()->json(['success' => true, 'tracking_number' => $result->tracking_number, 'current_status' => $result->current_status, 'service_area_id' => $result->service_area_id]);
     }
 
-    public function assignRider(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow): JsonResponse
+    public function assignRider(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow, LogisticsSchemaReadiness $schema, LocalRiderTripService $localTrips): JsonResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
@@ -125,10 +138,21 @@ class WorkflowApiController extends Controller
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer', Rule::exists('rider_profiles', 'id')->where('logistics_center_id', $center->id)],
             'assignment_type' => ['required', Rule::in(['PICKUP', 'DELIVERY'])],
+            'local_trip_id' => ['nullable', 'integer'],
         ]);
-        $rider = RiderProfile::query()->where('logistics_center_id', $center->id)->findOrFail($data['rider_profile_id']);
+        $rider = RiderProfile::query()
+            ->where('logistics_center_id', $center->id)
+            ->where('status', 'ACTIVE')
+            ->whereHas('user', fn ($query) => $query->where('status', User::STATUS_ACTIVE))
+            ->findOrFail($data['rider_profile_id']);
         try {
-            $assignment = $workflow->assignRider($shipment, $rider, $data['assignment_type'], $request->user());
+            $assignment = DB::transaction(function () use ($workflow, $localTrips, $schema, $shipment, $rider, $data, $request) {
+                $assignment = $workflow->assignRider($shipment, $rider, $data['assignment_type'], $request->user());
+                if ($schema->localTripsReady() && ! empty($data['local_trip_id'])) {
+                    $localTrips->addAssignment($request->user(), RiderLocalTrip::query()->findOrFail((int) $data['local_trip_id']), $assignment);
+                }
+                return $assignment;
+            });
         } catch (\RuntimeException $exception) {
             return response()->json([
                 'success' => false,
@@ -159,17 +183,6 @@ class WorkflowApiController extends Controller
             $lockedOrder->update(['status' => 'COMPLETED', 'completed_at' => now()]);
             foreach ($lockedOrder->sellerOrders as $sellerOrder) {
                 $sellerOrder->update(['status' => 'COMPLETED']);
-                $rate = PlatformSetting::commissionRate();
-                CommissionTransaction::query()->firstOrCreate(
-                    ['seller_order_id' => $sellerOrder->id],
-                    [
-                        'commission_rate' => $rate,
-                        'commissionable_amount' => $sellerOrder->grand_total,
-                        'commission_amount' => round((float) $sellerOrder->grand_total * $rate, 2),
-                        'status' => 'PENDING',
-                        'calculated_at' => now(),
-                    ],
-                );
                 if ($sellerOrder->shipment) {
                     $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
                     app(ShipmentWorkflowService::class)->recordEvent($sellerOrder->shipment, 'COMPLETED', $user, 'Buyer confirmed receipt.');
@@ -185,7 +198,7 @@ class WorkflowApiController extends Controller
         $user = $request->user();
         abort_unless($user->isAccountType(User::TYPE_LOGISTICS), 403);
 
-        return $user->logisticsCenter;
+        return $user->logisticsCenter()->approvedActive()->first();
     }
 
     private function assertCenterShipment(Shipment $shipment, LogisticsCenter $center): void

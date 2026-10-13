@@ -266,6 +266,13 @@
                     ],
                 ],
                 [
+                    'key' => 'protection-rules',
+                    'label' => 'Additional Care Rules',
+                    'route' => 'admin.protection-rules',
+                    'icon' => 'finance',
+                    'active' => ['admin.protection-rules'],
+                ],
+                [
                     'key' => 'reports',
                     'label' => 'Reports',
                     'route' => 'admin.reports',
@@ -382,6 +389,8 @@
             ['label' => 'Assignments', 'items' => [
                 ['key' => 'pickups', 'label' => 'Pickup Assignments', 'route' => 'rider.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickups'] ?? 0, 'active' => ['rider.pickups', 'rider.pickups.*', 'rider.parcels.*']],
                 ['key' => 'deliveries', 'label' => 'Delivery Assignments', 'route' => 'rider.deliveries', 'icon' => 'shipment', 'count' => $sidebarCounts['deliveries'] ?? 0, 'active' => ['rider.deliveries', 'rider.deliveries.*']],
+                ['key' => 'trips', 'label' => 'Local Trips', 'route' => 'rider.trips', 'icon' => 'shipment', 'active' => ['rider.trips', 'rider.trips.*']],
+                ['key' => 'transfers', 'label' => 'Inter-Hub Transfers', 'route' => 'rider.transfers', 'icon' => 'sorting', 'active' => ['rider.transfers', 'rider.transfers.*']],
             ]],
             ['label' => 'History & Earnings', 'items' => [
                 ['key' => 'history', 'label' => 'Delivery History', 'route' => 'rider.history', 'icon' => 'history', 'active' => ['rider.history', 'rider.history.*']],
@@ -402,6 +411,8 @@
                 ['key' => 'pickup-requests', 'label' => 'Pickup Requests', 'route' => 'logistics.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickup_requests'] ?? 0, 'active' => ['logistics.pickups', 'logistics.pickups.*']],
                 ['key' => 'incoming', 'label' => 'Incoming Parcels', 'route' => 'logistics.parcels.receive', 'icon' => 'shipment', 'count' => $sidebarCounts['incoming'] ?? 0, 'active' => ['logistics.parcels', 'logistics.parcels.receive', 'logistics.parcels.show']],
                 ['key' => 'sorting', 'label' => 'Sorting', 'route' => 'logistics.sorting', 'icon' => 'sorting', 'count' => $sidebarCounts['sorting'] ?? 0, 'active' => ['logistics.sorting', 'logistics.sorting.*']],
+                ['key' => 'transfers', 'label' => 'Hub Transfers', 'route' => 'logistics.transfers', 'icon' => 'sorting', 'active' => ['logistics.transfers', 'logistics.transfers.*']],
+                ['key' => 'local-trips', 'label' => 'Local Rider Trips', 'route' => 'logistics.local-trips', 'icon' => 'sorting', 'active' => ['logistics.local-trips', 'logistics.local-trips.*']],
                 ['key' => 'assignments', 'label' => 'Rider Assignment', 'route' => 'logistics.assignments', 'icon' => 'riders', 'count' => $sidebarCounts['assignments'] ?? 0, 'active' => ['logistics.assignments', 'logistics.dispatch', 'logistics.assignments.*', 'logistics.dispatch.*']],
                 ['key' => 'monitoring', 'label' => 'Delivery Monitoring', 'route' => 'logistics.parcels.tracking', 'icon' => 'tracking', 'count' => $sidebarCounts['monitoring'] ?? 0, 'active' => ['logistics.parcels.tracking']],
             ]],

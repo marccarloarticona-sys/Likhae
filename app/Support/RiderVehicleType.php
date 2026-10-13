@@ -35,6 +35,12 @@ final class RiderVehicleType
         return array_keys(self::registrationOptions());
     }
 
+    /** @return list<string> */
+    public static function localValues(): array
+    {
+        return [self::MOTORCYCLE, self::TRICYCLE];
+    }
+
     public static function role(?string $vehicleType): string
     {
         return match (self::normalize($vehicleType)) {

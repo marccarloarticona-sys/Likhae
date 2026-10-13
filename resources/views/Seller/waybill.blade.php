@@ -14,6 +14,7 @@
         <div class="box"><h2>From</h2><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><br>{{ $sellerOrder->sellerProfile?->businessAddress?->formatted() }}</div>
         <div class="box"><h2>Deliver to</h2><strong>{{ $address?->recipient_name }}</strong><br>{{ $address?->contact_number }}<br>{{ $address?->formatted() }}</div>
     </section>
+    @if($sellerOrder->items->contains(fn ($item): bool => $item->hasAdditionalCare()))<div style="margin-top:14px;border:2px solid #b45309;background:#fffbeb;padding:10px;font-weight:800;letter-spacing:.5px">FRAGILE / ADDITIONAL CARE — HANDLE WITH CARE</div>@endif
     <table class="items" style="margin-top:20px"><thead><tr><th>Item</th><th>Variant</th><th>SKU</th><th>Qty</th></tr></thead><tbody>@foreach($sellerOrder->items as $item)<tr><td>{{ $item->product_name }}</td><td>{{ $item->variant_description ?: 'Standard' }}</td><td>{{ $item->sku }}</td><td>{{ $item->quantity }}</td></tr>@endforeach</tbody></table>
     <p><strong>Destination:</strong> {{ collect([$shipment->destination_barangay_name, $shipment->destination_municipality_name, $shipment->destination_province_name])->filter()->implode(', ') }}</p>
 </main>

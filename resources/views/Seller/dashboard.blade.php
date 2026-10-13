@@ -34,6 +34,15 @@
         <x-seller.stat-card label="Ready for Pickup" :value="number_format($stats['pending_shipment'])" change="Needs action" direction="down" icon="shipping" />
     </section>
 
+    <section class="sl-card" style="margin-top:16px">
+        <header class="sl-card-head"><div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable status</h2><p>Commission is calculated from original product prices; discount-funded rows remain in review.</p></div><a href="{{ route('seller.reports') }}" class="sl-text-link">View reports</a></header>
+        @if($settlementSummary['schema_ready'])
+            <div class="sl-stat-grid" style="margin-top:0"><x-seller.stat-card label="Pending / Review" :value="'₱'.number_format($settlementSummary['pending'], 2)" icon="orders" /><x-seller.stat-card label="Authorized" :value="'₱'.number_format($settlementSummary['authorized'], 2)" icon="money" /><x-seller.stat-card label="Paid" :value="'₱'.number_format($settlementSummary['paid'], 2)" icon="revenue" /><x-seller.stat-card label="Outstanding" :value="'₱'.number_format($settlementSummary['outstanding'], 2)" icon="shipping" /></div>
+        @else
+            <p class="sl-empty-state">Settlement tables are prepared but not installed yet. Existing seller orders and reports remain available.</p>
+        @endif
+    </section>
+
     <div class="sl-dashboard-grid">
         <section class="sl-card sl-sales-panel">
             <header class="sl-card-head">

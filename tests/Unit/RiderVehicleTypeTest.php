@@ -27,4 +27,9 @@ class RiderVehicleTypeTest extends TestCase
         $this->assertSame(RiderVehicleType::ROLE_INTER_LOGISTICS, RiderVehicleType::role('Truck'));
         $this->assertSame(RiderVehicleType::ROLE_LEGACY, RiderVehicleType::role('Car'));
     }
+
+    public function test_local_assignment_values_are_motorcycle_and_tricycle_only(): void
+    {
+        $this->assertSame(['motorcycle', 'tricycle'], RiderVehicleType::localValues());
+    }
 }

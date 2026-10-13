@@ -10,14 +10,23 @@
         <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">{{ $earningsNotice }}</p>
     </section>
 
-    <section class="rounded-xl border border-line bg-surface p-6">
-        <p class="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Total Recorded Earnings</p>
-        <p class="mt-2 text-3xl font-semibold text-ink">PHP {{ number_format($earningsTotal, 2) }}</p>
+    <section class="grid gap-3 sm:grid-cols-3">
+        <article class="rounded-xl border border-line bg-surface p-6"><p class="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Accrued / allocated</p><p class="mt-2 text-3xl font-semibold text-ink">PHP {{ number_format((float) ($poolSummary['accrued'] ?? $earningsTotal), 2) }}</p></article>
+        <article class="rounded-xl border border-line bg-surface p-6"><p class="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Paid</p><p class="mt-2 text-3xl font-semibold text-ink">PHP {{ number_format((float) ($poolSummary['paid'] ?? 0), 2) }}</p></article>
+        <article class="rounded-xl border border-line bg-surface p-6"><p class="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Unallocated pool</p><p class="mt-2 text-3xl font-semibold text-ink">PHP {{ number_format((float) ($poolSummary['unallocated'] ?? 0), 2) }}</p></article>
+    </section>
+
+    @php($financeSummary = $financeSummary ?? [])
+    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        @foreach([['COD collected', 'cod_collected'], ['Unremitted cash', 'unremitted_cash'], ['Submitted cash', 'remittances_submitted'], ['Verified cash', 'verified_cash']] as [$label, $key])
+            <article class="rounded-xl border border-line bg-surface p-4"><span class="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">{{ $label }}</span><strong class="mt-2 block text-xl text-ink">PHP {{ number_format((float) ($financeSummary[$key] ?? 0), 2) }}</strong></article>
+        @endforeach
+        <article class="rounded-xl border border-line bg-surface p-4"><span class="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">Discrepancies</span><strong class="mt-2 block text-xl text-ink">{{ number_format((int) ($financeSummary['discrepancies'] ?? 0)) }}</strong></article>
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-6">
         <h2 class="text-[13px] font-semibold text-ink">Earnings Records</h2>
-        <p class="mt-1 text-[9px] text-muted">Pickup and delivery earnings are recorded when an assignment is completed.</p>
+        <p class="mt-1 text-[9px] text-muted">Only approved rider pool shares become earnings. Cash remittance is never netted against this table.</p>
 
         <div class="mt-5 overflow-hidden rounded-xl border border-line">
             <table class="w-full min-w-[620px] text-left">

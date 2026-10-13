@@ -9,7 +9,7 @@
 <div class="sl-page">
     <div class="sl-page-toolbar">
         <div><span class="sl-eyebrow">Rider workspace</span><h2>Good morning, Rider</h2><p>Your pickup and delivery queue for today.</p></div>
-        <div class="sl-toolbar-group"><a class="sl-btn sl-btn-primary" href="{{ route('courier.deliveries') }}">Open deliveries</a></div>
+        <div class="sl-toolbar-group"><a class="sl-btn sl-btn-primary" href="{{ route('rider.deliveries') }}">Open deliveries</a></div>
     </div>
 
     <section class="sl-stat-grid" aria-label="Courier summary">
@@ -20,12 +20,12 @@
     </section>
 
     <div class="sl-dashboard-grid">
-        <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Seller pickup</span><h2>Pickup assignments</h2><p>Accept, collect, and scan parcels from sellers.</p></div><a href="{{ route('courier.pickups') }}" class="sl-text-link">View pickup queue</a></header><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Parcel</th><th>Seller</th><th>Area</th><th>Status</th><th></th></tr></thead><tbody>
+        <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Seller pickup</span><h2>Pickup assignments</h2><p>Accept, collect, and scan parcels from sellers.</p></div><a href="{{ route('rider.pickups') }}" class="sl-text-link">View pickup queue</a></header><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Parcel</th><th>Seller</th><th>Area</th><th>Status</th><th></th></tr></thead><tbody>
             @foreach ([['#1004','Metro Finds PH','Makati','New request','is-warning'],['#1005','Urban Carry Co.','Quezon City','Accepted','is-info'],['#1006','Stride PH','Pasig','To confirm','is-neutral']] as $pickup)
-                <tr><td><strong>{{ $pickup[0] }}</strong></td><td>{{ $pickup[1] }}</td><td>{{ $pickup[2] }}</td><td><span class="sl-status {{ $pickup[4] }}">{{ $pickup[3] }}</span></td><td><a class="sl-icon-link" href="{{ route('courier.pickups') }}" aria-label="Open pickup">→</a></td></tr>
+                <tr><td><strong>{{ $pickup[0] }}</strong></td><td>{{ $pickup[1] }}</td><td>{{ $pickup[2] }}</td><td><span class="sl-status {{ $pickup[4] }}">{{ $pickup[3] }}</span></td><td><a class="sl-icon-link" href="{{ route('rider.pickups') }}" aria-label="Open pickup">→</a></td></tr>
             @endforeach
         </tbody></table></div></section>
-        <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Sorting center</span><h2>Delivery assignments</h2><p>Collect sorted parcels and deliver to buyers.</p></div><a href="{{ route('courier.deliveries') }}" class="sl-text-link">View delivery queue</a></header><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Parcel</th><th>Destination</th><th>Status</th></tr></thead><tbody>
+        <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Sorting center</span><h2>Delivery assignments</h2><p>Collect sorted parcels and deliver to buyers.</p></div><a href="{{ route('rider.deliveries') }}" class="sl-text-link">View delivery queue</a></header><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Parcel</th><th>Destination</th><th>Status</th></tr></thead><tbody>
             @foreach ([['#0998','Santa Cruz, Laguna','Out for delivery','is-info'],['#0999','Los Baños, Laguna','Ready to collect','is-warning'],['#1000','Calamba, Laguna','At sorting center','is-neutral']] as $delivery)
                 <tr><td><strong>{{ $delivery[0] }}</strong></td><td>{{ $delivery[1] }}</td><td><span class="sl-status {{ $delivery[3] }}">{{ $delivery[2] }}</span></td></tr>
             @endforeach

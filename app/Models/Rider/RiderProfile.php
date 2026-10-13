@@ -3,6 +3,8 @@
 namespace App\Models\Rider;
 
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\RiderRemittance;
 use App\Models\User;
 use App\Support\RiderVehicleType;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,6 +20,9 @@ class RiderProfile extends Model
         'user_id',
         'logistics_center_id',
         'vehicle_type',
+        'approved_parcel_capacity',
+        'approved_weight_capacity_kg',
+        'approved_volume_capacity_liters',
         'plate_number',
         'drivers_license_number',
         'status',
@@ -27,7 +32,12 @@ class RiderProfile extends Model
 
     protected function casts(): array
     {
-        return ['approved_at' => 'datetime'];
+        return [
+            'approved_at' => 'datetime',
+            'approved_parcel_capacity' => 'integer',
+            'approved_weight_capacity_kg' => 'decimal:3',
+            'approved_volume_capacity_liters' => 'decimal:3',
+        ];
     }
 
     public function user(): BelongsTo
@@ -61,9 +71,24 @@ class RiderProfile extends Model
         return $this->hasMany(RiderAssignment::class);
     }
 
+    public function localTrips(): HasMany
+    {
+        return $this->hasMany(RiderLocalTrip::class);
+    }
+
     public function earnings(): HasMany
     {
         return $this->hasMany(RiderEarning::class);
+    }
+
+    public function codCollections(): HasMany
+    {
+        return $this->hasMany(CodCollection::class);
+    }
+
+    public function remittances(): HasMany
+    {
+        return $this->hasMany(RiderRemittance::class);
     }
 
     public function scopeActive(Builder $query): Builder

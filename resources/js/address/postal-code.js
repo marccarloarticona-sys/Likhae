@@ -155,6 +155,8 @@ function initPostalAddressDropdowns({
         municipality: [municipality.dataset.oldValue, municipality.dataset.oldCode],
         barangay: [barangay.dataset.oldValue, barangay.dataset.oldCode],
     };
+    const allowedProvinceCode = String(form.dataset.postalAllowedProvinceCode ?? '');
+    const allowedMunicipalityCode = String(form.dataset.postalAllowedMunicipalityCode ?? '');
     const requests = new Map();
     let postalRequest = 0;
 
@@ -189,8 +191,15 @@ function initPostalAddressDropdowns({
             signal: controller.signal,
         });
         if (!response.ok) throw new Error(`Address lookup failed (${response.status})`);
-        const records = recordsFrom(await response.json());
+        let records = recordsFrom(await response.json());
         if (requests.get(key) !== controller) return;
+
+        if (key === 'provinces' && allowedProvinceCode) {
+            records = records.filter((record) => String(record.code ?? record.id ?? record.value ?? '') === allowedProvinceCode);
+        }
+        if (key === 'municipalities' && allowedMunicipalityCode) {
+            records = records.filter((record) => String(record.code ?? record.id ?? record.value ?? '') === allowedMunicipalityCode);
+        }
 
         resetSelect(select, placeholder);
         records.forEach((record) => {
@@ -203,12 +212,17 @@ function initPostalAddressDropdowns({
             option.dataset.level = record.level ?? '';
             select.add(option);
         });
-        select.disabled = false;
+        select.disabled = select.options.length <= 1;
     };
 
     const pickOldValue = (select, key) => {
         const [name, code] = old[key];
         old[key] = ['', ''];
+        const allowedCode = key === 'province' ? allowedProvinceCode : key === 'municipality' ? allowedMunicipalityCode : '';
+        if (allowedCode) {
+            const allowed = [...select.options].find((option) => option.dataset.code === allowedCode);
+            if (allowed) return allowed.value;
+        }
         if (code) {
             const byCode = [...select.options].find((option) => option.dataset.code === code);
             if (byCode) return byCode.value;

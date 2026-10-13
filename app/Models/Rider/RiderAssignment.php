@@ -96,6 +96,11 @@ class RiderAssignment extends Model
         return $this->hasMany(DeliveryAttempt::class);
     }
 
+    public function localTripItems(): HasMany
+    {
+        return $this->hasMany(RiderLocalTripItem::class);
+    }
+
     public function earning(): HasOne
     {
         return $this->hasOne(RiderEarning::class);

@@ -54,6 +54,9 @@ Route::prefix('seller')
         Route::post('/orders/refunds/{sellerRequest}/approve', [SellerReturnRefundController::class, 'approve'])->name('orders.refunds.approve');
         Route::post('/orders/refunds/{sellerRequest}/reject', [SellerReturnRefundController::class, 'reject'])->name('orders.refunds.reject');
         Route::post('/orders/refunds/{sellerRequest}/payout', [SellerReturnRefundController::class, 'payout'])->name('orders.refunds.payout');
+        Route::post('/orders/refunds/{sellerRequest}/cash-ready', [SellerReturnRefundController::class, 'cashReady'])->name('orders.refunds.cash-ready');
+        Route::post('/orders/refunds/{sellerRequest}/receive', [SellerReturnRefundController::class, 'receiveReturn'])->name('orders.refunds.receive');
+        Route::post('/orders/refunds/{sellerRequest}/items/{item}/inspect', [SellerReturnRefundController::class, 'inspectReturn'])->name('orders.refunds.inspect');
         Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');
         Route::get('/orders/refunds/evidence/{evidence}', [SellerReturnRefundController::class, 'evidence'])->name('orders.refunds.evidence');
         Route::patch('/orders/{sellerOrder}/status', [SellerOrderController::class, 'transition'])->name('orders.status');

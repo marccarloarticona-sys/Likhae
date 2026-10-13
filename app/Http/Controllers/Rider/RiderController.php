@@ -5,6 +5,10 @@ namespace App\Http\Controllers\Rider;
 use App\Http\Controllers\Controller;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Buyer\Address;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\RiderEarningPool;
+use App\Models\Finance\RiderEarningPoolParticipant;
+use App\Models\Finance\RiderRemittance;
 use App\Models\Communication\Conversation;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
@@ -12,6 +16,7 @@ use App\Services\Communication\ConversationService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Services\Maps\MapDataService;
+use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -27,11 +32,12 @@ class RiderController extends Controller
         $rider = $this->rider($request);
 
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
+        $finance = $this->financeSummary($rider, app(FinanceSchemaReadiness::class));
         $riderStats = [
             ['label' => 'Pending pickups', 'value' => (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
             ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
             ['label' => 'In progress', 'value' => (clone $assignments)->where('status', 'IN_PROGRESS')->count()],
-            ['label' => 'Earnings', 'value' => 'PHP '.number_format((float) $rider->earnings()->sum('amount'), 2)],
+            ['label' => 'COD unremitted', 'value' => 'PHP '.number_format($finance['unremitted_cash'], 2)],
         ];
         $recentAssignments = (clone $assignments)
             ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address'])
@@ -60,6 +66,7 @@ class RiderController extends Controller
             'rider' => $rider,
             'riderStats' => $riderStats,
             'recentDeliveries' => $recentDeliveries,
+            'financeSummary' => $finance,
         ]);
     }
 
@@ -209,18 +216,42 @@ class RiderController extends Controller
     public function earnings(Request $request): View
     {
         $rider = $this->rider($request);
+        $financeSchema = app(FinanceSchemaReadiness::class);
 
-        $earnings = $rider->earnings()->with('riderAssignment.shipment')->latest()->paginate(15);
-        $earningsRows = $earnings->getCollection()->map(fn ($earning): array => [
-            'date' => $earning->earned_at?->format('M d, Y') ?? $earning->created_at?->format('M d, Y') ?? 'Date unavailable',
-            'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
-            'amount' => 'PHP '.number_format((float) $earning->amount, 2),
-            'status' => str($earning->status)->headline(),
-        ]);
-        $earningsTotal = (float) $rider->earnings()->sum('amount');
-        $earningsNotice = 'Recorded earnings from completed pickup and delivery assignments.';
+        if ($financeSchema->step7Ready()) {
+            $earnings = RiderEarningPoolParticipant::query()
+                ->where('rider_profile_id', $rider->id)
+                ->with(['pool.shipment', 'assignment.shipment'])
+                ->latest()
+                ->paginate(15);
+            $earningsRows = $earnings->getCollection()->map(fn (RiderEarningPoolParticipant $participant): array => [
+                'date' => $participant->created_at?->format('M d, Y') ?? 'Date unavailable',
+                'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
+                'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
+                'status' => str($participant->status)->headline(),
+            ]);
+            $earningsTotal = (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->sum('share_amount');
+            $poolSummary = [
+                'schema_ready' => true,
+                'unallocated' => (float) RiderEarningPool::query()->whereHas('participants', fn ($query) => $query->where('rider_profile_id', $rider->id))->sum('unresolved_share_amount'),
+                'accrued' => $earningsTotal,
+                'paid' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAID')->sum('share_amount'),
+            ];
+        } else {
+            $earnings = $rider->earnings()->with('riderAssignment.shipment')->latest()->paginate(15);
+            $earningsRows = $earnings->getCollection()->map(fn ($earning): array => [
+                'date' => $earning->earned_at?->format('M d, Y') ?? $earning->created_at?->format('M d, Y') ?? 'Date unavailable',
+                'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
+                'amount' => 'PHP '.number_format((float) $earning->amount, 2),
+                'status' => str($earning->status)->headline(),
+            ]);
+            $earningsTotal = (float) $rider->earnings()->sum('amount');
+            $poolSummary = ['schema_ready' => false, 'unallocated' => 0.0, 'accrued' => $earningsTotal, 'paid' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount')];
+        }
+        $earningsNotice = 'Cash held and rider earnings are separate. Cross-hub pool shares remain pending until policy approval.';
+        $financeSummary = $this->financeSummary($rider, $financeSchema);
 
-        return view('Rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice'));
+        return view('Rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary'));
     }
 
     public function history(Request $request): View
@@ -388,6 +419,25 @@ class RiderController extends Controller
         abort_unless($rider, 403);
 
         return $rider;
+    }
+
+    /** @return array<string, float|int> */
+    private function financeSummary($rider, FinanceSchemaReadiness $schema): array
+    {
+        if (! $schema->step6Ready()) {
+            return ['cod_collected' => 0.0, 'unremitted_cash' => 0.0, 'remittances_submitted' => 0.0, 'verified_cash' => 0.0, 'discrepancies' => 0];
+        }
+
+        $collections = $rider->codCollections();
+        $remittances = $rider->remittances();
+
+        return [
+            'cod_collected' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])->sum('collected_amount'),
+            'unremitted_cash' => (float) (clone $collections)->where('status', CodCollection::COLLECTED)->whereDoesntHave('remittanceItem')->sum('expected_amount'),
+            'remittances_submitted' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('submitted_amount'),
+            'verified_cash' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('verified_amount'),
+            'discrepancies' => (int) (clone $remittances)->where('status', RiderRemittance::DISCREPANCY)->count(),
+        ];
     }
 
     private function assignmentImage(RiderAssignment $assignment): string

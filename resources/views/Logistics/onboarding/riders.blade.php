@@ -1,11 +1,18 @@
 @extends('Logistics.app')
-@section('title','Riders')
+
+@section('title', 'Riders')
+
 @section('content')
-<div class="space-y-6"><div><p class="text-xs font-bold uppercase text-primary">Team access</p><h1 class="text-2xl font-bold">Rider accounts</h1></div>
-@if(session('rider_password'))<div class="border border-amber-300 bg-amber-50 p-5"><strong>Temporary password, shown once:</strong><code class="ml-2 text-lg">{{ session('rider_password') }}</code></div>@endif
-@if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ $errors->first() }}</div>@endif
-@if(session('success'))<div class="border border-green-200 bg-green-50 p-4 text-sm text-green-800">{{ session('success') }}</div>@endif
-@if(isset($editingRider))<form method="POST" action="{{ route('logistics.riders.update',$editingRider) }}" class="grid gap-3 border border-border bg-card p-5 md:grid-cols-2">@csrf @method('PATCH')<input class="likhae-input" name="name" value="{{ old('name',$editingRider->user?->name) }}" required><input class="likhae-input" type="email" name="email" value="{{ old('email',$editingRider->user?->email) }}" required><input class="likhae-input" name="phone" value="{{ old('phone',$editingRider->user?->contact_number) }}" required><select class="likhae-input" name="vehicle_type" required>@foreach(['motorcycle','car','van','truck'] as $v)<option value="{{ $v }}" @selected(old('vehicle_type',$editingRider->vehicle_type)===$v)>{{ str($v)->headline() }}</option>@endforeach</select><input class="likhae-input" name="plate_no" value="{{ old('plate_no',$editingRider->plate_no) }}" required><input type="hidden" name="is_active" value="{{ $editingRider->is_active ? 1 : 0 }}"><button class="likhae-btn-primary">Save rider</button></form>@endif
-<form method="POST" action="{{ route('logistics.riders.store') }}" class="grid gap-3 border border-border bg-card p-5 md:grid-cols-2">@csrf<input class="likhae-input" name="name" placeholder="Full name" required><input class="likhae-input" type="email" name="email" placeholder="Email" required><input class="likhae-input" name="phone" placeholder="Phone" required><select class="likhae-input" name="vehicle_type" required><option value="">Vehicle</option>@foreach(['motorcycle','car','van','truck'] as $v)<option value="{{ $v }}">{{ str($v)->headline() }}</option>@endforeach</select><input class="likhae-input" name="plate_no" placeholder="Plate number" required><button class="likhae-btn-primary">Create rider</button></form>
-<div class="border border-border bg-card">@foreach($riders as $rider)<div class="flex items-center justify-between border-b border-border p-4"><div><strong>{{ $rider->user?->name }}</strong><p class="text-sm text-muted">{{ $rider->user?->email }} · {{ $rider->vehicle_type }} · {{ $rider->plate_no }}</p></div><div class="flex gap-2"><a class="likhae-btn-secondary" href="{{ route('logistics.riders.edit',$rider) }}">Edit</a><form method="POST" action="{{ route($rider->is_active?'logistics.riders.deactivate':'logistics.riders.activate',$rider) }}">@csrf @method('PATCH')<button class="likhae-btn-secondary">{{ $rider->is_active?'Deactivate':'Reactivate' }}</button></form></div></div>@endforeach</div></div>
+<div class="space-y-6">
+    <div>
+        <p class="text-xs font-bold uppercase text-primary">Team access</p>
+        <h1 class="text-2xl font-bold">Rider accounts</h1>
+        <p class="mt-2 max-w-2xl text-sm text-muted">Riders now register their own verified account and select a logistics center. Use the canonical rider management pages below; this compatibility page does not create accounts or bypass approval.</p>
+    </div>
+
+    <div class="flex flex-wrap gap-3">
+        <a class="likhae-btn-primary" href="{{ route('logistics.riders') }}">Rider accounts</a>
+        <a class="likhae-btn-secondary" href="{{ route('logistics.riders.applications') }}">Rider applications</a>
+    </div>
+</div>
 @endsection

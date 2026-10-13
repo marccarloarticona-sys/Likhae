@@ -92,6 +92,8 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/rider/assignments/{assignment}/location', [RiderApiController::class, 'updateLocation'])->name('api.v1.rider.assignments.location');
         Route::get('/rider/history', [RiderApiController::class, 'history'])->name('api.v1.rider.history.index');
         Route::get('/rider/earnings', [RiderApiController::class, 'earnings'])->name('api.v1.rider.earnings.index');
+        Route::get('/rider/remittances', [RiderApiController::class, 'remittances'])->name('api.v1.rider.remittances.index');
+        Route::post('/rider/remittances', [RiderApiController::class, 'submitRemittance'])->name('api.v1.rider.remittances.store');
         Route::get('/rider/profile', [RiderApiController::class, 'profile'])->name('api.v1.rider.profile.show');
         Route::get('/rider/notifications', [RiderApiController::class, 'notifications'])->name('api.v1.rider.notifications.index');
         Route::post('/rider/notifications/read-all', [RiderApiController::class, 'markNotificationsRead'])->name('api.v1.rider.notifications.read-all');
