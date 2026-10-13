@@ -39,7 +39,7 @@
                     <li>If you need clarification or believe this was a mistake, contact LIKHAE support and include case number <strong>{{ $case->case_number }}</strong>.</li>
                 </ol>
                 <p>Keep this case number for any follow-up. The product remains unavailable to buyers while its status is suspended.</p>
-                <p style="margin:26px 0"><a href="{{ $actionUrl }}" style="display:inline-block;padding:12px 18px;border-radius:9px;background:#7f1d1d;color:#fff;text-decoration:none;font-weight:700">Review product listing</a></p>
+                <p style="margin:26px 0"><a href="{{ $actionUrl }}" style="display:inline-block;padding:12px 18px;border-radius:9px;background:#7f1d1d;color:#fff;text-decoration:none;font-weight:700">Review compliance case</a></p>
                 <p style="margin:24px 0 0;color:#78716c;font-size:13px">This notice was sent only to the seller account associated with this product.</p>
             </div>
         </div>

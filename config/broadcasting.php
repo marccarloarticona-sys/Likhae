@@ -36,16 +36,19 @@ return [
             'secret' => env('REVERB_APP_SECRET'),
             'app_id' => env('REVERB_APP_ID'),
             'options' => [
-                'host' => env('REVERB_HOST'),
-                'port' => env('REVERB_PORT', 443),
-                'scheme' => env('REVERB_SCHEME', 'https'),
-                'useTLS' => env('REVERB_SCHEME', 'https') === 'https',
+                // Keep server-side event publishing on the private Reverb
+                // listener when the app and Reverb share a host. Browsers
+                // still use the public REVERB_HOST/PORT values below.
+                'host' => env('REVERB_BROADCAST_HOST', env('REVERB_HOST')),
+                'port' => env('REVERB_BROADCAST_PORT', env('REVERB_PORT', 443)),
+                'scheme' => env('REVERB_BROADCAST_SCHEME', env('REVERB_SCHEME', 'https')),
+                'useTLS' => env('REVERB_BROADCAST_SCHEME', env('REVERB_SCHEME', 'https')) === 'https',
             ],
             'client_options' => [
                 // Keep a Reverb outage from holding a web request until the
                 // platform's 30-second execution limit.
-                'connect_timeout' => (float) env('REVERB_CONNECT_TIMEOUT', 2),
-                'timeout' => (float) env('REVERB_HTTP_TIMEOUT', 5),
+                'connect_timeout' => (float) env('REVERB_CONNECT_TIMEOUT', 1),
+                'timeout' => (float) env('REVERB_HTTP_TIMEOUT', 2),
             ],
         ],
 

@@ -10,19 +10,18 @@
         : null;
 @endphp
 
-@vite('resources/js/shared/messages.js')
-
 @once
 <style>
-    .lk-unified-messages { --msg-bg: #FBF7F2; --msg-soft: #F6EFE7; --msg-card: #FFFDF9; --msg-border: #EADCCC; --msg-maroon: #561C17; --msg-maroon-2: #642920; --msg-text: #3B211B; --msg-muted: #987865; --msg-muted-2: #A99386; display: grid; gap: 18px; }
-    .lk-unified-messages .lk-messages-shell { display: grid; min-height: 620px; overflow: hidden; border: 1px solid var(--msg-border); border-radius: 24px; background: var(--msg-card); box-shadow: 0 8px 24px rgba(86,28,23,.055); }
+    .lk-unified-messages { --msg-bg: #FBF7F2; --msg-soft: #F6EFE7; --msg-card: #FFFDF9; --msg-border: #EADCCC; --msg-maroon: #561C17; --msg-maroon-2: #642920; --msg-text: #3B211B; --msg-muted: #987865; --msg-muted-2: #A99386; display: grid; min-height: 0; gap: 18px; }
+    .lk-unified-messages .lk-messages-shell { display: grid; height: max(280px, min(720px, calc(100dvh - 205px))); min-height: 0; overflow: hidden; border: 1px solid var(--msg-border); border-radius: 24px; background: var(--msg-card); box-shadow: 0 8px 24px rgba(86,28,23,.055); }
     @media (min-width: 1024px) { .lk-unified-messages .lk-messages-shell { grid-template-columns: 330px minmax(0,1fr); } }
-    .lk-unified-messages .lk-messages-sidebar { display: flex; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--msg-border); background: radial-gradient(circle at 0 0,rgba(193,151,113,.16),transparent 32%),linear-gradient(180deg,#FFFDF9,#F8F0E8); }
+    .lk-unified-messages .lk-messages-sidebar { display: flex; min-width: 0; min-height: 0; flex-direction: column; border-bottom: 1px solid var(--msg-border); background: radial-gradient(circle at 0 0,rgba(193,151,113,.16),transparent 32%),linear-gradient(180deg,#FFFDF9,#F8F0E8); }
     @media (min-width: 1024px) { .lk-unified-messages .lk-messages-sidebar { border-right: 1px solid var(--msg-border); border-bottom: 0; } }
     .lk-unified-messages .lk-messages-sidebar-head,.lk-unified-messages .lk-chat-head,.lk-unified-messages .lk-chat-form { border-color: var(--msg-border); background: rgba(255,253,249,.92); }
+    .lk-unified-messages .lk-chat-head,.lk-unified-messages .lk-chat-form { flex: 0 0 auto; }
     .lk-unified-messages .lk-messages-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px; border-bottom: 1px solid var(--msg-border); }
     .lk-unified-messages .lk-messages-sidebar-head h2 { margin: 0; color: var(--msg-text); font-size: 14px; font-weight: 900; }
-    .lk-unified-messages .lk-conversation-list { flex: 1; overflow-y: auto; }
+    .lk-unified-messages .lk-conversation-list { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
     .lk-unified-messages .lk-conversation-item { display: flex; align-items: flex-start; gap: 12px; padding: 15px 18px; border-bottom: 1px solid #EFE1D5; color: var(--msg-text); text-decoration: none; transition: background 160ms ease; }
     .lk-unified-messages .lk-conversation-item:hover { background: #F6EFE7; }
     .lk-unified-messages .lk-conversation-item.is-active { background: #F3E4DE; box-shadow: inset 4px 0 var(--msg-maroon); }
@@ -33,7 +32,7 @@
     .lk-unified-messages .lk-conversation-time { color: var(--msg-muted-2); font-size: 10px; font-weight: 600; white-space: nowrap; }
     .lk-unified-messages .lk-conversation-preview { overflow: hidden; margin: 4px 0 0; color: var(--msg-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
     .lk-unified-messages .lk-messages-empty { padding: 42px 20px; color: var(--msg-muted); font-size: 12px; text-align: center; }
-    .lk-unified-messages .lk-chat-area { display: flex; min-width: 0; min-height: 520px; flex-direction: column; background: var(--msg-soft); }
+    .lk-unified-messages .lk-chat-area { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--msg-soft); }
     .lk-unified-messages .lk-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--msg-border); }
     .lk-unified-messages .lk-chat-user { display: flex; min-width: 0; align-items: center; gap: 12px; }
     .lk-unified-messages .lk-chat-user-copy { min-width: 0; }
@@ -42,7 +41,7 @@
     .lk-unified-messages .lk-chat-status-dot { width: 8px; height: 8px; border-radius: 999px; background: #256F4A; }
     .lk-unified-messages .lk-chat-status.is-error { color: #9A5B11; }
     .lk-unified-messages .lk-chat-status-dot.is-error { background: #C88418; }
-    .lk-unified-messages .lk-chat-stream { flex: 1; overflow-y: auto; padding: 20px; background: radial-gradient(circle at 12% 12%,rgba(193,151,113,.10),transparent 28%),linear-gradient(180deg,#FBF7F2,#F6EFE7); }
+    .lk-unified-messages .lk-chat-stream { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 20px; background: radial-gradient(circle at 12% 12%,rgba(193,151,113,.10),transparent 28%),linear-gradient(180deg,#FBF7F2,#F6EFE7); }
     .lk-unified-messages .lk-chat-day { display: flex; justify-content: center; margin-bottom: 18px; }
     .lk-unified-messages .lk-chat-day span { display: inline-flex; align-items: center; min-height: 26px; padding: 0 12px; border: 1px solid var(--msg-border); border-radius: 999px; background: rgba(255,253,249,.86); color: var(--msg-muted); font-size: 10px; font-weight: 800; }
     .lk-unified-messages .lk-message-row { display: flex; max-width: 82%; align-items: flex-start; gap: 10px; margin-top: 14px; }
@@ -64,7 +63,10 @@
     .lk-unified-messages .lk-compose-form select { min-height: 42px; padding: 0 12px; border: 1px solid var(--msg-border); border-radius: 12px; background: var(--msg-card); color: var(--msg-text); }
     .lk-unified-messages .lk-compose-form textarea { padding: 12px; border: 1px solid var(--msg-border); border-radius: 12px; background: var(--msg-card); color: var(--msg-text); font-size: 12px; resize: vertical; }
     .lk-unified-messages .lk-status-message { padding: 12px 14px; border: 1px solid #B9DEC8; border-radius: 12px; background: #EFFAF2; color: #256F4A; font-size: 12px; font-weight: 700; }
+    @media (max-width: 1023px) { .lk-unified-messages .lk-messages-shell { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(118px,30%) minmax(0,1fr); } }
     @media (max-width: 640px) { .lk-unified-messages .lk-chat-head,.lk-unified-messages .lk-chat-form { align-items: stretch; flex-direction: column; } .lk-unified-messages .lk-chat-send { width: 100%; } .lk-unified-messages .lk-message-row { max-width: 94%; } }
+    body:has(.lk-unified-messages) { overflow: hidden; }
+    body:has(.lk-unified-messages) .ad-footer,body:has(.lk-unified-messages) .sl-footer { display: none; }
     html.dark .lk-unified-messages .lk-messages-shell,html.dark .lk-unified-messages .lk-messages-sidebar,html.dark .lk-unified-messages .lk-chat-area,html.dark .lk-unified-messages .lk-messages-sidebar-head,html.dark .lk-unified-messages .lk-chat-head,html.dark .lk-unified-messages .lk-chat-form { background: #211B17; border-color: #3B2E27; color: #F5EFE8; }
     html.dark .lk-unified-messages .lk-chat-stream { background: linear-gradient(180deg,#161210,#1E1A17); }
     html.dark .lk-unified-messages .lk-conversation-item { border-color: #3B2E27; }
@@ -78,7 +80,7 @@
 @if(session('status'))<div class="lk-status-message">{{ session('status') }}</div>@endif
 @if($errors->any())<div class="lk-status-message" style="border-color:#E8B4AE;background:#FFF1EF;color:#8D2D23">{{ $errors->first() }}</div>@endif
 
-<div class="lk-unified-messages">
+<div class="lk-unified-messages" data-current-user-id="{{ auth()->id() }}">
     <section class="lk-messages-shell">
         <aside class="lk-messages-sidebar">
             <div class="lk-messages-sidebar-head"><h2>Conversations ({{ $messageConversations->count() }})</h2></div>

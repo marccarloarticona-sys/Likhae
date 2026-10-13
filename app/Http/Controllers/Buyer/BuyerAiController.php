@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\Order;
+use App\Models\User;
 use App\Services\Buyer\BuyerGeminiService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,6 +26,8 @@ class BuyerAiController extends Controller
 
     public function chat(Request $request, BuyerGeminiService $gemini): JsonResponse
     {
+        abort_unless($request->user()?->isAccountType(User::TYPE_BUYER), 403, 'Buyer access is required.');
+
         $data = $request->validate([
             'message' => ['required', 'string', 'max:1000'],
             'page' => ['nullable', 'string', 'max:40'],

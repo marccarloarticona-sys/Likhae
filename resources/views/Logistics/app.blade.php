@@ -5,6 +5,7 @@
 >
 
 <head>
+    <x-likhae-favicon />
 
     <meta charset="UTF-8">
 
@@ -42,7 +43,7 @@
                     'likhae-theme'
                 );
 
-            if (savedTheme === 'dark') {
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
 
                 document.documentElement
                     .classList
@@ -62,6 +63,7 @@
     @vite([
         'resources/css/logistic/app.css',
         'resources/css/shared/likhae-workspace-ai.css',
+        'resources/css/shared/workspace-sidebar.css',
         'resources/css/shared/mapbox.css',
         'resources/js/logistic/app.js',
         'resources/js/shared/likhae-workspace-ai.js',
@@ -314,7 +316,9 @@
         $workspaceAiPage = request()->route()?->getName() ?: 'logistics.dashboard';
         $workspaceAiTitle = trim($__env->yieldContent('title')) ?: 'Logistics';
     @endphp
-    <x-workspace.ai-assistant workspace="logistics" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
+    @if(data_get(auth()->user()?->notification_preferences, 'logistics_ai_assistant_enabled', true))
+        <x-workspace.ai-assistant workspace="logistics" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
+    @endif
     @stack('scripts')
 
 </body>

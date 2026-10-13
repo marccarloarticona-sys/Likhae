@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
+use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
@@ -23,6 +24,29 @@ class SellerOrderController extends Controller
             ->latest()
             ->get();
 
+        $requestedStatus = strtolower((string) $request->query('status', 'all'));
+        $refundSearch = trim((string) $request->query('q', ''));
+        $refundStatus = strtoupper((string) $request->query('refund_status', ''));
+        $refundBaseQuery = SellerReturnRefundRequest::query()->where('seller_profile_id', $seller->id);
+        $refundCounts = (clone $refundBaseQuery)
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+        $refundQuery = (clone $refundBaseQuery)
+            ->with(['request.order.buyer', 'request.events', 'sellerOrder', 'sellerProfile', 'items.orderItem', 'payouts'])
+            ->when($refundSearch !== '', function ($query) use ($refundSearch): void {
+                $query->where(function ($nested) use ($refundSearch): void {
+                    $nested
+                        ->whereHas('request', fn ($requestQuery) => $requestQuery->where('request_number', 'like', '%'.$refundSearch.'%'))
+                        ->orWhereHas('request.order', fn ($orderQuery) => $orderQuery->where('order_number', 'like', '%'.$refundSearch.'%'))
+                        ->orWhereHas('request.buyer', fn ($buyerQuery) => $buyerQuery->where('first_name', 'like', '%'.$refundSearch.'%')->orWhere('last_name', 'like', '%'.$refundSearch.'%')->orWhere('email', 'like', '%'.$refundSearch.'%'))
+                        ->orWhereHas('items.orderItem', fn ($itemQuery) => $itemQuery->where('product_name', 'like', '%'.$refundSearch.'%'));
+                });
+            })
+            ->when(in_array($refundStatus, [SellerReturnRefundRequest::STATUS_SELLER_REVIEW, SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED, SellerReturnRefundRequest::STATUS_REJECTED, SellerReturnRefundRequest::STATUS_REFUND_SENT, SellerReturnRefundRequest::STATUS_CONFIRMED, SellerReturnRefundRequest::STATUS_ESCALATED, SellerReturnRefundRequest::STATUS_DISPUTE_RESOLVED], true), fn ($query) => $query->where('status', $refundStatus))
+            ->latest();
+        $refundRequests = $requestedStatus === 'returns' ? $refundQuery->paginate(15)->withQueryString() : null;
+
         $counts = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
             ->selectRaw('status, COUNT(*) as total')
@@ -34,10 +58,15 @@ class SellerOrderController extends Controller
             'orders' => $orders,
             'counts' => $counts,
             'activeStatus' => strtoupper((string) $request->query('status', '')),
+            'status' => $requestedStatus,
             'sellerOrders' => $orders->map(fn (SellerOrder $order): array => $this->viewOrder($order)),
+            'refundRequests' => $refundRequests,
+            'refundCounts' => $refundCounts,
+            'refundStatus' => $refundStatus,
             'statusCounts' => $orders
                 ->groupBy(fn (SellerOrder $order): string => $this->statusKey($order->status))
-                ->map->count(),
+                ->map->count()
+                ->put('returns', (int) $refundCounts->sum()),
         ]);
     }
 

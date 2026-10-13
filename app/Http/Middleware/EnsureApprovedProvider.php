@@ -15,7 +15,7 @@ class EnsureApprovedProvider
 
         abort_unless(
             $user?->isAccountType(User::TYPE_LOGISTICS)
-            && $user->logisticsCenter()->where('status', 'ACTIVE')->exists(),
+            && $user->logisticsCenter()->approvedActive()->exists(),
             403,
             'An active logistics center account is required.',
         );

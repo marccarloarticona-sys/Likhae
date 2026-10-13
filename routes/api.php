@@ -7,10 +7,12 @@ use App\Http\Controllers\Api\ProductApiController;
 use App\Http\Controllers\Api\RiderApiController;
 use App\Http\Controllers\Api\TrackingApiController;
 use App\Http\Controllers\Api\WorkflowApiController;
+use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
 use App\Http\Middleware\AuthenticateApiToken;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
@@ -51,6 +53,8 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/tracking/{trackingNumber}', [TrackingApiController::class, 'show'])->name('api.v1.tracking.show');
 
     Route::middleware(AuthenticateApiToken::class)->group(function (): void {
+        Route::post('/broadcasting/auth', fn (Request $request) => Broadcast::auth($request))
+            ->name('api.v1.broadcasting.auth');
         Route::get('/auth/me', [MobileAuthController::class, 'me'])->name('api.v1.auth.me');
         Route::post('/auth/logout', [MobileAuthController::class, 'logout'])->name('api.v1.auth.logout');
         Route::get('/buyer/cart', [BuyerApiController::class, 'cart'])->name('api.v1.buyer.cart.index');
@@ -80,6 +84,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/buyer/messages', [BuyerApiController::class, 'conversations'])->name('api.v1.buyer.messages.index');
         Route::get('/buyer/messages/{conversation}', [BuyerApiController::class, 'conversationMessages'])->name('api.v1.buyer.messages.show');
         Route::post('/buyer/messages', [BuyerApiController::class, 'sendMessage'])->name('api.v1.buyer.messages.store');
+        Route::post('/buyer/ai/chat', [BuyerAiController::class, 'chat'])->name('api.v1.buyer.ai.chat');
         Route::get('/rider/dashboard', [RiderApiController::class, 'dashboard'])->name('api.v1.rider.dashboard');
         Route::get('/rider/assignments', [RiderApiController::class, 'assignments'])->name('api.v1.rider.assignments.index');
         Route::get('/rider/pickups', [RiderApiController::class, 'pickups'])->name('api.v1.rider.pickups.index');
@@ -87,6 +92,8 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/rider/assignments/{assignment}/location', [RiderApiController::class, 'updateLocation'])->name('api.v1.rider.assignments.location');
         Route::get('/rider/history', [RiderApiController::class, 'history'])->name('api.v1.rider.history.index');
         Route::get('/rider/earnings', [RiderApiController::class, 'earnings'])->name('api.v1.rider.earnings.index');
+        Route::get('/rider/remittances', [RiderApiController::class, 'remittances'])->name('api.v1.rider.remittances.index');
+        Route::post('/rider/remittances', [RiderApiController::class, 'submitRemittance'])->name('api.v1.rider.remittances.store');
         Route::get('/rider/profile', [RiderApiController::class, 'profile'])->name('api.v1.rider.profile.show');
         Route::get('/rider/notifications', [RiderApiController::class, 'notifications'])->name('api.v1.rider.notifications.index');
         Route::post('/rider/notifications/read-all', [RiderApiController::class, 'markNotificationsRead'])->name('api.v1.rider.notifications.read-all');

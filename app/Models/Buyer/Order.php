@@ -4,6 +4,8 @@ namespace App\Models\Buyer;
 
 use App\Models\Admin\Dispute;
 use App\Models\Communication\Conversation;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Seller\SellerOrder;
 use App\Models\User;
 use App\Models\Buyer\ReturnRefundRequest;
@@ -28,6 +30,7 @@ class Order extends Model
         'discount_total',
         'shipping_total',
         'grand_total',
+        'protection_total',
         'payment_status',
         'placed_at',
         'completed_at',
@@ -42,6 +45,7 @@ class Order extends Model
             'discount_total' => 'decimal:2',
             'shipping_total' => 'decimal:2',
             'grand_total' => 'decimal:2',
+            'protection_total' => 'decimal:2',
             'placed_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
@@ -78,6 +82,16 @@ class Order extends Model
         return $this->hasMany(Payment::class);
     }
 
+    public function codCollections(): HasMany
+    {
+        return $this->hasMany(CodCollection::class);
+    }
+
+    public function financialLedgerEntries(): HasMany
+    {
+        return $this->hasMany(FinancialLedgerEntry::class);
+    }
+
     public function conversations(): HasMany
     {
         return $this->hasMany(Conversation::class);
@@ -91,5 +105,17 @@ class Order extends Model
     public function returnRefundRequests(): HasMany
     {
         return $this->hasMany(ReturnRefundRequest::class);
+    }
+
+    public function sellerReturnRefundRequests(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            \App\Models\Seller\SellerReturnRefundRequest::class,
+            \App\Models\Buyer\ReturnRefundRequest::class,
+            'order_id',
+            'return_refund_request_id',
+            'id',
+            'id',
+        );
     }
 }

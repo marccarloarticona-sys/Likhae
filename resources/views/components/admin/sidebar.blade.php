@@ -63,6 +63,11 @@
             <path d="M12 12v9"></path>
         ',
 
+        'list' => '
+            <path d="M8 6h13M8 12h13M8 18h13"></path>
+            <path d="M3 6h.01M3 12h.01M3 18h.01"></path>
+        ',
+
         'compliance' => '
             <path d="M12 3l7 3v5c0 5-3 8.5-7 10-4-1.5-7-5-7-10V6z"></path>
             <path d="m9 12 2 2 4-4"></path>
@@ -218,7 +223,7 @@
                     'key' => 'categories',
                     'label' => 'Categories',
                     'route' => 'admin.categories',
-                    'icon' => 'products',
+                    'icon' => 'list',
                     'active' => [
                         'admin.categories',
                     ],
@@ -259,6 +264,13 @@
                         'admin.finance',
                         'admin.payments',
                     ],
+                ],
+                [
+                    'key' => 'protection-rules',
+                    'label' => 'Additional Care Rules',
+                    'route' => 'admin.protection-rules',
+                    'icon' => 'finance',
+                    'active' => ['admin.protection-rules'],
                 ],
                 [
                     'key' => 'reports',
@@ -312,6 +324,13 @@
                     ],
                 ],
                 [
+                    'key' => 'system-settings',
+                    'label' => 'System Settings',
+                    'route' => 'admin.system-settings',
+                    'icon' => 'settings',
+                    'active' => ['admin.system-settings'],
+                ],
+                [
                     'key' => 'account',
                     'label' => 'My Account',
                     'route' => 'admin.account',
@@ -362,6 +381,7 @@
             ]],
             ['label' => 'Account', 'items' => [
                 ['key' => 'account', 'label' => 'My Account', 'route' => 'seller.account', 'icon' => 'account', 'active' => ['seller.account', 'seller.account.*', 'seller.notifications']],
+                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'seller.settings', 'icon' => 'settings', 'active' => ['seller.settings']],
             ]],
         ];
     } elseif ($role === 'rider') {
@@ -369,6 +389,8 @@
             ['label' => 'Assignments', 'items' => [
                 ['key' => 'pickups', 'label' => 'Pickup Assignments', 'route' => 'rider.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickups'] ?? 0, 'active' => ['rider.pickups', 'rider.pickups.*', 'rider.parcels.*']],
                 ['key' => 'deliveries', 'label' => 'Delivery Assignments', 'route' => 'rider.deliveries', 'icon' => 'shipment', 'count' => $sidebarCounts['deliveries'] ?? 0, 'active' => ['rider.deliveries', 'rider.deliveries.*']],
+                ['key' => 'trips', 'label' => 'Local Trips', 'route' => 'rider.trips', 'icon' => 'shipment', 'active' => ['rider.trips', 'rider.trips.*']],
+                ['key' => 'transfers', 'label' => 'Inter-Hub Transfers', 'route' => 'rider.transfers', 'icon' => 'sorting', 'active' => ['rider.transfers', 'rider.transfers.*']],
             ]],
             ['label' => 'History & Earnings', 'items' => [
                 ['key' => 'history', 'label' => 'Delivery History', 'route' => 'rider.history', 'icon' => 'history', 'active' => ['rider.history', 'rider.history.*']],
@@ -380,6 +402,7 @@
             ]],
             ['label' => 'Account', 'items' => [
                 ['key' => 'account', 'label' => 'My Account', 'route' => 'rider.account', 'icon' => 'account', 'active' => ['rider.account', 'rider.account.*', 'rider.profile']],
+                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'rider.settings', 'icon' => 'settings', 'active' => ['rider.settings']],
             ]],
         ];
     } elseif ($role === 'logistics') {
@@ -388,6 +411,8 @@
                 ['key' => 'pickup-requests', 'label' => 'Pickup Requests', 'route' => 'logistics.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickup_requests'] ?? 0, 'active' => ['logistics.pickups', 'logistics.pickups.*']],
                 ['key' => 'incoming', 'label' => 'Incoming Parcels', 'route' => 'logistics.parcels.receive', 'icon' => 'shipment', 'count' => $sidebarCounts['incoming'] ?? 0, 'active' => ['logistics.parcels', 'logistics.parcels.receive', 'logistics.parcels.show']],
                 ['key' => 'sorting', 'label' => 'Sorting', 'route' => 'logistics.sorting', 'icon' => 'sorting', 'count' => $sidebarCounts['sorting'] ?? 0, 'active' => ['logistics.sorting', 'logistics.sorting.*']],
+                ['key' => 'transfers', 'label' => 'Hub Transfers', 'route' => 'logistics.transfers', 'icon' => 'sorting', 'active' => ['logistics.transfers', 'logistics.transfers.*']],
+                ['key' => 'local-trips', 'label' => 'Local Rider Trips', 'route' => 'logistics.local-trips', 'icon' => 'sorting', 'active' => ['logistics.local-trips', 'logistics.local-trips.*']],
                 ['key' => 'assignments', 'label' => 'Rider Assignment', 'route' => 'logistics.assignments', 'icon' => 'riders', 'count' => $sidebarCounts['assignments'] ?? 0, 'active' => ['logistics.assignments', 'logistics.dispatch', 'logistics.assignments.*', 'logistics.dispatch.*']],
                 ['key' => 'monitoring', 'label' => 'Delivery Monitoring', 'route' => 'logistics.parcels.tracking', 'icon' => 'tracking', 'count' => $sidebarCounts['monitoring'] ?? 0, 'active' => ['logistics.parcels.tracking']],
             ]],
@@ -403,6 +428,7 @@
             ]],
             ['label' => 'Account', 'items' => [
                 ['key' => 'account', 'label' => 'My Account', 'route' => 'logistics.profile', 'icon' => 'account', 'active' => ['logistics.profile', 'logistics.account']],
+                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'logistics.settings', 'icon' => 'settings', 'active' => ['logistics.settings']],
             ]],
         ];
     }
@@ -413,682 +439,7 @@
     };
 @endphp
 
-<style>
-    :root {
-        --admin-side-width: 252px;
-        --admin-side-collapsed: 76px;
 
-        --admin-bg: #FFFDF9;
-        --admin-page: #FBF7F2;
-        --admin-soft: #FAF3EC;
-        --admin-active: #F3E4DE;
-
-        --admin-line: #E8D8C8;
-        --admin-line-strong: #DCC8B8;
-
-        --admin-primary: #641F19;
-        --admin-primary-dark: #4D1712;
-
-        --admin-text: #694737;
-        --admin-text-strong: #311E18;
-        --admin-muted: #A27F6C;
-        --admin-muted-light: #A88B7B;
-    }
-
-    #adminSidebar,
-    #adminSidebar * {
-        box-sizing: border-box;
-    }
-
-    #adminSidebar {
-        position: fixed;
-        inset: 0 auto 0 0;
-        z-index: 60;
-
-        display: flex;
-        width: var(--admin-side-width);
-        height: 100vh;
-        flex-direction: column;
-
-        overflow: hidden;
-
-        border-right: 1px solid var(--admin-line);
-        background: var(--admin-bg);
-        color: var(--admin-text);
-
-        font-family:
-            "DM Sans",
-            system-ui,
-            -apple-system,
-            BlinkMacSystemFont,
-            "Segoe UI",
-            sans-serif;
-
-        transition:
-            width .22s ease,
-            transform .22s ease;
-    }
-
-    /* HEADER */
-
-    .ad-side-head {
-        display: flex;
-        height: 62px;
-        min-height: 62px;
-        flex: 0 0 62px;
-        box-sizing: border-box;
-        align-items: center;
-        gap: 11px;
-
-        padding: 0 11px;
-
-        border-bottom: 1px solid var(--admin-line);
-    }
-
-    .ad-side-menu {
-        display: grid;
-        width: 36px;
-        height: 36px;
-        flex: 0 0 36px;
-        place-items: center;
-
-        border: 1px solid var(--admin-line);
-        border-radius: 10px;
-
-        background: var(--admin-soft);
-        color: #6C4936;
-
-        cursor: pointer;
-
-        transition: .15s ease;
-    }
-
-    .ad-side-menu:hover {
-        border-color: var(--admin-line-strong);
-        background: var(--admin-active);
-        color: var(--admin-primary);
-    }
-
-    .ad-side-menu svg {
-        width: 18px;
-        height: 18px;
-
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 1.7;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-
-    .ad-side-brand {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-
-        color: inherit;
-        text-decoration: none;
-    }
-
-    .ad-side-brand .likhae-logo--sidebar {
-        width: auto;
-        max-width: 151px;
-        max-height: 40px;
-    }
-
-    .likhae-logo__image--light {
-        display: block;
-    }
-
-    .likhae-logo__image--dark {
-        display: none;
-    }
-
-    html.dark .likhae-logo__image--light {
-        display: none;
-    }
-
-    html.dark .likhae-logo__image--dark {
-        display: block;
-    }
-
-    /* PROFILE */
-
-    .ad-side-profile {
-        display: grid;
-        grid-template-columns: auto minmax(0,1fr) auto;
-        min-height: 61px;
-        align-items: center;
-        gap: 10px;
-
-        margin: 13px 10px 8px;
-        padding: 10px;
-
-        border: 1px solid var(--admin-line);
-        border-radius: 13px;
-
-        background:
-            radial-gradient(
-                circle at 94% 9%,
-                rgba(193,151,113,.12),
-                transparent 34%
-            ),
-            var(--admin-soft);
-    }
-
-    .ad-side-avatar {
-        display: grid;
-        width: 39px;
-        height: 39px;
-        flex: 0 0 39px;
-        place-items: center;
-        overflow: hidden;
-
-        border-radius: 10px;
-
-        background: var(--admin-primary);
-        color: #FFFFFF;
-
-        font-size: 10px;
-        font-weight: 900;
-    }
-
-    .ad-side-avatar img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-
-    .ad-side-profile-copy {
-        min-width: 0;
-    }
-
-    .ad-side-profile-copy strong {
-        display: block;
-        overflow: hidden;
-
-        color: var(--admin-text-strong);
-
-        font-size: 10px;
-        font-weight: 800;
-        line-height: 1.2;
-
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .ad-side-profile-copy small {
-        display: block;
-        margin-top: 3px;
-
-        color: var(--admin-muted);
-
-        font-size: 7px;
-        font-weight: 500;
-        line-height: 1.15;
-    }
-
-    .ad-side-verified {
-        display: grid;
-        width: 19px;
-        height: 19px;
-        flex: 0 0 19px;
-        place-items: center;
-
-        border-radius: 999px;
-
-        background: var(--admin-primary);
-        color: #FFFFFF;
-
-        font-size: 9px;
-        font-weight: 900;
-    }
-
-    /* SCROLL */
-
-    .ad-side-scroll {
-        min-height: 0;
-        flex: 1;
-
-        overflow-x: hidden;
-        overflow-y: auto;
-
-        padding: 4px 8px 14px;
-
-        scrollbar-width: thin;
-        scrollbar-color: #D8C2B1 transparent;
-    }
-
-    .ad-side-scroll::-webkit-scrollbar {
-        width: 5px;
-    }
-
-    .ad-side-scroll::-webkit-scrollbar-thumb {
-        border-radius: 999px;
-        background: #D8C2B1;
-    }
-
-    /* NAV */
-
-    .ad-side-group {
-        margin-top: 5px;
-    }
-
-    .ad-side-heading {
-        display: block;
-
-        margin: 0;
-        padding: 14px 11px 6px;
-
-        color: var(--admin-muted-light);
-
-        font-size: 7px;
-        font-weight: 900;
-        line-height: 1;
-        letter-spacing: .13em;
-        text-transform: uppercase;
-    }
-
-    .ad-side-list {
-        display: grid;
-        gap: 2px;
-    }
-
-    .ad-side-link {
-        position: relative;
-
-        display: flex;
-        width: 100%;
-        min-height: 41px;
-        align-items: center;
-        gap: 10px;
-
-        padding: 0 11px;
-
-        border: 0;
-        border-radius: 9px;
-
-        background: transparent;
-        color: #72503F;
-
-        font-size: 10.5px;
-        font-weight: 500;
-        line-height: 1;
-
-        text-decoration: none;
-
-        transition: .14s ease;
-    }
-
-    .ad-side-link:hover {
-        background: var(--admin-soft);
-        color: var(--admin-primary);
-    }
-
-    .ad-side-link.is-active {
-        background: var(--admin-active);
-        color: var(--admin-primary);
-        font-weight: 700;
-    }
-
-    .ad-side-link.is-active::before {
-        position: absolute;
-        top: 8px;
-        bottom: 8px;
-        left: 0;
-
-        width: 3px;
-
-        border-radius: 0 6px 6px 0;
-
-        background: var(--admin-primary);
-
-        content: "";
-    }
-
-    .ad-side-icon {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        flex: 0 0 26px;
-        place-items: center;
-
-        color: currentColor;
-    }
-
-    .ad-side-icon svg {
-        width: 18px;
-        height: 18px;
-
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 1.6;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-
-    .ad-side-label {
-        min-width: 0;
-        flex: 1;
-
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .ad-side-badge {
-        display: inline-flex;
-        min-width: 20px;
-        height: 20px;
-        align-items: center;
-        justify-content: center;
-
-        margin-left: auto;
-
-        padding: 0 6px;
-
-        border-radius: 999px;
-
-        background: #9E7D68;
-        color: #FFFFFF;
-
-        font-size: 8px;
-        font-weight: 800;
-        line-height: 1;
-    }
-
-    /* FOOTER */
-
-    .ad-side-bottom {
-        display: grid;
-        gap: 2px;
-
-        padding: 7px 8px 9px;
-
-        border-top: 1px solid var(--admin-line);
-
-        background: var(--admin-bg);
-    }
-
-    .ad-side-bottom form {
-        margin: 0;
-    }
-
-    .ad-side-theme,
-    .ad-side-logout {
-        display: flex;
-        width: 100%;
-        min-height: 43px;
-        align-items: center;
-        gap: 10px;
-
-        padding: 0 11px;
-
-        border: 0;
-        border-radius: 9px;
-
-        background: transparent;
-        color: #72503F;
-
-        font-family: inherit;
-        font-size: 10.5px;
-        font-weight: 500;
-        text-align: left;
-
-        cursor: pointer;
-
-        transition: .14s ease;
-    }
-
-    .ad-side-theme {
-        justify-content: space-between;
-    }
-
-    .ad-side-theme:hover,
-    .ad-side-logout:hover {
-        background: var(--admin-soft);
-        color: var(--admin-primary);
-    }
-
-    .ad-side-theme-copy {
-        display: grid;
-        min-width: 0;
-        flex: 1;
-        gap: 2px;
-    }
-
-    .ad-side-theme-copy strong {
-        color: inherit;
-
-        font-size: 10.5px;
-        font-weight: 500;
-        line-height: 1.1;
-    }
-
-    .ad-side-theme-copy small {
-        color: var(--admin-muted);
-
-        font-size: 8px;
-        font-weight: 500;
-        line-height: 1.1;
-    }
-
-    .ad-side-theme-state {
-        display: inline-flex;
-        min-width: 40px;
-        min-height: 21px;
-        align-items: center;
-        justify-content: center;
-
-        margin-left: auto;
-        padding: 0 9px;
-
-        border-radius: 999px;
-
-        background: #E3E3E2;
-        color: #494644;
-
-        font-size: 7px;
-        font-weight: 900;
-        line-height: 1;
-    }
-
-    .ad-side-logout {
-        justify-content: flex-start;
-    }
-
-    /* COLLAPSED */
-
-    #adminSidebar.is-collapsed {
-        width: var(--admin-side-collapsed);
-    }
-
-    #adminSidebar.is-collapsed .ad-side-brand,
-    #adminSidebar.is-collapsed .ad-side-profile-copy,
-    #adminSidebar.is-collapsed .ad-side-verified,
-    #adminSidebar.is-collapsed .ad-side-heading,
-    #adminSidebar.is-collapsed .ad-side-label,
-    #adminSidebar.is-collapsed .ad-side-badge,
-    #adminSidebar.is-collapsed .ad-side-theme-copy,
-    #adminSidebar.is-collapsed .ad-side-theme-state {
-        display: none !important;
-    }
-
-    #adminSidebar.is-collapsed .ad-side-head {
-        justify-content: center;
-        padding-inline: 0;
-    }
-
-    #adminSidebar.is-collapsed .ad-side-profile {
-        display: flex;
-        min-height: auto;
-        justify-content: center;
-
-        margin-inline: 8px;
-        padding: 8px 0;
-    }
-
-    #adminSidebar.is-collapsed .ad-side-link,
-    #adminSidebar.is-collapsed .ad-side-theme,
-    #adminSidebar.is-collapsed .ad-side-logout {
-        justify-content: center;
-        padding-inline: 0;
-    }
-
-    /* DARK */
-
-    html.dark #adminSidebar,
-    html.dark .ad-side-bottom {
-        border-color: #30231F;
-        background: #130F0E;
-        color: #F5EFE8;
-    }
-
-    html.dark .ad-side-head,
-    html.dark .ad-side-bottom {
-        border-color: #30231F;
-    }
-
-    html.dark .ad-side-menu {
-        border-color: #3B2E27;
-        background: #211B17;
-        color: #EBA99D;
-    }
-
-    html.dark .ad-side-profile {
-        border-color: #30231F;
-        background: #1B1513;
-    }
-
-    html.dark .ad-side-profile-copy strong {
-        color: #F5EFE8;
-    }
-
-    html.dark .ad-side-profile-copy small,
-    html.dark .ad-side-heading,
-    html.dark .ad-side-theme-copy small {
-        color: #8F817A;
-    }
-
-    html.dark .ad-side-link,
-    html.dark .ad-side-theme,
-    html.dark .ad-side-logout {
-        color: #B8AAA1;
-    }
-
-    html.dark .ad-side-link:hover,
-    html.dark .ad-side-theme:hover,
-    html.dark .ad-side-logout:hover {
-        background: #211B17;
-        color: #F3C6BA;
-    }
-
-    html.dark .ad-side-link.is-active {
-        background: #3A1111;
-        color: #F3C6BA;
-    }
-
-    html.dark .ad-side-link.is-active::before {
-        background: #A84538;
-    }
-
-    html.dark .ad-side-badge {
-        background: #8E7363;
-        color: #FFFFFF;
-    }
-
-    html.dark .ad-side-theme-state {
-        background: #A84538;
-        color: #FFFFFF;
-    }
-
-    html.dark .ad-side-avatar,
-    html.dark .ad-side-verified {
-        background: #A84538;
-    }
-
-    /* MOBILE */
-
-    #adminSidebarOverlay {
-        visibility: hidden;
-        position: fixed;
-        inset: 0;
-        z-index: 55;
-
-        background: rgba(28,22,15,.42);
-
-        opacity: 0;
-        backdrop-filter: blur(3px);
-
-        transition:
-            opacity .18s ease,
-            visibility .18s ease;
-    }
-
-    #adminSidebarOverlay.is-visible {
-        visibility: visible;
-        opacity: 1;
-    }
-
-    @media (max-width: 1023px) {
-        #adminSidebar,
-        #adminSidebar.is-collapsed {
-            width: var(--admin-side-width);
-            transform: translateX(-100%);
-        }
-
-        #adminSidebar.is-open {
-            transform: translateX(0);
-        }
-
-        #adminSidebar.is-collapsed .ad-side-brand,
-        #adminSidebar.is-collapsed .ad-side-profile-copy,
-        #adminSidebar.is-collapsed .ad-side-verified,
-        #adminSidebar.is-collapsed .ad-side-heading,
-        #adminSidebar.is-collapsed .ad-side-label,
-        #adminSidebar.is-collapsed .ad-side-badge,
-        #adminSidebar.is-collapsed .ad-side-theme-copy,
-        #adminSidebar.is-collapsed .ad-side-theme-state {
-            display: initial !important;
-        }
-
-        #adminSidebar.is-collapsed .ad-side-head {
-            justify-content: flex-start;
-            padding-inline: 11px;
-        }
-
-        #adminSidebar.is-collapsed .ad-side-profile {
-            display: grid;
-            grid-template-columns: auto minmax(0,1fr) auto;
-            min-height: 61px;
-            justify-content: initial;
-
-            margin: 13px 10px 8px;
-            padding: 10px;
-        }
-
-        #adminSidebar.is-collapsed .ad-side-link,
-        #adminSidebar.is-collapsed .ad-side-theme,
-        #adminSidebar.is-collapsed .ad-side-logout {
-            justify-content: initial;
-            padding-inline: 11px;
-        }
-    }
-
-    [data-sidebar-content] {
-        margin-left: var(--admin-side-width);
-        transition: margin-left .22s ease;
-    }
-
-    body.workspace-sidebar-collapsed [data-sidebar-content] {
-        margin-left: var(--admin-side-collapsed);
-    }
-
-    @media (max-width: 1023px) {
-        [data-sidebar-content] {
-            margin-left: 0 !important;
-        }
-    }
-</style>
 
 <div
     id="adminSidebarOverlay"

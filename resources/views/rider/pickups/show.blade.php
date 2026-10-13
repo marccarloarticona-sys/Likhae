@@ -16,6 +16,12 @@
         <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Pickup Details</span>
         <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup['tracking'] }}</h1>
         <p class="mt-3 text-sm text-muted">{{ $pickup['status_label'] }} - Seller: {{ $pickup['seller'] }}</p>
+        <ol class="mt-5 grid gap-2 text-xs sm:grid-cols-4">
+            @foreach(['Accept assignment', 'Go to seller', 'Scan and confirm parcel', 'Take parcel to sorting center'] as $index => $step)
+                @php($activeStep = match($pickup['status']) { 'ASSIGNED' => 0, 'ACCEPTED' => 1, 'IN_PROGRESS' => 2, default => 3 })
+                <li class="border p-3 {{ $index === $activeStep ? 'border-primary bg-primary-soft font-semibold text-primary' : ($index < $activeStep ? 'border-green-200 bg-green-50 text-green-800' : 'border-line text-muted') }}">{{ $index + 1 }}. {{ $step }}</li>
+            @endforeach
+        </ol>
     </section>
 
     <x-shared.mapbox :markers="$mapMarkers" title="Route to seller pickup" height="220px" user-location-target="seller" :rider-gps="true" :navigation="true" />
@@ -41,8 +47,8 @@
                     <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
                 @elseif($pickup['status'] === 'IN_PROGRESS')
                     @if($verified)
-                        <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">Parcel Verified: {{ $delivery->tracking_code }}</div>
-                        <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="pickup_complete"><input type="hidden" name="scan_method" value="MANUAL"><input type="hidden" name="scanned_code" value="{{ $pickup['tracking'] }}"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Confirm Picked Up</button></form>
+                        <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">Parcel Verified: {{ $pickup['tracking'] }}</div>
+                        <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="pickup_complete"><input type="hidden" name="scan_method" value="{{ $scanMethod }}"><input type="hidden" name="scanned_code" value="{{ $pickup['tracking'] }}"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Confirm Picked Up</button></form>
                     @else
                         <p class="text-sm text-muted">Scan and verify the seller's waybill below before confirming collection.</p>
                     @endif
@@ -53,7 +59,7 @@
     </section>
 
     @if($pickup['status'] === 'IN_PROGRESS')
-        <x-parcel-scanner :action="route('rider.pickups.show', $delivery)" :tracking="request('tracking', '')" title="Scan Parcel At Seller" description="The tracking code must match this pickup assignment. Scanning alone does not mark the parcel picked up." button="Verify Parcel" />
+        <x-parcel-scanner :action="route('rider.pickups.show', $delivery)" :tracking="request('tracking', '')" :method="$scanMethod" title="Scan and Confirm Parcel at Seller" description="Match the waybill to this accepted pickup. After confirmation, take the parcel to the sorting center for its intake scan." button="Verify Parcel" />
         @if(request()->filled('tracking') && !$verified)<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">The scanned tracking number does not match this pickup assignment.</div>@endif
     @endif
 </div>

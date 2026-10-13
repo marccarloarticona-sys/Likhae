@@ -5,6 +5,10 @@
     <header><p class="text-xs font-bold uppercase text-primary">First-mile operations</p><h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Requests</h1><p class="mt-2 text-sm text-muted">Approve requests and assign an active rider from this logistics center.</p></header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
+    <form method="GET" action="{{ route('logistics.pickups') }}" class="flex flex-col gap-2 border border-line bg-surface p-4 sm:flex-row">
+        <input name="tracking" value="{{ request('tracking', '') }}" class="h-10 min-w-0 flex-1 border border-line bg-white px-3 text-sm text-ink" placeholder="Filter by tracking number" aria-label="Filter pickup requests by tracking number">
+        <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Find Pickup</button>
+    </form>
     <x-shared.mapbox :markers="$mapMarkers" title="Pickup operations map" height="220px" user-location-target="seller" />
     <div class="overflow-x-auto border border-line bg-surface"><table class="min-w-full text-left text-sm">
         <thead class="border-b border-line bg-gray-50 text-xs uppercase text-muted"><tr><th class="p-4">Parcel</th><th class="p-4">Seller</th><th class="p-4">Destination</th><th class="p-4">Status</th><th class="p-4">Assignment</th></tr></thead>
@@ -37,6 +41,7 @@
                         <button class="bg-primary px-4 py-2 font-semibold text-white">Assign</button>
                         @if($pickupAreaId)
                             <label class="col-span-full flex items-start gap-2 text-[11px] font-semibold {{ $coverageShortage ? 'text-red-700' : 'text-amber-800' }}"><input type="checkbox" name="coverage_override" value="1" @checked((int) old('assignment_shipment_id') === (int) $shipment->id && old('coverage_override')) class="mt-0.5"><span>{{ $coverageShortage ? 'Required for the listed rider: no active rider covers this pickup area. Check to use the shortage override.' : 'Use only if an area-coverage override is required.' }}</span></label>
+                            <textarea name="coverage_override_reason" rows="2" maxlength="1000" class="col-span-full border border-line px-3 py-2 text-xs" placeholder="Reason for coverage override (required when checked)">{{ old('assignment_shipment_id') == $shipment->id ? old('coverage_override_reason') : '' }}</textarea>
                         @endif
                         @if((int) old('assignment_shipment_id') === (int) $shipment->id && $errors->has('rider_profile_id'))
                             <p class="col-span-full border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800" role="alert">{{ $errors->first('rider_profile_id') }}</p>

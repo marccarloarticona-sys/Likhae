@@ -4,6 +4,8 @@
     'wrapperClass' => '',
     'includeDetails' => true,
     'streetRequired' => true,
+    'allowedProvinceCode' => null,
+    'allowedMunicipalityCode' => null,
 ])
 
 @php
@@ -11,7 +13,7 @@
     $regionCode = old('region_code', preg_match('/^\d{2}/', (string) $provinceCode) ? substr((string) $provinceCode, 0, 2).'00000000' : '');
 @endphp
 
-<div class="{{ $wrapperClass }}" data-postal-address data-postal-base="{{ \Illuminate\Support\Str::beforeLast(route('address.philippines.regions', [], false), '/regions') }}">
+<div class="{{ $wrapperClass }}" data-postal-address data-postal-base="{{ \Illuminate\Support\Str::beforeLast(route('address.philippines.regions', [], false), '/regions') }}" data-postal-allowed-province-code="{{ $allowedProvinceCode }}" data-postal-allowed-municipality-code="{{ $allowedMunicipalityCode }}">
     <input type="hidden" name="region_code" value="{{ $regionCode }}" data-postal-region-code>
     <label class="grid gap-1 text-sm">Region
         <select required name="region_name" class="{{ $fieldClass }}" data-postal-region data-old-value="{{ old('region_name') }}" data-old-code="{{ $regionCode }}"><option value="">Loading regions...</option></select>

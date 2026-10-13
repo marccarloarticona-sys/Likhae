@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Models\Seller\Category;
+use App\Models\Seller\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -28,10 +29,15 @@ class SaveSellerProductRequest extends FormRequest
 
     public function rules(): array
     {
+        $categoryRule = Rule::exists('categories', 'id');
+        if (! $this->preservingUnavailableCategory()) {
+            $categoryRule->where('is_active', true)->whereNull('archived_at');
+        }
+
         return [
             'product_type' => ['required', Rule::in(['single', 'variations'])],
             'name' => ['required', 'string', 'max:200'],
-            'category_id' => ['required', 'integer', Rule::exists('categories', 'id')->where('is_active', true)],
+            'category_id' => ['required', 'integer', $categoryRule],
             'description' => ['nullable', 'string', 'max:10000'],
             'status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'ARCHIVED'])],
 
@@ -78,13 +84,22 @@ class SaveSellerProductRequest extends FormRequest
             $categoryAllowed = $lineOfBusinessId > 0 && Category::query()
                 ->whereKey($categoryId)
                 ->where('is_active', true)
+                ->whereNull('archived_at')
+                ->where(function ($query): void {
+                    $query->whereNull('parent_id')
+                        ->orWhereHas('parent', fn ($parentQuery) => $parentQuery->where('is_active', true)->whereNull('archived_at'));
+                })
                 ->where(function ($query) use ($lineOfBusinessId): void {
                     $query->whereKey($lineOfBusinessId)
                         ->orWhere('parent_id', $lineOfBusinessId);
                 })
                 ->exists();
 
-            if (! $categoryAllowed) {
+            // An existing product may retain an unavailable historical
+            // category while its Seller edits other fields. A new product or
+            // an explicit category change must still use an active category
+            // in the Seller's registered line of business.
+            if (! $categoryAllowed && ! $this->preservingUnavailableCategory()) {
                 $validator->errors()->add('category_id', 'Choose a category within your approved line of business.');
             }
 
@@ -119,5 +134,36 @@ class SaveSellerProductRequest extends FormRequest
                 );
             }
         }
+    }
+
+    private function preservingUnavailableCategory(): bool
+    {
+        $product = $this->editingProduct();
+        if (! $product) {
+            return false;
+        }
+
+        $categoryId = (int) $this->input('category_id');
+        if ($categoryId <= 0 || (int) $product->category_id !== $categoryId) {
+            return false;
+        }
+
+        return ! Category::query()
+            ->whereKey($categoryId)
+            ->where('is_active', true)
+            ->whereNull('archived_at')
+            ->exists();
+    }
+
+    private function editingProduct(): ?Product
+    {
+        $product = $this->route('product');
+        if (! $product instanceof Product) {
+            return null;
+        }
+
+        return (int) $product->seller_profile_id === (int) $this->user()?->sellerProfile?->id
+            ? $product
+            : null;
     }
 }

@@ -48,13 +48,16 @@ class RegistrationController extends Controller
             'googleBuyerRegistration' => $request->session()->get('google_buyer_registration'),
             'sellerLineOfBusinessCategories' => Category::query()
                 ->where('is_active', true)
+                ->whereNull('archived_at')
                 ->whereNull('parent_id')
                 ->orderBy('name')
                 ->get(['id', 'name']),
             'logisticsCenters' => LogisticsCenter::query()
-                ->where('status', 'ACTIVE')
+                ->active()
+                ->whereHas('address')
+                ->with('address:id,province_code,municipality_code')
                 ->orderBy('business_name')
-                ->get(['id', 'code', 'business_name']),
+                ->get(['id', 'address_id', 'code', 'business_name']),
         ]);
     }
 

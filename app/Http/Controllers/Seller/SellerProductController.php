@@ -34,8 +34,10 @@ class SellerProductController extends Controller
         $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
 
         $selected = null;
+        $selectedProductModel = null;
         if ($request->filled('product')) {
             $selected = $sellerProducts->firstWhere('db_id', $request->integer('product'));
+            $selectedProductModel = $products->firstWhere('id', $request->integer('product'));
         }
 
         if ($request->query('mode') === 'edit' && $selected === null) {
@@ -49,7 +51,12 @@ class SellerProductController extends Controller
             'sellerProducts' => $sellerProducts,
             'selectedProduct' => $selected,
             'lineOfBusinessCategory' => $seller->primaryCategory,
-            'categories' => $this->allowedCategories($seller),
+            'categories' => $this->allowedCategories($seller, $selectedProductModel),
+            'complianceCases' => $seller->complianceCases()
+                ->with(['product.category.parent'])
+                ->latest('opened_at')
+                ->latest('id')
+                ->get(),
         ]);
     }
 
@@ -185,7 +192,16 @@ class SellerProductController extends Controller
             'stock' => (int) $activeVariants->sum('stock'),
             'sold' => (int) $product->orderItems->sum('quantity'),
             'rating' => (float) $product->orderItems->pluck('review.rating')->filter()->avg(),
-            'status' => $product->status,
+            // Keep a stable canonical key for logic and a title-cased value
+            // for the existing Seller table presentation.
+            'status' => str((string) $product->status)->replace('_', ' ')->headline(),
+            'status_key' => strtoupper((string) $product->status),
+            'status_label' => str((string) $product->status)->replace('_', ' ')->headline(),
+            'status_class' => match (strtoupper((string) $product->status)) {
+                'ACTIVE' => 'is-success',
+                'SUSPENDED' => 'is-danger',
+                default => 'is-neutral',
+            },
             'description' => $product->description,
             'image' => $firstImage?->file_path
                 ? $this->catalog->publicUrl($firstImage->file_path)
@@ -240,18 +256,29 @@ class SellerProductController extends Controller
         ];
     }
 
-    private function allowedCategories(SellerProfile $seller)
+    private function allowedCategories(SellerProfile $seller, ?Product $editingProduct = null)
     {
         $primary = $seller->primaryCategory;
 
-        if (! $primary) {
-            return collect();
+        $categories = collect();
+        if ($primary && $primary->is_active && $primary->archived_at === null) {
+            $categories = collect([$primary])
+                ->merge($primary->children->where('is_active', true)->whereNull('archived_at'))
+                ->filter(fn (Category $category) => $category->is_active && $category->archived_at === null)
+                ->unique('id')
+                ->sortBy('name')
+                ->values();
         }
 
-        $children = $primary->children->where('is_active', true)->sortBy('name')->values();
+        // Keep a historical unavailable assignment selectable while editing
+        // so a Seller can save unrelated corrections. New products and
+        // category changes still pass the active-category backend rules.
+        $existingCategory = $editingProduct?->category;
+        if ($existingCategory && ! $categories->contains('id', $existingCategory->id)) {
+            $existingCategory->setAttribute('is_unavailable_assignment', true);
+            $categories->prepend($existingCategory);
+        }
 
-        return $children->isNotEmpty()
-            ? $children
-            : collect([$primary])->filter(fn (Category $category) => $category->is_active);
+        return $categories;
     }
 }

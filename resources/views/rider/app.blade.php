@@ -2,6 +2,7 @@
 <html lang="en">
 
 <head>
+    <x-likhae-favicon />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -19,11 +20,11 @@
     <script>
         (function () {
             const savedTheme =
-                localStorage.getItem('likhae-theme') || 'light';
+                localStorage.getItem('likhae-theme');
 
             document.documentElement.classList.toggle(
                 'dark',
-                savedTheme === 'dark'
+                savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
             );
         })();
     </script>
@@ -31,6 +32,7 @@
     @vite([
         'resources/css/logistic/app.css',
         'resources/css/shared/likhae-workspace-ai.css',
+        'resources/css/shared/workspace-sidebar.css',
         'resources/js/rider/app.js',
         'resources/js/shared/likhae-workspace-ai.js'
     ])
@@ -726,7 +728,9 @@
         $workspaceAiPage = request()->route()?->getName() ?: 'rider.dashboard';
         $workspaceAiTitle = trim($__env->yieldContent('title')) ?: 'Rider';
     @endphp
-    <x-workspace.ai-assistant workspace="rider" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
+    @if(data_get(auth()->user()?->notification_preferences, 'rider_ai_assistant_enabled', true))
+        <x-workspace.ai-assistant workspace="rider" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
+    @endif
     @stack('scripts')
 </body>
 

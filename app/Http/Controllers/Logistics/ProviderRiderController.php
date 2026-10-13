@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Logistics;
 use App\Http\Controllers\Controller;
 use App\Models\Rider\RiderProfile;
 use App\Services\RiderRatingService;
+use App\Support\RiderVehicleType;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -90,7 +91,7 @@ class ProviderRiderController extends Controller
 
         $data = $request->validate([
             'contact_number' => ['sometimes', 'required', 'string', 'max:30', Rule::unique('users', 'contact_number')->ignore($rider->user_id)],
-            'vehicle_type' => ['sometimes', 'required', Rule::in(['motorcycle', 'car', 'van', 'truck'])],
+            'vehicle_type' => ['sometimes', 'required', Rule::in(RiderVehicleType::acceptedValues())],
             'plate_number' => ['sometimes', 'required', 'string', 'max:50', Rule::unique('rider_profiles', 'plate_number')->ignore($rider->id)],
             'drivers_license_number' => ['sometimes', 'required', 'string', 'max:100', Rule::unique('rider_profiles', 'drivers_license_number')->ignore($rider->id)],
         ]);

@@ -19,7 +19,7 @@ class BuyerProductDetailsTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
-        $product = Product::query()->where('status', 'ACTIVE')->sole();
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
 
         $this->actingAs($buyer)
             ->get(route('buyer.product-details', $product->slug))
@@ -37,7 +37,7 @@ class BuyerProductDetailsTest extends TestCase
         config()->set('filesystems.disks.public.url', 'http://127.0.0.1:8000/storage');
 
         $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
-        $product = Product::query()->where('status', 'ACTIVE')->sole();
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
 
         for ($index = 1; $index <= 10; $index++) {
             ProductImage::query()->create([

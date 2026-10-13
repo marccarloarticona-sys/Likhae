@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Http\Requests\StoreRegistrationRequest;
+use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Admin\AuditLog;
 use App\Models\Auth\ApplicationDocument;
 use App\Models\Auth\RegistrationApplication;
@@ -32,6 +33,7 @@ class RegistrationWorkflowService
     public function submit(StoreRegistrationRequest $request, array $overrides = []): RegistrationApplication
     {
         $data = array_replace($request->validated(), $overrides);
+        $this->ensureRiderCenterEligibility($request, $data);
         $storedPaths = [];
         $publicPaths = [];
 
@@ -262,7 +264,7 @@ class RegistrationWorkflowService
             throw ValidationException::withMessages(['application' => 'This is not a rider application.']);
         }
 
-        $center = $reviewer->logisticsCenter()->where('status', 'ACTIVE')->first();
+        $center = $reviewer->logisticsCenter()->approvedActive()->first();
         if (! $center || (int) $application->riderData?->target_logistics_center_id !== (int) $center->id) {
             abort(403, 'This rider application belongs to another logistics center.');
         }
@@ -289,7 +291,15 @@ class RegistrationWorkflowService
             throw ValidationException::withMessages(['application' => 'Only pending applications can be rejected.']);
         }
 
-        DB::transaction(function () use ($application, $reviewer, $reason, $request, $before): void {
+        DB::transaction(function () use ($application, $reviewer, $reason, $request): void {
+            $application = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
+            $before = $application->status;
+
+            if (! in_array($before, [RegistrationApplication::STATUS_PENDING, RegistrationApplication::STATUS_UNDER_REVIEW], true)) {
+                throw ValidationException::withMessages(['application' => 'Only pending applications can be rejected.']);
+            }
+
+            $application->loadMissing('documents');
             $application->update([
                 'status' => RegistrationApplication::STATUS_REJECTED,
                 'reviewed_by_user_id' => $reviewer->id,
@@ -333,14 +343,22 @@ class RegistrationWorkflowService
             throw ValidationException::withMessages(['application' => 'Only pending applications can be approved.']);
         }
 
-        DB::transaction(function () use ($application, $reviewer, $notes, $request, $expectedType, $before): void {
-            $application->refresh();
-            $application->loadMissing(['user.addresses', 'sellerData', 'logisticsData', 'riderData']);
+        DB::transaction(function () use ($application, $reviewer, $notes, $request, $expectedType): void {
+            $application = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
+            $before = $application->status;
+
+            if (! in_array($before, [RegistrationApplication::STATUS_PENDING, RegistrationApplication::STATUS_UNDER_REVIEW], true)) {
+                throw ValidationException::withMessages(['application' => 'Only pending applications can be approved.']);
+            }
+
+            $application->loadMissing(['user.addresses', 'sellerData', 'logisticsData.businessAddress', 'riderData', 'documents']);
             $user = $application->user;
 
             if (! $user || $user->account_type !== $expectedType) {
                 throw ValidationException::withMessages(['application' => 'The application account type is invalid.']);
             }
+
+            $this->ensureDocumentsReady($application, $expectedType);
 
             $defaultAddress = $user->addresses()->where('is_default', true)->first() ?? $user->addresses()->first();
 
@@ -372,6 +390,12 @@ class RegistrationWorkflowService
                     throw ValidationException::withMessages(['application' => 'Logistics application data is missing.']);
                 }
 
+                $centerAddress = $data->businessAddress ?: $defaultAddress;
+                $existingCenterId = LogisticsCenter::query()
+                    ->where('owner_user_id', $user->id)
+                    ->value('id');
+                $this->ensureUniqueActiveLogisticsCenter($centerAddress, $existingCenterId ? (int) $existingCenterId : null);
+
                 LogisticsCenter::updateOrCreate(
                     ['owner_user_id' => $user->id],
                     [
@@ -393,6 +417,8 @@ class RegistrationWorkflowService
                 if (! $data) {
                     throw ValidationException::withMessages(['application' => 'Rider application data is missing.']);
                 }
+
+                $this->ensureRiderApprovalEligibility($defaultAddress, $data);
 
                 RiderProfile::updateOrCreate(
                     ['user_id' => $user->id],
@@ -421,13 +447,6 @@ class RegistrationWorkflowService
                 'rejection_reason' => null,
             ]);
 
-            $application->documents()->update([
-                'verification_status' => 'VERIFIED',
-                'verified_by_user_id' => $reviewer->id,
-                'verified_at' => now(),
-                'rejection_reason' => null,
-            ]);
-
             $this->audit(
                 actor: $reviewer,
                 event: 'registration.approved',
@@ -444,6 +463,144 @@ class RegistrationWorkflowService
         return $fresh;
     }
 
+    public function verifyDocument(
+        RegistrationApplication $application,
+        ApplicationDocument $document,
+        User $reviewer,
+        ?Request $request = null,
+    ): ApplicationDocument {
+        return DB::transaction(function () use ($application, $document, $reviewer, $request): ApplicationDocument {
+            $application = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
+            $this->ensureReviewableStatus($application);
+            $document = $application->documents()->lockForUpdate()->find($document->id);
+
+            if (! $document) {
+                throw ValidationException::withMessages(['document' => 'This document does not belong to the application.']);
+            }
+
+            $before = $document->verification_status;
+            $document->update([
+                'verification_status' => 'VERIFIED',
+                'verified_by_user_id' => $reviewer->id,
+                'verified_at' => now(),
+                'rejection_reason' => null,
+            ]);
+
+            if ($application->status === RegistrationApplication::STATUS_PENDING) {
+                $application->update(['status' => RegistrationApplication::STATUS_UNDER_REVIEW]);
+            }
+
+            $this->audit(
+                actor: $reviewer,
+                event: 'registration.document_verified',
+                record: $application,
+                oldValues: ['document_id' => $document->id, 'verification_status' => $before],
+                newValues: ['document_id' => $document->id, 'verification_status' => 'VERIFIED'],
+                request: $request,
+            );
+
+            return $document->fresh('verifier');
+        });
+    }
+
+    public function rejectDocument(
+        RegistrationApplication $application,
+        ApplicationDocument $document,
+        User $reviewer,
+        string $reason,
+        ?Request $request = null,
+    ): ApplicationDocument {
+        return DB::transaction(function () use ($application, $document, $reviewer, $reason, $request): ApplicationDocument {
+            $application = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
+            $this->ensureReviewableStatus($application);
+            $document = $application->documents()->lockForUpdate()->find($document->id);
+
+            if (! $document) {
+                throw ValidationException::withMessages(['document' => 'This document does not belong to the application.']);
+            }
+
+            $before = $document->verification_status;
+            $document->update([
+                'verification_status' => 'REJECTED',
+                'verified_by_user_id' => $reviewer->id,
+                'verified_at' => now(),
+                'rejection_reason' => trim($reason),
+            ]);
+
+            if ($application->status === RegistrationApplication::STATUS_PENDING) {
+                $application->update(['status' => RegistrationApplication::STATUS_UNDER_REVIEW]);
+            }
+
+            $this->audit(
+                actor: $reviewer,
+                event: 'registration.document_rejected',
+                record: $application,
+                oldValues: ['document_id' => $document->id, 'verification_status' => $before],
+                newValues: ['document_id' => $document->id, 'verification_status' => 'REJECTED', 'reason' => trim($reason)],
+                request: $request,
+            );
+
+            return $document->fresh('verifier');
+        });
+    }
+
+    private function ensureReviewableStatus(RegistrationApplication $application): void
+    {
+        if (! in_array($application->status, [RegistrationApplication::STATUS_PENDING, RegistrationApplication::STATUS_UNDER_REVIEW], true)) {
+            throw ValidationException::withMessages(['application' => 'This application is no longer awaiting review.']);
+        }
+    }
+
+    private function ensureDocumentsReady(RegistrationApplication $application, string $expectedType): void
+    {
+        $documents = $application->documents;
+        $requiredTypes = $this->requiredDocumentTypes($application, $expectedType);
+        $missing = collect($requiredTypes)
+            ->reject(fn (string $type): bool => $documents->contains(fn (ApplicationDocument $document): bool => strtoupper((string) $document->document_type) === $type))
+            ->values();
+        $unverified = $documents
+            ->filter(fn (ApplicationDocument $document): bool => strtoupper((string) $document->verification_status) !== 'VERIFIED')
+            ->map(fn (ApplicationDocument $document): string => str($document->document_type)->replace('_', ' ')->headline()->toString())
+            ->unique()
+            ->values();
+
+        $errors = [];
+        if ($missing->isNotEmpty()) {
+            $errors['documents'][] = 'Required documents are missing: '.$missing->map(fn (string $type): string => str($type)->replace('_', ' ')->headline()->toString())->implode(', ').'.';
+        }
+        if ($unverified->isNotEmpty()) {
+            $errors['documents'][] = 'Verify or reject every submitted document before approving: '.$unverified->implode(', ').'.';
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    private function requiredDocumentTypes(RegistrationApplication $application, string $expectedType): array
+    {
+        $required = ['VALID_ID'];
+
+        if ($expectedType === User::TYPE_SELLER) {
+            $sellerType = strtolower((string) $application->sellerData?->seller_type);
+            if ($sellerType === 'sole_proprietorship') {
+                $required = array_merge($required, ['DTI_CERTIFICATE', 'BIR_FORM_2303']);
+            } elseif ($sellerType === 'corporation') {
+                $required = array_merge($required, ['SEC_CERTIFICATE', 'BIR_FORM_2303']);
+            }
+        }
+
+        if ($expectedType === User::TYPE_LOGISTICS) {
+            $required = array_merge($required, ['BUSINESS_PERMIT', 'SEC_CERTIFICATE', 'BIR_FORM_2303']);
+        }
+
+        if ($expectedType === User::TYPE_RIDER) {
+            $required = array_merge($required, ['VEHICLE_OR_CR', 'DRIVERS_LICENSE']);
+        }
+
+        return array_values(array_unique($required));
+    }
+
     private function normalizeSex(string $sex): string
     {
         return match (strtolower($sex)) {
@@ -452,6 +609,119 @@ class RegistrationWorkflowService
             'other' => 'OTHER',
             default => 'PREFER_NOT_TO_SAY',
         };
+    }
+
+    /** @param array<string, mixed> $data */
+    private function ensureRiderCenterEligibility(StoreRegistrationRequest $request, array $data): void
+    {
+        if ($request->accountTypeConstant() !== User::TYPE_RIDER) {
+            return;
+        }
+
+        $this->ensureCanonicalBarangay(
+            (string) ($data['municipality_code'] ?? ''),
+            (string) ($data['barangay_code'] ?? ''),
+            'barangay_code',
+        );
+
+        $eligibleCenters = LogisticsCenter::query()
+            ->eligibleForRiderAddress(
+                (string) ($data['province_code'] ?? ''),
+                (string) ($data['municipality_code'] ?? ''),
+            )
+            ->get(['id']);
+
+        if ($eligibleCenters->count() > 1) {
+            throw ValidationException::withMessages([
+                'target_logistics_center_id' => 'The rider address matches multiple active logistics hubs. Routing ownership must be resolved before registration.',
+            ]);
+        }
+
+        $eligible = $eligibleCenters->contains(fn (LogisticsCenter $center): bool =>
+            (int) $center->id === (int) ($data['target_logistics_center_id'] ?? 0));
+
+        if (! $eligible) {
+            throw ValidationException::withMessages([
+                'target_logistics_center_id' => 'The selected logistics hub does not serve the rider address municipality.',
+            ]);
+        }
+    }
+
+    private function ensureRiderApprovalEligibility(?Address $address, RiderApplicationData $data): void
+    {
+        if (! $address
+            || blank($address->province_code)
+            || blank($address->municipality_code)
+            || blank($address->barangay_code)) {
+            throw ValidationException::withMessages([
+                'application' => 'The rider application has no complete canonical PSGC address for approval.',
+            ]);
+        }
+
+        $this->ensureCanonicalBarangay(
+            (string) $address->municipality_code,
+            (string) $address->barangay_code,
+            'application',
+        );
+
+        $eligibleCenters = LogisticsCenter::query()
+            ->eligibleForRiderAddress((string) $address->province_code, (string) $address->municipality_code)
+            ->get(['id']);
+
+        if ($eligibleCenters->count() !== 1
+            || (int) $eligibleCenters->first()?->id !== (int) $data->target_logistics_center_id) {
+            throw ValidationException::withMessages([
+                'application' => $eligibleCenters->count() > 1
+                    ? 'The rider address matches multiple active logistics hubs. Resolve the PSGC ownership before approval.'
+                    : 'The selected logistics hub no longer serves the rider address municipality.',
+            ]);
+        }
+    }
+
+    private function ensureCanonicalBarangay(string $municipalityCode, string $barangayCode, string $errorKey): void
+    {
+        $municipalityCode = trim($municipalityCode);
+        $barangayCode = trim($barangayCode);
+        if ($municipalityCode === '' || $barangayCode === '') {
+            throw ValidationException::withMessages([
+                $errorKey => 'A complete canonical PSGC municipality and barangay are required.',
+            ]);
+        }
+
+        $records = PhilippineAddressController::barangayRecordsForMunicipality($municipalityCode);
+        $matches = collect($records)->filter(fn ($record): bool =>
+            is_array($record) && trim((string) ($record['code'] ?? '')) === $barangayCode
+        );
+
+        if ($records === [] || $matches->count() !== 1) {
+            throw ValidationException::withMessages([
+                $errorKey => 'The selected barangay is not a canonical barangay of the selected municipality, or PSGC verification is unavailable.',
+            ]);
+        }
+    }
+
+    private function ensureUniqueActiveLogisticsCenter(?Address $address, ?int $excludeCenterId = null): void
+    {
+        if (! $address
+            || blank($address->province_code)
+            || blank($address->municipality_code)) {
+            throw ValidationException::withMessages([
+                'application' => 'The logistics center has no complete canonical PSGC municipality address.',
+            ]);
+        }
+
+        $query = LogisticsCenter::query()
+            ->eligibleForRiderAddress((string) $address->province_code, (string) $address->municipality_code);
+
+        if ($excludeCenterId) {
+            $query->where('id', '!=', $excludeCenterId);
+        }
+
+        if ($query->exists()) {
+            throw ValidationException::withMessages([
+                'application' => 'An active logistics hub already owns this province and municipality PSGC.',
+            ]);
+        }
     }
 
     private function newApplicationNumber(): string

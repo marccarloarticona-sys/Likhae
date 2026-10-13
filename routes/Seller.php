@@ -1,11 +1,14 @@
 <?php
 
 use App\Http\Controllers\Seller\SellerAccountController;
+use App\Http\Controllers\Seller\SellerComplianceController;
 use App\Http\Controllers\Seller\SellerEngagementController;
 use App\Http\Controllers\Seller\SellerOperationsController;
 use App\Http\Controllers\Seller\SellerOrderController;
+use App\Http\Controllers\Seller\SellerReturnRefundController;
 use App\Http\Controllers\Seller\SellerProductController;
 use App\Http\Controllers\WorkspaceAiController;
+use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
 
@@ -23,6 +26,8 @@ Route::prefix('seller')
             ->name('ai.chat');
 
         Route::get('/dashboard', [SellerOperationsController::class, 'dashboard'])->name('dashboard');
+        Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'seller')->name('settings');
+        Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'seller')->name('settings.update');
 
         Route::get('/products', [SellerProductController::class, 'index'])->name('products');
         Route::get('/products/trash', [SellerProductController::class, 'trash'])->name('products.trash');
@@ -35,7 +40,25 @@ Route::prefix('seller')
         Route::delete('/products/{product}/images/{image}', [SellerProductController::class, 'deleteImage'])->name('products.images.destroy');
         Route::get('/products-export', [SellerProductController::class, 'export'])->name('products.export');
 
+        // Product compliance notices are scoped to the authenticated Seller;
+        // they are linked from Product Management and Notifications rather
+        // than added as a separate primary sidebar section.
+        Route::get('/compliance', [SellerComplianceController::class, 'index'])->name('compliance');
+        Route::get('/compliance/{case}', [SellerComplianceController::class, 'show'])->name('compliance.show');
+        Route::post('/compliance/{case}/responses', [SellerComplianceController::class, 'storeResponse'])->name('compliance.responses.store');
+        Route::get('/compliance/{case}/responses/{response}/evidence', [SellerComplianceController::class, 'downloadResponseEvidence'])
+            ->name('compliance.responses.evidence');
+
         Route::get('/orders', [SellerOrderController::class, 'index'])->name('orders');
+        Route::get('/orders/refunds/{sellerRequest}', [SellerReturnRefundController::class, 'show'])->name('orders.refunds.show');
+        Route::post('/orders/refunds/{sellerRequest}/approve', [SellerReturnRefundController::class, 'approve'])->name('orders.refunds.approve');
+        Route::post('/orders/refunds/{sellerRequest}/reject', [SellerReturnRefundController::class, 'reject'])->name('orders.refunds.reject');
+        Route::post('/orders/refunds/{sellerRequest}/payout', [SellerReturnRefundController::class, 'payout'])->name('orders.refunds.payout');
+        Route::post('/orders/refunds/{sellerRequest}/cash-ready', [SellerReturnRefundController::class, 'cashReady'])->name('orders.refunds.cash-ready');
+        Route::post('/orders/refunds/{sellerRequest}/receive', [SellerReturnRefundController::class, 'receiveReturn'])->name('orders.refunds.receive');
+        Route::post('/orders/refunds/{sellerRequest}/items/{item}/inspect', [SellerReturnRefundController::class, 'inspectReturn'])->name('orders.refunds.inspect');
+        Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');
+        Route::get('/orders/refunds/evidence/{evidence}', [SellerReturnRefundController::class, 'evidence'])->name('orders.refunds.evidence');
         Route::patch('/orders/{sellerOrder}/status', [SellerOrderController::class, 'transition'])->name('orders.status');
         Route::get('/orders/{sellerOrder}/waybill', [SellerOperationsController::class, 'waybill'])->name('orders.waybill');
         Route::get('/orders-export', [SellerOperationsController::class, 'exportOrders'])->name('orders.export');

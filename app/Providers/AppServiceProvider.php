@@ -23,6 +23,8 @@ use App\Services\AccountNotificationService;
 use App\Policies\LogisticsCenterPolicy;
 use App\Policies\RiderProfilePolicy;
 use App\Policies\SellerProfilePolicy;
+use Illuminate\Auth\Notifications\ResetPassword;
+use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Vite;
@@ -38,6 +40,40 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        ResetPassword::createUrlUsing(function ($notifiable, string $token): string {
+            $request = request();
+            $portal = $request->hasSession()
+                ? $request->session()->get('password_reset_portal', 'marketplace')
+                : 'marketplace';
+            $portal = $portal === 'logistics' ? 'logistics' : 'marketplace';
+
+            return url(route('password.reset', [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+                'portal' => $portal,
+            ], false));
+        });
+
+        ResetPassword::toMailUsing(function ($notifiable, string $token): MailMessage {
+            $request = request();
+            $portal = $request->hasSession()
+                ? $request->session()->get('password_reset_portal', 'marketplace')
+                : 'marketplace';
+            $portal = $portal === 'logistics' ? 'logistics' : 'marketplace';
+            $resetUrl = url(route('password.reset', [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+                'portal' => $portal,
+            ], false));
+
+            return (new MailMessage)
+                ->subject('Reset Your LIKHAE Password')
+                ->view('emails.auth.reset-password', [
+                    'resetUrl' => $resetUrl,
+                    'expirationMinutes' => (int) config('auth.passwords.'.config('auth.defaults.passwords').'.expire'),
+                ]);
+        });
+
         // The local development server may use Vite's hot marker. Public
         // likhae.online requests must ignore it because it can point to a
         // private LAN address that public visitors cannot reach.
@@ -88,12 +124,30 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(LogisticsCenter::class, LogisticsCenterPolicy::class);
         Gate::policy(RiderProfile::class, RiderProfilePolicy::class);
 
-        $unreadMessageCount = static function (?User $user): int {
-            if (! $user || ! Schema::hasTable('messages') || ! Schema::hasTable('conversation_participants')) {
+        $memo = static function (string $key, callable $resolve): mixed {
+            $attributes = request()->attributes;
+
+            if ($attributes->has($key)) {
+                return $attributes->get($key);
+            }
+
+            $value = $resolve();
+            $attributes->set($key, $value);
+
+            return $value;
+        };
+
+        $hasTable = static fn (string $table): bool => $memo(
+            '_likhae_schema_'.$table,
+            static fn (): bool => Schema::hasTable($table),
+        );
+
+        $unreadMessageCount = static function (?User $user) use ($memo, $hasTable): int {
+            if (! $user || ! $hasTable('messages') || ! $hasTable('conversation_participants')) {
                 return 0;
             }
 
-            return Message::query()
+            return $memo('_likhae_unread_messages_'.$user->id, static fn (): int => Message::query()
                 ->join('conversation_participants as cp', function ($join) use ($user): void {
                     $join->on('cp.conversation_id', '=', 'messages.conversation_id')
                         ->where('cp.user_id', '=', $user->id)
@@ -108,18 +162,18 @@ class AppServiceProvider extends ServiceProvider
                     $query->whereNull('cp.last_read_at')
                         ->orWhereColumn('messages.sent_at', '>', 'cp.last_read_at');
                 })
-                ->count('messages.id');
+                ->count('messages.id'));
         };
 
-        $unreadNotificationCount = static function (?User $user): int {
-            if (! $user || ! Schema::hasTable('notifications')) {
+        $unreadNotificationCount = static function (?User $user) use ($memo, $hasTable): int {
+            if (! $user || ! $hasTable('notifications')) {
                 return 0;
             }
 
-            return Notification::query()
+            return $memo('_likhae_unread_notifications_'.$user->id, static fn (): int => Notification::query()
                 ->where('user_id', $user->id)
                 ->whereNull('read_at')
-                ->count();
+                ->count());
         };
 
         View::composer(['components.admin.sidebar', 'components.admin.header'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {

@@ -14,7 +14,9 @@ use App\Models\Admin\Notification;
 use App\Models\Admin\PlatformSetting;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Buyer\ReturnRefundRequestItem;
+use App\Models\Buyer\ReturnRefundEvidence;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
 use App\Services\RiderRatingService;
@@ -22,6 +24,9 @@ use App\Services\ReviewImageService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Maps\MapDataService;
+use App\Services\Marketplace\BuyerOrderActionService;
+use App\Services\RefundProofStorageService;
+use App\Services\ReturnRefundWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -54,7 +59,7 @@ class BuyerOrderController extends Controller
         ]);
     }
 
-    public function index(Request $request, ShipmentWorkflowService $workflow): View
+    public function index(Request $request, ShipmentWorkflowService $workflow, BuyerOrderActionService $actions): View
     {
         $filter = strtoupper((string) $request->query('status', ''));
         $returnRefundReady = $this->returnRefundStorageReady();
@@ -94,7 +99,7 @@ class BuyerOrderController extends Controller
 
         $orderQuery = $request->user()
             ->orders()
-            ->with(['sellerOrders.items.product.images', 'sellerOrders.shipment', 'payments']);
+            ->with(['sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'payments', 'disputes']);
 
         if ($returnRefundReady) {
             $orderQuery->with('returnRefundRequests');
@@ -128,6 +133,9 @@ class BuyerOrderController extends Controller
             ->withQueryString();
 
         $orders->getCollection()->each(fn (Order $order) => $workflow->syncParentOrderProgress($order));
+        $orderActionStates = $orders->getCollection()->mapWithKeys(
+            fn (Order $order): array => [$order->id => $actions->state($order, $returnRefundReady)]
+        );
 
         return view('Buyer.orders', [
             'mode' => 'index',
@@ -135,6 +143,7 @@ class BuyerOrderController extends Controller
             'selectedOrder' => null,
             'returnRefundReady' => $returnRefundReady,
             'orderStatusCounts' => $orderStatusCounts,
+            'orderActionStates' => $orderActionStates,
         ]);
     }
 
@@ -167,15 +176,17 @@ class BuyerOrderController extends Controller
         ]);
     }
 
-    public function show(Request $request, Order $order, ShipmentWorkflowService $workflow, ReviewImageService $reviewImages): View
+    public function show(Request $request, Order $order, ShipmentWorkflowService $workflow, ReviewImageService $reviewImages, BuyerOrderActionService $actions): View
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
         $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'sellerOrders.shipment.riderAssignments.riderProfile.user', 'sellerOrders.shipment.riderAssignments.liveLocation', 'sellerOrders.shipment.logisticsCenter.address', 'address', 'payments', 'disputes'];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
+            $orderRelations[] = 'returnRefundRequests';
         }
         $selectedOrder = $order->load($orderRelations);
+        $selectedOrderActionState = $actions->state($selectedOrder, $this->returnRefundStorageReady());
         $riderRatingsByShipment = $selectedOrder->sellerOrders->mapWithKeys(function ($sellerOrder): array {
             $shipment = $sellerOrder->shipment;
             $assignment = $shipment?->riderAssignments
@@ -199,6 +210,7 @@ class BuyerOrderController extends Controller
             'riderRatingsByShipment' => $riderRatingsByShipment,
             'reviewImagesById' => $reviewImagesById,
             'mapMarkers' => $mapMarkers,
+            'selectedOrderActionState' => $selectedOrderActionState,
             'orders' => $request->user()->orders()->with(['sellerOrders.shipment'])->latest()->paginate(10),
         ]);
     }
@@ -297,40 +309,26 @@ class BuyerOrderController extends Controller
         return back()->with('buyer_notice', 'Order cancelled.');
     }
 
-    public function received(Request $request, Order $order): RedirectResponse|JsonResponse
+    public function received(Request $request, Order $order, BuyerOrderActionService $actions): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
-        $order->loadMissing('sellerOrders.shipment');
-        abort_if(
-            $order->disputes()->where('type', 'RETURN_REFUND')->whereIn('status', ['OPEN', 'UNDER_REVIEW'])->exists(),
-            409,
-            'Resolve the active return/refund request before confirming receipt.'
-        );
-        abort_unless(
-            $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment?->current_status === 'DELIVERED'),
-            409,
-            'Receipt can only be confirmed after every parcel has been delivered.'
-        );
-
-        $order->update([
-            'status' => 'COMPLETED',
-            'completed_at' => now(),
+        $request->validate([
+            'confirm_receipt' => ['required', 'accepted'],
         ]);
 
-        foreach ($order->sellerOrders as $sellerOrder) {
+        DB::transaction(function () use ($request, $order, $actions): void {
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $state = $actions->state($lockedOrder, $this->returnRefundStorageReady());
+            abort_if($state['active_dispute'], 409, 'Resolve the active return/refund request before confirming receipt.');
+            abort_unless($state['can_confirm_received'], 409, 'Receipt can only be confirmed once, after every parcel has been delivered.');
+
+            $lockedOrder->update([
+                'status' => 'COMPLETED',
+                'completed_at' => now(),
+            ]);
+
+            foreach ($lockedOrder->sellerOrders as $sellerOrder) {
             $sellerOrder->update(['status' => 'COMPLETED']);
-            $rate = PlatformSetting::commissionRate();
-            CommissionTransaction::query()->firstOrCreate(
-                ['seller_order_id' => $sellerOrder->id],
-                [
-                    'commission_rate' => $rate,
-                    'commissionable_amount' => $sellerOrder->grand_total,
-                    'commission_amount' => round((float) $sellerOrder->grand_total * $rate, 2),
-                    'status' => 'PENDING',
-                    'calculated_at' => now(),
-                ],
-            );
             if ($sellerOrder->shipment) {
                 $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
                 ShipmentEvent::query()->create([
@@ -341,7 +339,8 @@ class BuyerOrderController extends Controller
                     'occurred_at' => now(),
                 ]);
             }
-        }
+            }
+        });
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -375,7 +374,7 @@ class BuyerOrderController extends Controller
         ]);
     }
 
-    public function returnRefund(Request $request, Order $order): View|RedirectResponse|JsonResponse
+    public function returnRefund(Request $request, Order $order, ReturnRefundWorkflowService $workflow, RefundProofStorageService $proofs): View|RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
 
@@ -401,10 +400,11 @@ class BuyerOrderController extends Controller
             'quantities' => ['required', 'array'],
             'description' => ['required', 'string', 'min:1', 'max:2000'],
             'images' => ['nullable', 'array', 'max:6'],
-            'images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
+            'images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
             'video' => ['nullable', 'file', 'mimes:mp4,mov,webm', 'max:204800'],
             'buyer_email' => ['required', 'email', 'max:255'],
-            'refund_method' => ['nullable', 'string', 'max:100'],
+            'confirm_cash' => ['required', 'accepted'],
+            'confirm_request' => ['required', 'accepted'],
         ]);
 
         $issue = $issues[$data['issue_category']];
@@ -420,19 +420,22 @@ class BuyerOrderController extends Controller
         foreach ($itemIds as $itemId) {
             $item = $items->get($itemId);
             $quantity = (int) ($data['quantities'][$itemId] ?? 0);
-            abort_unless($quantity > 0 && $quantity <= (int) $item->quantity, 422, 'Choose a valid quantity for each selected item.');
+            $remaining = max(0, (int) $item->quantity - $workflow->activeClaimedQuantity((int) $item->id));
+            abort_unless($quantity > 0 && $quantity <= $remaining, 422, 'Choose a valid quantity that has not already been claimed.');
             $amount = round(((float) $item->line_total / max((int) $item->quantity, 1)) * $quantity, 2);
             $selectedItems[] = ['item' => $item, 'quantity' => $quantity, 'amount' => $amount];
             $totalRefund += $amount;
         }
 
-        $refundMethods = $this->refundMethods($order);
-        $refundMethod = count($refundMethods) === 1 ? array_key_first($refundMethods) : ($data['refund_method'] ?? null);
-        abort_unless($refundMethod === null || array_key_exists($refundMethod, $refundMethods), 422, 'Choose a valid refund method.');
-
-        $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $refundMethod, $totalRefund, $selectedItems): ReturnRefundRequest {
+        $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs): ReturnRefundRequest {
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $requestNumber = 'RR-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
             $description = trim($data['description']);
+            // The legacy dispute-based creation block remains below only as a
+            // compatibility reference; ordinary submissions now use the
+            // seller-scoped records and never execute it.
+            if (false) {
             $dispute = Dispute::create([
                 'dispute_number' => $requestNumber,
                 'opened_by_user_id' => $request->user()->id,
@@ -455,16 +458,18 @@ class BuyerOrderController extends Controller
                 ]);
             });
 
+            }
+
             $returnRequest = ReturnRefundRequest::create([
                 'request_number' => $requestNumber,
-                'dispute_id' => $dispute->id,
+                'dispute_id' => null,
                 'order_id' => $order->id,
                 'buyer_user_id' => $request->user()->id,
                 'issue_category' => $data['issue_category'],
                 'issue_reason' => $data['issue_reason'],
                 'solution' => $issue['solution'],
                 'description' => $description,
-                'refund_method' => $refundMethod,
+                'refund_method' => 'CASH',
                 'refundable_amount' => round($totalRefund, 2),
                 'requested_amount' => round($totalRefund, 2),
                 'buyer_email' => $data['buyer_email'],
@@ -472,23 +477,77 @@ class BuyerOrderController extends Controller
                 'submitted_at' => now(),
             ]);
 
-            foreach ($selectedItems as $selected) {
-                ReturnRefundRequestItem::create([
+            $selectedBySeller = collect($selectedItems)->groupBy(fn (array $selected): int => (int) $selected['item']->seller_order_id);
+            foreach ($selectedBySeller as $sellerOrderId => $sellerItems) {
+                $sellerOrder = $lockedOrder->sellerOrders()->with('sellerProfile.user')->whereKey($sellerOrderId)->firstOrFail();
+                $sellerTotal = round($sellerItems->sum('amount'), 2);
+                $sellerRequest = SellerReturnRefundRequest::create([
                     'return_refund_request_id' => $returnRequest->id,
-                    'order_item_id' => $selected['item']->id,
-                    'quantity' => $selected['quantity'],
-                    'refundable_amount' => $selected['amount'],
+                    'seller_order_id' => $sellerOrder->id,
+                    'seller_profile_id' => $sellerOrder->seller_profile_id,
+                    'status' => SellerReturnRefundRequest::STATUS_SELLER_REVIEW,
+                    'requested_amount' => $sellerTotal,
                 ]);
+
+                foreach ($sellerItems as $selected) {
+                    $freshItem = $sellerOrder->items()->whereKey($selected['item']->id)->lockForUpdate()->firstOrFail();
+                    $claimed = $workflow->activeClaimedQuantity((int) $freshItem->id);
+                    abort_unless($selected['quantity'] <= ((int) $freshItem->quantity - $claimed), 422, 'One or more item quantities were claimed while this request was being submitted.');
+                    ReturnRefundRequestItem::create([
+                        'return_refund_request_id' => $returnRequest->id,
+                        'seller_return_refund_request_id' => $sellerRequest->id,
+                        'order_item_id' => $freshItem->id,
+                        'quantity' => $selected['quantity'],
+                        'refundable_amount' => $selected['amount'],
+                    ]);
+                }
+
+                $workflow->recordEvent($returnRequest, 'REQUEST_SUBMITTED', $request->user(), $sellerRequest, null, $sellerRequest->status, 'Buyer submitted a seller-scoped return/refund request.');
+                $sellerUser = $sellerOrder->sellerProfile?->user;
+                if ($sellerUser) {
+                    Notification::create([
+                        'user_id' => $sellerUser->id,
+                        'type' => 'RETURN_REFUND',
+                        'title' => 'New return/refund request',
+                        'message' => 'Request '.$returnRequest->request_number.' is ready for your review for order '.$lockedOrder->order_number.'.',
+                        'reference_type' => SellerReturnRefundRequest::class,
+                        'reference_id' => $sellerRequest->id,
+                        'action_url' => route('seller.orders.refunds.show', $sellerRequest),
+                    ]);
+                    $workflow->recordEvent($returnRequest, 'SELLER_NOTIFIED', $request->user(), $sellerRequest, $sellerRequest->status, $sellerRequest->status, 'Responsible Seller notification persisted.');
+                }
             }
 
             foreach ((array) $request->file('images', []) as $image) {
-                $this->storeDisputeEvidence($dispute, $image, $request->user()->id, 'Buyer photo evidence.');
+                $stored = $proofs->storeImage($image, 'return-refund-evidence/'.$returnRequest->id);
+                ReturnRefundEvidence::create([
+                    'return_refund_request_id' => $returnRequest->id,
+                    'uploaded_by_user_id' => $request->user()->id,
+                    'disk' => $stored['disk'],
+                    'file_path' => $stored['path'],
+                    'original_name' => $stored['original_name'],
+                    'mime_type' => $stored['mime'],
+                    'evidence_type' => 'BUYER_PHOTO',
+                    'encrypted' => true,
+                ]);
             }
             if ($request->hasFile('video')) {
-                $this->storeDisputeEvidence($dispute, $request->file('video'), $request->user()->id, 'Buyer video evidence.');
+                $stored = $proofs->storeFile($request->file('video'), 'return-refund-evidence/'.$returnRequest->id, ['video/mp4', 'video/quicktime', 'video/webm']);
+                ReturnRefundEvidence::create([
+                    'return_refund_request_id' => $returnRequest->id,
+                    'uploaded_by_user_id' => $request->user()->id,
+                    'disk' => $stored['disk'],
+                    'file_path' => $stored['path'],
+                    'original_name' => $stored['original_name'],
+                    'mime_type' => $stored['mime'],
+                    'evidence_type' => 'BUYER_VIDEO',
+                    'encrypted' => true,
+                ]);
             }
 
-            return $returnRequest->load('items.orderItem');
+            $workflow->recordEvent($returnRequest, 'REQUEST_SUBMITTED', $request->user(), null, null, $returnRequest->status, 'Buyer submitted the return/refund request.');
+
+            return $returnRequest->load(['items.orderItem', 'sellerRequests']);
         });
 
         if ($request->expectsJson()) {
@@ -533,21 +592,31 @@ class BuyerOrderController extends Controller
 
     private function returnRefundStorageReady(): bool
     {
-        return Schema::hasTable('return_refund_requests') && Schema::hasTable('return_refund_request_items');
+        return Schema::hasTable('return_refund_requests')
+            && Schema::hasTable('return_refund_request_items')
+            && Schema::hasTable('seller_return_refund_requests')
+            && Schema::hasTable('return_refund_evidence')
+            && Schema::hasTable('refund_payouts')
+            && Schema::hasTable('return_refund_events');
     }
 
-    private function activeReturnRefund(Order $order, int $buyerId): ?Dispute
+    private function activeReturnRefund(Order $order, int $buyerId): mixed
     {
         if (! $this->returnRefundStorageReady()) {
             return null;
         }
 
-        return $order->disputes()
+        $request = $order->returnRefundRequests()
+            ->where('buyer_user_id', $buyerId)
+            ->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED'])
+            ->latest('submitted_at')
+            ->first();
+
+        return $request ?: $order->disputes()
             ->where('opened_by_user_id', $buyerId)
             ->where('type', 'RETURN_REFUND')
             ->whereIn('status', ['OPEN', 'UNDER_REVIEW'])
-            ->with('returnRefundRequest')
-            ->latest()
+            ->latest('opened_at')
             ->first();
     }
 
@@ -564,13 +633,7 @@ class BuyerOrderController extends Controller
 
     private function refundMethods(Order $order): array
     {
-        $payment = $order->payments()->whereIn('status', ['PAID', 'PENDING'])->latest()->first()
-            ?? $order->payments()->latest()->first();
-        if (! $payment) {
-            return [];
-        }
-
-        return [$payment->method => $payment->method === 'COD' ? 'Original payment method (Cash on Delivery)' : 'Original payment method (Online payment)'];
+        return ['CASH' => 'Cash after approval, return custody, and inspection'];
     }
 
     private function storeDisputeEvidence(Dispute $dispute, mixed $file, int $userId, string $notes): void

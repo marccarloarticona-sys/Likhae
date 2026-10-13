@@ -86,6 +86,12 @@
                 <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
                 <span class="sl-nav-text">Earnings</span>
             </a>
+            <a href="{{ route('rider.remittances') }}"
+               class="sl-nav-link {{ $active === 'remittances' ? 'is-active' : '' }}"
+               data-title="COD Remittances">
+                <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
+                <span class="sl-nav-text">COD Remittances</span>
+            </a>
         </div>
 
         <div class="sl-nav-section">

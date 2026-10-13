@@ -121,7 +121,7 @@ class BuyerController extends Controller
         ]);
     }
 
-    public function addCart(Request $request, Product $product): RedirectResponse
+    public function addCart(Request $request, Product $product): RedirectResponse|JsonResponse
     {
         abort_unless($product->status === 'ACTIVE', 404);
 
@@ -216,7 +216,7 @@ class BuyerController extends Controller
             ], static fn ($value) => filled($value)));
         }
 
-        $conversations = $this->conversations->listFor($request->user(), false);
+        $conversations = $this->conversations->listFor($request->user(), false, null, true);
         if ($conversations->isNotEmpty()) {
             ConversationParticipant::query()
                 ->where('user_id', $request->user()->id)
@@ -252,7 +252,7 @@ class BuyerController extends Controller
             ? Message::query()
                 ->where('conversation_id', $active['conversation_id'])
                 ->latest('sent_at')
-                ->limit(100)
+                ->limit(50)
                 ->get(['id', 'conversation_id', 'body', 'sender_user_id', 'sent_at'])
                 ->reverse()
                 ->values()
@@ -269,6 +269,7 @@ class BuyerController extends Controller
     public function messageStream(Request $request): JsonResponse
     {
         $recipientId = (int) $request->query('seller_id');
+        $afterId = (int) $request->query('after_id');
         $conversation = $recipientId > 0
             ? Conversation::query()
                 ->select('conversations.id')
@@ -277,15 +278,16 @@ class BuyerController extends Controller
                 ->first()
             : null;
 
-        $messages = $conversation
-            ? Message::query()
+        $messages = collect();
+        if ($conversation) {
+            $query = Message::query()
                 ->where('conversation_id', $conversation->id)
-                ->latest('sent_at')
-                ->limit(100)
-                ->get(['id', 'conversation_id', 'body', 'sender_user_id', 'sent_at'])
-                ->reverse()
-                ->values()
-            : collect();
+                ->when($afterId > 0, fn ($query) => $query->where('id', '>', $afterId)->oldest('id'), fn ($query) => $query->latest('sent_at'))
+                ->limit(50)
+                ->get(['id', 'conversation_id', 'body', 'sender_user_id', 'sent_at']);
+
+            $messages = $afterId > 0 ? $query->values() : $query->reverse()->values();
+        }
 
         return response()->json([
             'success' => true,
@@ -295,7 +297,7 @@ class BuyerController extends Controller
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
             ])->values(),
-        ]);
+        ])->header('Cache-Control', 'no-store, private');
     }
 
     public function sendMessage(Request $request): JsonResponse|RedirectResponse
@@ -315,6 +317,7 @@ class BuyerController extends Controller
         abort_unless($isActiveSeller || $recipient->isAccountType(User::TYPE_ADMIN), 404);
 
         $context = [];
+        $conversation = null;
         if (! empty($data['conversation_id'])) {
             $conversation = Conversation::query()
                 ->whereKey((int) $data['conversation_id'])
@@ -325,7 +328,7 @@ class BuyerController extends Controller
             $context = $this->conversations->contextFor($conversation);
         }
 
-        $message = $this->conversations->send($request->user(), $recipient->id, trim($data['body']), $context);
+        $message = $this->conversations->send($request->user(), $recipient->id, trim($data['body']), $context, $conversation);
 
         if ($request->expectsJson()) {
             $sentAt = $message->sent_at ?? $message->created_at;

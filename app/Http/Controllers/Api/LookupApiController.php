@@ -15,6 +15,7 @@ class LookupApiController extends Controller
             'success' => true,
             'data' => Category::query()
                 ->where('is_active', true)
+                ->whereNull('archived_at')
                 ->orderBy('name')
                 ->get(['id', 'parent_id', 'name', 'slug', 'description'])
                 ->values(),
@@ -26,7 +27,7 @@ class LookupApiController extends Controller
         return response()->json([
             'success' => true,
             'data' => LogisticsCenter::query()
-                ->where('status', 'ACTIVE')
+                ->approvedActive()
                 ->orderBy('business_name')
                 ->get(['id', 'code', 'business_name'])
                 ->values(),

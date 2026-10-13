@@ -18,6 +18,7 @@
         'page' => $page,
         'pageTitle' => $pageTitle ?: $pageContext['title'],
     ];
+    $aiResponseSound = (bool) data_get(auth()->user()?->notification_preferences, $workspace.'_ai_response_sound', false);
 @endphp
 
 <script>window.LIKHAE_WORKSPACE_AI_CONFIG = @json($clientConfig);</script>
@@ -26,6 +27,7 @@
     data-likhae-workspace-ai
     data-workspace="{{ $workspace }}"
     data-chat-url="{{ $chatUrl ?: route($workspace . '.ai.chat') }}"
+    data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}"
 >
     <button
         class="likhae-workspace-ai-head"

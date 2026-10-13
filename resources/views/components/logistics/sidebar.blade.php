@@ -112,6 +112,12 @@
                 <span class="sl-nav-icon">{!! $icon('reports') !!}</span>
                 <span class="sl-nav-text">Reports</span>
             </a>
+            <a href="{{ route('logistics.remittances') }}"
+               class="sl-nav-link {{ $active === 'remittances' ? 'is-active' : '' }}"
+               data-title="COD Remittances">
+                <span class="sl-nav-icon">{!! $icon('reports') !!}</span>
+                <span class="sl-nav-text">COD Remittances</span>
+            </a>
         </div>
 
         <div class="sl-nav-section">

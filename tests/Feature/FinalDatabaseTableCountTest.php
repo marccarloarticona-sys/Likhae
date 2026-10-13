@@ -11,7 +11,7 @@ class FinalDatabaseTableCountTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_final_database_contains_exactly_61_tables(): void
+    public function test_final_database_contains_the_expected_tables(): void
     {
         $tableCount = DB::getDriverName() === 'mysql'
             ? (int) DB::selectOne(
@@ -20,6 +20,6 @@ class FinalDatabaseTableCountTest extends TestCase
             )->aggregate
             : count(Schema::getTableListing());
 
-        $this->assertSame(61, $tableCount);
+        $this->assertSame(66, $tableCount);
     }
 }

@@ -11,18 +11,38 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
+use App\Services\Finance\CodCollectionService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\PsgcLogisticsRoutingService;
+use App\Services\Fulfillment\ShipmentTransferService;
+use App\Services\Protection\FragileProtectionRuleService;
 use App\Support\AddressCoordinateValidator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class CheckoutService
 {
+    public function __construct(
+        private readonly LogisticsSchemaReadiness $schema,
+        private readonly PsgcLogisticsRoutingService $routing,
+        private readonly ShipmentTransferService $transfers,
+        private readonly FragileProtectionRuleService $protection,
+    ) {}
+
+    public function automaticRoutingReady(): bool
+    {
+        return $this->schema->automaticRoutingReady();
+    }
+
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
     {
         return $items
@@ -51,12 +71,13 @@ class CheckoutService
     public function availableLogisticsProviders(): Collection
     {
         return LogisticsCenter::query()
-            ->where('status', 'ACTIVE')
+            ->approvedActive()
             ->whereHas('serviceAreas', fn ($query) => $query
                 ->where('is_active', true)
                 ->whereHas('locations'))
             ->orderBy('business_name')
-            ->get(['id', 'code', 'business_name', 'shipping_fee']);
+            ->get(['id', 'code', 'business_name', 'shipping_fee'])
+            ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', number_format((float) config('likhae.standard_shipping_fee', 50), 2, '.', '')));
     }
 
     public function preview(
@@ -64,6 +85,8 @@ class CheckoutService
         array|string $voucherCodes = [],
         ?User $buyer = null,
         ?LogisticsCenter $logisticsProvider = null,
+        ?Address $automaticDestination = null,
+        array $protectionItemIds = [],
     ): array
     {
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
@@ -72,7 +95,12 @@ class CheckoutService
         $subtotal = 0.0;
         $discountTotal = 0.0;
         $shippingTotal = 0.0;
-        $shippingFee = $logisticsProvider ? (float) $logisticsProvider->shipping_fee : 0.0;
+        $protectionTotal = 0.0;
+        $selectedProtectionIds = collect($protectionItemIds)->map(fn ($id): int => (int) $id)->unique()->values();
+        // Step 7: one fixed charge per seller-order/shipment, never per item unit.
+        // The provider is selected separately from the charge; API checkout may
+        // resolve the provider from the destination service area.
+        $shippingFee = (float) config('likhae.standard_shipping_fee', 50);
 
         foreach ($items as $item) {
             /** @var CartItem $item */
@@ -84,18 +112,54 @@ class CheckoutService
             $lineTotal = $variant->final_price * (int) $item->quantity;
             $subtotal += $lineTotal;
 
+            $protection = $this->protection->quoteForCartItem($item);
+            $selectedProtection = $selectedProtectionIds->contains((int) $item->id);
+            if ($selectedProtection && ! $protection) {
+                throw ValidationException::withMessages([
+                    'protection_item_ids' => 'Additional Care is no longer available for one of the selected products. Refresh checkout and try again.',
+                ]);
+            }
+            $itemProtectionFee = $selectedProtection ? (float) ($protection['fee'] ?? 0) : 0.0;
+            $item->setAttribute('protection_quote', [
+                'eligible' => $protection !== null,
+                'selected' => $selectedProtection,
+                'fee' => $protection['fee'] ?? 0,
+                'unit_fee' => $protection['unit_fee'] ?? 0,
+                'scope' => $protection['scope'] ?? null,
+                'risk_level' => $protection['risk_level'] ?? null,
+                'rule_id' => $protection['rule_id'] ?? null,
+                'rule_snapshot' => $protection['rule_snapshot'] ?? null,
+            ]);
+            $protectionTotal += $itemProtectionFee;
+
+            $groupShippingFee = $shippingFee;
+            if ($this->automaticRoutingReady() && $logisticsProvider === null && $automaticDestination) {
+                $route = $this->routing->resolve($seller, $automaticDestination);
+                $this->assertCrossHubCustodyReady($route);
+                $groupShippingFee = (float) config('likhae.standard_shipping_fee', 50);
+            }
+
             $groups[$sellerId] ??= [
                 'seller' => $seller,
                 'items' => collect(),
                 'item_subtotal' => 0.0,
                 'voucher' => null,
                 'voucher_discount' => 0.0,
-                'shipping_fee' => $shippingFee,
+                'shipping_fee' => $groupShippingFee,
+                'protection_total' => 0.0,
                 'grand_total' => 0.0,
             ];
 
             $groups[$sellerId]['items']->push($item);
             $groups[$sellerId]['item_subtotal'] += $lineTotal;
+            $groups[$sellerId]['protection_total'] += $itemProtectionFee;
+        }
+
+        $unknownProtectionIds = $selectedProtectionIds->diff($items->pluck('id')->map(fn ($id): int => (int) $id));
+        if ($unknownProtectionIds->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'protection_item_ids' => 'One or more protection selections are no longer part of this checkout.',
+            ]);
         }
 
         if ($singleVoucherCode !== '') {
@@ -115,7 +179,7 @@ class CheckoutService
 
                 $group['voucher'] = $voucher;
                 $group['voucher_discount'] = $discount;
-                $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee']);
+                    $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
             }
             unset($group);
 
@@ -130,7 +194,7 @@ class CheckoutService
 
         foreach ($groups as &$group) {
             $discount = (float) $group['voucher_discount'];
-            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee']);
+            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
             $discountTotal += $discount;
             $shippingTotal += (float) $group['shipping_fee'];
         }
@@ -141,7 +205,8 @@ class CheckoutService
             'subtotal' => round($subtotal, 2),
             'discount_total' => round($discountTotal, 2),
             'shipping_total' => round($shippingTotal, 2),
-            'grand_total' => round($subtotal - $discountTotal + $shippingTotal, 2),
+            'protection_total' => round($protectionTotal, 2),
+            'grand_total' => round($subtotal - $discountTotal + $shippingTotal + $protectionTotal, 2),
         ];
     }
 
@@ -152,8 +217,15 @@ class CheckoutService
         string $paymentMethod,
         array|string $voucherCodes = [],
         ?int $logisticsCenterId = null,
+        array $protectionItemIds = [],
     ): Order
     {
+        if (strtoupper($paymentMethod) !== 'COD') {
+            throw ValidationException::withMessages([
+                'payment_method' => 'Cash on Delivery is the only payment method available for new orders.',
+            ]);
+        }
+
         AddressCoordinateValidator::assertValid([
             'latitude' => $address->latitude,
             'longitude' => $address->longitude,
@@ -169,7 +241,7 @@ class CheckoutService
             ? null
             : LogisticsCenter::query()
                 ->whereKey($logisticsCenterId)
-                ->where('status', 'ACTIVE')
+                ->approvedActive()
                 ->first();
 
         if ($logisticsCenterId !== null && ! $logisticsProvider) {
@@ -177,51 +249,94 @@ class CheckoutService
                 'logistics_center_id' => 'Select an active logistics provider.',
             ]);
         }
+        if ($this->automaticRoutingReady() && $logisticsCenterId !== null) {
+            throw ValidationException::withMessages([
+                'logistics_center_id' => 'Manual logistics provider selection is disabled while automatic PSGC routing is active.',
+            ]);
+        }
 
-        foreach ($items as $item) {
-            $configuredMethod = strtolower((string) ($item->productVariant?->payment_method ?? 'cod_online'));
-            $allowed = match ($configuredMethod) {
-                'cod' => ['COD'],
-                'online' => ['ONLINE'],
-                default => ['COD', 'ONLINE'],
-            };
-
-            if (! in_array($paymentMethod, $allowed, true)) {
+        $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
+        if ($automaticRouting) {
+            // This validates every seller's origin and the buyer's destination
+            // before any order rows are created. The transaction repeats it
+            // after locked seller records are loaded.
+            $this->preview($items, $voucherCodes, $buyer, null, $address, $protectionItemIds);
+        } else {
+            $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
+            if (! $areaLocation) {
                 throw ValidationException::withMessages([
-                    'payment_method' => 'The selected payment method is not available for one or more products in this order.',
+                    $logisticsProvider ? 'logistics_center_id' : 'address_id' => $logisticsProvider
+                        ? 'The selected logistics provider does not serve this delivery address.'
+                        : 'Delivery is not currently available to this address.',
                 ]);
             }
         }
 
-        $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
-        if (! $areaLocation) {
-            throw ValidationException::withMessages([
-                $logisticsProvider ? 'logistics_center_id' : 'address_id' => $logisticsProvider
-                    ? 'The selected logistics provider does not serve this delivery address.'
-                    : 'Delivery is not currently available to this address.',
-            ]);
-        }
-
-        return DB::transaction(function () use ($buyer, $address, $items, $paymentMethod, $voucherCodes, $logisticsProvider): Order {
+        return DB::transaction(function () use ($buyer, $address, $items, $paymentMethod, $voucherCodes, $logisticsProvider, $automaticRouting, $protectionItemIds): Order {
             $variantIds = $items->pluck('product_variant_id')->unique()->values();
             $lockedVariants = ProductVariant::query()
                 ->whereIn('id', $variantIds)
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
+            $lockedProducts = Product::query()
+                ->whereIn('id', $lockedVariants->pluck('product_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedSellers = SellerProfile::query()
+                ->whereIn('id', $lockedProducts->pluck('seller_profile_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedSellerUsers = User::query()
+                ->whereIn('id', $lockedSellers->pluck('user_id')->filter()->unique()->values())
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
 
             foreach ($items as $item) {
                 $variant = $lockedVariants->get($item->product_variant_id);
-                if (! $variant || ! $variant->is_active || $variant->stock < $item->quantity) {
+                $product = $variant ? $lockedProducts->get($variant->product_id) : null;
+                $seller = $product ? $lockedSellers->get($product->seller_profile_id) : null;
+                $sellerUser = $seller ? $lockedSellerUsers->get($seller->user_id) : null;
+
+                if (! $product
+                    || $product->status !== 'ACTIVE'
+                    || ! $seller
+                    || $seller->status !== 'ACTIVE'
+                    || ! $sellerUser
+                    || $sellerUser->status !== User::STATUS_ACTIVE) {
+                    throw ValidationException::withMessages([
+                        'cart' => 'One or more selected products are no longer available for checkout. Remove the unavailable item and try again.',
+                    ]);
+                }
+
+                if (! $variant->is_active || $variant->stock < $item->quantity) {
                     throw ValidationException::withMessages([
                         'cart' => 'One or more products no longer have enough stock.',
                     ]);
                 }
+
+                // Use the locked records for the totals and order snapshot. The
+                // cart relation may have been loaded before another request
+                // changed a price, stock, or listing status.
+                $seller->setRelation('user', $sellerUser);
+                $product->setRelation('sellerProfile', $seller);
+                $variant->setRelation('product', $product);
+                $item->setRelation('productVariant', $variant);
             }
 
-            $preview = $this->preview($items, $voucherCodes, $buyer, $logisticsProvider);
+            $preview = $this->preview(
+                $items,
+                $voucherCodes,
+                $buyer,
+                $logisticsProvider,
+                $automaticRouting ? $address : null,
+                $protectionItemIds,
+            );
 
-            $order = Order::query()->create([
+            $orderAttributes = [
                 'order_number' => $this->uniqueNumber('orders', 'order_number', 'LK'),
                 'buyer_user_id' => $buyer->id,
                 'source_cart_id' => $items->first()?->cart_id,
@@ -233,7 +348,11 @@ class CheckoutService
                 'grand_total' => $preview['grand_total'],
                 'payment_status' => 'PENDING',
                 'placed_at' => now(),
-            ]);
+            ];
+            if (Schema::hasColumn('orders', 'protection_total')) {
+                $orderAttributes['protection_total'] = $preview['protection_total'];
+            }
+            $order = Order::query()->create($orderAttributes);
 
             $order->address()->create([
                 'recipient_name' => $address->recipient_name,
@@ -254,8 +373,8 @@ class CheckoutService
 
             Payment::query()->create([
                 'order_id' => $order->id,
-                'method' => $paymentMethod,
-                'provider' => $paymentMethod === 'ONLINE' ? 'MANUAL_ONLINE' : 'COD',
+                'method' => 'COD',
+                'provider' => 'COD',
                 'provider_reference' => null,
                 'amount' => $order->grand_total,
                 'status' => 'PENDING',
@@ -263,7 +382,7 @@ class CheckoutService
             ]);
 
             foreach ($preview['groups'] as $sellerId => $group) {
-                $sellerOrder = SellerOrder::query()->create([
+                $sellerOrderAttributes = [
                     'seller_order_number' => $this->uniqueNumber('seller_orders', 'seller_order_number', 'SO'),
                     'order_id' => $order->id,
                     'seller_profile_id' => $sellerId,
@@ -273,8 +392,13 @@ class CheckoutService
                     'voucher_discount' => $group['voucher_discount'],
                     'shipping_fee' => $group['shipping_fee'],
                     'grand_total' => $group['grand_total'],
-                ]);
+                ];
+                if (Schema::hasColumn('seller_orders', 'protection_total')) {
+                    $sellerOrderAttributes['protection_total'] = $group['protection_total'];
+                }
+                $sellerOrder = SellerOrder::query()->create($sellerOrderAttributes);
 
+                $snapshotReady = Schema::hasColumn('order_items', 'original_unit_price');
                 foreach ($group['items'] as $item) {
                     /** @var CartItem $item */
                     $item->loadMissing(['productVariant.product', 'productVariant.optionValues.option']);
@@ -283,7 +407,7 @@ class CheckoutService
                     $lineTotal = $variant->final_price * (int) $item->quantity;
                     $discountAmount = $variant->discount_amount * (int) $item->quantity;
 
-                    $sellerOrder->items()->create([
+                    $itemAttributes = [
                         'product_id' => $product->id,
                         'product_variant_id' => $item->productVariant->id,
                         'product_name' => $product->name,
@@ -293,12 +417,45 @@ class CheckoutService
                         'quantity' => $item->quantity,
                         'discount_amount' => $discountAmount,
                         'line_total' => $lineTotal,
-                    ]);
+                    ];
+                    if ($snapshotReady) {
+                        $itemAttributes['original_unit_price'] = number_format((float) $variant->price, 2, '.', '');
+                    }
+                    if (Schema::hasColumn('order_items', 'protection_selected')) {
+                        $quote = (array) $item->getAttribute('protection_quote');
+                        $itemAttributes += [
+                            'protection_selected' => (bool) ($quote['selected'] ?? false),
+                            'protection_fee' => (float) ($quote['selected'] ? ($quote['fee'] ?? 0) : 0),
+                            'protection_rule_id' => $quote['selected'] ? ($quote['rule_id'] ?? null) : null,
+                            'protection_scope' => $quote['selected'] ? ($quote['scope'] ?? null) : null,
+                            'protection_rule_snapshot' => $quote['selected'] ? ($quote['rule_snapshot'] ?? null) : null,
+                            'protection_handling_flag' => (bool) ($quote['selected'] ?? false),
+                        ];
+                    }
+                    $orderItem = $sellerOrder->items()->create($itemAttributes);
+
+                    if (Schema::hasTable('protection_selection_audits')) {
+                        $quote = (array) $item->getAttribute('protection_quote');
+                        DB::table('protection_selection_audits')->insert([
+                            'order_id' => $order->id,
+                            'order_item_id' => $orderItem->id,
+                            'protection_rule_id' => $quote['selected'] ? ($quote['rule_id'] ?? null) : null,
+                            'buyer_user_id' => $buyer->id,
+                            'selected' => (bool) ($quote['selected'] ?? false),
+                            'amount' => (float) ($quote['selected'] ? ($quote['fee'] ?? 0) : 0),
+                            'handling_flag' => (bool) ($quote['selected'] ?? false),
+                            'metadata' => json_encode(['scope' => $quote['scope'] ?? null, 'risk_level' => $quote['risk_level'] ?? null, 'rule_snapshot' => $quote['rule_snapshot'] ?? null], JSON_THROW_ON_ERROR),
+                            'selected_at' => now(),
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    }
 
                     $variant->decrement('stock', (int) $item->quantity);
                 }
 
-                $this->createShipmentForSellerOrder($sellerOrder, $address, $logisticsProvider);
+                $shipment = $this->createShipmentForSellerOrder($sellerOrder, $address, $logisticsProvider);
+                app(CodCollectionService::class)->initializeForShipment($shipment);
             }
 
             $cartId = $items->first()?->cart_id;
@@ -323,7 +480,17 @@ class CheckoutService
         ?LogisticsCenter $logisticsProvider = null,
     ): Shipment
     {
-        $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
+        $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
+        $route = null;
+        $areaLocation = null;
+        if ($automaticRouting) {
+            $sellerOrder->loadMissing('sellerProfile.businessAddress');
+            $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
+            $this->assertCrossHubCustodyReady($route);
+            $areaLocation = $route['destination_area'];
+        } else {
+            $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
+        }
 
         if (! $areaLocation) {
             throw ValidationException::withMessages([
@@ -333,10 +500,10 @@ class CheckoutService
             ]);
         }
 
-        $shipment = Shipment::query()->create([
+        $shipmentAttributes = [
             'seller_order_id' => $sellerOrder->id,
             'tracking_number' => $this->uniqueNumber('shipments', 'tracking_number', 'TRK'),
-            'logistics_center_id' => $logisticsProvider?->id ?? $areaLocation->serviceArea?->logistics_center_id,
+            'logistics_center_id' => $route['origin']->id ?? ($logisticsProvider?->id ?? $areaLocation->serviceArea?->logistics_center_id),
             'service_area_id' => $areaLocation->service_area_id,
             'destination_province_code' => $address->province_code,
             'destination_province_name' => $address->province_name,
@@ -345,7 +512,22 @@ class CheckoutService
             'destination_barangay_code' => $address->barangay_code,
             'destination_barangay_name' => $address->barangay_name,
             'current_status' => 'PLACED',
-        ]);
+        ];
+        if ($route) {
+            $originAddress = $route['origin']->address;
+            $shipmentAttributes += [
+                'origin_logistics_center_id' => $route['origin']->id,
+                'destination_logistics_center_id' => $route['destination']->id,
+                'origin_province_code' => $originAddress->province_code,
+                'origin_province_name' => $originAddress->province_name,
+                'origin_municipality_code' => $originAddress->municipality_code,
+                'origin_municipality_name' => $originAddress->municipality_name,
+                'origin_barangay_code' => $sellerOrder->sellerProfile->businessAddress->barangay_code,
+                'origin_barangay_name' => $sellerOrder->sellerProfile->businessAddress->barangay_name,
+            ];
+        }
+
+        $shipment = Shipment::query()->create($shipmentAttributes);
 
         ShipmentEvent::query()->create([
             'shipment_id' => $shipment->id,
@@ -357,12 +539,27 @@ class CheckoutService
             'occurred_at' => now(),
         ]);
 
+        if ($route && (int) $route['origin']->id !== (int) $route['destination']->id) {
+            $this->transfers->createPlannedLeg($shipment, $route['origin'], $route['destination']);
+        }
+
         return $shipment;
+    }
+
+    /** @param array{origin: LogisticsCenter, destination: LogisticsCenter} $route */
+    private function assertCrossHubCustodyReady(array $route): void
+    {
+        if ((int) $route['origin']->id !== (int) $route['destination']->id
+            && ! $this->schema->manifestReady()) {
+            throw ValidationException::withMessages([
+                'address_id' => 'Cross-hub fulfillment is temporarily disabled until transfer manifests, custody scans, and approved vehicle capacities are installed.',
+            ]);
+        }
     }
 
     private function serviceAreaLocationForAddress(Address $address, ?LogisticsCenter $logisticsProvider = null): ?ServiceAreaLocation
     {
-        return ServiceAreaLocation::query()
+        $locations = ServiceAreaLocation::query()
             ->where('province_code', $address->province_code)
             ->where('municipality_code', $address->municipality_code)
             ->where('barangay_code', $address->barangay_code)
@@ -371,7 +568,15 @@ class CheckoutService
                     ->when($logisticsProvider, fn ($providerQuery) => $providerQuery->where('logistics_center_id', $logisticsProvider->id));
             })
             ->with('serviceArea')
-            ->first();
+            ->get();
+
+        if ($locations->count() > 1) {
+            throw ValidationException::withMessages([
+                'address_id' => 'Delivery routing is ambiguous for this PSGC address. Please contact logistics support before placing the order.',
+            ]);
+        }
+
+        return $locations->first();
     }
 
     private function usableVoucher(int $sellerId, string $code, float $subtotal, ?User $buyer = null): ?Voucher

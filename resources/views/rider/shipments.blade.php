@@ -10,6 +10,7 @@
     @forelse($assignments as $assignment)
         @php($shipment = $assignment->shipment)
         <article class="rounded-2xl border border-line bg-surface p-5">
+            @if($shipment?->sellerOrder?->items?->contains(fn ($item): bool => $item->hasAdditionalCare()))<div class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-amber-900">Fragile / Additional Care — handling flag</div>@endif
             <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div><span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">{{ str($assignment->assignment_type)->headline() }}</span><strong class="mt-2 block text-xl font-bold text-ink">{{ $shipment->tracking_number }}</strong><p class="mt-1 text-sm text-muted">{{ str($assignment->status)->headline() }} · Parcel {{ str($shipment->current_status)->headline() }}</p>@if($assignment->assignment_type === 'DELIVERY')<p class="mt-2 max-w-xl text-sm text-ink"><strong>Deliver to:</strong> {{ $shipment->sellerOrder?->order?->address?->formatted() }}</p>@else<p class="mt-2 max-w-xl text-sm text-ink"><strong>Collect from:</strong> {{ $shipment->sellerOrder?->sellerProfile?->businessAddress?->formatted() }}</p>@endif</div>
                 <div class="flex flex-wrap gap-2">

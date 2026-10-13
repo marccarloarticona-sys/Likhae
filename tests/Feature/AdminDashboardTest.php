@@ -17,7 +17,7 @@ class AdminDashboardTest extends TestCase
         $this->withoutVite();
     }
 
-    public function test_dashboard_counts_only_public_accounts_in_the_matching_status(): void
+    public function test_dashboard_counts_only_admin_managed_accounts_in_the_matching_status(): void
     {
         $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
         $accountTypes = [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_LOGISTICS, User::TYPE_RIDER];
@@ -36,12 +36,18 @@ class AdminDashboardTest extends TestCase
         $this->actingAs($admin)->get(route('admin.dashboard'))
             ->assertOk()
             ->assertViewHas('accountStats', [
-                'pending' => count($accountTypes),
-                'active' => count($accountTypes),
+                'pending' => 3,
+                'active' => 3,
                 'pending_older_than_day' => 0,
             ])
+            ->assertViewHas('recentPendingApplications', fn ($applications) => $applications->count() === 3
+                && $applications->every(fn (RegistrationApplication $application) => in_array(
+                    $application->user->account_type,
+                    [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_LOGISTICS],
+                    true,
+                )))
             ->assertSee('Awaiting administrator review')
-            ->assertSee('Approved marketplace accounts')
+            ->assertSee('Buyer, Seller, and Logistics accounts')
             ->assertDontSee('12,480')
             ->assertDontSee('+4.2%');
     }
@@ -66,7 +72,7 @@ class AdminDashboardTest extends TestCase
 
         $this->actingAs($admin)->get(route('admin.dashboard'))
             ->assertOk()
-            ->assertViewHas('accountStats', ['pending' => 4, 'active' => 1, 'pending_older_than_day' => 2])
+            ->assertViewHas('accountStats', ['pending' => 3, 'active' => 1, 'pending_older_than_day' => 2])
             ->assertSee('2 older than 24 hours');
     }
 
@@ -77,5 +83,43 @@ class AdminDashboardTest extends TestCase
             ->assertOk()
             ->assertViewHas('accountStats', ['pending' => 0, 'active' => 0, 'pending_older_than_day' => 0])
             ->assertSee('0 older than 24 hours');
+    }
+
+    public function test_dashboard_shows_only_the_five_newest_admin_reviewable_applications(): void
+    {
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
+
+        foreach (range(1, 6) as $number) {
+            $user = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+            RegistrationApplication::create([
+                'application_number' => 'APP-RECENT-'.$number,
+                'user_id' => $user->id,
+                'status' => RegistrationApplication::STATUS_PENDING,
+                'submitted_at' => now()->subMinutes(7 - $number),
+            ]);
+        }
+
+        $rider = User::factory()->create(['account_type' => User::TYPE_RIDER]);
+        RegistrationApplication::create([
+            'application_number' => 'APP-RIDER',
+            'user_id' => $rider->id,
+            'status' => RegistrationApplication::STATUS_PENDING,
+            'submitted_at' => now(),
+        ]);
+
+        $this->actingAs($admin)->get(route('admin.dashboard'))
+            ->assertOk()
+            ->assertViewHas('recentPendingApplications', function ($applications): bool {
+                return $applications->count() === 5
+                    && $applications->pluck('application_number')->all() === [
+                        'APP-RECENT-6',
+                        'APP-RECENT-5',
+                        'APP-RECENT-4',
+                        'APP-RECENT-3',
+                        'APP-RECENT-2',
+                    ];
+            })
+            ->assertSee('Recent Accounts Pending Approval')
+            ->assertDontSee('Recent orders');
     }
 }

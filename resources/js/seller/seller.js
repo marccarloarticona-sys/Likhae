@@ -1,4 +1,7 @@
 import '../address/forms.js';
+import '../shared/echo.js';
+import '../shared/messages.js';
+import '../shared/notification-sounds.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     const select = (selector, root = document) => root.querySelector(selector);

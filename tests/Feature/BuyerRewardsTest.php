@@ -17,7 +17,7 @@ class BuyerRewardsTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
-        $product = Product::query()->where('status', 'ACTIVE')->sole();
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
 
         Voucher::query()->create([
             'seller_profile_id' => $product->seller_profile_id,

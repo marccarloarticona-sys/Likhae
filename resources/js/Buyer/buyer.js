@@ -1,5 +1,4 @@
 import '../address/forms.js';
-import '../shared/echo.js';
 import { startRealtimeFallback } from '../shared/realtime-fallback.js';
 import './hero-carousel.js';
 

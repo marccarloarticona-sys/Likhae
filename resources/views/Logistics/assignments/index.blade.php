@@ -3,9 +3,10 @@
 @section('content')
 <div class="space-y-6">
     <header><p class="text-xs font-bold uppercase text-primary">Final-mile dispatch</p><h1 class="mt-2 text-2xl font-bold text-ink">Assign Sorted Parcels</h1><p class="mt-2 text-sm text-muted">Only active riders assigned to the parcel's destination area are eligible.</p></header>
+    <x-logistics.parcel-flow current="assign" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
-    <x-parcel-scanner :action="route('logistics.dispatch')" :tracking="request('tracking', '')" title="Scan Delivery Waybill" button="Find Parcel" />
+    <x-parcel-scanner :action="route('logistics.dispatch')" :tracking="request('tracking', '')" :method="request('scan_method', 'MANUAL')" title="Identify the Area Rider" description="Scan a sorted parcel to show only active riders assigned to its destination area." button="Find Parcel" />
     <x-shared.mapbox :markers="$mapMarkers" title="Delivery assignment map" height="220px" user-location-target="destination" />
     <div class="grid gap-4">
     @forelse($shipments as $shipment)

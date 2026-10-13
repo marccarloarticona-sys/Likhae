@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
+use Throwable;
 
 class SellerAccountController extends Controller
 {
@@ -45,7 +46,6 @@ class SellerAccountController extends Controller
             'vacation_mode' => ['nullable', 'boolean'],
             'auto_accept_orders' => ['nullable', 'boolean'],
             'store_visibility' => ['nullable', 'boolean'],
-            'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'banner' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
         ]);
 
@@ -54,20 +54,31 @@ class SellerAccountController extends Controller
             'processing_days', 'order_cutoff', 'vacation_mode', 'auto_accept_orders', 'store_visibility',
         ])->all());
 
+        $newPaths = [];
         $oldPaths = [];
-        foreach (['avatar' => 'avatar_path', 'banner' => 'banner_path'] as $input => $column) {
+        foreach (['banner' => 'banner_path'] as $input => $column) {
             if (! $request->hasFile($input)) {
                 continue;
             }
 
             $oldPath = $shop->{$column};
             $shop->{$column} = $images->store($request->file($input), 'seller-branding');
+            $newPaths[] = $shop->{$column};
             if ($oldPath && $oldPath !== $shop->{$column} && ! Str::startsWith($oldPath, ['http://', 'https://'])) {
                 $oldPaths[] = $oldPath;
             }
         }
 
-        $shop->save();
+        try {
+            $shop->save();
+        } catch (Throwable $exception) {
+            // The file is written before the database row is saved. Remove it
+            // if persistence fails so a rejected update cannot leak storage.
+            Storage::disk('public')->delete($newPaths);
+
+            throw $exception;
+        }
+
         Storage::disk('public')->delete($oldPaths);
 
         return back()->with('status', 'Store profile saved.');

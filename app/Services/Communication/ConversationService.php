@@ -9,16 +9,22 @@ use App\Models\Communication\Message;
 use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class ConversationService
 {
-    public function listFor(User $user, bool $includeMessages = true, ?int $limit = null): Collection
+    public function listFor(User $user, bool $includeMessages = true, ?int $limit = null, bool $includeSellerProfiles = false): Collection
     {
+        $relations = ['participants', 'latestMessage.sender'];
+        if ($includeSellerProfiles) {
+            $relations[] = 'participants.sellerProfile';
+        }
+
         $query = Conversation::query()
             ->whereHas('participants', fn ($query) => $query->where('users.id', $user->id))
-            ->with(['participants', 'latestMessage.sender'])
+            ->with($relations)
             ->latest('updated_at');
 
         if ($limit !== null) {
@@ -32,6 +38,34 @@ class ConversationService
         }
 
         return $conversations;
+    }
+
+    /** Return unread counts without hydrating every message in each thread. */
+    public function unreadCountsFor(User $user, Collection $conversations): Collection
+    {
+        $conversationIds = $conversations->pluck('id')->map(fn ($id): int => (int) $id)->values();
+        if ($conversationIds->isEmpty()) {
+            return collect();
+        }
+
+        $query = Message::query()
+            ->join('conversation_participants as unread_participants', function ($join) use ($user): void {
+                $join->on('unread_participants.conversation_id', '=', 'messages.conversation_id')
+                    ->where('unread_participants.user_id', $user->id);
+            })
+            ->whereIn('messages.conversation_id', $conversationIds)
+            ->where('messages.sender_user_id', '!=', $user->id)
+            ->where(function ($query): void {
+                $query->whereNull('unread_participants.last_read_at')
+                    ->orWhereColumn('messages.sent_at', '>', 'unread_participants.last_read_at');
+            });
+
+        return $query
+            ->select('messages.conversation_id')
+            ->selectRaw('COUNT(messages.id) as aggregate')
+            ->groupBy('messages.conversation_id')
+            ->pluck('aggregate', 'messages.conversation_id')
+            ->map(fn ($count): int => (int) $count);
     }
 
     /** Load conversation summaries plus only the selected thread's recent messages. */
@@ -50,8 +84,8 @@ class ConversationService
         return $conversations;
     }
 
-    /** Return a small authorized message window for the five-second fallback. */
-    public function messagesFor(User $user, int $conversationId, int $limit = 100): Collection
+    /** Return an authorized message window for the fallback connection. */
+    public function messagesFor(User $user, int $conversationId, int $limit = 50, ?int $afterId = null): Collection
     {
         $conversation = Conversation::query()
             ->select('conversations.id')
@@ -59,13 +93,13 @@ class ConversationService
             ->whereHas('participants', fn ($query) => $query->where('users.id', $user->id))
             ->firstOrFail();
 
-        return Message::query()
+        $query = Message::query()
             ->where('conversation_id', $conversation->id)
-            ->latest('sent_at')
-            ->limit(max(1, min($limit, 100)))
-            ->get(['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at'])
-            ->reverse()
-            ->values();
+            ->when($afterId, fn ($query) => $query->where('id', '>', $afterId)->oldest('id'), fn ($query) => $query->latest('sent_at')->latest('id'))
+            ->limit(max(1, min($limit, 50)))
+            ->get(['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at']);
+
+        return $afterId ? $query->values() : $query->reverse()->values();
     }
 
     public function messagePayload(Message $message): array
@@ -83,39 +117,78 @@ class ConversationService
         ];
     }
 
-    public function streamPayload(User $user, int $conversationId): Collection
+    public function streamPayload(User $user, int $conversationId, ?int $afterId = null): Collection
     {
-        return $this->messagesFor($user, $conversationId)
+        return $this->messagesFor($user, $conversationId, 50, $afterId)
             ->map(fn (Message $message): array => $this->messagePayload($message));
     }
 
-    public function send(User $sender, int $recipientUserId, string $body, array $context = []): Message
+    public function send(
+        User $sender,
+        int $recipientUserId,
+        string $body,
+        array $context = [],
+        ?Conversation $conversation = null,
+    ): Message
     {
-        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context): Message {
-            $conversation = $this->findOrCreate($sender, $recipientUserId, $context);
+        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation): Message {
+            $conversation ??= $this->findOrCreate($sender, $recipientUserId, $context);
+            $now = now();
 
             $message = Message::create([
                 'conversation_id' => $conversation->id,
                 'sender_user_id' => $sender->id,
                 'body' => $body,
-                'sent_at' => now(),
+                'sent_at' => $now,
             ]);
 
-            $conversation->touch();
+            $conversation->updated_at = $now;
+            $conversation->saveQuietly();
 
             ConversationParticipant::query()
                 ->where('conversation_id', $conversation->id)
                 ->where('user_id', $sender->id)
-                ->update(['last_read_at' => now()]);
+                ->update(['last_read_at' => $now]);
 
             return $message;
         });
 
-        try {
-            MessageSent::dispatch($message->load('sender'));
-        } catch (Throwable $exception) {
-            // A WebSocket outage must not make a committed web or mobile message fail.
-            report($exception);
+        $broadcast = function () use ($message, $sender, $recipientUserId): void {
+            try {
+                // Stop repeated WebSocket failures from making every message
+                // request pay the same network timeout. Polling remains active
+                // while the short circuit is open and broadcasting retries
+                // automatically after the cooldown.
+                if (Cache::get('reverb:broadcast-unavailable')) {
+                    return;
+                }
+
+                MessageSent::dispatch(
+                    $message,
+                    [(int) $sender->id, (int) $recipientUserId],
+                    $sender->name,
+                );
+
+                Cache::forget('reverb:broadcast-unavailable');
+            } catch (Throwable $exception) {
+                // A WebSocket outage must not make a committed web or mobile message fail.
+                try {
+                    Cache::put('reverb:broadcast-unavailable', true, now()->addSeconds(30));
+                } catch (Throwable) {
+                    // A cache outage must not affect message delivery either.
+                }
+
+                report($exception);
+            }
+        };
+
+        // Return the committed message first. Reverb is notified during the
+        // HTTP termination phase so a slow/unavailable WebSocket endpoint can
+        // never hold the send request open.
+        if (app()->runningInConsole() || app()->runningUnitTests()) {
+            $broadcast();
+        } else {
+            app()->terminating($broadcast);
         }
 
         return $message;
@@ -153,7 +226,11 @@ class ConversationService
             throw new \InvalidArgumentException('A conversation requires two different accounts.');
         }
 
-        $conversation = $this->findPairConversation($ids);
+        $pairKey = $ids->implode(':');
+        $conversation = Conversation::query()
+            ->where('direct_pair_key', $pairKey)
+            ->first()
+            ?: $this->findPairConversation($ids);
 
         if ($conversation) {
             return $conversation;
@@ -162,7 +239,7 @@ class ConversationService
         try {
             $conversation = Conversation::create([
                 'type' => $context['type'] ?? 'DIRECT',
-                'direct_pair_key' => $ids->implode(':'),
+                'direct_pair_key' => $pairKey,
                 'order_id' => $context['order_id'] ?? null,
                 'seller_order_id' => $context['seller_order_id'] ?? null,
                 'shipment_id' => $context['shipment_id'] ?? null,
@@ -175,7 +252,10 @@ class ConversationService
                 throw $exception;
             }
 
-            $conversation = $this->findPairConversation($ids);
+            $conversation = Conversation::query()
+                ->where('direct_pair_key', $pairKey)
+                ->first()
+                ?: $this->findPairConversation($ids);
             if ($conversation) {
                 return $conversation;
             }
@@ -183,12 +263,23 @@ class ConversationService
             throw $exception;
         }
 
-        foreach ($ids as $id) {
-            ConversationParticipant::firstOrCreate([
+        $now = now();
+        ConversationParticipant::query()->insert([
+            [
                 'conversation_id' => $conversation->id,
-                'user_id' => $id,
-            ], ['joined_at' => now()]);
-        }
+                'user_id' => (int) $ids[0],
+                'joined_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'conversation_id' => $conversation->id,
+                'user_id' => (int) $ids[1],
+                'joined_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
 
         return $conversation;
     }

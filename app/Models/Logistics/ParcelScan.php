@@ -14,6 +14,7 @@ class ParcelScan extends Model
         'scanned_by_user_id',
         'logistics_center_id',
         'rider_assignment_id',
+        'transfer_leg_id',
         'scan_type',
         'scan_method',
         'scanned_code',
@@ -45,5 +46,10 @@ class ParcelScan extends Model
     public function riderAssignment(): BelongsTo
     {
         return $this->belongsTo(RiderAssignment::class);
+    }
+
+    public function transferLeg(): BelongsTo
+    {
+        return $this->belongsTo(ShipmentTransferLeg::class, 'transfer_leg_id');
     }
 }

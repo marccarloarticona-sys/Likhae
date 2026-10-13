@@ -60,6 +60,18 @@ class PhilippineAddressController extends Controller
         return $this->respond(fn () => $this->list('/cities-municipalities/'.rawurlencode($municipality).'/barangays'));
     }
 
+    /** @return list<array<string, mixed>> */
+    public static function barangayRecordsForMunicipality(string $municipalityCode): array
+    {
+        try {
+            return (new self)->list('/cities-municipalities/'.rawurlencode($municipalityCode).'/barangays');
+        } catch (Throwable $e) {
+            report($e);
+
+            return [];
+        }
+    }
+
     public function postalCode(Request $request): JsonResponse
     {
         $municipalityCode = trim((string) $request->query('municipality', ''));

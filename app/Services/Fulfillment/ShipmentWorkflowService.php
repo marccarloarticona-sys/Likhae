@@ -12,12 +12,15 @@ use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Logistics\Waybill;
 use App\Models\Rider\RiderAssignment;
-use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
 use App\Models\Seller\SellerOrder;
+use App\Services\Finance\CodCollectionService;
+use App\Services\Finance\FinancialAllocationService;
 use App\Models\User;
+use App\Support\RiderVehicleType;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -25,12 +28,25 @@ use RuntimeException;
 
 class ShipmentWorkflowService
 {
+<<<<<<< HEAD
     public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = 10;
+=======
+    public function __construct(
+        private readonly LocalRiderEligibilityService $localRiderEligibility,
+        private readonly LogisticsSchemaReadiness $schema,
+        private readonly ShipmentTransferService $transfers,
+        private readonly LocalRiderTripService $localTrips,
+    ) {}
+>>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
 
     public function sellerTransition(SellerOrder $sellerOrder, string $action, User $actor): SellerOrder
     {
         return DB::transaction(function () use ($sellerOrder, $action, $actor): SellerOrder {
-            $sellerOrder->loadMissing('shipment', 'order.address');
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['shipment', 'order.address'])
+                ->lockForUpdate()
+                ->firstOrFail();
             $shipment = $this->ensureShipment($sellerOrder);
 
             match ($action) {
@@ -49,7 +65,11 @@ class ShipmentWorkflowService
     public function requestSellerHandover(SellerOrder $sellerOrder, User $actor, bool $sellerDropoff, ?string $note = null): SellerOrder
     {
         return DB::transaction(function () use ($sellerOrder, $actor, $sellerDropoff, $note): SellerOrder {
-            $sellerOrder->loadMissing('shipment', 'order.address');
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['shipment', 'order.address'])
+                ->lockForUpdate()
+                ->firstOrFail();
             $shipment = $this->ensureShipment($sellerOrder);
             $this->readyForPickup($sellerOrder, $shipment, $actor, $sellerDropoff, $note);
 
@@ -99,6 +119,11 @@ class ShipmentWorkflowService
     public function approvePickup(PickupRequest $pickupRequest, User $reviewer, ?string $notes = null): PickupRequest
     {
         return DB::transaction(function () use ($pickupRequest, $reviewer, $notes): PickupRequest {
+            $pickupRequest = PickupRequest::query()
+                ->whereKey($pickupRequest->id)
+                ->with('shipment')
+                ->lockForUpdate()
+                ->firstOrFail();
             if ($pickupRequest->status !== 'PENDING') {
                 throw new RuntimeException('Only pending pickup requests can be approved.');
             }
@@ -120,6 +145,11 @@ class ShipmentWorkflowService
     public function rejectPickup(PickupRequest $pickupRequest, User $reviewer, string $reason): PickupRequest
     {
         return DB::transaction(function () use ($pickupRequest, $reviewer, $reason): PickupRequest {
+            $pickupRequest = PickupRequest::query()
+                ->whereKey($pickupRequest->id)
+                ->with('shipment')
+                ->lockForUpdate()
+                ->firstOrFail();
             if ($pickupRequest->status !== 'PENDING') {
                 throw new RuntimeException('Only pending pickup requests can be rejected.');
             }
@@ -143,34 +173,68 @@ class ShipmentWorkflowService
         string $assignmentType,
         User $assigner,
         bool $allowPickupAreaOverride = false,
+        ?string $pickupAreaOverrideReason = null,
     ): RiderAssignment
     {
-        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride): RiderAssignment {
+        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason): RiderAssignment {
+            $shipment = Shipment::query()
+                ->whereKey($shipment->id)
+                ->with('serviceArea')
+                ->lockForUpdate()
+                ->firstOrFail();
+            $rider = RiderProfile::query()
+                ->whereKey($rider->id)
+                ->with(['user', 'logisticsCenter'])
+                ->lockForUpdate()
+                ->firstOrFail();
             $assignmentType = strtoupper($assignmentType);
 
             if (! in_array($assignmentType, ['PICKUP', 'DELIVERY'], true)) {
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
 
+<<<<<<< HEAD
             $rider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
             $rider->load('user');
             if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true) || $rider->user?->status !== User::STATUS_ACTIVE) {
+=======
+            if ($rider->status !== 'ACTIVE'
+                || $rider->user?->account_type !== User::TYPE_RIDER
+                || $rider->user?->status !== User::STATUS_ACTIVE) {
+>>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
                 throw new RuntimeException('Only active riders can receive assignments.');
             }
-
-            $shipment->loadMissing('serviceArea');
-            $shipmentCenterId = $shipment->logistics_center_id ?: $shipment->serviceArea?->logistics_center_id;
-            if ($shipmentCenterId && (int) $rider->logistics_center_id !== (int) $shipmentCenterId) {
-                throw new RuntimeException('The rider does not belong to this shipment logistics center.');
+            if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {
+                throw new RuntimeException('Only motorcycle and tricycle riders can receive local pickup and delivery assignments.');
             }
+            if ($allowPickupAreaOverride) {
+                $assigner->loadMissing('logisticsCenter');
+                if ($assigner->account_type !== User::TYPE_LOGISTICS
+                    || $assigner->status !== User::STATUS_ACTIVE
+                    || ! $assigner->logisticsCenter
+                    || (int) $assigner->logisticsCenter->id !== (int) $rider->logistics_center_id) {
+                    throw new RuntimeException('Only an active authorized logistics center account can approve a pickup coverage override.');
+                }
+                if (blank(trim((string) $pickupAreaOverrideReason))) {
+                    throw new RuntimeException('A reason is required for a pickup coverage override.');
+                }
+            }
+
+            $pickupArea = null;
 
             if ($assignmentType === 'PICKUP') {
                 $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'assign a pickup rider');
 
-                $pickupArea = $this->sellerPickupServiceArea($shipment);
+                $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter);
                 if (! $pickupArea) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
+
+                $pickupArea->loadMissing('logisticsCenter');
+                if ((int) $rider->logistics_center_id !== (int) $pickupArea->logistics_center_id) {
+                    throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
+                }
+                $this->localRiderEligibility->assertRiderCanCoverArea($pickupArea->logisticsCenter, $rider, $pickupArea);
 
                 if (! $this->riderCoversSellerPickupArea($shipment, $rider)
                     && ! $allowPickupAreaOverride) {
@@ -178,6 +242,15 @@ class ShipmentWorkflowService
                 }
             } else {
                 $this->requireShipmentStatus($shipment, ['SORTED', 'DELIVERY_FAILED'], 'assign a delivery rider');
+
+                if ($this->isUnreceivedCrossHubShipment($shipment)) {
+                    throw new RuntimeException('This shipment must be received by its destination hub before final-mile delivery assignment.');
+                }
+
+                $shipmentCenterId = $shipment->logistics_center_id ?: $shipment->serviceArea?->logistics_center_id;
+                if ($shipmentCenterId && (int) $rider->logistics_center_id !== (int) $shipmentCenterId) {
+                    throw new RuntimeException('The rider does not belong to this shipment logistics center.');
+                }
 
                 if (! $this->riderCoversShipmentDestinationArea($shipment, $rider)) {
                     throw new RuntimeException('The selected rider is not assigned to the parcel destination area. Assign that area to the rider or choose another rider.');
@@ -215,10 +288,16 @@ class ShipmentWorkflowService
             ]);
 
             if ($assignmentType === 'DELIVERY') {
+                app(CodCollectionService::class)->attachDeliveryRider($shipment, $assignment);
+                app(FinancialAllocationService::class)->syncRiderParticipant($shipment, $assignment->rider_profile_id, 'DELIVERY', $assignment->id);
                 $shipment->update(['current_status' => 'ASSIGNED_TO_RIDER']);
                 $this->recordEvent($shipment, 'ASSIGNED_TO_RIDER', $assigner, 'Delivery rider assigned.', $assignment);
             } else {
-                $this->recordEvent($shipment, $shipment->current_status, $assigner, 'Pickup rider assigned.', $assignment);
+                app(FinancialAllocationService::class)->syncRiderParticipant($shipment, $assignment->rider_profile_id, 'PICKUP', $assignment->id);
+                $note = $allowPickupAreaOverride
+                    ? 'Pickup rider assigned with coverage override: '.trim((string) $pickupAreaOverrideReason)
+                    : 'Pickup rider assigned.';
+                $this->recordEvent($shipment, $shipment->current_status, $assigner, $note, $assignment);
             }
 
             return $assignment->refresh();
@@ -228,6 +307,11 @@ class ShipmentWorkflowService
     public function receiveAtCenter(Shipment $shipment, LogisticsCenter $center, User $actor, string $code, string $method = 'MANUAL'): Shipment
     {
         return DB::transaction(function () use ($shipment, $center, $actor, $code, $method): Shipment {
+            $shipment = Shipment::query()
+                ->whereKey($shipment->id)
+                ->with(['serviceArea', 'pickupRequests', 'sellerOrder'])
+                ->lockForUpdate()
+                ->firstOrFail();
             $dropoffRequest = $shipment->pickupRequests()->whereIn('status', ['PENDING', 'APPROVED'])
                 ->where('notes', 'like', 'SELLER_DROPOFF:%')->latest()->first();
             $isSellerDropoff = $shipment->current_status === 'READY_FOR_PICKUP' && $dropoffRequest;
@@ -236,7 +320,6 @@ class ShipmentWorkflowService
             if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This parcel belongs to another logistics center.');
             }
-            $shipment->loadMissing('serviceArea');
             if (! $shipment->logistics_center_id && (int) $shipment->serviceArea?->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This parcel is not assigned to this logistics center.');
             }
@@ -268,9 +351,35 @@ class ShipmentWorkflowService
     public function sortShipment(Shipment $shipment, LogisticsCenter $center, User $actor, ?ServiceArea $serviceArea = null): Shipment
     {
         return DB::transaction(function () use ($shipment, $center, $actor, $serviceArea): Shipment {
+            $shipment = Shipment::query()
+                ->whereKey($shipment->id)
+                ->with('serviceArea')
+                ->lockForUpdate()
+                ->firstOrFail();
             $this->requireShipmentStatus($shipment, ['AT_SORTING_CENTER'], 'sort the parcel');
             if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This parcel belongs to another logistics center.');
+            }
+
+            if ($this->isCrossHubShipmentAtOrigin($shipment, $center)) {
+                $leg = ShipmentTransferLeg::query()
+                    ->where('shipment_id', $shipment->id)
+                    ->where('sequence_no', 1)
+                    ->lockForUpdate()
+                    ->first();
+                if (! $leg) {
+                    throw new RuntimeException('The cross-hub shipment has no planned transfer leg; routing is paused safely.');
+                }
+                $shipment->update([
+                    'logistics_center_id' => $center->id,
+                    'current_status' => 'SORTED',
+                ]);
+                if ($leg->status === ShipmentTransferLeg::PLANNED) {
+                    $this->transfers->markReady($leg, $actor);
+                }
+                $this->recordEvent($shipment, 'SORTED', $actor, 'Parcel sorted for an inter-hub transfer; final-mile assignment is locked until destination receipt.', null, $center);
+
+                return $shipment->refresh();
             }
             $area = $serviceArea ?: $this->findServiceAreaForAddress(
                 (string) $shipment->destination_province_code,
@@ -284,6 +393,14 @@ class ShipmentWorkflowService
             }
 
             $area->loadMissing('locations');
+            if ($area->locations->isEmpty() || $area->locations->contains(fn ($location): bool =>
+                ! $this->localRiderEligibility->centerCoversMunicipality(
+                    $center,
+                    $location->province_code,
+                    $location->municipality_code,
+                ))) {
+                throw new RuntimeException('The selected delivery area is not fully owned by this center’s canonical municipality.');
+            }
             $matchesDestination = $this->serviceAreaMatchesDestinationCodes($area, $shipment);
 
             if (! $matchesDestination) {
@@ -305,7 +422,12 @@ class ShipmentWorkflowService
     public function riderTransition(RiderAssignment $assignment, string $action, User $actor, array $payload = []): RiderAssignment
     {
         return DB::transaction(function () use ($assignment, $action, $actor, $payload): RiderAssignment {
-            $assignment->loadMissing('shipment');
+            $assignment = RiderAssignment::query()
+                ->whereKey($assignment->id)
+                ->with(['shipment', 'riderProfile'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->assertRiderActor($assignment, $actor);
             $shipment = $assignment->shipment;
 
             match ($action) {
@@ -378,6 +500,10 @@ class ShipmentWorkflowService
         ?LogisticsCenter $center = null,
     ): ?ServiceArea
     {
+        if (blank(trim($provinceCode)) || blank(trim($municipalityCode)) || blank(trim($barangayCode))) {
+            return null;
+        }
+
         $query = ServiceAreaLocation::query()
             ->where('province_code', $provinceCode)
             ->where('municipality_code', $municipalityCode)
@@ -389,11 +515,24 @@ class ShipmentWorkflowService
                     $areaQuery->where('logistics_center_id', $center->id);
                 }
             })
-            ->with('serviceArea');
+            ->with('serviceArea.logisticsCenter.address');
 
-        $exact = $query->first()?->serviceArea;
-        if ($exact) {
-            return $exact;
+        $locations = $query->get();
+        if ($locations->count() > 1) {
+            throw new RuntimeException('The address matches multiple active logistics coverage areas. Routing is paused until the PSGC ownership is made unique.');
+        }
+
+        foreach ($locations as $location) {
+            $area = $location->serviceArea;
+            $areaCenter = $area?->logisticsCenter;
+            if ($area && $areaCenter
+                && $this->localRiderEligibility->centerCoversMunicipality(
+                    $areaCenter,
+                    $location->province_code,
+                    $location->municipality_code,
+                )) {
+                return $area;
+            }
         }
 
         return null;
@@ -401,10 +540,7 @@ class ShipmentWorkflowService
 
     public function pickupServiceArea(Shipment $shipment, ?LogisticsCenter $center = null): ?ServiceArea
     {
-        return $this->sellerPickupServiceArea($shipment, $center)
-            ?: ((! $center || (int) $shipment->serviceArea?->logistics_center_id === (int) $center->id)
-                ? $shipment->serviceArea
-                : null);
+        return $this->sellerPickupServiceArea($shipment, $center);
     }
 
     public function sellerPickupServiceArea(Shipment $shipment, ?LogisticsCenter $center = null): ?ServiceArea
@@ -441,7 +577,9 @@ class ShipmentWorkflowService
             return false;
         }
 
-        return $activeAssignments->contains(fn ($assignment) => $this->serviceAreaMatchesAddressCodes($assignment->serviceArea, $address));
+        return $activeAssignments->contains(fn ($assignment) =>
+            $this->riderCanUseLocalArea($rider, $assignment->serviceArea)
+            && $this->serviceAreaMatchesAddressCodes($assignment->serviceArea, $address));
     }
 
     /** Match final-mile coverage using the order snapshot PSGC codes only. */
@@ -450,46 +588,31 @@ class ShipmentWorkflowService
         $rider->loadMissing('areaAssignments.serviceArea.locations');
 
         $activeAssignments = $rider->areaAssignments->where('is_active', true);
-        return $activeAssignments->contains(fn ($assignment) => $this->serviceAreaMatchesDestinationCodes($assignment->serviceArea, $shipment));
+        return $activeAssignments->contains(fn ($assignment) =>
+            $this->riderCanUseLocalArea($rider, $assignment->serviceArea)
+            && $this->serviceAreaMatchesDestinationCodes($assignment->serviceArea, $shipment));
     }
 
     private function serviceAreaMatchesAddressCodes(?ServiceArea $area, object $address): bool
     {
-        if ($this->serviceAreaMatchesCodes(
+        return $this->serviceAreaMatchesCodes(
             $area,
             $address->province_code,
             $address->municipality_code,
             $address->barangay_code,
-        )) {
-            return true;
-        }
-
-        if (! $area?->is_active) {
-            return false;
-        }
-
-        $addressNames = collect([
-            $address->province_name ?? null,
-            $address->municipality_name ?? null,
-            $address->barangay_name ?? null,
-        ])->map(fn ($name) => $this->normalizeLocationName($name));
-
-        if ($addressNames->contains('')) {
-            return false;
-        }
-
-        return $area->locations->contains(function ($location) use ($addressNames): bool {
-            return $addressNames->all() === collect([
-                $location->province_name,
-                $location->municipality_name,
-                $location->barangay_name,
-            ])->map(fn ($name) => $this->normalizeLocationName($name))->all();
-        });
+        );
     }
 
-    private function normalizeLocationName(mixed $name): string
+    private function riderCanUseLocalArea(RiderProfile $rider, ?ServiceArea $area): bool
     {
-        return Str::of((string) $name)->lower()->squish()->toString();
+        $rider->loadMissing('user', 'logisticsCenter');
+
+        return $rider->status === 'ACTIVE'
+            && $rider->user?->account_type === User::TYPE_RIDER
+            && $rider->user?->status === User::STATUS_ACTIVE
+            && RiderVehicleType::isLocalBarangay($rider->vehicle_type)
+            && $rider->logisticsCenter
+            && $this->localRiderEligibility->singleBarangayLocation($rider->logisticsCenter, $area) !== null;
     }
 
     private function serviceAreaMatchesDestinationCodes(?ServiceArea $area, Shipment $shipment): bool
@@ -508,11 +631,19 @@ class ShipmentWorkflowService
         ?string $municipalityCode,
         ?string $barangayCode,
     ): bool {
-        if (! $area?->is_active) {
+        if (! $area?->is_active
+            || blank(trim((string) $provinceCode))
+            || blank(trim((string) $municipalityCode))
+            || blank(trim((string) $barangayCode))) {
             return false;
         }
 
         foreach ($area?->locations ?? [] as $location) {
+            if (blank(trim((string) $location->province_code))
+                || blank(trim((string) $location->municipality_code))
+                || blank(trim((string) $location->barangay_code))) {
+                continue;
+            }
             if (trim((string) $provinceCode) === trim((string) $location->province_code)
                 && trim((string) $municipalityCode) === trim((string) $location->municipality_code)
                 && trim((string) $barangayCode) === trim((string) $location->barangay_code)) {
@@ -521,6 +652,25 @@ class ShipmentWorkflowService
         }
 
         return false;
+    }
+
+    private function isCrossHubShipmentAtOrigin(Shipment $shipment, LogisticsCenter $center): bool
+    {
+        return $this->schema->automaticRoutingReady()
+            && filled($shipment->origin_logistics_center_id)
+            && filled($shipment->destination_logistics_center_id)
+            && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id
+            && (int) $shipment->logistics_center_id === (int) $center->id
+            && (int) $shipment->origin_logistics_center_id === (int) $center->id;
+    }
+
+    private function isUnreceivedCrossHubShipment(Shipment $shipment): bool
+    {
+        return $this->schema->automaticRoutingReady()
+            && filled($shipment->origin_logistics_center_id)
+            && filled($shipment->destination_logistics_center_id)
+            && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id
+            && (int) $shipment->logistics_center_id !== (int) $shipment->destination_logistics_center_id;
     }
 
     private function confirmSellerOrder(SellerOrder $sellerOrder, Shipment $shipment, User $actor): void
@@ -624,6 +774,7 @@ class ShipmentWorkflowService
         } else {
             $this->requireShipmentStatus($shipment, ['ASSIGNED_TO_RIDER', 'DELIVERY_FAILED'], 'start delivery');
         }
+        $this->localTrips->assertAssignmentMayStart($assignment);
         $assignment->update([
             'status' => 'IN_PROGRESS',
             'started_at' => now(),
@@ -635,6 +786,7 @@ class ShipmentWorkflowService
         } else {
             $this->recordEvent($shipment, $shipment->current_status, $actor, 'Pickup rider started pickup.', $assignment);
         }
+        $this->localTrips->startTripForAssignment($actor, $assignment);
     }
 
     private function completePickup(RiderAssignment $assignment, Shipment $shipment, User $actor, array $payload): void
@@ -659,7 +811,6 @@ class ShipmentWorkflowService
         ]);
         $shipment->pickupRequests()->where('status', 'APPROVED')->update(['status' => 'FULFILLED']);
         $this->recordEvent($shipment, 'PICKED_UP', $actor, 'Pickup rider collected the parcel from seller.', $assignment);
-        $this->createEarning($assignment, '50.00');
     }
 
     private function completeDelivery(RiderAssignment $assignment, Shipment $shipment, User $actor, array $payload): void
@@ -674,6 +825,8 @@ class ShipmentWorkflowService
         if ($proofPath === '') {
             throw ValidationException::withMessages(['proof_file' => 'A delivery proof photo is required before marking the parcel delivered.']);
         }
+
+        app(CodCollectionService::class)->recordSuccessfulCollection($shipment, $assignment, $actor, $payload);
 
         $attemptNumber = (int) $shipment->deliveryAttempts()->count() + 1;
 
@@ -692,9 +845,12 @@ class ShipmentWorkflowService
         ]);
 
         $shipment->update(['current_status' => 'DELIVERED']);
+        // Step 7 allocations are created only after a valid delivered status
+        // and successful COD collection. The allocation service remains
+        // idempotent, so retries cannot duplicate financial records.
+        app(FinancialAllocationService::class)->initializeForShipment($shipment->fresh());
         $this->syncParentOrderProgress($shipment->sellerOrder?->order);
         $this->recordEvent($shipment, 'DELIVERED', $actor, 'Delivery rider delivered the parcel.', $assignment);
-        $this->createEarning($assignment, '75.00');
     }
 
     private function failDelivery(RiderAssignment $assignment, Shipment $shipment, User $actor, array $payload): void
@@ -748,17 +904,18 @@ class ShipmentWorkflowService
         $this->recordEvent($shipment, $shipment->current_status, $actor, $assignment->assignment_type.' assignment rejected: '.$reason, $assignment);
     }
 
-    private function createEarning(RiderAssignment $assignment, string $amount): void
+    private function assertRiderActor(RiderAssignment $assignment, User $actor): void
     {
-        RiderEarning::firstOrCreate(
-            ['rider_assignment_id' => $assignment->id],
-            [
-                'rider_profile_id' => $assignment->rider_profile_id,
-                'amount' => $amount,
-                'status' => 'PENDING',
-                'earned_at' => now(),
-            ],
-        );
+        if ($actor->account_type !== User::TYPE_RIDER || $actor->status !== User::STATUS_ACTIVE) {
+            throw new RuntimeException('Only an active rider may operate a rider assignment.');
+        }
+
+        $actor->loadMissing('riderProfile');
+        if (! $actor->riderProfile
+            || $actor->riderProfile->status !== 'ACTIVE'
+            || (int) $actor->riderProfile->id !== (int) $assignment->rider_profile_id) {
+            throw new RuntimeException('This rider assignment is not owned by the authenticated rider.');
+        }
     }
 
     private function syncParentOrder(?Order $order): void

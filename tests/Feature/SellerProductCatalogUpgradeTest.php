@@ -21,7 +21,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'variations',
@@ -47,7 +47,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'variations',
@@ -69,7 +69,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'variations',
@@ -97,7 +97,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
         Storage::fake('public');
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'variations',
@@ -136,7 +136,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'single',
@@ -169,7 +169,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
         Storage::fake('public');
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $variants = [];
         foreach (['Red' => 'upload:primary', 'Blue' => 'upload:additional:0', 'Green' => 'upload:additional:1'] as $color => $imageRef) {
@@ -275,7 +275,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
         Storage::fake('public');
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
-        $category = Category::query()->firstOrFail();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
 
         $this->actingAs($seller)->post(route('seller.products.store'), [
             'product_type' => 'single',

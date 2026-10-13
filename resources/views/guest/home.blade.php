@@ -86,6 +86,8 @@
                     <img
                         class="lk-ed-cat-img"
                         src="{{ $cat['img'] }}"
+                        srcset="{{ str_replace('w=800', 'w=400', $cat['img']) }} 400w, {{ $cat['img'] }} 800w"
+                        sizes="(max-width: 600px) 50vw, (max-width: 1100px) 33vw, 17vw"
                         alt="{{ $cat['name'] }}"
                         width="800"
                         height="680"

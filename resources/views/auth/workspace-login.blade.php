@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <x-likhae-favicon />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -178,7 +179,7 @@
                 </button>
             </form>
 
-            <p class="auth-switch" style="margin-top: 10px;"><a href="{{ route('password.request') }}">Forgot your password?</a></p>
+            <p class="auth-switch" style="margin-top: 10px;"><a href="{{ route('password.request', ['portal' => 'logistics']) }}">Forgot your password?</a></p>
 
             <p class="auth-switch">
                 Need a {{ strtolower($accountLabel) }} account?

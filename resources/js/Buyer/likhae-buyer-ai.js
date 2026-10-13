@@ -101,7 +101,12 @@
     };
 
     const playResponseSound = () => {
-        if (!responseSoundEnabled || !window.AudioContext) return;
+        if (!responseSoundEnabled) return;
+        if (window.likhaePlayNotificationSound) {
+            window.likhaePlayNotificationSound('AI_RESPONSE', { force: true });
+            return;
+        }
+        if (!window.AudioContext) return;
         const context = new window.AudioContext();
         const oscillator = context.createOscillator();
         const gain = context.createGain();

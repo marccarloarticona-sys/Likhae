@@ -1,3 +1,7 @@
+import '../shared/echo.js';
+import '../shared/messages.js';
+import '../shared/notification-sounds.js';
+
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];

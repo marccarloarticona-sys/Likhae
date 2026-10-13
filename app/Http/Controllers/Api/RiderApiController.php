@@ -4,17 +4,22 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Communication\Conversation;
+use App\Models\Finance\RiderEarningPoolParticipant;
+use App\Models\Finance\RiderRemittance;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
+use App\Services\Finance\FinanceSchemaReadiness;
+use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
+use RuntimeException;
 
 class RiderApiController extends Controller
 {
@@ -141,9 +146,27 @@ class RiderApiController extends Controller
         });
     }
 
-    public function earnings(Request $request): JsonResponse
+    public function earnings(Request $request, FinanceSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->rider($request);
+        if ($schema->step7Ready()) {
+            $rows = RiderEarningPoolParticipant::query()
+                ->where('rider_profile_id', $rider->id)
+                ->with('pool.shipment')
+                ->latest()
+                ->paginate($this->perPage($request));
+
+            return $this->paginated($rows, fn (RiderEarningPoolParticipant $participant): array => [
+                'date' => $participant->created_at?->format('M d, Y') ?? 'Date unavailable',
+                'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
+                'amount' => $participant->share_amount === null ? 0.0 : (float) $participant->share_amount,
+                'status' => str($participant->status)->headline()->toString(),
+            ], [
+                'total' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->sum('share_amount'),
+                'notice' => 'Rider pool shares remain pending until an authorized allocation and payout decision; COD remittance is separate.',
+            ]);
+        }
+
         $rows = $rider->earnings()->with('riderAssignment.shipment')->latest()->paginate($this->perPage($request));
 
         return $this->paginated($rows, fn (RiderEarning $earning): array => [
@@ -152,6 +175,63 @@ class RiderApiController extends Controller
             'amount' => (float) $earning->amount,
             'status' => str($earning->status)->headline()->toString(),
         ], ['total' => (float) $rider->earnings()->sum('amount'), 'notice' => 'Recorded earnings from completed pickup and delivery assignments.']);
+    }
+
+    public function remittances(Request $request, RemittanceService $service, FinanceSchemaReadiness $schema): JsonResponse
+    {
+        $rider = $this->rider($request);
+        if (! $schema->step6Ready()) {
+            return response()->json(['success' => true, 'data' => ['schema_ready' => false, 'collections' => [], 'remittances' => []]]);
+        }
+
+        $history = $rider->remittances()->latest()->paginate($this->perPage($request));
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'schema_ready' => true,
+                'collections' => $service->availableCollections($rider)->map(fn ($collection): array => [
+                    'id' => $collection->id,
+                    'tracking' => $collection->shipment?->tracking_number,
+                    'reference' => $collection->collection_reference,
+                    'expected_amount' => (float) $collection->expected_amount,
+                    'collected_amount' => (float) $collection->collected_amount,
+                ])->values(),
+                'remittances' => $history->getCollection()->map(fn (RiderRemittance $remittance): array => [
+                    'id' => $remittance->id,
+                    'reference' => $remittance->remittance_reference,
+                    'status' => $remittance->status,
+                    'expected_amount' => (float) $remittance->expected_amount,
+                    'submitted_amount' => (float) $remittance->submitted_amount,
+                    'verified_amount' => (float) $remittance->verified_amount,
+                ])->values(),
+                'meta' => ['current_page' => $history->currentPage(), 'last_page' => $history->lastPage(), 'total' => $history->total()],
+            ],
+        ]);
+    }
+
+    public function submitRemittance(Request $request, RemittanceService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'collection_ids' => ['required', 'array', 'min:1'],
+            'collection_ids.*' => ['required', 'integer'],
+            'submitted_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        try {
+            $remittance = $service->submit($request->user(), $data['collection_ids'], $data['submitted_amount'], $data['notes'] ?? null);
+        } catch (RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'id' => $remittance->id,
+            'reference' => $remittance->remittance_reference,
+            'status' => $remittance->status,
+            'expected_amount' => (float) $remittance->expected_amount,
+            'submitted_amount' => (float) $remittance->submitted_amount,
+        ]], 201);
     }
 
     public function profile(Request $request): JsonResponse
@@ -217,11 +297,10 @@ class RiderApiController extends Controller
     {
         $this->rider($request);
         $user = $request->user();
-        $rows = $service->listFor($user)->map(function (Conversation $conversation) use ($user): array {
+        $conversations = $service->listFor($user, false, 100);
+        $unreadCounts = $service->unreadCountsFor($user, $conversations);
+        $rows = $conversations->map(function (Conversation $conversation) use ($user, $unreadCounts): array {
             $other = $conversation->participants->first(fn (User $participant): bool => (int) $participant->id !== (int) $user->id);
-            $self = $conversation->participants->first(fn (User $participant): bool => (int) $participant->id === (int) $user->id);
-            $lastReadAt = $self?->pivot?->last_read_at;
-            $unread = $conversation->messages->where('sender_user_id', '!=', $user->id)->filter(fn ($message): bool => $lastReadAt === null || $message->sent_at?->gt($lastReadAt))->count();
             $shipment = $conversation->shipment;
 
             return [
@@ -233,22 +312,26 @@ class RiderApiController extends Controller
                 'tracking_code' => $shipment?->tracking_number,
                 'last_message' => $conversation->latestMessage?->body ?? '',
                 'last_message_at' => $conversation->latestMessage?->sent_at?->toIso8601String(),
-                'unread_count' => $unread,
+                'unread_count' => (int) $unreadCounts->get($conversation->id, 0),
             ];
         })->values();
 
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
-    public function conversationMessages(Request $request, int $conversation): JsonResponse
+    public function conversationMessages(Request $request, int $conversation, ConversationService $service): JsonResponse
     {
         $this->rider($request);
-        $thread = Conversation::query()->whereKey($conversation)
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-            ->with(['messages.sender', 'participantRecords'])->firstOrFail();
-        app(ConversationService::class)->markRead($thread, $request->user());
+        $messages = $service->messagesFor(
+            $request->user(),
+            $conversation,
+            50,
+            max(0, $request->integer('after_id')) ?: null,
+        );
+        $thread = Conversation::query()->select('id')->findOrFail($conversation);
+        $service->markRead($thread, $request->user());
 
-        return response()->json(['success' => true, 'data' => $thread->messages->map(fn ($message): array => [
+        return response()->json(['success' => true, 'data' => $messages->map(fn ($message): array => [
             'id' => (string) $message->id, 'conversation_id' => (string) $message->conversation_id,
             'body' => $message->body, 'sender_user_id' => $message->sender_user_id,
             'sent_at' => $message->sent_at?->toIso8601String(),
@@ -268,7 +351,7 @@ class RiderApiController extends Controller
         $message = $service->send($request->user(), (int) $recipient->id, trim($data['body']), [
             'type' => $thread->type, 'order_id' => $thread->order_id,
             'seller_order_id' => $thread->seller_order_id, 'shipment_id' => $thread->shipment_id,
-        ]);
+        ], $thread);
 
         return response()->json(['success' => true, 'data' => [
             'id' => (string) $message->id, 'conversation_id' => (string) $message->conversation_id,
@@ -280,7 +363,7 @@ class RiderApiController extends Controller
     {
         abort_unless($request->user()?->isAccountType(User::TYPE_RIDER), 403, 'Rider access is required.');
         $rider = $request->user()->riderProfile;
-        abort_unless($rider, 403, 'A rider profile is required.');
+        abort_unless($rider && $rider->status === 'ACTIVE', 403, 'An active rider profile is required.');
         return $rider;
     }
 

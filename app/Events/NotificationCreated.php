@@ -4,15 +4,13 @@ namespace App\Events;
 
 use App\Models\Admin\Notification;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class NotificationCreated implements ShouldBroadcast
+class NotificationCreated implements ShouldBroadcastNow
 {
     use Dispatchable, SerializesModels;
-
-    public string $connection = 'background';
 
     public function __construct(public Notification $notification)
     {
@@ -32,6 +30,7 @@ class NotificationCreated implements ShouldBroadcast
     {
         return [
             'id' => $this->notification->id,
+            'type' => $this->notification->type,
             'title' => $this->notification->title,
             'message' => $this->notification->message,
             'action_url' => $this->notification->action_url,

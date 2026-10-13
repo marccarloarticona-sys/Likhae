@@ -68,10 +68,24 @@ class ServiceArea extends Model
 
     public function scopeForAddress(Builder $query, \App\Models\Buyer\Address $address): Builder
     {
-        return $query->whereHas('locations', function (Builder $location) use ($address): void {
-            $location->where('province_code', $address->province_code)
-                ->where('municipality_code', $address->municipality_code)
-                ->where('barangay_code', $address->barangay_code);
+        return $this->scopeForCodes(
+            $query,
+            $address->province_code,
+            $address->municipality_code,
+            $address->barangay_code,
+        );
+    }
+
+    public function scopeForCodes(
+        Builder $query,
+        ?string $provinceCode,
+        ?string $municipalityCode,
+        ?string $barangayCode,
+    ): Builder {
+        return $query->whereHas('locations', function (Builder $location) use ($provinceCode, $municipalityCode, $barangayCode): void {
+            $location->where('province_code', trim((string) $provinceCode))
+                ->where('municipality_code', trim((string) $municipalityCode))
+                ->where('barangay_code', trim((string) $barangayCode));
         });
     }
 }

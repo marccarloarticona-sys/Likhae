@@ -48,6 +48,26 @@
             return bubble;
         };
 
+        const playResponseSound = () => {
+            if (widget.dataset.aiResponseSound !== '1') return;
+            if (window.likhaePlayNotificationSound) {
+                window.likhaePlayNotificationSound('AI_RESPONSE', { force: true });
+                return;
+            }
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            const context = new AudioContext();
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.frequency.value = 620;
+            gain.gain.setValueAtTime(0.035, context.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.16);
+            oscillator.connect(gain).connect(context.destination);
+            oscillator.start();
+            oscillator.stop(context.currentTime + 0.16);
+            oscillator.addEventListener('ended', () => context.close(), { once: true });
+        };
+
         const addWelcome = () => {
             if (openedOnce) return;
             openedOnce = true;
@@ -130,6 +150,7 @@
                 if (!response.ok || !payload.reply) throw new Error('Assistant request failed');
                 typing.remove();
                 addBubble(payload.reply, 'assistant', Array.isArray(payload.options) ? payload.options : []);
+                playResponseSound();
             } catch (_) {
                 typing.remove();
                 addBubble('I’m unable to reach the AI service right now, but I can still help with the workspace navigation and common workflows.', 'assistant');

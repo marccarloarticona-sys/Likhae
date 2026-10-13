@@ -72,8 +72,35 @@ class LogisticsCenter extends Model
         return $this->hasMany(Shipment::class);
     }
 
+    public function localTrips(): HasMany
+    {
+        return $this->hasMany(\App\Models\Rider\RiderLocalTrip::class);
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('status', 'ACTIVE');
+    }
+
+    public function scopeApprovedActive(Builder $query): Builder
+    {
+        return $query
+            ->active()
+            ->whereNotNull('approved_by_user_id')
+            ->whereNotNull('approved_at');
+    }
+
+    public function scopeEligibleForRiderAddress(
+        Builder $query,
+        string $provinceCode,
+        string $municipalityCode,
+    ): Builder {
+        return $query
+            ->approvedActive()
+            ->whereHas('address', function (Builder $address) use ($provinceCode, $municipalityCode): void {
+                $address
+                    ->where('province_code', trim($provinceCode))
+                    ->where('municipality_code', trim($municipalityCode));
+            });
     }
 }

@@ -180,7 +180,7 @@ class EndToEndShipmentLifecycleTest extends TestCase
         $this->assertFalse($processingResponse->viewData('orders')->getCollection()->contains('id', $order->id));
 
         $this->actingAs($buyer)
-            ->post(route('buyer.orders.received', $order))
+            ->post(route('buyer.orders.received', $order), ['confirm_receipt' => '1'])
             ->assertRedirect();
 
         $this->assertSame('COMPLETED', $order->fresh()->status);

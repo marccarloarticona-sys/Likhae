@@ -9,6 +9,7 @@ export function initializeParcelScanners() {
         const stop = scanner.querySelector('[data-scanner-stop]');
         const message = scanner.querySelector('[data-scanner-message]');
         const input = scanner.querySelector('[data-scanner-input]');
+        const method = scanner.querySelector('[data-scanner-method]');
         const form = scanner.querySelector('[data-scanner-form]');
         let controls;
         let stream;
@@ -65,6 +66,7 @@ export function initializeParcelScanners() {
                 controls = await reader.decodeFromStream(stream, video, (result) => {
                     if (!result) return;
                     input.value = result.getText().trim();
+                    method.value = result.getBarcodeFormat() === BarcodeFormat.QR_CODE ? 'QR' : 'BARCODE';
                     message.textContent = `Detected tracking: ${input.value}`;
                     stopCamera();
                     form.requestSubmit();

@@ -20,6 +20,7 @@ use App\Services\Communication\ConversationService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
@@ -28,6 +29,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -157,9 +159,11 @@ class BuyerApiController extends Controller
             'cart_item_ids' => ['required', 'array', 'min:1'],
             'cart_item_ids.*' => ['required', 'integer'],
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
-            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
+            'payment_method' => ['required', Rule::in(['COD'])],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['integer'],
         ]);
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
         $items = $cart->selectedItems($request->user(), $ids);
@@ -169,7 +173,20 @@ class BuyerApiController extends Controller
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
             ->all();
-        $order = $checkout->placeOrder($request->user(), $address, $items, $data['payment_method'], $voucherCodes);
+        $protectionItemIds = collect((array) ($data['protection_item_ids'] ?? []))
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+        $order = $checkout->placeOrder(
+            $request->user(),
+            $address,
+            $items,
+            $data['payment_method'],
+            $voucherCodes,
+            null,
+            $protectionItemIds,
+        );
 
         return response()->json([
             'success' => true,
@@ -468,15 +485,12 @@ class BuyerApiController extends Controller
     public function conversations(Request $request, ConversationService $service): JsonResponse
     {
         $this->authorizeBuyer($request);
-        $rows = $service->listFor($request->user())->map(function (Conversation $conversation) use ($request): array {
+        $user = $request->user();
+        $conversations = $service->listFor($user, false, 100, true);
+        $unreadCounts = $service->unreadCountsFor($user, $conversations);
+        $rows = $conversations->map(function (Conversation $conversation) use ($request, $unreadCounts): array {
             $other = $conversation->participants->first(fn (User $participant): bool => (int) $participant->id !== (int) $request->user()->id);
-            $participant = $conversation->participants->first(fn (User $item): bool => (int) $item->id === (int) $request->user()->id);
             $seller = $other?->sellerProfile;
-            $lastReadAt = $participant?->pivot?->last_read_at;
-            $unread = $conversation->messages
-                ->where('sender_user_id', '!=', $request->user()->id)
-                ->filter(fn ($message): bool => $lastReadAt === null || $message->sent_at?->gt($lastReadAt))
-                ->count();
 
             return [
                 'id' => (string) $conversation->id,
@@ -486,38 +500,43 @@ class BuyerApiController extends Controller
                 'slug' => 'conversation-'.$conversation->id,
                 'last_message' => $conversation->latestMessage?->body ?? '',
                 'time' => $conversation->latestMessage?->sent_at?->toIso8601String(),
-                'unread' => $unread,
+                'unread' => (int) $unreadCounts->get($conversation->id, 0),
             ];
         })->values();
 
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
-    public function conversationMessages(Request $request, int $conversation): JsonResponse
+    public function conversationMessages(Request $request, int $conversation, ConversationService $service): JsonResponse
     {
         $this->authorizeBuyer($request);
-        $thread = Conversation::query()
-            ->whereKey($conversation)
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-            ->with(['messages.sender', 'participantRecords'])
-            ->firstOrFail();
+        $messages = $service->messagesFor(
+            $request->user(),
+            $conversation,
+            50,
+            max(0, $request->integer('after_id')) ?: null,
+        );
         ConversationParticipant::query()
-            ->where('conversation_id', $thread->id)
+            ->where('conversation_id', $conversation)
             ->where('user_id', $request->user()->id)
             ->update(['last_read_at' => now()]);
 
         return response()->json([
             'success' => true,
-            'data' => $thread->messages->map(fn ($message): array => [
+            'data' => $messages->map(function ($message) use ($request): array {
+                $attachmentPath = $message->getAttribute('attachment_path');
+
+                return [
                 'id' => (string) $message->id,
                 'conversation_id' => (string) $message->conversation_id,
                 'body' => $message->body,
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
                 'from_buyer' => (int) $message->sender_user_id === (int) $request->user()->id,
-                'attachment_url' => $message->attachment_path ? Storage::disk('public')->url($message->attachment_path) : null,
-                'attachment_name' => $message->attachment_path ? basename($message->attachment_path) : null,
-            ])->values(),
+                'attachment_url' => $attachmentPath ? Storage::disk('public')->url($attachmentPath) : null,
+                'attachment_name' => $attachmentPath ? basename($attachmentPath) : null,
+                ];
+            })->values(),
         ]);
     }
 
@@ -632,6 +651,10 @@ class BuyerApiController extends Controller
 
     private function orderPayload(Order $order): array
     {
+        $actionState = app(BuyerOrderActionService::class)->state(
+            $order,
+            Schema::hasTable('return_refund_requests') && Schema::hasTable('return_refund_request_items'),
+        );
         $items = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->items->map(fn ($item): array => [
             'id' => $item->id,
             'product_id' => $item->product_id,
@@ -648,20 +671,6 @@ class BuyerApiController extends Controller
         );
         $events = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
             ->sortBy('occurred_at')->values();
-        $allShipmentsDelivered = $order->sellerOrders->isNotEmpty()
-            && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true));
-        $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
-            ->where('status', 'DELIVERED')
-            ->max('occurred_at');
-        $insideReturnWindow = $deliveredAt
-            && now()->lte($deliveredAt->copy()->addDays(5));
-        $canRequestReturn = ! $activeReturnRequest
-            && in_array($order->status, ['PROCESSING', 'COMPLETED'], true)
-            && $allShipmentsDelivered
-            && $insideReturnWindow;
-
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
@@ -685,6 +694,7 @@ class BuyerApiController extends Controller
                 'formatted_address' => $order->address->formatted(),
             ] : null,
             'tracking_number' => $shipment?->tracking_number,
+            'shipment_id' => $shipment?->id,
             'rider_location' => $this->riderLocationPayload($shipment),
             'items' => $items,
             'timeline' => $events->map(fn ($event): array => [
@@ -695,10 +705,9 @@ class BuyerApiController extends Controller
             ]),
             'created_at' => $order->placed_at?->toIso8601String(),
             'allow_cancel' => in_array($order->status, ['PLACED', 'PROCESSING'], true),
-            'allow_mark_received' => $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment?->current_status === 'DELIVERED'),
+            'allow_mark_received' => $actionState['can_confirm_received'],
             'allow_review' => $order->status === 'COMPLETED',
-            'allow_return_request' => $canRequestReturn,
+            'allow_return_request' => $actionState['can_request_return'],
             'has_active_return_request' => (bool) $activeReturnRequest,
         ];
     }

@@ -6,6 +6,7 @@
 <!doctype html>
 <html lang="en">
 <head>
+    <x-likhae-favicon />
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -13,9 +14,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    @vite(['resources/css/seller/seller.css', 'resources/css/shared/likhae-workspace-ai.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/likhae-workspace-ai.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @vite(['resources/css/seller/seller.css', 'resources/css/shared/likhae-workspace-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/likhae-workspace-ai.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @stack('head')
     <script>
-        (function(){var t=localStorage.getItem('likhae-theme')||'light';document.documentElement.classList.toggle('dark',t==='dark')} )();
+        (function(){var t=localStorage.getItem('likhae-theme');document.documentElement.classList.toggle('dark',t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches))})();
     </script></head>
 <body class="sl-body">
     <x-admin.sidebar role="seller" :active="$activePage" />
@@ -35,7 +37,9 @@
 
     <div class="sl-toast" data-sl-toast data-flash="{{ session('status') }}" data-error="{{ $errors->first() }}" role="status" aria-live="polite"></div>
     <x-notification-popover />
-    <x-workspace.ai-assistant workspace="seller" :page="$activePage" :page-title="$pageTitle" />
+    @if(data_get(auth()->user()?->notification_preferences, 'seller_ai_assistant_enabled', true))
+        <x-workspace.ai-assistant workspace="seller" :page="$activePage" :page-title="$pageTitle" />
+    @endif
 
     @include('partials.darkmode')
     @stack('scripts')

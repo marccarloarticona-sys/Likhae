@@ -8,6 +8,9 @@ use App\Models\Auth\RegistrationApplication;
 use App\Models\Admin\AuditLog;
 use App\Models\Buyer\Address;
 use App\Models\Communication\Conversation;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\LogisticsEarningPool;
+use App\Models\Finance\RiderRemittance;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -17,6 +20,9 @@ use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\AccountNotificationService;
 use App\Services\Communication\ConversationService;
+use App\Services\Fulfillment\LocalRiderEligibilityService;
+use App\Services\Finance\FinanceSchemaReadiness;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\RegistrationWorkflowService;
 use App\Services\RiderRatingService;
 use App\Services\Maps\MapDataService;
@@ -33,12 +39,36 @@ use Illuminate\View\View;
 
 class LogisticsPortalController extends Controller
 {
-    public function __construct(private readonly RegistrationWorkflowService $registrationWorkflow) {}
+    public function __construct(
+        private readonly RegistrationWorkflowService $registrationWorkflow,
+        private readonly LocalRiderEligibilityService $localRiderEligibility,
+    ) {}
 
     public function dashboard(Request $request): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
+
+        $finance = [
+            'rider_cod_obligations' => 0.0,
+            'remittance_submitted' => 0.0,
+            'verified_cash' => 0.0,
+            'discrepancies' => 0,
+            'logistics_pool' => 0.0,
+            'pending_settlement' => 0.0,
+        ];
+        if (app(FinanceSchemaReadiness::class)->step6Ready()) {
+            $remittances = RiderRemittance::query()->where('logistics_center_id', $center->id);
+            $finance['remittance_submitted'] = (float) (clone $remittances)->sum('submitted_amount');
+            $finance['verified_cash'] = (float) (clone $remittances)->whereIn('status', ['VERIFIED', 'RECONCILED', 'DISCREPANCY'])->sum('verified_amount');
+            $finance['discrepancies'] = (int) (clone $remittances)->where('status', 'DISCREPANCY')->count();
+            $finance['rider_cod_obligations'] = (float) CodCollection::query()->where('logistics_center_id', $center->id)->whereIn('status', ['COLLECTED', 'REMITTED', 'DISCREPANCY'])->sum('expected_amount');
+        }
+        if (app(FinanceSchemaReadiness::class)->step7Ready()) {
+            $pools = LogisticsEarningPool::query()->where('logistics_center_id', $center->id);
+            $finance['logistics_pool'] = (float) (clone $pools)->sum('total_amount');
+            $finance['pending_settlement'] = (float) (clone $pools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('unresolved_share_amount');
+        }
 
         return view('Logistics.dashboard.index', [
             'center' => $center,
@@ -50,6 +80,7 @@ class LogisticsPortalController extends Controller
                 'active_riders' => $center->riders()->whereIn('status', ['ACTIVE', 'WARNED'])->count(),
             ],
             'recentShipments' => Shipment::where('logistics_center_id', $center->id)->with(['sellerOrder.order.address'])->latest()->limit(10)->get(),
+            'financeSummary' => $finance,
         ]);
     }
 
@@ -151,7 +182,7 @@ class LogisticsPortalController extends Controller
 
     public function riderShow(Request $request, RiderProfile $rider, RiderRatingService $riderRatings): View
     {
-        $center = $request->user()->logisticsCenter;
+        $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
         $rider->load(['user', 'areaAssignments.serviceArea', 'assignments.shipment.sellerOrder.sellerProfile.businessAddress', 'assignments.shipment.sellerOrder.order.address', 'assignments.shipment.riderAssignments.liveLocation', 'assignments.shipment.logisticsCenter.address', 'assignments.liveLocation', 'earnings', 'moderationLogs.actor']);
@@ -166,24 +197,71 @@ class LogisticsPortalController extends Controller
         $rider->setAttribute('rating_average', $ratingSummary['average']);
         $rider->setAttribute('rating_count', $ratingSummary['count']);
 
-        $serviceAreas = ServiceArea::query()
-            ->where('logistics_center_id', $center->id)
-            ->where('is_active', true)
-            ->with('locations')
-            ->orderBy('name')
-            ->get();
+        $serviceAreas = $center->address
+            ? ServiceArea::query()
+                ->where('logistics_center_id', $center->id)
+                ->where('is_active', true)
+                ->has('locations', '=', 1)
+                ->whereHas('locations', fn ($location) => $location
+                    ->where('province_code', $center->address->province_code)
+                    ->where('municipality_code', $center->address->municipality_code))
+                ->with('locations')
+                ->orderBy('name')
+                ->get()
+            : collect();
 
         $maps = app(MapDataService::class);
         $mapMarkers = $maps->forAssignments($rider->assignments, true);
         if ($centerMarker = $maps->centerMarker($center->loadMissing('address'))) {
             $mapMarkers[] = $centerMarker;
         }
-        return view('Logistics.riders.show', compact('rider', 'center', 'mapMarkers', 'serviceAreas'));
+        return view('Logistics.riders.show', [
+            'rider' => $rider,
+            'center' => $center,
+            'mapMarkers' => $mapMarkers,
+            'serviceAreas' => $serviceAreas,
+            'manifestSchemaReady' => app(LogisticsSchemaReadiness::class)->manifestReady(),
+        ]);
+    }
+
+    public function updateRiderCapacity(Request $request, RiderProfile $rider, LogisticsSchemaReadiness $schema): RedirectResponse
+    {
+        $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
+        abort_unless((int) $rider->logistics_center_id === (int) $center->id, 403);
+        if (! $schema->manifestReady()) {
+            return back()->withErrors(['capacity' => 'Transfer schema is not installed; capacity approval is disabled.']);
+        }
+
+        $data = $request->validate([
+            'approved_parcel_capacity' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'approved_weight_capacity_kg' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
+            'approved_volume_capacity_liters' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
+        ]);
+        if (in_array($rider->vehicleRole(), [\App\Support\RiderVehicleType::ROLE_INTER_LOGISTICS], true)
+            && (blank($data['approved_parcel_capacity'] ?? null)
+                || blank($data['approved_weight_capacity_kg'] ?? null)
+                || blank($data['approved_volume_capacity_liters'] ?? null))) {
+            return back()->withErrors(['capacity' => 'Inter-logistics riders require all three approved capacity values.'])->withInput();
+        }
+        if ($rider->vehicleRole() === \App\Support\RiderVehicleType::ROLE_LOCAL_BARANGAY
+            && (int) ($data['approved_parcel_capacity'] ?? 0) > 10) {
+            return back()->withErrors(['approved_parcel_capacity' => 'Local motorcycle/tricycle trips are limited to 10 parcels.'])->withInput();
+        }
+
+        DB::transaction(function () use ($rider, $data): void {
+            RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail()->update([
+                'approved_parcel_capacity' => $data['approved_parcel_capacity'] ?? null,
+                'approved_weight_capacity_kg' => $data['approved_weight_capacity_kg'] ?? null,
+                'approved_volume_capacity_liters' => $data['approved_volume_capacity_liters'] ?? null,
+            ]);
+        });
+
+        return back()->with('status', 'Rider transfer capacity saved as an approved hub setting.');
     }
 
     public function reassignRiderArea(Request $request, RiderProfile $rider): RedirectResponse
     {
-        $center = $request->user()->logisticsCenter;
+        $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
         $data = $request->validate([
@@ -196,29 +274,36 @@ class LogisticsPortalController extends Controller
                 ->whereKey($data['service_area_id'])
                 ->where('logistics_center_id', $center->id)
                 ->where('is_active', true)
+                ->with('locations')
                 ->first();
 
             abort_unless($area, 403);
+
+            try {
+                $this->localRiderEligibility->assertRiderCanCoverArea($center, $rider, $area);
+            } catch (\RuntimeException $exception) {
+                return back()->withErrors(['service_area_id' => $exception->getMessage()])->withInput();
+            }
         }
 
         DB::transaction(function () use ($area, $rider, $request): void {
-            $rider->areaAssignments()
+            $lockedRider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
+            $activeAssignments = RiderAreaAssignment::query()
+                ->where('rider_profile_id', $lockedRider->id)
                 ->where('is_active', true)
-                ->update(['is_active' => false, 'ended_at' => now()]);
+                ->lockForUpdate()
+                ->get();
+            $activeAssignments->each->update(['is_active' => false, 'ended_at' => now()]);
 
             if ($area) {
-                RiderAreaAssignment::updateOrCreate(
-                    [
-                        'rider_profile_id' => $rider->id,
-                        'service_area_id' => $area->id,
-                    ],
-                    [
-                        'assigned_by_user_id' => $request->user()->id,
-                        'is_active' => true,
-                        'assigned_at' => now(),
-                        'ended_at' => null,
-                    ],
-                );
+                RiderAreaAssignment::create([
+                    'rider_profile_id' => $lockedRider->id,
+                    'service_area_id' => $area->id,
+                    'assigned_by_user_id' => $request->user()->id,
+                    'is_active' => true,
+                    'assigned_at' => now(),
+                    'ended_at' => null,
+                ]);
             }
         });
 
@@ -289,8 +374,8 @@ class LogisticsPortalController extends Controller
 
     public function deliveryAreas(Request $request): View
     {
-        $center = $request->user()->logisticsCenter;
-        abort_unless($center, 403);
+        $center = $request->user()->logisticsCenter?->load('address');
+        abort_unless($center && $center->status === 'ACTIVE', 403);
 
         $areas = ServiceArea::query()
             ->where('logistics_center_id', $center->id)
@@ -298,16 +383,62 @@ class LogisticsPortalController extends Controller
             ->orderBy('name')
             ->get();
 
+<<<<<<< HEAD
         $riders = RiderProfile::where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->with('user')->get();
+=======
+        $riders = $this->localRiderEligibility
+            ->activeRidersForCenter($center)
+            ->with('user')
+            ->orderBy('id')
+            ->get();
+>>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
 
-        $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center->loadMissing('address'))]);
-        return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'mapMarkers'));
+        $allBarangays = $center->address?->municipality_code
+            ? PhilippineAddressController::barangayRecordsForMunicipality((string) $center->address->municipality_code)
+            : [];
+        $coveredBarangayCodes = $areas
+            ->where('is_active', true)
+            ->flatMap(fn (ServiceArea $area) => $area->locations)
+            ->filter(fn (ServiceAreaLocation $location): bool =>
+                $center->address
+                && (string) $location->province_code === (string) $center->address->province_code
+                && (string) $location->municipality_code === (string) $center->address->municipality_code)
+            ->pluck('barangay_code')
+            ->filter()
+            ->unique()
+            ->values();
+        $uncoveredBarangays = collect($allBarangays)
+            ->reject(fn (array $barangay): bool => $coveredBarangayCodes->contains((string) ($barangay['code'] ?? '')))
+            ->values();
+        $assignableAreaIds = $areas
+            ->filter(fn (ServiceArea $area): bool => $this->localRiderEligibility->singleBarangayLocation($center, $area) !== null)
+            ->pluck('id')
+            ->all();
+        $invalidAreaReasons = $areas->mapWithKeys(function (ServiceArea $area) use ($center): array {
+            $locations = $area->locations;
+            $reason = null;
+
+            if ($locations->count() !== 1) {
+                $reason = 'The existing area has missing or multiple barangay locations.';
+            } elseif (! $this->localRiderEligibility->centerCoversMunicipality(
+                $center,
+                $locations->first()->province_code,
+                $locations->first()->municipality_code,
+            )) {
+                $reason = 'The existing barangay PSGC does not match the center canonical province and municipality.';
+            }
+
+            return $reason ? [$area->id => $reason] : [];
+        });
+
+        $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center)]);
+        return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
     }
 
     public function saveDeliveryArea(Request $request): RedirectResponse
     {
-        $center = $request->user()->logisticsCenter;
-        abort_unless($center, 403);
+        $center = $request->user()->logisticsCenter?->load('address');
+        abort_unless($center && $center->status === 'ACTIVE', 403);
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:150'],
@@ -338,39 +469,97 @@ class LogisticsPortalController extends Controller
                 ->withInput();
         }
 
+<<<<<<< HEAD
         if (! empty($data['rider_profile_id'])) {
             abort_unless(
                 RiderProfile::query()->whereKey($data['rider_profile_id'])->where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->exists(),
                 403,
+=======
+        try {
+            $this->localRiderEligibility->assertCenterCoversMunicipality(
+                $center,
+                (string) $data['province_code'],
+                (string) $data['municipality_code'],
+>>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             );
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['municipality_code' => $exception->getMessage()])->withInput();
         }
 
-        DB::transaction(function () use ($data, $center, $request): void {
-            $area = ServiceArea::firstOrCreate(
-                ['logistics_center_id' => $center->id, 'code' => $data['code'] ?: Str::slug($data['name'])],
-                ['name' => $data['name'], 'is_active' => true],
-            );
+        try {
+            DB::transaction(function () use ($data, $center, $request): void {
+                // Serialize coverage changes for this hub so concurrent requests
+                // cannot both pass the overlap check.
+                LogisticsCenter::query()->whereKey($center->id)->lockForUpdate()->firstOrFail();
 
-            $area->update(['name' => $data['name'], 'is_active' => true]);
-
-            ServiceAreaLocation::updateOrCreate(
-                ['service_area_id' => $area->id, 'barangay_code' => $data['barangay_code']],
-                [
-                    'province_code' => $data['province_code'],
-                    'province_name' => $data['province_name'],
-                    'municipality_code' => $data['municipality_code'],
-                    'municipality_name' => $data['municipality_name'],
-                    'barangay_name' => $data['barangay_name'],
-                ],
-            );
-
-            if (! empty($data['rider_profile_id'])) {
-                RiderAreaAssignment::updateOrCreate(
-                    ['rider_profile_id' => $data['rider_profile_id'], 'service_area_id' => $area->id, 'is_active' => true],
-                    ['assigned_by_user_id' => $request->user()->id, 'assigned_at' => now(), 'ended_at' => null],
+                $area = ServiceArea::firstOrCreate(
+                    ['logistics_center_id' => $center->id, 'code' => $data['code'] ?: Str::slug($data['name'])],
+                    ['name' => $data['name'], 'is_active' => true],
                 );
-            }
-        });
+                $area->update(['name' => $data['name'], 'is_active' => true]);
+
+                $overlapExists = ServiceAreaLocation::query()
+                    ->where('province_code', $data['province_code'])
+                    ->where('municipality_code', $data['municipality_code'])
+                    ->where('barangay_code', $data['barangay_code'])
+                    ->where('service_area_id', '!=', $area->id)
+                    ->whereHas('serviceArea', fn ($query) => $query
+                        ->where('logistics_center_id', $center->id)
+                        ->where('is_active', true))
+                    ->exists();
+
+                if ($overlapExists) {
+                    throw new \RuntimeException('This barangay PSGC is already covered by another active service area in this logistics center.');
+                }
+
+                $hasOtherLocation = $area->locations()
+                    ->where('barangay_code', '!=', $data['barangay_code'])
+                    ->exists();
+                if ($hasOtherLocation && $area->riderAssignments()->where('is_active', true)->exists()) {
+                    throw new \RuntimeException('This service area already has an active rider and multiple barangays. Split or clear the existing assignment before changing its coverage.');
+                }
+
+                ServiceAreaLocation::updateOrCreate(
+                    ['service_area_id' => $area->id, 'barangay_code' => $data['barangay_code']],
+                    [
+                        'province_code' => $data['province_code'],
+                        'province_name' => $data['province_name'],
+                        'municipality_code' => $data['municipality_code'],
+                        'municipality_name' => $data['municipality_name'],
+                        'barangay_name' => $data['barangay_name'],
+                    ],
+                );
+
+                if (! empty($data['rider_profile_id'])) {
+                    $rider = RiderProfile::query()
+                        ->with('user')
+                        ->whereKey($data['rider_profile_id'])
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                    $area->load('locations');
+                    $this->localRiderEligibility->assertRiderCanCoverArea($center, $rider, $area);
+
+                    RiderAreaAssignment::query()
+                        ->where('rider_profile_id', $rider->id)
+                        ->where('is_active', true)
+                        ->lockForUpdate()
+                        ->get()
+                        ->each
+                        ->update(['is_active' => false, 'ended_at' => now()]);
+
+                    RiderAreaAssignment::create([
+                        'rider_profile_id' => $rider->id,
+                        'service_area_id' => $area->id,
+                        'assigned_by_user_id' => $request->user()->id,
+                        'is_active' => true,
+                        'assigned_at' => now(),
+                        'ended_at' => null,
+                    ]);
+                }
+            });
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
+        }
 
         return back()->with('status', 'Service area saved.');
     }
@@ -378,9 +567,18 @@ class LogisticsPortalController extends Controller
     public function toggleDeliveryArea(Request $request, ServiceArea $area): RedirectResponse
     {
         $center = $request->user()->logisticsCenter;
-        abort_unless($center && (int) $area->logistics_center_id === (int) $center->id, 403);
+        abort_unless($center && $center->status === 'ACTIVE' && (int) $area->logistics_center_id === (int) $center->id, 403);
 
-        $area->update(['is_active' => ! $area->is_active]);
+        DB::transaction(function () use ($area): void {
+            $lockedArea = ServiceArea::query()->whereKey($area->id)->lockForUpdate()->firstOrFail();
+            $willDeactivate = (bool) $lockedArea->is_active;
+            if ($willDeactivate) {
+                $lockedArea->riderAssignments()
+                    ->where('is_active', true)
+                    ->update(['is_active' => false, 'ended_at' => now()]);
+            }
+            $lockedArea->update(['is_active' => ! $willDeactivate]);
+        });
 
         return back()->with('status', 'Service area updated.');
     }
@@ -507,8 +705,9 @@ class LogisticsPortalController extends Controller
             'messages' => $conversationService->streamPayload(
                 $request->user(),
                 $request->integer('conversation'),
+                $request->integer('after_id') ?: null,
             ),
-        ]);
+        ])->header('Cache-Control', 'no-store, private');
     }
 
     public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
@@ -520,6 +719,7 @@ class LogisticsPortalController extends Controller
         ]);
 
         $context = [];
+        $conversation = null;
         if (! empty($data['conversation_id'])) {
             $conversation = Conversation::query()
                 ->whereKey((int) $data['conversation_id'])
@@ -529,7 +729,7 @@ class LogisticsPortalController extends Controller
             $context = $conversationService->contextFor($conversation);
         }
 
-        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context);
+        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context, $conversation);
 
         if ($request->expectsJson()) {
             return response()->json([

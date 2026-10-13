@@ -4,7 +4,24 @@
         ? $notificationUser->notifications()->latest()->limit(8)->get()
         : collect();
     $unreadNotifications = $recentNotifications->whereNull('read_at')->count();
+    $notificationSoundKey = match (strtoupper((string) $notificationUser?->account_type)) {
+        'SELLER' => 'seller_notification_sounds',
+        'ADMIN' => 'admin_notification_sounds',
+        'LOGISTICS' => 'logistics_notification_sounds',
+        'RIDER' => 'rider_notification_sounds',
+        default => 'notification_sounds',
+    };
+    $messagesUrl = match (strtoupper((string) $notificationUser?->account_type)) {
+        'SELLER' => route('seller.messages'),
+        'ADMIN' => route('admin.messages'),
+        'LOGISTICS' => route('logistics.messages'),
+        'RIDER' => route('rider.messages'),
+        default => route('buyer.messages'),
+    };
+    $notificationSoundsEnabled = (bool) data_get($notificationUser?->notification_preferences, $notificationSoundKey, true);
 @endphp
+
+<script>window.LIKHAE_NOTIFICATION_SOUND_CONFIG = @json(['userId' => $notificationUser?->id, 'enabled' => $notificationSoundsEnabled]); window.LIKHAE_MESSAGES_URL = @json($messagesUrl);</script>
 
 <section id="notificationPopover" class="lk-notification-popover" data-notification-popover hidden aria-label="Notifications">
     <div class="lk-notification-popover__head">
@@ -108,6 +125,11 @@
         .lk-notification-popover__copy strong { overflow: hidden; color: var(--notification-text); font-size: 12px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
         .lk-notification-popover__copy span { display: -webkit-box; overflow: hidden; margin-top: 3px; color: var(--notification-muted); font-size: 11px; line-height: 1.32; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
         .lk-notification-popover__copy small { margin-top: 4px; color: var(--notification-muted); font-size: 10px; }
+        .lk-audio-unlock-prompt { position: fixed; right: 18px; bottom: 18px; z-index: 1100; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 36px); border: 1px solid #d9b7aa; border-radius: 12px; background: #fffdf9; padding: 10px 12px; color: #493027; box-shadow: 0 14px 34px rgba(86,28,23,.18); font: 600 12px system-ui,sans-serif; }
+        .lk-audio-unlock-prompt button { border: 0; border-radius: 8px; background: #8f382d; padding: 7px 10px; color: #fff; font: 700 11px system-ui,sans-serif; cursor: pointer; }
+        .lk-audio-unlock-prompt button:hover { background: #6f2921; }
+        html.dark .lk-audio-unlock-prompt { border-color: #5a443c; background: #241b18; color: #f7eee9; }
+        html.dark .lk-audio-unlock-prompt button { background: #a84538; }
         .lk-notification-popover__empty { display: grid; justify-items: center; gap: 5px; padding: 33px 20px; text-align: center; }
         .lk-notification-popover__empty svg { width: 29px; height: 29px; margin-bottom: 4px; fill: none; stroke: var(--notification-muted); stroke-width: 1.5; }
         .lk-notification-popover__empty strong { font-size: 13px; }

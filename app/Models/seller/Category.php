@@ -17,11 +17,15 @@ class Category extends Model
         'slug',
         'description',
         'is_active',
+        'archived_at',
     ];
 
     protected function casts(): array
     {
-        return ['is_active' => 'boolean'];
+        return [
+            'is_active' => 'boolean',
+            'archived_at' => 'datetime',
+        ];
     }
 
     public function parent(): BelongsTo

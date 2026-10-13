@@ -1,5 +1,8 @@
 import { initializeParcelScanners } from '../shared/parcel-scanner';
 import '../address/forms.js';
+import '../shared/echo.js';
+import '../shared/messages.js';
+import '../shared/notification-sounds.js';
 
 document.addEventListener('DOMContentLoaded', () => {
 

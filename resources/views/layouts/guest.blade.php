@@ -2,17 +2,21 @@
 <!doctype html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 <head>
+    <x-likhae-favicon />
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $pageTitle }} &middot; LIKHAE Marketplace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    @if(request()->routeIs('home'))
+        <link rel="preload" as="image" href="{{ asset('images/Warm Mediterranean Still Life with Terracotta Accents.webp') }}" type="image/webp" fetchpriority="high">
+    @endif
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,700;0,800;1,700&family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --lk-ed-hero-bg: url("{{ asset('images/hero-bg.png') }}");
-            --lk-ed-promo-bg: url("{{ asset('images/hero-marketplace.png') }}");
+            --lk-ed-hero-bg: image-set(url("{{ asset('images/hero-bg.webp') }}") type("image/webp"), url("{{ asset('images/hero-bg.png') }}") type("image/png"));
+            --lk-ed-promo-bg: image-set(url("{{ asset('images/hero-marketplace.webp') }}") type("image/webp"), url("{{ asset('images/hero-marketplace.png') }}") type("image/png"));
         }
     </style>
     @vite(['resources/css/Buyer/buyer.css', 'resources/js/Buyer/buyer.js'])

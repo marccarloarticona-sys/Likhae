@@ -32,7 +32,6 @@
 @endphp
 
 @push('head')
-@vite('resources/js/shared/messages.js')
 <style>
     :root {
         --lk-bg: #FBF7F2;
@@ -59,12 +58,14 @@
 
     .lk-messages-page {
         display: grid;
+        min-height: 0;
         gap: 22px;
     }
 
     .lk-messages-shell {
         display: grid;
-        min-height: 620px;
+        height: max(280px, min(720px, calc(100dvh - 205px)));
+        min-height: 0;
         overflow: hidden;
 
         border: 1px solid var(--lk-border);
@@ -83,6 +84,7 @@
     .lk-messages-sidebar {
         display: flex;
         min-width: 0;
+        min-height: 0;
         flex-direction: column;
 
         border-bottom: 1px solid var(--lk-border);
@@ -101,6 +103,7 @@
     .lk-messages-sidebar-head,
     .lk-chat-head,
     .lk-chat-form {
+        flex: 0 0 auto;
         border-color: var(--lk-border);
         background: rgba(255, 253, 249, 0.9);
     }
@@ -124,8 +127,10 @@
     }
 
     .lk-conversation-list {
+        min-height: 0;
         flex: 1;
         overflow-y: auto;
+        overscroll-behavior: contain;
     }
 
     .lk-conversation-item {
@@ -214,8 +219,9 @@
     .lk-chat-area {
         display: flex;
         min-width: 0;
-        min-height: 520px;
+        min-height: 0;
         flex-direction: column;
+        overflow: hidden;
         background: var(--lk-bg-soft);
     }
 
@@ -280,8 +286,11 @@
     }
 
     .lk-chat-stream {
+        min-height: 0;
         flex: 1;
         overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
 
         padding: 20px;
 
@@ -533,6 +542,21 @@
         }
     }
 
+    @media (max-width: 1023px) {
+        .lk-messages-shell {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: minmax(118px, 30%) minmax(0, 1fr);
+        }
+    }
+
+    body:has(.lk-messages-page) {
+        overflow: hidden;
+    }
+
+    body:has(.lk-messages-page) .lk-footer {
+        display: none;
+    }
+
     html.dark .lk-messages-shell,
     html.dark .lk-messages-sidebar,
     html.dark .lk-chat-area,
@@ -677,6 +701,7 @@
                 <div
                     id="chatMessages"
                     class="lk-chat-stream"
+                    data-message-thread
                     data-conversation-id="{{ $activeSeller['conversation_id'] ?? '' }}"
                     data-stream-url="{{ route('buyer.messages.stream', ['seller_id' => $activeSeller['id']]) }}"
                     data-current-user-id="{{ auth()->id() }}"
@@ -779,7 +804,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const list = document.getElementById('chatMessages');
     const form = document.getElementById('chatForm');
     const input = form?.querySelector('[data-chat-input]');
-    const sendButton = form?.querySelector('[type="submit"]');
     if (!list) return;
 
     const initialRows = [...list.querySelectorAll('[data-message-id]')];
@@ -795,10 +819,29 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastId = Math.max(0, ...[...seen].map((id) => Number(id) || 0));
 
     const scrollBottom = () => { list.scrollTop = list.scrollHeight; };
-    let sending = false;
+    const hasMessage = (id) => seen.has(id) || [...list.querySelectorAll('[data-message-id]')]
+        .some((row) => row.dataset.messageId === id);
+    const reconcilePending = (message) => {
+        const body = String(message.body || '').trim();
+        const senderId = String(message.sender_id || message.sender_user_id || list.dataset.currentUserId || '');
+        const pending = [...list.querySelectorAll('[data-message-pending="true"]')].find((row) =>
+            row.querySelector('.lk-message-bubble')?.textContent?.trim() === body
+            && String(row.dataset.messageSenderId || '') === senderId
+        );
+        if (!pending || !message.id) return false;
+
+        pending.dataset.messageId = String(message.id);
+        pending.dataset.messagePending = 'false';
+        pending.querySelector('.lk-message-time').textContent = message.time || 'Just now';
+        seen.add(String(message.id));
+        lastId = Math.max(lastId, Number(message.id) || 0);
+        return true;
+    };
+    const removePending = (id) => list.querySelector(`[data-message-id="${id}"]`)?.remove();
     const appendMessage = (message) => {
         const id = String(message.id || '');
-        if (!id || seen.has(id)) return;
+        if (!message.pending && reconcilePending(message)) return;
+        if (!id || hasMessage(id)) return;
         seen.add(id);
         lastId = Math.max(lastId, Number(id) || 0);
         list.querySelector('.lk-messages-empty')?.remove();
@@ -806,6 +849,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const row = document.createElement('div');
         row.className = `lk-message-row${message.from_me ? ' is-buyer' : ''}`;
         row.dataset.messageId = id;
+        row.dataset.messageSenderId = String(message.sender_id || message.sender_user_id || list.dataset.currentUserId || '');
+        if (message.pending) row.dataset.messagePending = 'true';
 
         if (!message.from_me) {
             const avatar = document.createElement('img');
@@ -821,7 +866,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bubble.textContent = message.body || '';
         const time = document.createElement('span');
         time.className = 'lk-message-time';
-        time.textContent = message.time || 'Just now';
+        time.textContent = message.pending ? 'Sending…' : (message.time || 'Just now');
         wrapper.appendChild(bubble);
         wrapper.appendChild(time);
         row.appendChild(wrapper);
@@ -834,12 +879,22 @@ document.addEventListener('DOMContentLoaded', () => {
     form?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const body = input?.value.trim();
-        if (!body || sending) return;
-        sending = true;
-        if (sendButton) sendButton.disabled = true;
+        if (!body) return;
 
         const payload = new FormData(form);
+        const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        appendMessage({
+            id: pendingId,
+            sender_id: list.dataset.currentUserId,
+            body,
+            from_me: true,
+            pending: true,
+        });
+        input.value = '';
+        input.focus();
         try {
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), 10000);
             const response = await fetch(form.action, {
                 method: 'POST',
                 body: payload,
@@ -847,18 +902,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     Accept: 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
                 },
+                cache: 'no-store',
+                signal: controller.signal,
             });
+            window.clearTimeout(timeout);
 
             if (!response.ok) throw new Error('Message failed');
             const data = await response.json();
             appendMessage(data.message);
             window.lkSubscribeMessageThread?.(list, data.message);
-            input.value = '';
         } catch (error) {
+            removePending(pendingId);
             window.lkBuyerToast?.('Message could not be sent. Please try again.');
-        } finally {
-            sending = false;
-            if (sendButton) sendButton.disabled = false;
         }
     });
 });

@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Admin\CommissionTransaction;
+use App\Models\Finance\SellerSettlement;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\Voucher;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Reports\SellerReportPdfService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -31,6 +33,26 @@ class SellerOperationsController extends Controller
             'completed' => (clone $orders)->where('status', 'COMPLETED')->count(),
             'sales' => (float) (clone $orders)->where('status', 'COMPLETED')->sum('grand_total'),
         ];
+        $settlementSummary = [
+            'schema_ready' => false,
+            'pending' => 0.0,
+            'authorized' => 0.0,
+            'paid' => 0.0,
+            'outstanding' => 0.0,
+            'review_required' => 0,
+        ];
+        $financeSchema = app(FinanceSchemaReadiness::class);
+        if ($financeSchema->step7Ready()) {
+            $settlements = SellerSettlement::query()->where('seller_profile_id', $seller->id);
+            $settlementSummary = [
+                'schema_ready' => true,
+                'pending' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
+                'authorized' => (float) (clone $settlements)->where('payout_status', 'AUTHORIZED')->sum('seller_payable'),
+                'paid' => (float) (clone $settlements)->where('payout_status', 'PAID')->sum('payout_amount'),
+                'outstanding' => (float) (clone $settlements)->where('payout_status', '!=', 'PAID')->sum('outstanding_balance'),
+                'review_required' => (clone $settlements)->where('payout_status', 'REVIEW_REQUIRED')->count(),
+            ];
+        }
 
         $recentOrders = (clone $orders)
             ->with(['order.buyer', 'items', 'shipment'])
@@ -114,6 +136,7 @@ class SellerOperationsController extends Controller
             'salesChart' => $salesChart,
             'sellerOrders' => $sellerOrders,
             'inventoryAlerts' => $inventoryAlerts,
+            'settlementSummary' => $settlementSummary,
         ]);
     }
 
@@ -258,6 +281,25 @@ class SellerOperationsController extends Controller
             })
             ->whereBetween('created_at', [$from, $to])
             ->sum('commission_amount');
+        $settlementSummary = [
+            'original_product_amount' => 0.0,
+            'discounts' => 0.0,
+            'seller_payable' => 0.0,
+            'settled_payouts' => 0.0,
+            'outstanding_balance' => 0.0,
+            'pending_settlement' => 0.0,
+        ];
+        if (app(FinanceSchemaReadiness::class)->step7Ready()) {
+            $settlements = SellerSettlement::query()->where('seller_profile_id', $sellerId)->whereBetween('created_at', [$from, $to]);
+            $settlementSummary = [
+                'original_product_amount' => (float) (clone $settlements)->sum('original_product_amount'),
+                'discounts' => (float) (clone $settlements)->sum('discount_amount'),
+                'seller_payable' => (float) (clone $settlements)->whereNotNull('seller_payable')->sum('seller_payable'),
+                'settled_payouts' => (float) (clone $settlements)->where('payout_status', 'PAID')->sum('payout_amount'),
+                'outstanding_balance' => (float) (clone $settlements)->sum('outstanding_balance'),
+                'pending_settlement' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'AUTHORIZED', 'REVIEW_REQUIRED'])->count(),
+            ];
+        }
         $performance = [
             'high' => $products->where('tier', 'high')->count(),
             'mid' => $products->where('tier', 'mid')->count(),
@@ -274,6 +316,7 @@ class SellerOperationsController extends Controller
             'completion_rate' => $orders->isEmpty() ? 0 : (int) round(($completedOrders->count() / $orders->count()) * 100),
             'cancellation_rate' => $orders->isEmpty() ? 0 : (int) round(($orders->where('status', 'CANCELLED')->count() / $orders->count()) * 100),
             'average_order' => $orders->isEmpty() ? 0 : $gross / $orders->count(),
+            ...$settlementSummary,
         ];
         $scope = $selectedProduct ? 'Single product: '.$selectedProduct->name : 'All catalog products';
 

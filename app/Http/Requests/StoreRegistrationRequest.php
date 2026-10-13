@@ -3,6 +3,8 @@
 namespace App\Http\Requests;
 
 use App\Models\User;
+use App\Models\Logistics\LogisticsCenter;
+use App\Support\RiderVehicleType;
 use Carbon\Carbon;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -119,7 +121,7 @@ class StoreRegistrationRequest extends FormRequest
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
 
             'business_name' => $businessNameRules,
-            'line_of_business' => [Rule::requiredIf($isSeller), 'nullable', 'integer', Rule::exists('categories', 'id')->where('is_active', true)],
+            'line_of_business' => [Rule::requiredIf($isSeller), 'nullable', 'integer', Rule::exists('categories', 'id')->where('is_active', true)->whereNull('archived_at')],
             'seller_type' => [Rule::requiredIf($isSeller), 'nullable', Rule::in(['individual', 'sole_proprietorship', 'corporation'])],
             'tin' => $tinRules,
             'business_registration_number' => $businessRegistrationRules,
@@ -131,7 +133,7 @@ class StoreRegistrationRequest extends FormRequest
                 'integer',
                 Rule::exists('logistics_centers', 'id')->where('status', 'ACTIVE'),
             ],
-            'vehicle_type' => [Rule::requiredIf($isRider), 'nullable', Rule::in(['motorcycle', 'car', 'van', 'truck'])],
+            'vehicle_type' => [Rule::requiredIf($isRider), 'nullable', Rule::in(RiderVehicleType::acceptedValues())],
             'plate_number' => [
                 Rule::requiredIf($isRider),
                 'nullable',
@@ -178,6 +180,30 @@ class StoreRegistrationRequest extends FormRequest
 
             if ((int) $this->input('age') !== $calculated) {
                 $validator->errors()->add('age', 'The age must match the selected birthday.');
+            }
+        }, function (Validator $validator): void {
+            if (strtolower((string) $this->input('account_type')) !== 'rider') {
+                return;
+            }
+
+            $provinceCode = trim((string) $this->input('province_code'));
+            $municipalityCode = trim((string) $this->input('municipality_code'));
+            $centerId = (int) $this->input('target_logistics_center_id');
+
+            if ($provinceCode === '' || $municipalityCode === '' || $centerId <= 0) {
+                return;
+            }
+
+            $eligible = LogisticsCenter::query()
+                ->eligibleForRiderAddress($provinceCode, $municipalityCode)
+                ->whereKey($centerId)
+                ->exists();
+
+            if (! $eligible) {
+                $validator->errors()->add(
+                    'target_logistics_center_id',
+                    'Select an active logistics hub in the same province and municipality as your registered address.',
+                );
             }
         }];
     }
