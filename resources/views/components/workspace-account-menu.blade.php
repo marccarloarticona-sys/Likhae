@@ -79,7 +79,7 @@
     <div class="workspace-account__panel">
         <a class="workspace-account__link" href="{{ route($profileRoute) }}">Account settings</a>
         <div class="workspace-account__divider"></div>
-        <form method="POST" action="{{ route('logout') }}">
+        <form method="POST" action="{{ route('logout') }}" data-confirm-title="Log out?" data-confirm-message="You will be signed out of your LIKHAE account." data-confirm-label="Log out">
             @csrf
             <button type="submit" class="workspace-account__logout">Sign out</button>
         </form>

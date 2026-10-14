@@ -73,7 +73,7 @@
                 @endif
             </div>
             @if(in_array($product->status, ['ACTIVE', 'SUSPENDED'], true))
-                <form class="ad-product-moderation-form" method="POST" action="{{ route('admin.products.moderate', ['product' => $product->id]) }}" onsubmit="return confirm('Apply this product moderation change?');">
+                <form class="ad-product-moderation-form" method="POST" action="{{ route('admin.products.moderate', ['product' => $product->id]) }}" data-confirm-title="Apply moderation change?" data-confirm-message="This will update the product's marketplace availability." data-confirm-label="Apply change">
                     @csrf
                     <label class="ad-field">
                         <span>Moderation status</span>
@@ -99,7 +99,7 @@
                 <div class="ad-card-head" style="padding:0 0 12px;border-bottom:1px solid var(--ad-border);">
                     <div><span class="ad-overline">Seller compliance</span><h2>Warn Seller</h2><p>Record the correction required while keeping the product active.</p></div>
                 </div>
-                <form class="ad-product-warning-form" method="POST" action="{{ route('admin.products.warn', ['product' => $product->id]) }}" onsubmit="return confirm('Confirm this warning for the Seller?');" style="padding-top:14px;">
+                <form class="ad-product-warning-form" method="POST" action="{{ route('admin.products.warn', ['product' => $product->id]) }}" data-confirm-title="Send warning to seller?" data-confirm-message="Send this warning to the seller about the product listing?" data-confirm-label="Send warning" style="padding-top:14px;">
                     @csrf
                     <label class="ad-field">
                         <span>Warning category</span>

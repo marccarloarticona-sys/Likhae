@@ -54,7 +54,7 @@
             @if($managedAccount && in_array($status, ['active', 'suspended'], true))
                 @php($suspended = $status === 'suspended')
                 <p>{{ $suspended ? 'Reactivate this account to let the user sign in again.' : 'Suspending this account blocks sign-in and access to its workspace.' }}</p>
-                <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" onsubmit="return confirm('Apply this account access change?')">
+                <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" @if(!$suspended) data-confirm-tone="danger" @endif>
                     @csrf
                     <label class="ad-field">
                         <span>{{ $suspended ? 'Reason for reactivation' : 'Reason for suspension' }}</span>

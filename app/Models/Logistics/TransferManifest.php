@@ -25,7 +25,8 @@ class TransferManifest extends Model
         'manifest_number', 'origin_logistics_center_id', 'destination_logistics_center_id', 'status',
         'created_by_user_id', 'assigned_driver_rider_profile_id', 'driver_accepted_by_user_id', 'driver_accepted_at', 'sealed_by_user_id', 'sealed_at',
         'released_by_user_id', 'released_at', 'departed_at', 'arrived_at', 'received_by_user_id',
-        'received_at', 'cancelled_at', 'notes', 'exception_notes',
+        'received_at', 'cancelled_at', 'notes', 'exception_notes', 'transfer_commission_type',
+        'transfer_commission_value', 'transfer_commission_base', 'transfer_commission_amount',
     ];
 
     protected function casts(): array
@@ -33,6 +34,8 @@ class TransferManifest extends Model
         return [
             'sealed_at' => 'datetime', 'released_at' => 'datetime', 'departed_at' => 'datetime',
             'arrived_at' => 'datetime', 'received_at' => 'datetime', 'cancelled_at' => 'datetime', 'driver_accepted_at' => 'datetime',
+            'transfer_commission_value' => 'decimal:4', 'transfer_commission_base' => 'decimal:2',
+            'transfer_commission_amount' => 'decimal:2',
         ];
     }
 

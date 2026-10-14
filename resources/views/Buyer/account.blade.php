@@ -374,7 +374,7 @@
                                                 <div class="flex justify-end sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                                             </form>
                                         </details>
-                                        <form method="POST" action="{{ route('buyer.account.addresses.destroy', ['address' => $address->id]) }}" onsubmit="return confirm('Delete this saved address?');">
+                                        <form method="POST" action="{{ route('buyer.account.addresses.destroy', ['address' => $address->id]) }}" data-confirm-title="Delete saved address?" data-confirm-message="This saved address will be removed from your account." data-confirm-label="Delete address" data-confirm-tone="danger">
                                             @csrf @method('DELETE')
                                             <button type="submit" class="rounded-lg px-2 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100">Delete</button>
                                         </form>
@@ -573,7 +573,7 @@
                             </p>
                         </div>
 
-                        <form method="POST" action="{{ route('buyer.account.destroy') }}" class="mt-6 max-w-xl space-y-5" data-buyer-delete-form>
+                        <form method="POST" action="{{ route('buyer.account.destroy') }}" class="mt-6 max-w-xl space-y-5" data-buyer-delete-form data-confirm-title="Deactivate your account?" data-confirm-message="Your account will be deactivated and you will be signed out. Historical orders will be retained." data-confirm-label="Deactivate account" data-confirm-tone="danger">
                             @csrf
                             @method('DELETE')
 

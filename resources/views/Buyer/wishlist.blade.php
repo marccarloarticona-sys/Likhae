@@ -709,7 +709,7 @@
                 </span>
             </div>
 
-            <form method="POST" action="{{ route('buyer.wishlist.clear') }}" onsubmit="return confirm('Clear your entire wishlist?');">
+            <form method="POST" action="{{ route('buyer.wishlist.clear') }}" data-confirm-title="Clear wishlist?" data-confirm-message="All saved products will be removed from your wishlist." data-confirm-label="Clear wishlist" data-confirm-tone="danger">
                 @csrf
                 @method('DELETE')
                 <button type="submit" class="lk-wishlist-clear">

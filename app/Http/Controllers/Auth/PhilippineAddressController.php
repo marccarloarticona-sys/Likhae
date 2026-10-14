@@ -27,6 +27,15 @@ class PhilippineAddressController extends Controller
         return $this->respond(function () use ($region) {
             $provinces = $this->list('/regions/'.rawurlencode($region).'/provinces');
 
+            // Lucena is a city in Quezon for this address form. The PSA source
+            // also lists its independent-city record at province level, so
+            // omit that duplicate parent entry; it is added under Quezon in
+            // the municipalities list below.
+            $provinces = collect($provinces)
+                ->reject(fn (array $row) => (string) ($row['code'] ?? '') === '0431200000')
+                ->values()
+                ->all();
+
             if ($provinces !== []) {
                 return $provinces;
             }
@@ -78,7 +87,8 @@ class PhilippineAddressController extends Controller
         $provinceName = trim((string) $request->query('province_name', ''));
         $municipalityName = trim((string) $request->query('municipality_name', ''));
 
-        $postalCode = $this->resolvePostalCode($municipalityCode, $provinceName, $municipalityName);
+        $provinceCode = trim((string) $request->query('province', ''));
+        $postalCode = $this->resolvePostalCode($municipalityCode, $provinceName, $municipalityName, $provinceCode);
 
         if ($postalCode === null) {
             return response()->json([
@@ -146,7 +156,7 @@ class PhilippineAddressController extends Controller
         string $provinceName = '',
         string $municipalityName = ''
     ): ?string {
-        return (new self)->resolvePostalCode($municipality, $provinceName, $municipalityName);
+        return (new self)->resolvePostalCode($municipality, $provinceName, $municipalityName, $province);
     }
 
     private function respond(callable $callback): JsonResponse
@@ -303,8 +313,20 @@ class PhilippineAddressController extends Controller
         return ltrim(substr($code, 5, 2), '0') ?: $code;
     }
 
-    private function resolvePostalCode(string $municipalityCode, string $provinceName, string $municipalityName): ?string
+    private function resolvePostalCode(string $municipalityCode, string $provinceName, string $municipalityName, string $provinceCode = ''): ?string
     {
+        $byCode = config('philippine_postal_codes.by_code', []);
+        $codeKey = $this->postalLocationCodeKey($provinceCode, $municipalityCode);
+        if ($codeKey !== null && isset($byCode[$codeKey])) {
+            return (string) $byCode[$codeKey];
+        }
+
+        $byName = config('philippine_postal_codes.by_name', []);
+        $key = $this->normalizePostalName($provinceName).'|'.$this->normalizePostalName($municipalityName);
+        if (isset($byName[$key])) {
+            return (string) $byName[$key];
+        }
+
         if ($municipalityCode !== '') {
             try {
                 $cacheKey = 'psgc-cloud-v1-postal:'.$municipalityCode;
@@ -322,12 +344,35 @@ class PhilippineAddressController extends Controller
             }
         }
 
-        $byName = config('philippine_postal_codes.by_name', []);
-        $key = Str::of($provinceName)->lower()->replaceMatches('/\s+/', ' ')->trim()
-            ->append('|')
-            ->append(Str::of($municipalityName)->lower()->replaceMatches('/\s+/', ' ')->trim())
-            ->toString();
+        return null;
+    }
 
-        return isset($byName[$key]) ? (string) $byName[$key] : null;
+    private function postalLocationCodeKey(string $provinceCode, string $municipalityCode): ?string
+    {
+        if (preg_match('/^(\d+)-(\d+)$/', $municipalityCode, $match)) {
+            return ((int) $match[1]).'-'.((int) $match[2]);
+        }
+
+        if (preg_match('/^\d{10}$/', $municipalityCode)) {
+            return ((int) substr($municipalityCode, 2, 3)).'-'.((int) substr($municipalityCode, 5, 2));
+        }
+
+        if ($provinceCode !== '' && ctype_digit($provinceCode) && ctype_digit($municipalityCode)) {
+            $province = preg_match('/^\d{10}$/', $provinceCode)
+                ? (int) substr($provinceCode, 2, 3)
+                : (int) $provinceCode;
+            return $province.'-'.((int) $municipalityCode);
+        }
+
+        return null;
+    }
+
+    private function normalizePostalName(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->replaceMatches('/\s+/', ' ')
+            ->trim();
     }
 }

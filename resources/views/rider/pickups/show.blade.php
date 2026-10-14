@@ -42,13 +42,13 @@
             <h2 class="text-lg font-bold text-ink">Pickup Actions</h2>
             <div class="mt-5 grid gap-3">
                 @if($pickup['status'] === 'ASSIGNED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Accept pickup assignment?" data-confirm-message="Accept responsibility for collecting this parcel?" data-confirm-label="Accept pickup">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
                 @elseif($pickup['status'] === 'ACCEPTED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Start pickup?" data-confirm-message="Mark this pickup as in progress?" data-confirm-label="Start pickup">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
                 @elseif($pickup['status'] === 'IN_PROGRESS')
                     @if($verified)
                         <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">Parcel Verified: {{ $pickup['tracking'] }}</div>
-                        <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="pickup_complete"><input type="hidden" name="scan_method" value="{{ $scanMethod }}"><input type="hidden" name="scanned_code" value="{{ $pickup['tracking'] }}"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Confirm Picked Up</button></form>
+                        <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Confirm parcel pickup?" data-confirm-message="Confirm that you have physically collected the verified parcel from the seller?" data-confirm-label="Confirm pickup">@csrf @method('PATCH')<input type="hidden" name="action" value="pickup_complete"><input type="hidden" name="scan_method" value="{{ $scanMethod }}"><input type="hidden" name="scanned_code" value="{{ $pickup['tracking'] }}"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Confirm Picked Up</button></form>
                     @else
                         <p class="text-sm text-muted">Scan and verify the seller's waybill below before confirming collection.</p>
                     @endif

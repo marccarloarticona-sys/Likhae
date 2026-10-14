@@ -39,11 +39,11 @@
             <h2 class="text-lg font-bold text-ink">Delivery Actions</h2>
             <div class="mt-5 grid gap-3">
                 @if($parcel['status'] === 'ASSIGNED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Delivery</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Accept delivery assignment?" data-confirm-message="Accept responsibility for delivering this parcel?" data-confirm-label="Accept delivery">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Delivery</button></form>
                 @elseif($parcel['status'] === 'ACCEPTED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Start delivery?" data-confirm-message="Mark this delivery as in progress?" data-confirm-label="Start delivery">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-confirm-title="Confirm delivery?" data-confirm-message="Submit this proof and mark the parcel as delivered?" data-confirm-label="Complete delivery">
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
                         <label class="grid gap-2 text-sm font-semibold text-ink">

@@ -69,7 +69,7 @@ export function initializeParcelScanners() {
                     method.value = result.getBarcodeFormat() === BarcodeFormat.QR_CODE ? 'QR' : 'BARCODE';
                     message.textContent = `Detected tracking: ${input.value}`;
                     stopCamera();
-                    form.requestSubmit();
+                    form?.requestSubmit();
                 });
                 message.textContent = 'Point the camera at the waybill code.';
             } catch (error) {

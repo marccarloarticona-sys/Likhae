@@ -559,6 +559,8 @@ class AdminOperationsController extends Controller
                 'platform_name' => PlatformSetting::valueOf('platform_name', 'LIKHAE'),
                 'support_email' => PlatformSetting::valueOf('support_email', ''),
                 'commission_rate' => PlatformSetting::commissionRate(),
+                'transfer_commission_type' => PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'),
+                'transfer_commission_value' => PlatformSetting::valueOf('transfer_commission_value', 0),
                 'registration_enabled' => (bool) PlatformSetting::valueOf('registration_enabled', true),
             ],
             'policies' => PlatformPolicy::latest()->get(),
@@ -1092,9 +1094,18 @@ class AdminOperationsController extends Controller
     {
         $data = $request->validate([
             'commission_rate' => ['required', 'numeric', 'in:0.10'],
+            'transfer_commission_type' => ['required', Rule::in(['PERCENT', 'FIXED'])],
+            'transfer_commission_value' => ['required', 'numeric', 'min:0', 'max:10000'],
             'registration_enabled' => ['required', 'boolean'],
         ]);
+        if ($data['transfer_commission_type'] === 'PERCENT' && (float) $data['transfer_commission_value'] > 100) {
+            return back()
+                ->withErrors(['transfer_commission_value' => 'The transfer commission percentage cannot exceed 100%.'])
+                ->withInput();
+        }
         PlatformSetting::put('commission_rate', $data['commission_rate'], 'decimal', $request->user()->id);
+        PlatformSetting::put('transfer_commission_type', $data['transfer_commission_type'], 'string', $request->user()->id);
+        PlatformSetting::put('transfer_commission_value', $data['transfer_commission_value'], 'decimal', $request->user()->id);
         PlatformSetting::put('registration_enabled', (bool) $data['registration_enabled'], 'boolean', $request->user()->id);
 
         return back()->with('status', 'Settings updated.');

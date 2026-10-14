@@ -72,10 +72,10 @@
             $returnRequest = $actionState['latest_request'] ?? null;
         @endphp
         <div class="lk-order-actions mt-5">
-            @if(!$hasPickedUpParcel && in_array($selectedOrder->status, ['PLACED', 'PROCESSING'], true))<form method="POST" action="{{ route('buyer.orders.cancel', $selectedOrder) }}">@csrf<button class="lk-btn lk-btn-light" type="submit">Cancel Order</button></form>@endif
+            @if(!$hasPickedUpParcel && in_array($selectedOrder->status, ['PLACED', 'PROCESSING'], true))<form method="POST" action="{{ route('buyer.orders.cancel', $selectedOrder) }}" data-confirm-title="Cancel this order?" data-confirm-message="This will cancel the order and begin any applicable refund process." data-confirm-label="Cancel order" data-confirm-tone="danger">@csrf<button class="lk-btn lk-btn-light" type="submit">Cancel Order</button></form>@endif
             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}">Return / Refund</a>@endif
             @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
-            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
+            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" data-confirm-title="Confirm order received?" data-confirm-message="Confirm that you received every parcel. This will complete the order and enable product reviews." data-confirm-label="Confirm received" data-confirm-set-field="confirm_receipt">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
         </div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 class="text-lg font-bold text-stone-900">Order and payment information</h2>
@@ -197,7 +197,7 @@
                         <div class="lk-order-card-actions">
                             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Return / Refund</a>@endif
                             @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
-                            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $order) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
+                            @if($actionState['can_confirm_received'])<form method="POST" action="{{ route('buyer.orders.received', $order) }}" data-confirm-title="Confirm order received?" data-confirm-message="Confirm that you received every parcel. This will complete the order and enable product reviews." data-confirm-label="Confirm received" data-confirm-set-field="confirm_receipt">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@endif
                             <a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
                         </div>
                     </div>

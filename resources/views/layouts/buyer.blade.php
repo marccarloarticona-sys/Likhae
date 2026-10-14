@@ -35,6 +35,7 @@
     </div>
     <div id="lkBuyerToast" class="lk-toast" aria-live="polite" aria-atomic="true"></div>
     <x-notification-popover />
+    @include('partials.confirm-action-modal')
     @if(data_get(auth()->user()?->notification_preferences, 'ai_assistant_enabled', true))
         <x-buyer.ai-assistant :page="$activePage" :page-title="$pageTitle" />
     @endif

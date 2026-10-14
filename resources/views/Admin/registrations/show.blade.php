@@ -126,7 +126,7 @@
                                 @csrf
                                 <button class="ad-btn ad-btn-secondary" type="submit">Mark verified</button>
                             </form>
-                            <form method="POST" action="{{ route('admin.registrations.documents.reject', [$application, $document]) }}" style="display:grid;gap:8px;">
+                            <form method="POST" action="{{ route('admin.registrations.documents.reject', [$application, $document]) }}" style="display:grid;gap:8px;" data-confirm-title="Reject this document?" data-confirm-message="Reject the uploaded document using the reason entered above?" data-confirm-label="Reject document" data-confirm-tone="danger">
                                 @csrf
                                 <textarea name="reason" maxlength="1000" placeholder="Reason for rejecting this document" required></textarea>
                                 <button class="ad-btn ad-btn-danger-soft" type="submit">Reject document</button>
@@ -144,13 +144,13 @@
         <div class="ad-card ad-card-body">
             <h2>Decision</h2>
             <div style="display:grid;gap:16px;margin-top:16px;">
-                <form method="POST" action="{{ route('admin.registrations.approve', $application) }}" style="display:grid;gap:10px;">
+                <form method="POST" action="{{ route('admin.registrations.approve', $application) }}" style="display:grid;gap:10px;" data-confirm-title="Approve registration?" data-confirm-message="Approving will activate this user's LIKHAE account." data-confirm-label="Approve">
                     @csrf
                     <textarea name="decision_notes" maxlength="1000" placeholder="Optional approval notes"></textarea>
                     <button class="ad-btn ad-btn-primary" type="submit">Approve Registration</button>
                 </form>
 
-                <form method="POST" action="{{ route('admin.registrations.reject', $application) }}" style="display:grid;gap:10px;">
+                <form method="POST" action="{{ route('admin.registrations.reject', $application) }}" style="display:grid;gap:10px;" data-confirm-title="Reject registration?" data-confirm-message="This application will be rejected using the reason entered above." data-confirm-label="Reject" data-confirm-tone="danger">
                     @csrf
                     <textarea name="reason" maxlength="1000" placeholder="Required rejection reason" required></textarea>
                     <button class="ad-btn ad-btn-danger-soft" type="submit">Reject Registration</button>

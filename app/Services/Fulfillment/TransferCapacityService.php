@@ -27,7 +27,9 @@ final class TransferCapacityService
             || (int) $parcelCapacity < 1 || (float) $weightCapacity <= 0 || (float) $volumeCapacity <= 0) {
             throw new RuntimeException('The driver has no complete approved parcel, weight, and volume capacity.');
         }
-        if (count($parcelRows) > (int) $parcelCapacity) {
+        $vehicleParcelLimit = RiderVehicleType::interLogisticsParcelLimit($driver->vehicle_type);
+        $approvedParcelLimit = min((int) $parcelCapacity, $vehicleParcelLimit);
+        if (count($parcelRows) > $approvedParcelLimit) {
             throw new RuntimeException('The manifest exceeds the driver\'s approved parcel capacity.');
         }
 

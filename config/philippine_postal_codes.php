@@ -3,6 +3,7 @@
 return [
     'by_code' => [
         '34-24' => '4000',
+        '34-26' => '4009',
         '34-4' => '4033',
         '39-1' => '1000',
         '39-2' => '1100',
@@ -14,6 +15,8 @@ return [
     'by_name' => [
         'laguna|city of san pablo' => '4000',
         'laguna|san pablo city' => '4000',
+        'laguna|santa cruz' => '4009',
+        'laguna|sta cruz' => '4009',
         'laguna|bay' => '4033',
         'metro manila|city of manila' => '1000',
         'metropolitan manila|city of manila' => '1000',

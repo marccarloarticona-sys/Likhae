@@ -82,13 +82,13 @@ class RiderProfile extends Model
         return $this->hasMany(RiderEarning::class);
     }
 
-<<<<<<< HEAD
     public function moderationLogs(): HasMany
     {
         return $this->hasMany(AuditLog::class, 'auditable_id')
             ->where('auditable_type', self::class)
             ->latest('created_at');
-=======
+    }
+
     public function codCollections(): HasMany
     {
         return $this->hasMany(CodCollection::class);
@@ -97,7 +97,6 @@ class RiderProfile extends Model
     public function remittances(): HasMany
     {
         return $this->hasMany(RiderRemittance::class);
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
     }
 
     public function scopeActive(Builder $query): Builder

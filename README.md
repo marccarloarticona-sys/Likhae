@@ -41,7 +41,7 @@ The Windows/XAMPP production setup keeps Cloudflare Tunnel on port 8000 and uses
 ```powershell
 C:\xampp\php\php.exe artisan serve --host=127.0.0.1 --port=8001 --no-reload --likhae-internal
 C:\xampp\php\php.exe artisan reverb:start --host=0.0.0.0 --port=8080
-C:\xampp\apache\bin\httpd.exe -d C:/Users/mcarl/OneDrive/Documents/Likhae-working -f deploy/apache/likhae-reverse-proxy.conf
+php scripts/run-apache-proxy.php
 ```
 
 Registration sends a six-digit email verification code before an application can be submitted. For Gmail SMTP, configure these values in the local `.env` using a Google App Password (with two-step verification enabled):

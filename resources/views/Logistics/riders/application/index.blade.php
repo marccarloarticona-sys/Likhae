@@ -52,11 +52,11 @@
                     <a href="{{ route('logistics.riders.show', $rider['id']) }}" class="rounded-lg border border-line px-3 py-2 text-[9px] font-semibold text-ink">View</a>
 
                     @if($rider['status'] === 'Pending Approval')
-                        <form method="POST" action="{{ route('logistics.riders.approve', $rider['id']) }}">
+                        <form method="POST" action="{{ route('logistics.riders.approve', $rider['id']) }}" data-confirm-title="Approve rider application?" data-confirm-message="This will activate the rider account." data-confirm-label="Approve">
                             @csrf
                             <button type="submit" class="rounded-lg bg-success px-3 py-2 text-[9px] font-semibold text-white">Approve</button>
                         </form>
-                        <form method="POST" action="{{ route('logistics.riders.reject', $rider['id']) }}">
+                        <form method="POST" action="{{ route('logistics.riders.reject', $rider['id']) }}" data-confirm-title="Reject rider application?" data-confirm-message="This rider application will be rejected." data-confirm-label="Reject" data-confirm-tone="danger">
                             @csrf
                             <button type="submit" class="rounded-lg border border-danger/30 bg-surface px-3 py-2 text-[9px] font-semibold text-danger">Reject</button>
                         </form>

@@ -2,6 +2,7 @@
 
 namespace App\Services\Fulfillment;
 
+use App\Models\Admin\PlatformSetting;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Logistics\TransferManifest;
@@ -132,6 +133,7 @@ final class TransferManifestService
                 throw new RuntimeException('Only a draft manifest can be sealed.');
             }
             $this->assertManifestIntegrity($locked);
+            $this->snapshotTransferCommission($locked);
             $locked->update([
                 'status' => TransferManifest::SEALED,
                 'sealed_by_user_id' => $actor->id,
@@ -142,11 +144,11 @@ final class TransferManifestService
         });
     }
 
-    public function release(User $actor, TransferManifest $manifest): TransferManifest
+    public function release(User $actor, TransferManifest $manifest, array $scannedCodes, array $scanMethods): TransferManifest
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $manifest): TransferManifest {
+        return DB::transaction(function () use ($actor, $manifest, $scannedCodes, $scanMethods): TransferManifest {
             $locked = TransferManifest::query()->whereKey($manifest->id)->with('items.transferLeg')->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
             if ($locked->status === TransferManifest::RELEASED) {
@@ -156,7 +158,13 @@ final class TransferManifestService
                 throw new RuntimeException('Only a sealed manifest can be released.');
             }
             foreach ($locked->items as $item) {
-                $this->transfers->release($item->transferLeg, $actor, $item->transferLeg->shipment?->tracking_number ?? '');
+                $legId = (int) $item->transfer_leg_id;
+                $this->transfers->release(
+                    $item->transferLeg,
+                    $actor,
+                    (string) ($scannedCodes[$legId] ?? ''),
+                    (string) ($scanMethods[$legId] ?? 'MANUAL'),
+                );
             }
             $locked->update([
                 'status' => TransferManifest::RELEASED,
@@ -259,7 +267,7 @@ final class TransferManifestService
         });
     }
 
-    public function receiveItem(User $actor, TransferManifestItem $item, string $outcome, ?string $notes = null): TransferManifestItem
+    public function receiveItem(User $actor, TransferManifestItem $item, string $outcome, ?string $scannedCode = null, string $scanMethod = 'MANUAL', ?string $notes = null): TransferManifestItem
     {
         $this->assertReady();
         $outcome = strtoupper(trim($outcome));
@@ -267,7 +275,7 @@ final class TransferManifestService
             throw new RuntimeException('Unsupported manifest receipt outcome.');
         }
 
-        return DB::transaction(function () use ($actor, $item, $outcome, $notes): TransferManifestItem {
+        return DB::transaction(function () use ($actor, $item, $outcome, $scannedCode, $scanMethod, $notes): TransferManifestItem {
             $locked = TransferManifestItem::query()->whereKey($item->id)->with('manifest', 'transferLeg.shipment')->lockForUpdate()->firstOrFail();
             $manifest = TransferManifest::query()->whereKey($locked->manifest_id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $manifest->destination_logistics_center_id);
@@ -279,7 +287,7 @@ final class TransferManifestService
             }
 
             if ($outcome === TransferManifestItem::RECEIVED) {
-                $this->transfers->receive($locked->transferLeg, $actor, $locked->transferLeg->shipment?->tracking_number ?? '');
+                $this->transfers->receive($locked->transferLeg, $actor, (string) $scannedCode, $scanMethod);
                 $locked->update([
                     'status' => TransferManifestItem::RECEIVED,
                     'received_by_user_id' => $actor->id,
@@ -370,6 +378,27 @@ final class TransferManifestService
             'volume_liters' => $item->transferLeg?->shipment?->parcel_volume_liters,
         ]);
         $this->capacity->assertCapacity($driver, $rows);
+    }
+
+    private function snapshotTransferCommission(TransferManifest $manifest): void
+    {
+        $type = strtoupper((string) PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'));
+        $type = in_array($type, ['PERCENT', 'FIXED'], true) ? $type : 'PERCENT';
+        $value = max(0, (float) PlatformSetting::valueOf('transfer_commission_value', 0));
+        $shippingBase = (float) $manifest->items->sum(
+            fn (TransferManifestItem $item): float => (float) ($item->transferLeg?->shipment?->sellerOrder?->shipping_fee ?? 0),
+        );
+        $parcelCount = $manifest->items->count();
+        $amount = $type === 'PERCENT'
+            ? round($shippingBase * $value / 100, 2)
+            : round($parcelCount * $value, 2);
+
+        $manifest->update([
+            'transfer_commission_type' => $type,
+            'transfer_commission_value' => $value,
+            'transfer_commission_base' => round($shippingBase, 2),
+            'transfer_commission_amount' => $amount,
+        ]);
     }
 
     private function assertActorAtCenter(User $actor, int $centerId): void

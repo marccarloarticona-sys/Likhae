@@ -137,7 +137,19 @@ class TransferController extends Controller
     public function release(Request $request, int $manifest): RedirectResponse
     {
         $manifest = $this->loadManifest($manifest);
-        return $this->runAction($request, $manifest, fn () => $this->manifests->release($request->user(), $manifest), 'Manifest released with custody scans.');
+        $data = $request->validate([
+            'scanned_codes' => ['required', 'array', 'min:1'],
+            'scanned_codes.*' => ['required', 'string', 'max:150'],
+            'scan_methods' => ['required', 'array', 'min:1'],
+            'scan_methods.*' => ['required', 'in:QR,BARCODE,MANUAL'],
+        ]);
+
+        return $this->runAction(
+            $request,
+            $manifest,
+            fn () => $this->manifests->release($request->user(), $manifest, $data['scanned_codes'], $data['scan_methods']),
+            'Sender handover scans accepted and manifest released.',
+        );
     }
 
     public function depart(Request $request, int $manifest): RedirectResponse
@@ -166,10 +178,19 @@ class TransferController extends Controller
         $item = TransferManifestItem::query()->findOrFail($item);
         $data = $request->validate([
             'outcome' => ['required', 'in:RECEIVED,MISSING,DAMAGED'],
+            'scanned_code' => ['required_if:outcome,RECEIVED', 'nullable', 'string', 'max:150'],
+            'scan_method' => ['required_if:outcome,RECEIVED', 'nullable', 'in:QR,BARCODE,MANUAL'],
             'notes' => ['nullable', 'string', 'max:2000'],
         ]);
         try {
-            $this->manifests->receiveItem($request->user(), $item, $data['outcome'], $data['notes'] ?? null);
+            $this->manifests->receiveItem(
+                $request->user(),
+                $item,
+                $data['outcome'],
+                $data['scanned_code'] ?? null,
+                $data['scan_method'] ?? 'MANUAL',
+                $data['notes'] ?? null,
+            );
         } catch (RuntimeException $exception) {
             return back()->withErrors(['outcome' => $exception->getMessage()]);
         }

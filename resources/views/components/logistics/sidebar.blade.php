@@ -160,7 +160,7 @@
             </span>
             <span id="themeToggleBadge" style="display:inline-flex;min-height:21px;align-items:center;padding:0 9px;border-radius:9999px;background:#E3E3E2;color:#494644;font-size:7px;font-weight:900;white-space:nowrap;">OFF</span>
         </button>
-        <form method="POST" action="{{ route('logout') }}">
+        <form method="POST" action="{{ route('logout') }}" data-confirm-title="Log out?" data-confirm-message="You will be signed out of your LIKHAE account." data-confirm-label="Log out">
             @csrf
             <button type="submit" class="sl-nav-link sl-logout" data-title="Logout">
                 <span class="sl-nav-icon">{!! $icon('logout') !!}</span>

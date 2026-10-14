@@ -38,6 +38,7 @@
 
     <div class="ad-toast-region" data-toast-region aria-live="polite" aria-atomic="true"></div>
     <x-notification-popover />
+    @include('partials.confirm-action-modal')
 
     <dialog class="ad-dialog" data-confirm-dialog>
         <form method="dialog" class="ad-dialog-card">

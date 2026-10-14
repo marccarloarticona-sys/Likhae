@@ -2231,11 +2231,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     barangay: selectedLabel(barangay),
                 });
 
-                if (packagePostalCode) {
-                    postalCode.value = packagePostalCode;
-                    return;
-                }
-
                 const params =
                     new URLSearchParams({
                         province: provinceCode?.value || province.selectedOptions[0]?.dataset.code || '',
@@ -2256,7 +2251,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     );
 
                 postalCode.value =
-                    result.postal_code ?? '';
+                    result.postal_code ?? packagePostalCode;
 
             } catch (error) {
 
@@ -2265,7 +2260,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 console.error('Postal Code API:', error);
-                resetPostalCode('');
+                resetPostalCode(postalCodeFromAddress({
+                    region: selectedLabel(region),
+                    province: selectedLabel(province),
+                    municipality: selectedLabel(municipality),
+                    barangay: selectedLabel(barangay),
+                }));
 
             }
 

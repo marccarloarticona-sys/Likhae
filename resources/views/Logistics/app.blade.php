@@ -312,6 +312,7 @@
     ====================================================== --}}
 
     <x-notification-popover />
+    @include('partials.confirm-action-modal')
     @php
         $workspaceAiPage = request()->route()?->getName() ?: 'logistics.dashboard';
         $workspaceAiTitle = trim($__env->yieldContent('title')) ?: 'Logistics';

@@ -61,6 +61,16 @@ final class RiderVehicleType
         return self::role($vehicleType) === self::ROLE_INTER_LOGISTICS;
     }
 
+    public static function interLogisticsParcelLimit(?string $vehicleType): int
+    {
+        return match (self::normalize($vehicleType)) {
+            self::VAN => 50,
+            self::CLOSED_VAN => 75,
+            self::TRUCK => 100,
+            default => 0,
+        };
+    }
+
     private static function normalize(?string $vehicleType): string
     {
         return str((string) $vehicleType)

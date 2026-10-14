@@ -28,16 +28,14 @@ use RuntimeException;
 
 class ShipmentWorkflowService
 {
-<<<<<<< HEAD
     public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = 10;
-=======
+
     public function __construct(
         private readonly LocalRiderEligibilityService $localRiderEligibility,
         private readonly LogisticsSchemaReadiness $schema,
         private readonly ShipmentTransferService $transfers,
         private readonly LocalRiderTripService $localTrips,
     ) {}
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
 
     public function sellerTransition(SellerOrder $sellerOrder, string $action, User $actor): SellerOrder
     {
@@ -193,15 +191,11 @@ class ShipmentWorkflowService
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
 
-<<<<<<< HEAD
             $rider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
             $rider->load('user');
-            if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true) || $rider->user?->status !== User::STATUS_ACTIVE) {
-=======
             if ($rider->status !== 'ACTIVE'
                 || $rider->user?->account_type !== User::TYPE_RIDER
                 || $rider->user?->status !== User::STATUS_ACTIVE) {
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
                 throw new RuntimeException('Only active riders can receive assignments.');
             }
             if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {

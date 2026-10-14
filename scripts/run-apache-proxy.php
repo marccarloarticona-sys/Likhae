@@ -5,9 +5,10 @@ declare(strict_types=1);
 $projectDirectory = str_replace('\\', '/', dirname(__DIR__));
 $apache = 'C:/xampp/apache/bin/httpd.exe';
 $config = 'deploy/apache/likhae-reverse-proxy.conf';
+$projectRootDirective = 'Define LIKHAE_PROJECT_ROOT "'.$projectDirectory.'"';
 
 $process = proc_open(
-    [$apache, '-d', $projectDirectory, '-f', $config],
+    [$apache, '-d', $projectDirectory, '-f', $config, '-C', $projectRootDirective],
     [STDIN, STDOUT, STDERR],
     $pipes,
     $projectDirectory,

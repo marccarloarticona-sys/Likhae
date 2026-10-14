@@ -614,6 +614,9 @@
             <form
                 method="POST"
                 action="{{ route('logout') }}"
+                data-confirm-title="Log out?"
+                data-confirm-message="You will be signed out of your LIKHAE account."
+                data-confirm-label="Log out"
             >
                 @csrf
 

@@ -79,11 +79,11 @@
                 <p class="mt-1 text-[9px] text-muted">Approval and rejection update the rider account in the database.</p>
             </div>
             <div class="flex flex-wrap gap-2">
-                <form method="POST" action="{{ route('logistics.riders.approve', data_get($data, 'id')) }}">
+                <form method="POST" action="{{ route('logistics.riders.approve', data_get($data, 'id')) }}" data-confirm-title="Approve rider application?" data-confirm-message="This will activate the rider account." data-confirm-label="Approve">
                     @csrf
                     <button type="submit" class="h-10 rounded-lg bg-success px-4 text-[10px] font-semibold text-white">Approve Application</button>
                 </form>
-                <form method="POST" action="{{ route('logistics.riders.reject', data_get($data, 'id')) }}">
+                <form method="POST" action="{{ route('logistics.riders.reject', data_get($data, 'id')) }}" data-confirm-title="Reject rider application?" data-confirm-message="This rider application will be rejected." data-confirm-label="Reject" data-confirm-tone="danger">
                     @csrf
                     <button type="submit" class="h-10 rounded-lg border border-danger/30 bg-surface px-4 text-[10px] font-semibold text-danger">Reject Application</button>
                 </form>

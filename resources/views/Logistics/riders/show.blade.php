@@ -67,13 +67,13 @@
     <section class="rounded-xl border border-line bg-surface p-5">
         <div>
             <h2 class="text-[13px] font-semibold text-ink">Approved Transfer Capacity</h2>
-            <p class="mt-1 text-[10px] leading-5 text-muted">Inter-hub manifests require explicit hub approval for parcel count, weight, and volume. Missing values block sealing.</p>
+            <p class="mt-1 text-[10px] leading-5 text-muted">Set approved parcel, weight, and volume limits. Parcel count is capped by vehicle: Van 50, Closed Van 75, Truck 100. Missing values block sealing.</p>
         </div>
         @if($manifestSchemaReady)
             <form method="POST" action="{{ route('logistics.riders.capacity.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-3">
                 @csrf
                 @method('PATCH')
-                <label class="text-[10px] font-semibold text-ink">Parcels<input type="number" min="1" name="approved_parcel_capacity" value="{{ old('approved_parcel_capacity', $rider->approved_parcel_capacity) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
+                <label class="text-[10px] font-semibold text-ink">Parcels (max {{ \\App\\Support\\RiderVehicleType::interLogisticsParcelLimit($rider->vehicle_type) }})<input type="number" min="1" max="{{ \\App\\Support\\RiderVehicleType::interLogisticsParcelLimit($rider->vehicle_type) }}" name="approved_parcel_capacity" value="{{ old('approved_parcel_capacity', $rider->approved_parcel_capacity) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
                 <label class="text-[10px] font-semibold text-ink">Weight kg<input type="number" step="0.001" min="0.001" name="approved_weight_capacity_kg" value="{{ old('approved_weight_capacity_kg', $rider->approved_weight_capacity_kg) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
                 <label class="text-[10px] font-semibold text-ink">Volume liters<input type="number" step="0.001" min="0.001" name="approved_volume_capacity_liters" value="{{ old('approved_volume_capacity_liters', $rider->approved_volume_capacity_liters) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
                 <button type="submit" class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white sm:col-span-3 sm:justify-self-start">Save Capacity</button>

@@ -128,7 +128,7 @@
                                         <form method="POST" action="{{ route('admin.categories.status', $mainCategory) }}">
                                             @csrf @method('PATCH')
                                             <input type="hidden" name="is_active" value="{{ $mainCategory->is_active ? 0 : 1 }}">
-                                            <button type="submit" class="ad-btn {{ $mainCategory->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" @if($mainCategory->is_active) data-impact-confirm="{{ $impact ?: 'No linked records found' }}" @endif>{{ $mainCategory->is_active ? 'Deactivate' : 'Activate' }}</button>
+                                            <button type="submit" class="ad-btn {{ $mainCategory->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" data-confirm-title="{{ $mainCategory->is_active ? 'Deactivate category?' : 'Activate category?' }}" data-confirm-message="{{ $mainCategory->is_active ? 'Existing records will remain assigned. Current impact: '.($impact ?: 'No linked records found').'.' : 'Make this category available to users again?' }}" data-confirm-label="{{ $mainCategory->is_active ? 'Deactivate' : 'Activate' }}" @if($mainCategory->is_active) data-confirm-tone="danger" @endif>{{ $mainCategory->is_active ? 'Deactivate' : 'Activate' }}</button>
                                         </form>
                                         <form method="POST" action="{{ route('admin.categories.archive', $mainCategory) }}">
                                             @csrf @method('PATCH')
@@ -171,7 +171,7 @@
                                                 <form method="POST" action="{{ route('admin.subcategories.status', $subcategory) }}">
                                                     @csrf @method('PATCH')
                                                     <input type="hidden" name="is_active" value="{{ $subcategory->is_active ? 0 : 1 }}">
-                                                    <button type="submit" class="ad-btn {{ $subcategory->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" @if($subcategory->is_active) data-impact-confirm="{{ $subcategory->products_count ? $subcategory->products_count.' products' : 'No linked products found' }}" @endif>{{ $subcategory->is_active ? 'Deactivate' : 'Activate' }}</button>
+                                                    <button type="submit" class="ad-btn {{ $subcategory->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" data-confirm-title="{{ $subcategory->is_active ? 'Deactivate subcategory?' : 'Activate subcategory?' }}" data-confirm-message="{{ $subcategory->is_active ? 'Existing products will remain assigned. Current impact: '.($subcategory->products_count ? $subcategory->products_count.' products' : 'No linked products found').'.' : 'Make this subcategory available to users again?' }}" data-confirm-label="{{ $subcategory->is_active ? 'Deactivate' : 'Activate' }}" @if($subcategory->is_active) data-confirm-tone="danger" @endif>{{ $subcategory->is_active ? 'Deactivate' : 'Activate' }}</button>
                                                 </form>
                                                 <form method="POST" action="{{ route('admin.subcategories.archive', $subcategory) }}">
                                                     @csrf @method('PATCH')
@@ -276,10 +276,6 @@
         openModal('add-subcategory-modal');
     }));
 
-    document.querySelectorAll('[data-impact-confirm], [data-confirm-message]').forEach((button) => button.addEventListener('click', (event) => {
-        const message = button.dataset.confirmMessage || `Deactivate this category? Existing records will remain assigned. Current impact: ${button.dataset.impactConfirm}.`;
-        if (! window.confirm(message)) event.preventDefault();
-    }));
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') document.querySelectorAll('.ad-category-modal.show').forEach(closeModal); });
 })();
 </script>

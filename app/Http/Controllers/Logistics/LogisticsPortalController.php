@@ -233,7 +233,7 @@ class LogisticsPortalController extends Controller
         }
 
         $data = $request->validate([
-            'approved_parcel_capacity' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'approved_parcel_capacity' => ['nullable', 'integer', 'min:1', 'max:100'],
             'approved_weight_capacity_kg' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
             'approved_volume_capacity_liters' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
         ]);
@@ -246,6 +246,11 @@ class LogisticsPortalController extends Controller
         if ($rider->vehicleRole() === \App\Support\RiderVehicleType::ROLE_LOCAL_BARANGAY
             && (int) ($data['approved_parcel_capacity'] ?? 0) > 10) {
             return back()->withErrors(['approved_parcel_capacity' => 'Local motorcycle/tricycle trips are limited to 10 parcels.'])->withInput();
+        }
+        if (\App\Support\RiderVehicleType::isInterLogistics($rider->vehicle_type)
+            && (int) ($data['approved_parcel_capacity'] ?? 0) > \App\Support\RiderVehicleType::interLogisticsParcelLimit($rider->vehicle_type)) {
+            $limit = \App\Support\RiderVehicleType::interLogisticsParcelLimit($rider->vehicle_type);
+            return back()->withErrors(['approved_parcel_capacity' => str($rider->vehicle_type)->headline().' capacity is capped at '.$limit.' parcels.'])->withInput();
         }
 
         DB::transaction(function () use ($rider, $data): void {
@@ -383,15 +388,11 @@ class LogisticsPortalController extends Controller
             ->orderBy('name')
             ->get();
 
-<<<<<<< HEAD
-        $riders = RiderProfile::where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->with('user')->get();
-=======
         $riders = $this->localRiderEligibility
             ->activeRidersForCenter($center)
             ->with('user')
             ->orderBy('id')
             ->get();
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
 
         $allBarangays = $center->address?->municipality_code
             ? PhilippineAddressController::barangayRecordsForMunicipality((string) $center->address->municipality_code)
@@ -469,18 +470,11 @@ class LogisticsPortalController extends Controller
                 ->withInput();
         }
 
-<<<<<<< HEAD
-        if (! empty($data['rider_profile_id'])) {
-            abort_unless(
-                RiderProfile::query()->whereKey($data['rider_profile_id'])->where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->exists(),
-                403,
-=======
         try {
             $this->localRiderEligibility->assertCenterCoversMunicipality(
                 $center,
                 (string) $data['province_code'],
                 (string) $data['municipality_code'],
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             );
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['municipality_code' => $exception->getMessage()])->withInput();

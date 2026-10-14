@@ -169,7 +169,7 @@
             </span>
             <span id="themeToggleBadge" style="border-radius:9999px;padding:2px 10px;font-size:.7rem;font-weight:700;background:#c92d2f;color:#fff;">ON</span>
         </button>
-        <form method="POST" action="{{ Route::has('logout') ? route('logout') : url('/logout') }}">
+        <form method="POST" action="{{ Route::has('logout') ? route('logout') : url('/logout') }}" data-confirm-title="Log out?" data-confirm-message="You will be signed out of your LIKHAE account." data-confirm-label="Log out">
             @csrf
             <button type="submit" class="sl-nav-link sl-logout" data-title="Logout">
                 <span class="sl-nav-icon">{!! $icon('logout') !!}</span><span class="sl-nav-text">Logout</span>

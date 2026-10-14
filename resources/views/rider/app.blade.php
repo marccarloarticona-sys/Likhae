@@ -724,6 +724,7 @@
     </div>
 
     <x-notification-popover />
+    @include('partials.confirm-action-modal')
     @php
         $workspaceAiPage = request()->route()?->getName() ?: 'rider.dashboard';
         $workspaceAiTitle = trim($__env->yieldContent('title')) ?: 'Rider';

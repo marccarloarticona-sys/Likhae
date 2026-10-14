@@ -72,12 +72,8 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $riders = RiderProfile::query()
-<<<<<<< HEAD
-            ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
             ->where('status', 'ACTIVE')
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
@@ -187,12 +183,8 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $riders = RiderProfile::query()
-<<<<<<< HEAD
-            ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
             ->where('status', 'ACTIVE')
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
@@ -317,15 +309,11 @@ class DispatchController extends Controller
         if ($coverageOverride && $pickupArea) {
             $hasCoveredRider = RiderProfile::query()
                 ->where('logistics_center_id', $center->id)
-<<<<<<< HEAD
-                ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
                 ->where('status', 'ACTIVE')
                 ->whereIn('vehicle_type', RiderVehicleType::localValues())
                 ->whereHas('user', fn ($query) => $query
                     ->where('account_type', \App\Models\User::TYPE_RIDER)
                     ->where('status', \App\Models\User::STATUS_ACTIVE))
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
                 ->whereHas('areaAssignments', fn ($query) => $query
                     ->where('service_area_id', $pickupArea->id)
                     ->where('is_active', true))
