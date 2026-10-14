@@ -321,7 +321,6 @@
         <x-workspace.ai-assistant workspace="logistics" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
     @endif
     @stack('scripts')
-    <x-logout-confirmation />
 
 </body>
 

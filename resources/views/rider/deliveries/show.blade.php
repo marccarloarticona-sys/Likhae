@@ -60,7 +60,7 @@
                 @elseif($parcel['status'] === 'ACCEPTED')
                     <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Start delivery?" data-confirm-message="Mark this delivery as in progress?" data-confirm-label="Start delivery">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-confirm-title="Confirm delivery?" data-confirm-message="Submit this proof and mark the parcel as delivered?" data-confirm-label="Complete delivery">
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-confirm-title="Confirm delivery?" data-confirm-message="Submit this proof and mark the parcel as delivered?" data-confirm-label="Complete delivery" data-confirm-buyer="{{ $parcel['buyer'] }}" data-confirm-cod="{{ number_format((float) $parcel['cod_expected'], 2, '.', '') }}">
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
                         <label class="grid gap-2 text-sm font-semibold text-ink">
@@ -84,7 +84,7 @@
                         </div>
                         <button type="submit" class="w-full rounded-xl bg-green-700 px-5 py-3 text-sm font-semibold text-white" data-delivery-proof-submit>Upload Proof &amp; Mark Delivered</button>
                     </form>
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3" data-delivery-failed-form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3" data-delivery-failed-form data-confirm-title="Record failed delivery?" data-confirm-message="Save this failed delivery attempt. This will not automatically return the parcel." data-confirm-label="Record failed delivery" data-confirm-tone="danger">
                         @csrf @method('PATCH')<input type="hidden" name="action" value="delivery_failed">
                         <input type="hidden" name="failure_reason" data-delivery-failure-reason>
                         <label class="grid gap-2 text-sm font-semibold text-ink">Reason
@@ -104,16 +104,6 @@
     </section>
 
 </div>
-<dialog class="w-[calc(100%-2rem)] max-w-lg rounded-2xl p-0 shadow-2xl backdrop:bg-black/50" data-delivery-confirm-dialog aria-labelledby="delivery-confirm-heading">
-    <div class="grid gap-4 p-6">
-        <div><h2 id="delivery-confirm-heading" class="text-xl font-bold text-ink">Confirm Successful Delivery</h2><p class="mt-1 text-sm text-muted">This will record the parcel as delivered and submit the proof photo.</p></div>
-        <dl class="grid gap-2 rounded-xl bg-page-secondary p-4 text-sm"><div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div><div><dt class="text-muted">COD expected</dt><dd class="font-semibold text-ink">₱{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div><div><dt class="text-muted">Cash received</dt><dd class="font-semibold text-ink" data-confirm-delivery-cash>Not entered</dd></div><div><dt class="text-muted">Proof photo</dt><dd class="font-semibold text-ink" data-confirm-delivery-proof>Not attached</dd></div></dl>
-        <div class="flex flex-wrap justify-end gap-2"><button type="button" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink" data-delivery-confirm-cancel>Cancel</button><button type="button" class="rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white" data-delivery-confirm-submit>Confirm Delivery</button></div>
-    </div>
-</dialog>
-<dialog class="w-[calc(100%-2rem)] max-w-lg rounded-2xl p-0 shadow-2xl backdrop:bg-black/50" data-delivery-failed-dialog aria-labelledby="delivery-failed-heading">
-    <div class="grid gap-4 p-6"><div><h2 id="delivery-failed-heading" class="text-xl font-bold text-ink">Record Failed Delivery</h2><p class="mt-1 text-sm text-muted">The selected reason and notes will be saved for this delivery attempt. This will not automatically return the parcel.</p></div><p class="rounded-xl bg-page-secondary p-4 text-sm text-ink" data-delivery-failure-summary></p><div class="flex justify-end gap-2"><button type="button" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink" data-delivery-failed-cancel>Cancel</button><button type="button" class="rounded-xl bg-red-700 px-4 py-3 text-sm font-semibold text-white" data-delivery-failed-confirm>Record Failed Delivery</button></div></div>
-</dialog>
 <script>
     (() => {
         const form = document.querySelector('[data-delivery-proof-form]');
@@ -124,14 +114,8 @@
         const preview = form?.querySelector('[data-delivery-proof-preview]');
         const replace = form?.querySelector('[data-delivery-proof-replace]');
         const cashInput = form?.querySelector('[data-delivery-cash-input]');
-        const confirmDialog = document.querySelector('[data-delivery-confirm-dialog]');
-        const confirmedCash = confirmDialog?.querySelector('[data-confirm-delivery-cash]');
-        const confirmedProof = confirmDialog?.querySelector('[data-confirm-delivery-proof]');
-        const confirmButton = confirmDialog?.querySelector('[data-delivery-confirm-submit]');
-        const cancelConfirm = confirmDialog?.querySelector('[data-delivery-confirm-cancel]');
         const targetBytes = 1536 * 1024;
         let optimizing = false;
-        let confirmedDelivery = false;
         let previewUrl = null;
 
         if (!form || !input || !status || !submit) return;
@@ -226,67 +210,30 @@
 
         replace?.addEventListener('click', () => input.click());
 
-        form.addEventListener('submit', (event) => {
+        form.addEventListener('shared-confirm:prepare', (event) => {
             if (optimizing) {
                 event.preventDefault();
                 setStatus('Please wait for photo optimization to finish.');
-                return;
             }
-            if (confirmedDelivery) return;
-
-            event.preventDefault();
-            if (!confirmDialog?.showModal) {
-                if (window.confirm('Confirm successful delivery and submit the proof photo?')) {
-                    confirmedDelivery = true;
-                    form.requestSubmit(submit);
-                }
-                return;
-            }
-            if (confirmedCash) confirmedCash.textContent = `₱${Number(cashInput.value || 0).toFixed(2)}`;
-            if (confirmedProof) confirmedProof.textContent = input.files.length ? input.files[0].name : 'Not attached';
-            confirmDialog.showModal();
-        });
-
-        cancelConfirm?.addEventListener('click', () => confirmDialog.close());
-        confirmButton?.addEventListener('click', () => {
-            confirmedDelivery = true;
-            confirmDialog.close();
-            form.requestSubmit(submit);
+            const cash = Number(cashInput.value || 0).toFixed(2);
+            const proof = input.files.length ? input.files[0].name : 'Not attached';
+            form.dataset.confirmDetails = `Buyer: ${form.dataset.confirmBuyer}
+COD expected: PHP ${form.dataset.confirmCod}
+Cash received: PHP ${cash}
+Proof photo: ${proof}`;
         });
     })();
 
     (() => {
         const form = document.querySelector('[data-delivery-failed-form]');
-        const dialog = document.querySelector('[data-delivery-failed-dialog]');
         const category = form?.querySelector('[data-delivery-failure-category]');
         const notes = form?.querySelector('[data-delivery-failure-notes]');
         const reasonInput = form?.querySelector('[data-delivery-failure-reason]');
-        const summary = dialog?.querySelector('[data-delivery-failure-summary]');
-        const confirmButton = dialog?.querySelector('[data-delivery-failed-confirm]');
-        const cancelButton = dialog?.querySelector('[data-delivery-failed-cancel]');
-        let confirmed = false;
         if (!form || !category || !notes || !reasonInput) return;
 
-        form.addEventListener('submit', (event) => {
-            if (confirmed) return;
-            event.preventDefault();
+        form.addEventListener('shared-confirm:prepare', () => {
             reasonInput.value = `${category.value}: ${notes.value.trim()}`;
-            if (!dialog?.showModal) {
-                if (window.confirm(`Record failed delivery?\n\n${reasonInput.value}`)) {
-                    confirmed = true;
-                    form.requestSubmit();
-                }
-                return;
-            }
-            if (summary) summary.textContent = reasonInput.value;
-            dialog.showModal();
-        });
-
-        cancelButton?.addEventListener('click', () => dialog.close());
-        confirmButton?.addEventListener('click', () => {
-            confirmed = true;
-            dialog.close();
-            form.requestSubmit();
+            form.dataset.confirmDetails = reasonInput.value;
         });
     })();
 </script>

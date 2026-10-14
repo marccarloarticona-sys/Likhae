@@ -80,44 +80,6 @@ document.addEventListener('DOMContentLoaded', () => {
         window.setTimeout(() => toast.remove(), 3200);
     };
 
-    const dialog = one('[data-confirm-dialog]');
-    let pendingAction = null;
-    all('[data-confirm-action]').forEach((button) => {
-        button.addEventListener('click', () => {
-            pendingAction = button;
-            if (!dialog || typeof dialog.showModal !== 'function') {
-                if (window.confirm(button.dataset.confirmMessage || 'Continue with this action?')) {
-                    showToast(button.dataset.successMessage || 'Action completed.');
-                }
-                return;
-            }
-            one('[data-dialog-title]', dialog).textContent = button.dataset.confirmTitle || 'Confirm action';
-            one('[data-dialog-message]', dialog).textContent = button.dataset.confirmMessage || 'Please review this action before continuing.';
-            const reasonWrap = one('[data-dialog-reason-wrap]', dialog);
-            const reason = one('[data-dialog-reason]', dialog);
-            reasonWrap.hidden = button.dataset.requireReason !== 'true';
-            reason.value = '';
-            dialog.showModal();
-        });
-    });
-
-    dialog?.addEventListener('close', () => {
-        if (dialog.returnValue !== 'confirm' || !pendingAction) {
-            pendingAction = null;
-            return;
-        }
-        const reasonRequired = pendingAction.dataset.requireReason === 'true';
-        const reason = one('[data-dialog-reason]', dialog)?.value.trim();
-        if (reasonRequired && !reason) {
-            showToast('A reason is required. The action was not applied.');
-            pendingAction = null;
-            return;
-        }
-        showToast(pendingAction.dataset.successMessage || 'Action completed and recorded in the audit log.');
-        pendingAction.closest('tr, [data-filter-item]')?.classList.add('is-reviewed');
-        pendingAction = null;
-    });
-
     all('[data-filter-input]').forEach((input) => {
         const target = input.dataset.filterInput ? one(input.dataset.filterInput) : input.closest('[data-filter-scope]');
         const filter = () => {

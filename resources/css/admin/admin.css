@@ -406,15 +406,7 @@ a.ad-stat:hover { border-color: var(--ad-blue-border); transform: translateY(-1p
 .ad-empty h3 { margin: 4px 0 0; font-size: 12px; }
 .ad-empty p { max-width: 380px; margin: 0; color: var(--ad-muted); font-size: 8px; }
 
-/* Dialog and toast */
-.ad-dialog { position: fixed; inset: 0; width: min(430px, calc(100% - 28px)); height: fit-content; max-height: calc(100dvh - 28px); margin: auto; padding: 0; overflow: auto; border: 0; border-radius: 18px; background: transparent; }
-.ad-dialog::backdrop { background: rgba(35,20,17,.56); backdrop-filter: blur(5px); }
-.ad-dialog-card { display: grid; justify-items: center; gap: 15px; max-height: calc(100dvh - 30px); overflow-y: auto; padding: 25px; border: 1px solid var(--ad-border); border-radius: 18px; background: var(--ad-card, #fffdf9); box-shadow: 0 26px 76px rgba(35,20,17,.25); text-align: center; }
-.ad-dialog-icon { display: grid; width: 50px; height: 50px; place-items: center; border: 1px solid var(--ad-danger-border, #f0c9c4); border-radius: 16px; color: var(--ad-danger); background: var(--ad-danger-soft); font-size: 17px; font-weight: 700; }
-.ad-dialog h2 { margin: 0; font-size: 16px; }
-.ad-dialog p { margin: 7px auto 0; max-width: 38ch; color: var(--ad-muted); font-size: 10px; line-height: 1.65; }
-.ad-dialog .ad-field { width: 100%; text-align: left; }
-.ad-dialog-actions { display: flex; justify-content: center; gap: 9px; width: 100%; padding-top: 3px; }
+/* Toast */
 .ad-toast-region { position: fixed; right: 18px; bottom: 18px; z-index: 100; display: grid; gap: 8px; pointer-events: none; }
 .ad-toast { min-width: 250px; max-width: 360px; padding: 11px 13px; border: 1px solid var(--ad-blue-border); border-radius: 10px; color: #561C17; background: #fff; box-shadow: 0 15px 35px rgba(86,28,23,.16); font-size: 9px; animation: ad-toast-in .2s ease; }
 @keyframes ad-toast-in { from { opacity: 0; transform: translateY(8px); } }
@@ -657,8 +649,6 @@ html.dark .ad-queue-icon { background: #361B17; color: #EBA99D; }
 html.dark .ad-application-card { background: var(--ad-card); border-color: var(--ad-border); }
 html.dark .ad-report-card { background: var(--ad-card); border-color: var(--ad-border); }
 html.dark .ad-report-card h3 { color: var(--ad-text); }
-html.dark .ad-dialog-card { background: var(--ad-card); border-color: var(--ad-border); color: var(--ad-text); }
-html.dark .ad-dialog-icon { background: #2d1117; color: #f87171; }
 html.dark .ad-complaint-card { background: var(--ad-card); border-color: var(--ad-border); }
 html.dark .ad-conversation { background: var(--ad-card); border-color: var(--ad-border); }
 html.dark .ad-conversation:hover { background: #2A1E1A; }
@@ -692,15 +682,7 @@ body,
 .ad-complaint-card,
 .ad-mini-stat,
 .ad-messages,
-.ad-conversation,
-.ad-dialog-card {
-    background: var(--ad-card) !important;
-    border-color: var(--ad-border) !important;
-    color: var(--ad-text) !important;
-    box-shadow: var(--ad-shadow) !important;
-}
-
-.ad-sidebar {
+.ad-conversation {
     background:
         radial-gradient(circle at 0% 0%, rgba(193, 151, 113, .13), transparent 28%),
         linear-gradient(180deg, #FFFDF9 0%, #F6EFE7 100%) !important;
@@ -1103,7 +1085,6 @@ html.dark .ad-complaint-card,
 html.dark .ad-mini-stat,
 html.dark .ad-messages,
 html.dark .ad-conversation,
-html.dark .ad-dialog-card,
 html.dark .ad-note {
     background: var(--ad-card) !important;
     border-color: var(--ad-border) !important;

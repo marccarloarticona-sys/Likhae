@@ -13,6 +13,7 @@
             </div>
         </div>
         <p id="sharedConfirmMessage" data-shared-confirm-message>Please review this action before continuing.</p>
+        <p class="lk-confirm-details" data-shared-confirm-details hidden></p>
         <div class="lk-confirm-actions">
             <button type="button" class="lk-confirm-cancel" data-shared-confirm-cancel>Cancel</button>
             <button type="button" class="lk-confirm-accept" data-shared-confirm-accept><span data-shared-confirm-label>Continue</span><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -88,6 +89,7 @@
         .lk-confirm-eyebrow i { width: 3px; height: 3px; border-radius: 50%; background: var(--lk-tan, var(--sl-tan, #c19771)); }
         .lk-confirm-card h2 { margin: 7px 0 0; font-size: 21px; font-weight: 750; letter-spacing: -.03em; line-height: 1.3; }
         .lk-confirm-card > p { max-width: 38ch; margin: 13px auto 0; color: var(--confirm-muted); font-size: 13px; line-height: 1.7; }
+        .lk-confirm-card > .lk-confirm-details { max-width: 46ch; white-space: pre-line; border: 1px solid var(--confirm-border); border-radius: 12px; padding: 11px 13px; color: var(--confirm-text); background: var(--confirm-soft); text-align: left; }
         .lk-confirm-actions {
             display: flex;
             justify-content: center;
@@ -143,6 +145,7 @@
 
             const title = dialog.querySelector('[data-shared-confirm-title]');
             const message = dialog.querySelector('[data-shared-confirm-message]');
+            const details = dialog.querySelector('[data-shared-confirm-details]');
             const acceptButton = dialog.querySelector('[data-shared-confirm-accept]');
             const acceptLabel = dialog.querySelector('[data-shared-confirm-label]');
             const cancelButton = dialog.querySelector('[data-shared-confirm-cancel]');
@@ -157,6 +160,13 @@
                     return;
                 }
 
+                const prepareEvent = new CustomEvent('shared-confirm:prepare', { cancelable: true });
+                form.dispatchEvent(prepareEvent);
+                if (prepareEvent.defaultPrevented) {
+                    event.preventDefault();
+                    return;
+                }
+
                 const submitter = event.submitter;
                 const config = submitter?.dataset.confirmMessage !== undefined ? submitter.dataset : form.dataset;
                 if (!config.confirmMessage) return;
@@ -166,6 +176,8 @@
                 pendingSubmitter = submitter;
                 title.textContent = config.confirmTitle || 'Confirm action';
                 message.textContent = config.confirmMessage;
+                details.textContent = config.confirmDetails || '';
+                details.hidden = !config.confirmDetails;
                 acceptLabel.textContent = config.confirmLabel || 'Continue';
                 dialog.classList.toggle('is-danger', config.confirmTone === 'danger');
                 dialog.showModal();
