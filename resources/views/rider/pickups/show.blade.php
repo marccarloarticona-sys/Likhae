@@ -1,66 +1,115 @@
 @extends('Rider.app')
 
-@section('title', 'Pickup Details - LIKHAE Rider')
+@section('title', 'Pickup Batch #'.$pickup->id.' - LIKHAE Rider')
 
 @push('head')
     @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js'])
 @endpush
 
 @section('content')
+@php($allResolved = $items->every(fn ($item) => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true)))
 <div class="flex flex-col gap-8">
     @if(session('status'))
         <div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>
     @endif
+    @if($errors->any())
+        <div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>
+    @endif
 
     <section class="rounded-3xl border border-line bg-surface p-8">
-        <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Pickup Details</span>
-        <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup['tracking'] }}</h1>
-        <p class="mt-3 text-sm text-muted">{{ $pickup['status_label'] }} - Seller: {{ $pickup['seller'] }}</p>
-        <ol class="mt-5 grid gap-2 text-xs sm:grid-cols-4">
-            @foreach(['Accept assignment', 'Go to seller', 'Scan and confirm parcel', 'Take parcel to sorting center'] as $index => $step)
-                @php($activeStep = match($pickup['status']) { 'ASSIGNED' => 0, 'ACCEPTED' => 1, 'IN_PROGRESS' => 2, default => 3 })
+        <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Pickup Batch #P-{{ $pickup->id }}</span>
+        <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup->seller?->business_name ?? 'Seller unavailable' }}</h1>
+        <p class="mt-2 text-sm font-semibold text-muted">{{ $total }} {{ str('parcel')->plural($total) }} · {{ $collected }}/{{ $total }} collected</p>
+        <p class="mt-4 text-sm text-muted">Status: <strong class="text-ink">{{ match($pickup->status) { 'LOADING' => 'Assigned', 'READY' => 'Accepted', 'IN_PROGRESS' => $pickupFinished ? 'Seller pickup complete' : 'In progress', 'EN_ROUTE_TO_HUB' => 'In transit to logistics center', 'COMPLETED' => 'Completed', default => str($pickup->status)->headline() } }}</strong></p>
+
+        <ol class="mt-6 grid gap-2 text-xs sm:grid-cols-4">
+            @foreach(['Assigned', 'Accepted', 'Scan each parcel at seller', 'Logistics intake'] as $index => $step)
+                @php($activeStep = match($pickup->status) { 'LOADING' => 0, 'READY' => 1, 'IN_PROGRESS' => 2, 'EN_ROUTE_TO_HUB' => 3, default => 4 })
                 <li class="border p-3 {{ $index === $activeStep ? 'border-primary bg-primary-soft font-semibold text-primary' : ($index < $activeStep ? 'border-green-200 bg-green-50 text-green-800' : 'border-line text-muted') }}">{{ $index + 1 }}. {{ $step }}</li>
             @endforeach
         </ol>
     </section>
 
-    <x-shared.mapbox :markers="$mapMarkers" title="Route to seller pickup" height="220px" user-location-target="seller" :rider-gps="true" :navigation="true" />
+    <x-shared.mapbox :markers="$mapMarkers" :title="$pickup->status === 'EN_ROUTE_TO_HUB' ? 'Route to logistics center' : 'Route to seller pickup'" height="220px" :user-location-target="$navigationTargetKind" :rider-gps="true" :navigation="true" />
 
     <section class="grid gap-6 lg:grid-cols-2">
         <article class="rounded-3xl border border-line bg-surface p-8">
-            <h2 class="text-lg font-bold text-ink">Parcel Information</h2>
-            <div class="mt-5 flex flex-wrap gap-3">@foreach($delivery->shipment?->sellerOrder?->items ?? [] as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
-            <dl class="mt-5 grid gap-3 text-sm">
-                <div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $pickup['buyer'] }}</dd></div>
-                <div><dt class="text-muted">Delivery Address</dt><dd class="font-semibold text-ink whitespace-pre-line">{{ $pickup['address'] }}</dd></div>
-                <div><dt class="text-muted">Items</dt><dd class="font-semibold text-ink">{{ $pickup['items'] }}</dd></div>
-                <div><dt class="text-muted">Order Amount</dt><dd class="font-semibold text-ink">{{ $pickup['amount'] }}</dd></div>
+            <h2 class="text-lg font-bold text-ink">Pickup and destination</h2>
+            <dl class="mt-5 grid gap-4 text-sm">
+                <div><dt class="text-muted">Seller pickup address</dt><dd class="mt-1 whitespace-pre-line font-semibold text-ink">{{ $sellerAddress }}</dd></div>
+                <div><dt class="text-muted">Authorized logistics / sorting center</dt><dd class="mt-1 whitespace-pre-line font-semibold text-ink">{{ $pickup->logisticsCenter?->business_name }} · {{ $hubAddress }}</dd></div>
             </dl>
         </article>
 
         <article class="rounded-3xl border border-line bg-surface p-8">
-            <h2 class="text-lg font-bold text-ink">Pickup Actions</h2>
+            <h2 class="text-lg font-bold text-ink">Pickup actions</h2>
             <div class="mt-5 grid gap-3">
-                @if($pickup['status'] === 'ASSIGNED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
-                @elseif($pickup['status'] === 'ACCEPTED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
-                @elseif($pickup['status'] === 'IN_PROGRESS')
-                    @if($verified)
-                        <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">Parcel Verified: {{ $pickup['tracking'] }}</div>
-                        <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="pickup_complete"><input type="hidden" name="scan_method" value="{{ $scanMethod }}"><input type="hidden" name="scanned_code" value="{{ $pickup['tracking'] }}"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Confirm Picked Up</button></form>
-                    @else
-                        <p class="text-sm text-muted">Scan and verify the seller's waybill below before confirming collection.</p>
-                    @endif
+                @if($pickup->status === 'LOADING')
+                    <form method="POST" action="{{ route('rider.pickups.batches.accept', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
+                @elseif($pickup->status === 'READY')
+                    <form method="POST" action="{{ route('rider.pickups.batches.start', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
+                @elseif($pickup->status === 'IN_PROGRESS' && $pickupFinished)
+                    <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">All assigned parcels are resolved. Continue with {{ $collected }} collected parcel(s).</div>
+                    <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup · Start Route to Logistics</button></form>
+                @elseif($pickup->status === 'EN_ROUTE_TO_HUB')
+                    <div class="border border-primary/20 bg-primary-soft p-4 text-sm font-semibold text-primary">Seller pickup complete. Deliver {{ $collected }} collected parcel(s) to the assigned logistics center for individual intake scans.</div>
+                @elseif($pickup->status === 'COMPLETED')
+                    <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">This pickup batch is closed.</div>
                 @endif
-                <a href="{{ route('rider.pickups') }}" class="rounded-xl border border-line px-5 py-3 text-center text-sm font-semibold text-ink">Back To Pickups</a>
+                <a href="{{ route('rider.pickups') }}" class="rounded-xl border border-line px-5 py-3 text-center text-sm font-semibold text-ink">Back to Seller Pickups</a>
             </div>
         </article>
     </section>
 
-    @if($pickup['status'] === 'IN_PROGRESS')
-        <x-parcel-scanner :action="route('rider.pickups.show', $delivery)" :tracking="request('tracking', '')" :method="$scanMethod" title="Scan and Confirm Parcel at Seller" description="Match the waybill to this accepted pickup. After confirmation, take the parcel to the sorting center for its intake scan." button="Verify Parcel" />
-        @if(request()->filled('tracking') && !$verified)<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">The scanned tracking number does not match this pickup assignment.</div>@endif
-    @endif
+    <section class="rounded-3xl border border-line bg-surface p-8">
+        <div class="flex flex-wrap items-end justify-between gap-3">
+            <div><h2 class="text-lg font-bold text-ink">Parcel Checklist</h2><p class="mt-1 text-sm text-muted">Scan each tracking waybill separately at the seller.</p></div>
+            <span class="text-sm font-bold text-ink">{{ $collected }} / {{ $total }} verified</span>
+        </div>
+
+        @if($pickup->status === 'IN_PROGRESS' && ! $pickupFinished)
+            <form method="POST" action="{{ route('rider.pickups.batches.scan', $pickup->id) }}" class="mt-5 flex flex-col gap-3 sm:flex-row">
+                @csrf
+                <input name="scanned_code" value="{{ old('scanned_code') }}" required autocomplete="off" class="min-h-12 min-w-0 flex-1 rounded-xl border border-line bg-white px-4 text-sm" placeholder="Scan or enter a waybill number" aria-label="Scan seller waybill">
+                <select name="scan_method" class="min-h-12 rounded-xl border border-line bg-white px-4 text-sm" aria-label="Scan method"><option value="BARCODE">Barcode</option><option value="QR">QR code</option><option value="MANUAL">Manual</option></select>
+                <button class="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Verify Parcel</button>
+            </form>
+        @endif
+
+        <div class="mt-5 grid gap-3">
+            @foreach($items as $item)
+                @php($assignment = $item->riderAssignment)
+                @php($shipment = $assignment?->shipment)
+                <article class="rounded-2xl border border-line p-4">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ') }}</p></div>
+                        @if($assignment?->status === 'COMPLETED')
+                            <span class="text-sm font-semibold text-green-700">✓ Received by rider · waiting for logistics intake</span>
+                        @elseif(in_array($assignment?->status, ['REJECTED', 'CANCELLED'], true))
+                            <span class="text-sm font-semibold text-amber-800">Not collected: {{ $assignment->rejection_reason ?: 'Resolved' }}</span>
+                        @else
+                            <span class="text-sm font-semibold text-muted">{{ str($assignment?->status ?? $item->status)->headline() }}</span>
+                        @endif
+                    </div>
+
+                    @if($pickup->status === 'IN_PROGRESS' && $assignment?->status === 'IN_PROGRESS')
+                        <details class="mt-3 border-t border-line pt-3">
+                            <summary class="cursor-pointer text-xs font-semibold text-muted">Mark parcel not collected</summary>
+                            <form method="POST" action="{{ route('rider.pickups.batches.not-collected', $pickup->id) }}" class="mt-3 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+                                @csrf
+                                <input type="hidden" name="rider_assignment_id" value="{{ $assignment->id }}">
+                                <select name="reason" required class="min-h-10 border border-line bg-white px-3 text-sm">
+                                    <option value="">Select reason</option>
+                                    @foreach($notCollectedReasons as $reason)<option value="{{ $reason }}" @selected(old('rider_assignment_id') == $assignment->id && old('reason') === $reason)>{{ $reason }}</option>@endforeach
+                                </select>
+                                <input name="other_reason" value="{{ old('rider_assignment_id') == $assignment->id ? old('other_reason') : '' }}" maxlength="1000" class="min-h-10 border border-line px-3 text-sm" placeholder="Describe other reason">
+                                <button class="border border-line px-4 py-2 text-sm font-semibold text-ink">Save reason</button>
+                            </form>
+                        </details>
+                    @endif
+                </article>
+            @endforeach
+        </div>
+    </section>
 </div>
 @endsection

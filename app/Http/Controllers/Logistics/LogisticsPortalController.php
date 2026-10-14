@@ -11,6 +11,7 @@ use App\Models\Communication\Conversation;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderRemittance;
+use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -383,26 +384,23 @@ class LogisticsPortalController extends Controller
             ->orderBy('name')
             ->get();
 
-<<<<<<< HEAD
-        $riders = RiderProfile::where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->with('user')->get();
-=======
         $riders = $this->localRiderEligibility
             ->activeRidersForCenter($center)
             ->with('user')
             ->orderBy('id')
             ->get();
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
 
-        $allBarangays = $center->address?->municipality_code
-            ? PhilippineAddressController::barangayRecordsForMunicipality((string) $center->address->municipality_code)
+        $centerCanonicalMunicipality = $this->localRiderEligibility->canonicalMunicipality($center);
+        $allBarangays = $centerCanonicalMunicipality
+            ? PhilippineAddressController::barangayRecordsForMunicipality($centerCanonicalMunicipality['municipality_code'])
             : [];
         $coveredBarangayCodes = $areas
             ->where('is_active', true)
             ->flatMap(fn (ServiceArea $area) => $area->locations)
             ->filter(fn (ServiceAreaLocation $location): bool =>
-                $center->address
-                && (string) $location->province_code === (string) $center->address->province_code
-                && (string) $location->municipality_code === (string) $center->address->municipality_code)
+                $centerCanonicalMunicipality
+                && (string) $location->province_code === $centerCanonicalMunicipality['province_code']
+                && (string) $location->municipality_code === $centerCanonicalMunicipality['municipality_code'])
             ->pluck('barangay_code')
             ->filter()
             ->unique()
@@ -432,7 +430,7 @@ class LogisticsPortalController extends Controller
         });
 
         $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center)]);
-        return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
+        return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'centerCanonicalMunicipality', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
     }
 
     public function saveDeliveryArea(Request $request): RedirectResponse
@@ -469,18 +467,25 @@ class LogisticsPortalController extends Controller
                 ->withInput();
         }
 
-<<<<<<< HEAD
         if (! empty($data['rider_profile_id'])) {
             abort_unless(
-                RiderProfile::query()->whereKey($data['rider_profile_id'])->where('logistics_center_id', $center->id)->whereIn('status', ['ACTIVE', 'WARNED'])->exists(),
-                403,
-=======
+                RiderProfile::query()
+                    ->whereKey($data['rider_profile_id'])
+                    ->where('logistics_center_id', $center->id)
+                    ->whereIn('status', ['ACTIVE', 'WARNED'])
+                    ->whereHas('user', fn ($query) => $query
+                        ->where('account_type', User::TYPE_RIDER)
+                        ->where('status', User::STATUS_ACTIVE))
+                    ->exists(),
+                403
+            );
+        }
+
         try {
             $this->localRiderEligibility->assertCenterCoversMunicipality(
                 $center,
                 (string) $data['province_code'],
                 (string) $data['municipality_code'],
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             );
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['municipality_code' => $exception->getMessage()])->withInput();

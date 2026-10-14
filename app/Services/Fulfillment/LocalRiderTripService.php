@@ -4,11 +4,13 @@ namespace App\Services\Fulfillment;
 
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Rider\RiderProfile;
+use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Support\LocalTripCapacityRules;
 use App\Support\RiderVehicleType;
@@ -24,12 +26,22 @@ final class LocalRiderTripService
         private readonly LocalRiderEligibilityService $eligibility,
     ) {}
 
-    public function createTrip(User $actor, RiderProfile $rider, ServiceArea $area, string $tripType): RiderLocalTrip
+    public function createTrip(User $actor, RiderProfile $rider, ServiceArea $area, string $tripType, ?SellerProfile $seller = null): RiderLocalTrip
     {
-        $this->assertReady();
         $tripType = strtoupper(trim($tripType));
         if (! in_array($tripType, [RiderLocalTrip::TYPE_PICKUP, RiderLocalTrip::TYPE_DELIVERY], true)) {
             throw new RuntimeException('A local trip must be a pickup or delivery trip.');
+        }
+        if ($tripType === RiderLocalTrip::TYPE_PICKUP) {
+            $this->assertSellerPickupReady();
+        } else {
+            $this->assertReady();
+        }
+        if ($tripType === RiderLocalTrip::TYPE_PICKUP && (! $seller || ! $seller->exists)) {
+            throw new RuntimeException('A seller pickup trip must identify exactly one seller.');
+        }
+        if ($tripType === RiderLocalTrip::TYPE_DELIVERY && $seller) {
+            throw new RuntimeException('A delivery trip cannot be assigned a seller pickup profile.');
         }
 
         $actor->loadMissing('logisticsCenter');
@@ -41,11 +53,22 @@ final class LocalRiderTripService
             throw new RuntimeException('The rider is not actively assigned to this service area.');
         }
         $this->assertCanonicalBarangay($rider->logisticsCenter, $location->province_code, $location->municipality_code, $location->barangay_code);
+        if ($tripType === RiderLocalTrip::TYPE_PICKUP) {
+            $seller->loadMissing('businessAddress');
+            $address = $seller->businessAddress;
+            if (! $address
+                || trim((string) $address->province_code) !== trim((string) $location->province_code)
+                || trim((string) $address->municipality_code) !== trim((string) $location->municipality_code)
+                || trim((string) $address->barangay_code) !== trim((string) $location->barangay_code)) {
+                throw new RuntimeException('The pickup trip service area must match the seller business address PSGC.');
+            }
+        }
         $capacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity);
 
         return RiderLocalTrip::query()->create([
             'rider_profile_id' => $rider->id,
             'logistics_center_id' => $rider->logistics_center_id,
+            'seller_profile_id' => $seller?->id,
             'trip_type' => $tripType,
             'province_code' => trim((string) $location->province_code),
             'municipality_code' => trim((string) $location->municipality_code),
@@ -58,7 +81,11 @@ final class LocalRiderTripService
 
     public function addAssignment(User $actor, RiderLocalTrip $trip, RiderAssignment $assignment): RiderLocalTripItem
     {
-        $this->assertReady();
+        if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
+            $this->assertSellerPickupReady();
+        } else {
+            $this->assertReady();
+        }
 
         return DB::transaction(function () use ($actor, $trip, $assignment): RiderLocalTripItem {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->lockForUpdate()->firstOrFail();
@@ -81,6 +108,12 @@ final class LocalRiderTripService
                 throw new RuntimeException('The assignment type does not match this trip.');
             }
 
+            if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP
+                && ((int) $trip->seller_profile_id < 1
+                    || (int) $trip->seller_profile_id !== (int) $assignment->shipment?->sellerOrder?->seller_profile_id)) {
+                throw new RuntimeException('Every parcel in a seller pickup trip must belong to its one assigned seller.');
+            }
+
             [$provinceCode, $municipalityCode, $barangayCode] = $this->assignmentCodes($assignment);
             if ($provinceCode !== trim((string) $trip->province_code)
                 || $municipalityCode !== trim((string) $trip->municipality_code)
@@ -99,6 +132,23 @@ final class LocalRiderTripService
                 ->exists();
             if ($duplicate) {
                 throw new RuntimeException('This rider assignment is already loaded on an active local trip.');
+            }
+
+            if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP) {
+                $shipmentAlreadyLoaded = RiderLocalTripItem::query()
+                    ->whereHas('riderAssignment', fn ($query) => $query
+                        ->where('shipment_id', $assignment->shipment_id)
+                        ->where('assignment_type', RiderAssignment::TYPE_PICKUP))
+                    ->whereHas('trip', fn ($query) => $query->whereNotIn('status', [
+                        RiderLocalTrip::COMPLETED,
+                        RiderLocalTrip::CANCELLED,
+                        RiderLocalTrip::EXCEPTION,
+                    ]))
+                    ->lockForUpdate()
+                    ->exists();
+                if ($shipmentAlreadyLoaded) {
+                    throw new RuntimeException('This shipment is already assigned to an active seller pickup batch.');
+                }
             }
 
             $loadedCount = $trip->items()->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED])->count();
@@ -120,6 +170,9 @@ final class LocalRiderTripService
         return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, true);
+            if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
+                throw new RuntimeException('Seller pickup batches are verified one parcel at a time at the seller.');
+            }
             $this->assertTripOpenForLoading($trip);
             if ($trip->items->isEmpty()) {
                 throw new RuntimeException('A local trip must contain at least one assignment before loading.');
@@ -151,6 +204,9 @@ final class LocalRiderTripService
         return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, false);
+            if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
+                throw new RuntimeException('Use the Seller Pickup page to accept and start a pickup batch.');
+            }
             if ($trip->status === RiderLocalTrip::IN_PROGRESS) {
                 return $trip;
             }
@@ -167,12 +223,35 @@ final class LocalRiderTripService
 
     public function startTripForAssignment(User $actor, RiderAssignment $assignment): void
     {
-        if (! $this->schema->localTripsReady()) {
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP || ! $this->schema->localTripsReady()) {
             return;
         }
         $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->latest()->first();
         if ($item) {
             $this->startTrip($actor, $item->trip);
+        }
+    }
+
+    public function assertSellerPickupBatchAssignment(RiderAssignment $assignment): void
+    {
+        if (! $this->schema->sellerPickupBatchesReady()) {
+            throw new RuntimeException('Seller rider pickups require the seller-specific local-trip schema.');
+        }
+
+        $assignment->loadMissing('shipment.sellerOrder');
+        $item = RiderLocalTripItem::query()
+            ->with('trip')
+            ->where('rider_assignment_id', $assignment->id)
+            ->whereHas('trip', fn ($query) => $query
+                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                ->whereNotNull('seller_profile_id'))
+            ->lockForUpdate()
+            ->latest('id')
+            ->first();
+
+        if (! $item
+            || (int) $item->trip?->seller_profile_id !== (int) $assignment->shipment?->sellerOrder?->seller_profile_id) {
+            throw new RuntimeException('This parcel is not part of an active seller-specific pickup assignment.');
         }
     }
 
@@ -183,6 +262,9 @@ final class LocalRiderTripService
         return DB::transaction(function () use ($actor, $trip, $exception, $notes): RiderLocalTrip {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, true);
+            if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
+                throw new RuntimeException('A seller pickup batch closes only after every collected parcel is received at its logistics center.');
+            }
             if (in_array($trip->status, [RiderLocalTrip::COMPLETED, RiderLocalTrip::CANCELLED], true)) {
                 return $trip;
             }
@@ -200,7 +282,10 @@ final class LocalRiderTripService
 
     public function syncAssignment(RiderAssignment $assignment): void
     {
-        if (! $this->schema->localTripsReady()) {
+        $ready = $assignment->assignment_type === RiderAssignment::TYPE_PICKUP
+            ? $this->schema->sellerPickupBatchesReady()
+            : $this->schema->localTripsReady();
+        if (! $ready) {
             return;
         }
 
@@ -226,7 +311,54 @@ final class LocalRiderTripService
             ]);
 
             $trip = RiderLocalTrip::query()->whereKey($item->rider_local_trip_id)->with('items')->lockForUpdate()->first();
-            if ($trip && $trip->items->every(fn (RiderLocalTripItem $row): bool => in_array($row->status, [RiderLocalTripItem::COMPLETED, RiderLocalTripItem::FAILED, RiderLocalTripItem::CANCELLED], true))) {
+            if ($trip && $trip->trip_type !== RiderLocalTrip::TYPE_PICKUP
+                && $trip->items->every(fn (RiderLocalTripItem $row): bool => in_array($row->status, [RiderLocalTripItem::COMPLETED, RiderLocalTripItem::FAILED, RiderLocalTripItem::CANCELLED], true))) {
+                $trip->update(['status' => RiderLocalTrip::COMPLETED, 'completed_at' => now()]);
+            }
+        });
+    }
+
+    public function syncPickupIntake(Shipment $shipment): void
+    {
+        if (! $this->schema->sellerPickupBatchesReady()) {
+            return;
+        }
+
+        DB::transaction(function () use ($shipment): void {
+            $item = RiderLocalTripItem::query()
+                ->whereHas('riderAssignment', fn ($query) => $query
+                    ->where('shipment_id', $shipment->id)
+                    ->where('assignment_type', RiderAssignment::TYPE_PICKUP))
+                ->whereHas('trip', fn ($query) => $query
+                    ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                    ->whereNotIn('status', [RiderLocalTrip::COMPLETED, RiderLocalTrip::CANCELLED, RiderLocalTrip::EXCEPTION]))
+                ->with('trip')
+                ->lockForUpdate()
+                ->latest('id')
+                ->first();
+            if (! $item) {
+                return;
+            }
+
+            $trip = RiderLocalTrip::query()
+                ->whereKey($item->rider_local_trip_id)
+                ->with('items.riderAssignment.shipment')
+                ->lockForUpdate()
+                ->first();
+            if (! $trip || $trip->status !== RiderLocalTrip::EN_ROUTE_TO_HUB) {
+                return;
+            }
+
+            $collectedItems = $trip->items->filter(fn (RiderLocalTripItem $row): bool => $row->riderAssignment?->status === 'COMPLETED');
+            $unresolvedItems = $trip->items->contains(fn (RiderLocalTripItem $row): bool => ! in_array(
+                $row->riderAssignment?->status,
+                ['COMPLETED', 'REJECTED', 'CANCELLED'],
+                true,
+            ));
+            $allCollectedReceived = $collectedItems->isNotEmpty()
+                && $collectedItems->every(fn (RiderLocalTripItem $row): bool => $row->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER');
+
+            if (! $unresolvedItems && $allCollectedReceived) {
                 $trip->update(['status' => RiderLocalTrip::COMPLETED, 'completed_at' => now()]);
             }
         });
@@ -234,7 +366,11 @@ final class LocalRiderTripService
 
     public function assertAssignmentMayStart(RiderAssignment $assignment): void
     {
-        if (! $this->schema->localTripsReady()) {
+        // Pickup assignments are route stops on the way to the seller. The parcel
+        // is not in the rider's custody yet, so it cannot be scanned onto a
+        // physical load before departure. Delivery assignments still require a
+        // verified trip load.
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP || ! $this->schema->localTripsReady()) {
             return;
         }
         $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->latest()->first();
@@ -329,6 +465,13 @@ final class LocalRiderTripService
     {
         if (! $this->schema->localTripsReady()) {
             throw new RuntimeException('Local trip schema and Step 4 custody dependencies are not installed; local-trip dispatch is disabled.');
+        }
+    }
+
+    private function assertSellerPickupReady(): void
+    {
+        if (! $this->schema->sellerPickupBatchesReady()) {
+            throw new RuntimeException('Seller pickup batch schema and rider capacity are not installed; seller pickup dispatch is disabled.');
         }
     }
 }

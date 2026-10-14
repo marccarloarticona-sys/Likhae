@@ -51,7 +51,11 @@ class CheckoutController extends Controller
             'intval',
             (array) old('protection_item_ids', $request->session()->get('checkout_protection_item_ids', [])),
         );
+        $sellerNotes = old('seller_notes', $request->session()->get('checkout_seller_notes', []));
+        $sellerNotes = is_array($sellerNotes) ? $sellerNotes : [];
+        $request->session()->forget('checkout_seller_notes');
         $previewError = null;
+        $checkoutBlocked = false;
 
         try {
             $preview = $this->checkoutService->preview(
@@ -74,14 +78,32 @@ class CheckoutController extends Controller
                 ?: 'Checkout could not be prepared. Review your address and cart items before trying again.';
             $voucherCode = '';
             $selectedProtectionIds = [];
-            $preview = $this->checkoutService->preview(
-                $items,
-                '',
-                $request->user(),
-                null,
-                null,
-                [],
-            );
+            $checkoutBlocked = array_key_exists('cart', $exception->errors());
+            $preview = [
+                'groups' => collect(),
+                'subtotal' => 0.0,
+                'discount_total' => 0.0,
+                'shipping_total' => 0.0,
+                'protection_total' => 0.0,
+                'grand_total' => 0.0,
+            ];
+
+            if (! $checkoutBlocked) {
+                try {
+                    $preview = $this->checkoutService->preview(
+                        $items,
+                        '',
+                        $request->user(),
+                        null,
+                        null,
+                        [],
+                    );
+                } catch (ValidationException $fallbackException) {
+                    $checkoutBlocked = true;
+                    $previewError = collect($fallbackException->errors())->flatten()->filter()->first()
+                        ?: 'Checkout could not be prepared. Return to your cart and review the selected items.';
+                }
+            }
         }
 
         // Stock can change after an item is added to the cart. Keep the
@@ -105,12 +127,23 @@ class CheckoutController extends Controller
             'hasUnavailableStock' => $hasUnavailableStock,
             'automaticRouting' => $automaticRouting,
             'selectedProtectionIds' => $selectedProtectionIds,
+            'sellerNotes' => $sellerNotes,
             'previewError' => $previewError,
+            'checkoutBlocked' => $checkoutBlocked,
         ]);
     }
 
     public function applyVoucher(Request $request): RedirectResponse
     {
+        $noteData = $request->validate([
+            'seller_notes' => ['nullable', 'array'],
+            'seller_notes.*' => ['nullable', 'string', 'max:500'],
+        ]);
+        $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
+        $items = $this->cartService->selectedItems($request->user(), $selectedIds);
+        $sellerNotes = $this->checkoutService->normalizeSellerNotes($items, (array) ($noteData['seller_notes'] ?? []));
+        $request->session()->put('checkout_seller_notes', $sellerNotes);
+
         if ($request->boolean('clear_voucher')) {
             $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes']);
 
@@ -121,8 +154,6 @@ class CheckoutController extends Controller
             'voucher_code' => ['required', 'string', 'max:80'],
         ]);
         $code = mb_strtoupper(trim($data['voucher_code']));
-        $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
-        $items = $this->cartService->selectedItems($request->user(), $selectedIds);
 
         if ($items->isEmpty()) {
             $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes']);
@@ -193,6 +224,7 @@ class CheckoutController extends Controller
         }
 
         $request->session()->put('checkout_cart_item_ids', $ownedIds);
+        $request->session()->forget('checkout_seller_notes');
 
         return redirect()->route('buyer.checkout');
     }
@@ -212,6 +244,8 @@ class CheckoutController extends Controller
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['integer'],
+            'seller_notes' => ['nullable', 'array'],
+            'seller_notes.*' => ['nullable', 'string', 'max:500'],
         ], [
             'address_id.required' => 'Select a delivery address.',
             'address_id.exists' => 'The selected delivery address is no longer available.',
@@ -234,6 +268,7 @@ class CheckoutController extends Controller
                 'cart' => 'The selected product is no longer available in your cart. Choose the product again.',
             ]);
         }
+        $sellerNotes = $this->checkoutService->normalizeSellerNotes($items, (array) ($data['seller_notes'] ?? []));
         $address = Address::query()->where('user_id', $request->user()->id)->findOrFail((int) $data['address_id']);
         AddressCoordinateValidator::assertValid([
             'latitude' => $address->latitude,
@@ -264,6 +299,7 @@ class CheckoutController extends Controller
                 $voucherCode,
                 isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null,
                 array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
+                $sellerNotes,
             );
         } catch (ValidationException $exception) {
             if (array_key_exists('voucher_code', $exception->errors())) {
@@ -273,7 +309,7 @@ class CheckoutController extends Controller
             throw $exception;
         }
 
-        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_protection_item_ids']);
+        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_protection_item_ids', 'checkout_seller_notes']);
 
         return redirect()
             ->route('buyer.orders.success', ['order' => $order->order_number])

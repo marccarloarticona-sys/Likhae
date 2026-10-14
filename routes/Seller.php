@@ -30,11 +30,14 @@ Route::prefix('seller')
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'seller')->name('settings.update');
 
         Route::get('/products', [SellerProductController::class, 'index'])->name('products');
+        Route::get('/products/inventory/preview', [SellerProductController::class, 'inventoryPreview'])->name('products.inventory.preview');
+        Route::get('/products/inventory/download', [SellerProductController::class, 'downloadInventoryPdf'])->name('products.inventory.download');
         Route::get('/products/trash', [SellerProductController::class, 'trash'])->name('products.trash');
         Route::post('/products/trash/{productId}/restore', [SellerProductController::class, 'restore'])->name('products.restore');
         Route::post('/products', [SellerProductController::class, 'store'])->name('products.store');
         Route::put('/products/{product}', [SellerProductController::class, 'update'])->name('products.update');
         Route::patch('/products/{product}/stock', [SellerProductController::class, 'stock'])->name('products.stock');
+        Route::patch('/products/{product}/variants/{variant}/stock', [SellerProductController::class, 'variantStock'])->name('products.variants.stock');
         Route::patch('/products/{product}/toggle', [SellerProductController::class, 'toggle'])->name('products.toggle');
         Route::delete('/products/{product}', [SellerProductController::class, 'destroy'])->name('products.destroy');
         Route::delete('/products/{product}/images/{image}', [SellerProductController::class, 'deleteImage'])->name('products.images.destroy');

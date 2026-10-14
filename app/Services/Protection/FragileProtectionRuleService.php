@@ -77,9 +77,11 @@ class FragileProtectionRuleService
         $percentage = max(0, (float) ($rule['percentage_rate'] ?? 0));
         $flat = max(0, (float) ($rule['flat_amount'] ?? 0));
         $fee = match ($type) {
-            FragileProtectionRule::TYPE_PERCENTAGE => $price * $percentage / 100,
-            FragileProtectionRule::TYPE_FLAT => $flat,
-            FragileProtectionRule::TYPE_HYBRID => ($percentage > 0 ? $price * $percentage / 100 : $flat),
+            FragileProtectionRule::TYPE_PERCENTAGE => $percentage > 0 ? $price * $percentage / 100 : null,
+            FragileProtectionRule::TYPE_FLAT => $flat > 0 ? $flat : null,
+            FragileProtectionRule::TYPE_HYBRID => $percentage > 0
+                ? $price * $percentage / 100
+                : ($flat > 0 ? $flat : null),
             default => null,
         };
         if ($fee === null) {

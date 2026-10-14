@@ -11,6 +11,7 @@ use App\Models\Seller\Voucher;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Reports\SellerReportPdfService;
+use App\Support\InventoryStockStatus;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -103,14 +104,21 @@ class SellerOperationsController extends Controller
         });
 
         $inventoryAlerts = $seller->products()
-            ->withSum('variants', 'stock')
-            ->get()
-            ->map(fn ($product): array => [
+            ->whereHas('variants', fn ($query) => $query
+                ->where('is_active', true)
+                ->where('stock', '<=', InventoryStockStatus::LOW_STOCK_THRESHOLD))
+            ->with(['variants' => fn ($query) => $query
+                ->where('is_active', true)
+                ->where('stock', '<=', InventoryStockStatus::LOW_STOCK_THRESHOLD)
+                ->orderBy('stock')])
+            ->get(['id', 'name'])
+            ->map(fn (Product $product): array => [
                 'name' => $product->name,
-                'stock' => (int) ($product->variants_sum_stock ?? 0),
+                'out_count' => $product->variants->filter(fn ($variant): bool => InventoryStockStatus::isOut((int) $variant->stock))->count(),
+                'low_count' => $product->variants->filter(fn ($variant): bool => InventoryStockStatus::isLow((int) $variant->stock))->count(),
             ])
-            ->filter(fn (array $product): bool => $product['stock'] <= 5)
-            ->sortBy('stock')
+            ->sortByDesc('low_count')
+            ->sortByDesc('out_count')
             ->take(6)
             ->values();
 
@@ -124,7 +132,9 @@ class SellerOperationsController extends Controller
                 'weekly_revenue' => (float) $dailySales->sum(),
                 'products_sold' => $seller->products()->count(),
                 'pending_shipment' => $stats['ready'],
-                'inventory_alerts' => $seller->products()->whereHas('variants', fn ($query) => $query->where('stock', '<=', 5))->count(),
+                'inventory_alerts' => $seller->products()->whereHas('variants', fn ($query) => $query
+                    ->where('is_active', true)
+                    ->where('stock', '<=', InventoryStockStatus::LOW_STOCK_THRESHOLD))->count(),
             ],
             'orderStatusCounts' => [
                 'placed' => $stats['placed'],

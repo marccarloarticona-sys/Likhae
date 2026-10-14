@@ -10,3 +10,7 @@ Schedule::command('likhae:purge-expired-soft-deletes')
     ->daily()
     ->timezone('Asia/Manila')
     ->withoutOverlapping();
+Schedule::command('likhae:auto-confirm-delivered-orders')
+    ->hourly()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping();

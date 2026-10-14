@@ -27,6 +27,12 @@
 
         $sellerValue = data_get($product, 'sellerProfile.business_name')
             ?? 'LIKHAE Seller';
+        $sellerId = data_get($product, 'seller_profile_id');
+        $sellerShopUrl = \Illuminate\Support\Facades\Route::has('buyer.shop')
+            && is_numeric($sellerId)
+            && filled(data_get($product, 'sellerProfile.business_name'))
+                ? route('buyer.shop', ['seller' => $sellerId])
+                : null;
 
         return [
             'id' => data_get($item, 'id')
@@ -49,6 +55,12 @@
             'seller' => is_scalar($sellerValue)
                 ? (string) $sellerValue
                 : 'LIKHAE Seller',
+
+            'seller_id' => is_numeric($sellerId)
+                ? (int) $sellerId
+                : 'unknown-'.(string) (data_get($item, 'id') ?? data_get($product, 'id')),
+
+            'seller_shop_url' => $sellerShopUrl,
 
             'price' => max(
                 0,
@@ -84,6 +96,8 @@
         ];
     });
 
+    $cartGroups = $normalizedCartItems->groupBy('seller_id');
+
     $hasItems = $normalizedCartItems->isNotEmpty();
     $hasUnavailableSelection = $normalizedCartItems->contains(
         fn ($item) => $item['stock'] < $item['quantity']
@@ -93,10 +107,9 @@
     $subtotal = $normalizedCartItems->sum(
         fn ($item) => $item['price'] * $item['quantity']
     );
-
     $shipping = 0;
     $discount = 0;
-    $total = $subtotal;
+    $total = $subtotal + $shipping - $discount;
 
     $buyer = auth()->user();
 
@@ -224,13 +237,14 @@
     >
         <div class="min-w-0 space-y-5">
             {{-- Cart items --}}
-            <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-4 py-4 sm:px-5">
+            <section class="space-y-4" aria-label="Shopping cart items">
+                <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-4 shadow-sm sm:px-5">
                     <label class="flex cursor-pointer items-center gap-3">
                         <input
                             type="checkbox"
                             class="h-4 w-4 rounded border-stone-300 text-red-900 focus:ring-red-800"
                             data-select-all
+                            aria-label="Select all cart items"
                             checked
                         >
 
@@ -253,8 +267,28 @@
                     </button>
                 </div>
 
-                <div class="divide-y divide-stone-100" data-cart-items>
-                    @foreach ($normalizedCartItems as $item)
+                <div class="space-y-4" data-cart-items>
+                    @foreach ($cartGroups as $sellerId => $sellerItems)
+                        @php
+                            $sellerName = $sellerItems->first()['seller'] ?? 'LIKHAE Seller';
+                            $storeSubtotal = $sellerItems->sum(fn ($item) => $item['price'] * $item['quantity']);
+                            $sellerShopUrl = $sellerItems->first()['seller_shop_url'] ?? null;
+                        @endphp
+                        <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-group data-seller-id="{{ $sellerId }}">
+                            <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 bg-stone-50 px-4 py-4 sm:px-5">
+                                <label class="flex min-w-0 cursor-pointer items-center gap-3">
+                                    <input type="checkbox" class="h-4 w-4 shrink-0 rounded border-stone-300 text-red-900 focus:ring-red-800" data-seller-select checked aria-label="Select all items from {{ $sellerName }}">
+                                    <span class="min-w-0 text-sm font-bold uppercase tracking-wide text-stone-900">{{ $sellerName }}</span>
+                                </label>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <span class="text-xs text-stone-500" data-seller-count>{{ $sellerItems->count() }} {{ $sellerItems->count() === 1 ? 'item' : 'items' }}</span>
+                                    @if ($sellerShopUrl)
+                                        <a href="{{ $sellerShopUrl }}" class="text-xs font-semibold text-red-800 hover:text-red-950">View Shop</a>
+                                    @endif
+                                </div>
+                            </header>
+                            <div class="divide-y divide-stone-100" data-seller-items>
+                    @foreach ($sellerItems as $item)
                         @php
                             $lineTotal = $item['price'] * $item['quantity'];
 
@@ -270,6 +304,7 @@
                             class="p-4 sm:p-5"
                             data-cart-item
                             data-item-id="{{ $item['id'] ?? '' }}"
+                            data-seller-id="{{ $item['seller_id'] }}"
                             data-item-price="{{ $item['price'] }}"
                             data-item-stock="{{ $item['stock'] }}"
                             data-update-url="{{ route('buyer.cart.update', ['item' => $item['id']]) }}"
@@ -315,10 +350,6 @@
                                                 </h2>
                                             </a>
 
-                                            <p class="mt-1 truncate text-xs text-stone-500">
-                                                {{ $item['seller'] }}
-                                            </p>
-
                                             <p class="mt-1 text-[11px] text-stone-400">
                                                 Variant: {{ $item['variant'] }}
                                             </p>
@@ -363,8 +394,8 @@
                                                 @endif
                                             </div>
 
-                                            <p class="mt-1 text-[10px] text-stone-400">
-                                                {{ $item['stock'] }} pieces available
+                                            <p class="mt-1 text-[10px] {{ $item['stock'] < $item['quantity'] ? 'font-semibold text-red-700' : 'text-stone-400' }}" data-stock-availability>
+                                                {{ $item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available' }}
                                             </p>
                                         </div>
 
@@ -433,6 +464,13 @@
                             </div>
                         </article>
                     @endforeach
+                            </div>
+                            <footer class="flex items-center justify-between gap-4 border-t border-stone-100 bg-white px-4 py-4 sm:px-5">
+                                <span class="text-xs font-semibold text-stone-600">Store subtotal</span>
+                                <strong class="text-sm font-bold text-stone-900" data-seller-subtotal>{{ '₱'.number_format($storeSubtotal, 2) }}</strong>
+                            </footer>
+                        </section>
+                    @endforeach
                 </div>
             </section>
 
@@ -447,7 +485,7 @@
                     </h2>
 
                     <p class="mt-1 text-xs text-stone-500">
-                        Final amount for the selected products.
+                        Shipping and eligible shop discounts are confirmed at checkout.
                     </p>
                 </div>
 
@@ -502,34 +540,26 @@
 
                         <div class="flex items-center justify-between gap-4">
                             <span class="text-stone-500">Shipping</span>
-                            <span class="font-medium text-stone-700" data-summary-shipping>
-                                ₱{{ number_format($shipping, 2) }}
-                            </span>
+                            <span class="font-medium text-stone-700" data-summary-shipping>₱{{ number_format($shipping, 2) }}</span>
                         </div>
 
                         <div class="flex items-center justify-between gap-4">
                             <span class="text-stone-500">Discount</span>
-                            <span class="font-medium text-red-700" data-summary-discount>
-                                −₱{{ number_format($discount, 2) }}
-                            </span>
+                            <span class="font-medium text-stone-700" data-summary-discount>−₱{{ number_format($discount, 2) }}</span>
                         </div>
-                    </div>
 
-                    <div class="mt-5 flex items-end justify-between gap-4 border-t border-stone-200 pt-5">
-                        <span class="text-sm font-semibold text-stone-900">
-                            Total
-                        </span>
+                        <div class="flex items-center justify-between gap-4 border-t border-stone-200 pt-3 font-semibold">
+                            <span class="text-stone-900">Total</span>
+                            <span class="text-stone-900" data-summary-total>₱{{ number_format($total, 2) }}</span>
+                        </div>
 
-                        <strong class="text-xl font-semibold text-red-800" data-summary-total>
-                            ₱{{ number_format($total, 2) }}
-                        </strong>
                     </div>
 
                     <button
                         type="button"
                         class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-950 disabled:cursor-not-allowed disabled:bg-stone-300"
                         data-place-order
-                        @disabled(!$hasItems)
+                        @disabled(!$hasItems || $hasUnavailableSelection)
                     >
                         Checkout
 
@@ -598,15 +628,59 @@ document.addEventListener('DOMContentLoaded', () => {
         );
     };
 
+    const getSellerGroups = () => Array.from(
+        page.querySelectorAll('[data-seller-group]')
+    );
+
+    const getSellerItems = (group) => Array.from(
+        group.querySelectorAll('[data-cart-item]')
+    );
+
+    const updateSellerGroup = (group) => {
+        const items = getSellerItems(group);
+        const selectedItems = items.filter((item) =>
+            item.querySelector('[data-cart-select]')?.checked
+        );
+        const selector = group.querySelector('[data-seller-select]');
+        const count = group.querySelector('[data-seller-count]');
+        const subtotalElement = group.querySelector('[data-seller-subtotal]');
+        const subtotal = selectedItems.reduce((sum, item) => {
+            const price = Number(item.dataset.itemPrice) || 0;
+            const quantity = item.querySelector('[data-cart-quantity]');
+
+            return sum + price * (quantity ? clampQuantity(quantity) : 1);
+        }, 0);
+
+        if (count) {
+            count.textContent = `${items.length} ${items.length === 1 ? 'item' : 'items'}`;
+        }
+
+        if (subtotalElement) {
+            subtotalElement.textContent = currency.format(subtotal);
+        }
+
+        if (selector) {
+            selector.checked = items.length > 0 && selectedItems.length === items.length;
+            selector.indeterminate = selectedItems.length > 0 && selectedItems.length < items.length;
+        }
+    };
+
+    const removeEmptySellerGroups = () => {
+        getSellerGroups().forEach((group) => {
+            if (getSellerItems(group).length === 0) {
+                group.remove();
+            }
+        });
+    };
+
     const clampQuantity = (input) => {
         const minimum = Number(input.min) || 1;
-        const maximum = Number(input.max) || 99;
         const current = Number(input.value) || minimum;
+        const quantity = Math.min(999, Math.max(minimum, current));
 
-        input.value = Math.min(
-            maximum,
-            Math.max(minimum, current)
-        );
+        // Preserve an over-stock quantity so the buyer sees the real cart
+        // state and Checkout remains blocked until it is corrected.
+        input.value = quantity;
 
         return Number(input.value);
     };
@@ -622,14 +696,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const quantity = clampQuantity(input);
         const minimum = Number(input.min) || 1;
-        const maximum = Number(input.max) || 99;
+        const maximum = Math.max(0, Number(input.max) || 0);
 
         if (minusButton) {
             minusButton.disabled = quantity <= minimum;
         }
 
         if (plusButton) {
-            plusButton.disabled = quantity >= maximum;
+            plusButton.disabled = maximum === 0 || quantity >= maximum;
         }
     };
 
@@ -652,10 +726,25 @@ document.addEventListener('DOMContentLoaded', () => {
             price * quantity
         );
 
+        const stock = Math.max(0, Number(item.dataset.itemStock) || 0);
+        const availability = item.querySelector('[data-stock-availability]');
+        if (availability) {
+            const unavailable = stock < quantity;
+            availability.textContent = unavailable
+                ? `Only ${stock} available.`
+                : `${stock} pieces available`;
+            availability.classList.toggle('font-semibold', unavailable);
+            availability.classList.toggle('text-red-700', unavailable);
+            availability.classList.toggle('text-stone-400', !unavailable);
+        }
+
         updateQuantityButtons(item);
     };
 
     const updateSummary = () => {
+        removeEmptySellerGroups();
+        getSellerGroups().forEach(updateSellerGroup);
+
         const items = getItems();
         const selectedItems = items.filter((item) => {
             return item.querySelector(
@@ -664,7 +753,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         let subtotal = 0;
-        let selectedQuantity = 0;
         let hasUnavailableStock = false;
 
         selectedItems.forEach((item) => {
@@ -682,27 +770,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             subtotal += price * quantity;
-            selectedQuantity += quantity;
         });
-
-        const baseShipping =
-            Number(page.dataset.shipping) || 0;
-
-        const shipping =
-            selectedItems.length > 0 ? baseShipping : 0;
-
-        const appliedDiscount =
-            Number(page.dataset.appliedDiscount) || 0;
-
-        const discount =
-            selectedItems.length > 0
-                ? Math.min(appliedDiscount, subtotal)
-                : 0;
-
-        const total = Math.max(
-            0,
-            subtotal + shipping - discount
-        );
 
         if (cartCount) {
             cartCount.textContent =
@@ -710,8 +778,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (selectedCountElement) {
-            selectedCountElement.textContent =
-                selectedQuantity;
+            selectedCountElement.textContent = `${selectedItems.length}`;
         }
 
         if (subtotalElement) {
@@ -719,19 +786,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 currency.format(subtotal);
         }
 
+        const shipping = selectedItems.length > 0 ? Math.max(0, Number(page.dataset.shipping) || 0) : 0;
+        const appliedDiscount = selectedItems.length > 0 ? Math.max(0, Number(page.dataset.appliedDiscount) || 0) : 0;
+        const discount = Math.min(subtotal, appliedDiscount);
+        const total = Math.max(0, subtotal + shipping - discount);
+
         if (shippingElement) {
-            shippingElement.textContent =
-                currency.format(shipping);
+            shippingElement.textContent = currency.format(shipping);
         }
 
         if (discountElement) {
-            discountElement.textContent =
-                `−${currency.format(discount)}`;
+            discountElement.textContent = `−${currency.format(discount)}`;
         }
 
         if (totalElement) {
-            totalElement.textContent =
-                currency.format(total);
+            totalElement.textContent = currency.format(total);
         }
 
         if (placeOrderButton) {
@@ -828,7 +897,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (input) {
                 input.value = Math.min(
-                    Number(input.max) || 99,
+                    Math.max(0, Number(input.max) || 0),
                     Number(input.value || 1) + 1
                 );
 
@@ -875,6 +944,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSummary();
                 persistQuantity(item);
             }
+        }
+
+        if (event.target.matches('[data-seller-select]')) {
+            const group = event.target.closest('[data-seller-group]');
+            group?.querySelectorAll('[data-cart-select]').forEach((checkbox) => {
+                checkbox.checked = event.target.checked;
+            });
+            updateSummary();
+            return;
         }
 
         if (event.target.matches('[data-cart-select]')) {

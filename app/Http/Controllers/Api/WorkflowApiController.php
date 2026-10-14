@@ -52,6 +52,12 @@ class WorkflowApiController extends Controller
         $user = $request->user();
         abort_unless($user->isAccountType(User::TYPE_RIDER), 403);
         abort_unless($user->riderProfile && (int) $assignment->rider_profile_id === (int) $user->riderProfile->id, 403);
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Seller pickup actions must be performed through the seller-specific pickup batch workflow.',
+            ], 422);
+        }
 
         $data = $request->validate([
             'action' => ['required', Rule::in(['accept', 'start', 'pickup_complete', 'delivery_success', 'delivery_failed', 'reject'])],
@@ -137,7 +143,7 @@ class WorkflowApiController extends Controller
         $this->assertCenterShipment($shipment, $center);
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer', Rule::exists('rider_profiles', 'id')->where('logistics_center_id', $center->id)],
-            'assignment_type' => ['required', Rule::in(['PICKUP', 'DELIVERY'])],
+            'assignment_type' => ['required', Rule::in(['DELIVERY'])],
             'local_trip_id' => ['nullable', 'integer'],
         ]);
         $rider = RiderProfile::query()

@@ -41,7 +41,7 @@ class RiderMobileApiTest extends TestCase
         $this->getJson(route('api.v1.rider.pickups.index'))
             ->assertOk()
             ->assertJsonPath('data.items', [])
-            ->assertJsonPath('data.stats.ready', 0)
+            ->assertJsonPath('data.stats.assigned', 0)
             ->assertJsonStructure(['data' => ['stats']]);
 
         $this->getJson(route('api.v1.rider.history.index'))

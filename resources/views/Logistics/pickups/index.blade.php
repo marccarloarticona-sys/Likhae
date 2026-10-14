@@ -1,56 +1,131 @@
 @extends('Logistics.app')
-@section('title', 'Pickup Requests - LIKHAE Logistics')
+
+@section('title', 'Seller Pickup Queue - LIKHAE Logistics')
+
 @section('content')
 <div class="space-y-6">
-    <header><p class="text-xs font-bold uppercase text-primary">First-mile operations</p><h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Requests</h1><p class="mt-2 text-sm text-muted">Approve requests and assign an active rider from this logistics center.</p></header>
+    <header>
+        <p class="text-xs font-bold uppercase text-primary">First-mile operations</p>
+        <h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Queue</h1>
+        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address and holds 1 to 10 parcels, limited by the selected rider capacity.</p>
+    </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
+
     <form method="GET" action="{{ route('logistics.pickups') }}" class="flex flex-col gap-2 border border-line bg-surface p-4 sm:flex-row">
-        <input name="tracking" value="{{ request('tracking', '') }}" class="h-10 min-w-0 flex-1 border border-line bg-white px-3 text-sm text-ink" placeholder="Filter by tracking number" aria-label="Filter pickup requests by tracking number">
-        <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Find Pickup</button>
+        <input name="tracking" value="{{ $tracking }}" class="h-10 min-w-0 flex-1 border border-line bg-white px-3 text-sm text-ink" placeholder="Filter by tracking number" aria-label="Filter pickup queue by tracking number">
+        <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Find Parcel</button>
     </form>
-    <x-shared.mapbox :markers="$mapMarkers" title="Pickup operations map" height="220px" user-location-target="seller" />
-    <div class="overflow-x-auto border border-line bg-surface"><table class="min-w-full text-left text-sm">
-        <thead class="border-b border-line bg-gray-50 text-xs uppercase text-muted"><tr><th class="p-4">Parcel</th><th class="p-4">Seller</th><th class="p-4">Destination</th><th class="p-4">Status</th><th class="p-4">Assignment</th></tr></thead>
-        <tbody class="divide-y divide-line">
-        @forelse($pickups as $pickup)
-            @php($shipment = $pickup->shipment)
-            <tr>
-                <td class="p-4"><a class="font-semibold text-primary" href="{{ route('logistics.parcels.show', $shipment) }}">{{ $shipment->tracking_number }}</a><div class="text-muted">{{ $shipment->sellerOrder?->seller_order_number }}</div></td>
-                <td class="p-4">{{ $shipment->sellerOrder?->sellerProfile?->business_name }}</td>
-                <td class="p-4">{{ collect([$shipment->destination_barangay_name,$shipment->destination_municipality_name,$shipment->destination_province_name])->filter()->implode(', ') }}</td>
-                <td class="p-4 font-semibold">{{ str($pickup->status)->headline() }}</td>
-                <td class="p-4">
-                    @php($activeAssignment = $shipment->riderAssignments->where('assignment_type','PICKUP')->whereIn('status',['ASSIGNED','ACCEPTED','IN_PROGRESS'])->sortByDesc('id')->first())
-                    @if(str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:'))
-                        <form method="POST" action="{{ route('logistics.parcels.receive.confirm', $shipment) }}" class="flex min-w-72 gap-2">@csrf<input name="scanned_code" required class="min-w-0 flex-1 border border-line px-3 py-2" placeholder="Scan tracking number"><input type="hidden" name="scan_method" value="MANUAL"><button class="bg-primary px-4 py-2 font-semibold text-white">Confirm Drop-off</button></form>
-                    @elseif($activeAssignment)<span class="font-semibold">{{ $activeAssignment->riderProfile?->user?->name }}</span><small class="block text-muted">{{ str($activeAssignment->status)->headline() }}</small>
+    <x-shared.mapbox :markers="$mapMarkers" title="Seller pickup operations map" height="220px" user-location-target="seller" />
+
+    @if(!$pickupSchemaReady)
+        <section class="border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">Seller pickup batch assignment is unavailable until the additive local trip migrations are installed.</section>
+    @endif
+
+    <section class="space-y-4">
+        <div><h2 class="text-lg font-bold text-ink">Waiting for Assignment</h2><p class="mt-1 text-sm text-muted">Ready parcels are grouped by the seller and that seller's registered pickup address.</p></div>
+        @forelse($sellerPickupQueue as $group)
+            @php($seller = $group['seller'])
+            @php($shipments = $group['shipments'])
+            @php($eligibleRiders = $group['eligible_riders'])
+            @php($address = $seller?->businessAddress)
+            <details open class="border border-line bg-surface" data-seller-pickup-group>
+                <summary class="cursor-pointer list-none border-b border-line px-5 py-4">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div><h3 class="font-bold text-ink">{{ $seller?->business_name ?? 'Seller unavailable' }}</h3><p class="mt-1 text-sm text-muted">{{ $address?->formatted() ?? 'Pickup address unavailable' }}</p></div>
+                        <span class="text-sm font-semibold text-ink">{{ $shipments->count() }} ready {{ str('parcel')->plural($shipments->count()) }} · {{ $center->business_name }}</span>
+                    </div>
+                </summary>
+                <div class="p-5">
+                    @if($pickupSchemaReady)
+                    <form method="POST" action="{{ route('logistics.pickups.assignments.store') }}" data-seller-pickup-form class="space-y-4">
+                        @csrf
+                        <div class="grid gap-2">
+                            @foreach($shipments as $shipment)
+                                <label class="flex cursor-pointer items-start gap-3 border border-line p-3 hover:bg-page-secondary">
+                                    <input type="checkbox" name="shipment_ids[]" value="{{ $shipment->id }}" class="mt-1" data-pickup-parcel>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block font-semibold text-primary">{{ $shipment->tracking_number }}</span>
+                                        <span class="mt-1 block text-xs text-muted">{{ $shipment->sellerOrder?->seller_order_number }} · {{ $shipment->sellerOrder?->items?->pluck('product_name')->filter()->join(', ') }}</span>
+                                    </span>
+                                    <span class="text-xs font-semibold text-muted">READY_FOR_PICKUP</span>
+                                </label>
+                            @endforeach
+                        </div>
+
+                        <div class="grid gap-3 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                            <label class="grid gap-1 text-xs font-semibold text-muted">Eligible local rider
+                                <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
+                                    <option value="">{{ $eligibleRiders->isEmpty() ? 'No eligible rider assigned to this pickup barangay' : 'Select motorcycle or tricycle rider' }}</option>
+                                    @foreach($eligibleRiders as $rider)
+                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · cap {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}</option>
+                                    @endforeach
+                                </select>
+                            </label>
+                            <button type="submit" disabled data-pickup-submit class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Assign Selected Parcels</button>
+                        </div>
+                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected · 1 to the rider's approved capacity, up to 10 parcels.</p>
+                    </form>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        @foreach($shipments as $shipment)
+                            <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}">@csrf<button class="border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign {{ $shipment->tracking_number }}</button></form>
+                        @endforeach
+                    </div>
                     @else
-                    <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}" class="mb-2">@csrf<button class="w-full border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign (least busy eligible rider)</button></form>
-                    @php($pickupAreaId = $pickupAreaIds[$shipment->id] ?? null)
-                    @php($eligibleRiders = $riders->filter(fn ($rider) => (int) $rider->active_pickup_assignments_count < \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS))
-                    @php($eligibleRiders = $pickupAreaId ? $eligibleRiders->filter(fn ($rider) => $rider->areaAssignments->contains(fn ($assignment) => $assignment->is_active && (int) $assignment->service_area_id === (int) $pickupAreaId)) : $eligibleRiders)
-                    @php($pickupEligibleIds = $pickupEligibleRiderIds[$shipment->id] ?? null)
-                    @php($eligibleRiders = $pickupAreaId && $pickupEligibleIds !== null ? $riders->whereIn('id', $pickupEligibleIds) : $eligibleRiders)
-                    @php($hasCoveredRiders = $eligibleRiders->isNotEmpty())
-                    @php($coverageShortage = $pickupAreaId && !$hasCoveredRiders)
-                    @php($eligibleRiders = $coverageShortage ? $riders->filter(fn ($rider) => (int) $rider->active_pickup_assignments_count < \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS) : $eligibleRiders)
-                    <form method="POST" action="{{ route('logistics.pickups.assign', $shipment) }}" class="grid min-w-72 grid-cols-[minmax(0,1fr)_auto] gap-2">@csrf
-                        <input type="hidden" name="assignment_shipment_id" value="{{ $shipment->id }}">
-                        <select name="rider_profile_id" required class="min-h-11 min-w-0 border border-line bg-white px-3"><option value="">{{ $eligibleRiders->isEmpty() ? 'No rider with capacity available' : 'Select nearby rider' }}</option>@foreach($eligibleRiders as $rider)<option value="{{ $rider->id }}" @selected((int) old('assignment_shipment_id') === (int) $shipment->id && (int) old('rider_profile_id') === (int) $rider->id)>{{ $rider->user?->name }} — {{ $rider->vehicle_type }} ({{ $rider->active_pickup_assignments_count }}/10 pickups)</option>@endforeach</select>
-                        <button class="bg-primary px-4 py-2 font-semibold text-white">Assign</button>
-                        @if($pickupAreaId)
-                            <label class="col-span-full flex items-start gap-2 text-[11px] font-semibold {{ $coverageShortage ? 'text-red-700' : 'text-amber-800' }}"><input type="checkbox" name="coverage_override" value="1" @checked((int) old('assignment_shipment_id') === (int) $shipment->id && old('coverage_override')) class="mt-0.5"><span>{{ $coverageShortage ? 'Required for the listed rider: no active rider covers this pickup area. Check to use the shortage override.' : 'Use only if an area-coverage override is required.' }}</span></label>
-                            <textarea name="coverage_override_reason" rows="2" maxlength="1000" class="col-span-full border border-line px-3 py-2 text-xs" placeholder="Reason for coverage override (required when checked)">{{ old('assignment_shipment_id') == $shipment->id ? old('coverage_override_reason') : '' }}</textarea>
-                        @endif
-                        @if((int) old('assignment_shipment_id') === (int) $shipment->id && $errors->has('rider_profile_id'))
-                            <p class="col-span-full border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800" role="alert">{{ $errors->first('rider_profile_id') }}</p>
-                        @endif
-                    </form>@endif
-                </td>
-            </tr>
-        @empty<tr><td colspan="5" class="p-8 text-center text-muted">{{ request('tracking') ? 'No pending pickup requests match that waybill.' : 'No pending pickup requests.' }}</td></tr>@endforelse
-        </tbody>
-    </table></div>{{ $pickups->links() }}
+                        <p class="text-sm text-muted">Pickup assignment is unavailable until the seller-specific local-trip migration is installed.</p>
+                    @endif
+                </div>
+            </details>
+        @empty
+            <div class="border border-dashed border-line bg-surface p-8 text-center text-sm text-muted">{{ $tracking ? 'No waiting pickup parcel matches that waybill.' : 'No sellers are waiting for rider pickup.' }}</div>
+        @endforelse
+    </section>
+
+    <section class="space-y-4">
+        <div><h2 class="text-lg font-bold text-ink">Active Seller Pickups</h2><p class="mt-1 text-sm text-muted">Seller scans, rider progress, and parcels still due for logistics intake.</p></div>
+        <div class="grid gap-3">
+            @forelse($activePickupBatches as $batch)
+                @php($total = $batch->items->count())
+                @php($collectedItems = $batch->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED'))
+                @php($collected = $collectedItems->count())
+                @php($received = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER')->count())
+                @php($phase = match($batch->status) { 'LOADING' => 'Waiting for rider acceptance', 'READY' => 'Accepted · waiting for pickup start', 'EN_ROUTE_TO_HUB' => 'In transit to hub', default => 'In progress at seller' })
+                <article class="border border-line bg-surface p-5">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div><p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup Batch #P-{{ $batch->id }}</p><h3 class="mt-1 font-bold text-ink">{{ $batch->seller?->business_name }}</h3><p class="mt-1 text-sm text-muted">{{ $batch->seller?->businessAddress?->formatted() }}</p><p class="mt-1 text-sm text-muted">Rider: {{ $batch->rider?->user?->name }}</p></div>
+                        <span class="font-semibold text-ink">{{ $phase }}</span>
+                    </div>
+                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned · {{ $collected }}/{{ $total }} seller scans complete@if($collected > 0) · {{ $received }}/{{ $collected }} received at hub@endif</p>
+                    @if($batch->status === 'EN_ROUTE_TO_HUB')
+                        <div class="mt-3 grid gap-2 sm:grid-cols-2">@foreach($collectedItems as $item)<div class="border border-line px-3 py-2 text-sm"><strong>{{ $item->riderAssignment?->shipment?->tracking_number }}</strong><span class="ml-2 text-xs {{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'text-green-700' : 'text-amber-800' }}">{{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'Received' : 'Expected' }}</span></div>@endforeach</div>
+                    @endif
+                </article>
+            @empty
+                <div class="border border-dashed border-line bg-surface p-6 text-sm text-muted">No active seller pickup batches.</div>
+            @endforelse
+        </div>
+    </section>
 </div>
+
+@push('scripts')
+<script>
+document.querySelectorAll('[data-seller-pickup-form]').forEach((form) => {
+    const rider = form.querySelector('[data-pickup-rider]');
+    const checks = [...form.querySelectorAll('[data-pickup-parcel]')];
+    const countLabel = form.querySelector('[data-pickup-selected]');
+    const submit = form.querySelector('[data-pickup-submit]');
+    const update = () => {
+        const selected = checks.filter((check) => check.checked).length;
+        const option = rider.options[rider.selectedIndex];
+        const capacity = Math.min(10, Number(option?.dataset.capacity || 0));
+        checks.forEach((check) => { check.disabled = !check.checked && selected >= capacity; });
+        countLabel.textContent = String(selected);
+        submit.disabled = selected < 1 || selected > capacity || !rider.value;
+    };
+    rider.addEventListener('change', update);
+    checks.forEach((check) => check.addEventListener('change', update));
+    update();
+});
+</script>
+@endpush
 @endsection

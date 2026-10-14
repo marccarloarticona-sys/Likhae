@@ -102,6 +102,18 @@ class SellerCatalogService
         $product->variants()->where('is_active', true)->firstOrFail()->update(['stock' => $stock]);
     }
 
+    public function updateVariantStock(
+        SellerProfile $seller,
+        Product $product,
+        ProductVariant $variant,
+        int $stock,
+    ): void {
+        abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $variant->product_id === (int) $product->id, 404);
+
+        $variant->update(['stock' => $stock]);
+    }
+
     /** @return array<string, ProductOptionValue> */
     private function syncOptions(Product $product, array $optionRows): array
     {

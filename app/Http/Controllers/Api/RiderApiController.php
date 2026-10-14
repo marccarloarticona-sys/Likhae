@@ -8,12 +8,16 @@ use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
+use App\Models\Rider\RiderLocalTrip;
+use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\SellerPickupBatchService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,12 +27,20 @@ use RuntimeException;
 
 class RiderApiController extends Controller
 {
-    public function dashboard(Request $request): JsonResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->rider($request);
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $deliveries = (clone $assignments)->delivery();
+        $pendingPickupCount = $schema->sellerPickupBatchesReady()
+            ? RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
+                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                ->whereNotNull('seller_profile_id')
+                ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS])
+                ->count()
+            : (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count();
         $stats = [
+            ['label' => 'Pending Seller Pickup Assignments', 'value' => $pendingPickupCount],
             ['label' => 'Assigned Parcels', 'value' => (clone $deliveries)->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
             ['label' => 'In Transit', 'value' => (clone $deliveries)->where('status', 'IN_PROGRESS')->count()],
             ['label' => 'Out for Delivery', 'value' => (clone $deliveries)->where('status', 'IN_PROGRESS')->whereHas('shipment', fn ($query) => $query->where('current_status', 'OUT_FOR_DELIVERY'))->count()],
@@ -66,31 +78,114 @@ class RiderApiController extends Controller
         return $this->paginated($rows, fn (RiderAssignment $assignment): array => $this->assignmentPayload($assignment), ['stats' => $stats]);
     }
 
-    public function pickups(Request $request): JsonResponse
+    public function pickups(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->rider($request);
-        $query = RiderAssignment::query()->where('rider_profile_id', $rider->id)->pickup()
-            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
-            ->with($this->assignmentRelations())->latest();
+        if (! $schema->sellerPickupBatchesReady()) {
+            return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
+        }
+
+        $query = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->whereNotNull('seller_profile_id')
+            ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])
+            ->with(['seller.businessAddress', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items']);
         $rows = $query->paginate($this->perPage($request));
-        $statsQuery = RiderAssignment::query()->where('rider_profile_id', $rider->id)->pickup();
+        $statsQuery = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)->whereNotNull('seller_profile_id');
         $stats = [
-            'ready' => (clone $statsQuery)->where('status', 'ASSIGNED')->count(),
-            'accepted' => (clone $statsQuery)->whereIn('status', ['ACCEPTED', 'IN_PROGRESS'])->count(),
-            'picked_up' => (clone $statsQuery)->where('status', 'COMPLETED')->whereDate('completed_at', today())->count(),
+            'assigned' => (clone $statsQuery)->where('status', RiderLocalTrip::LOADING)->count(),
+            'accepted' => (clone $statsQuery)->where('status', RiderLocalTrip::READY)->count(),
+            'in_progress' => (clone $statsQuery)->whereIn('status', [RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])->count(),
+            'completed_today' => (clone $statsQuery)->where('status', RiderLocalTrip::COMPLETED)->whereDate('completed_at', today())->count(),
         ];
 
-        return $this->paginated($rows, fn (RiderAssignment $assignment): array => $this->assignmentPayload($assignment), ['stats' => $stats]);
+        return $this->paginated($rows, fn (RiderLocalTrip $trip): array => $this->pickupBatchPayload($trip), ['stats' => $stats]);
     }
 
-    public function verifyPickup(Request $request, RiderAssignment $assignment): JsonResponse
+    public function acceptPickupBatch(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
+    {
+        return $this->operatePickupBatch($request, $trip, fn (RiderLocalTrip $batch) => $batches->accept($request->user(), $batch), 'Seller pickup batch accepted.');
+    }
+
+    public function startPickupBatch(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
+    {
+        return $this->operatePickupBatch($request, $trip, fn (RiderLocalTrip $batch) => $batches->start($request->user(), $batch), 'Seller pickup batch started. Scan each waybill separately.');
+    }
+
+    public function scanPickupBatch(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
+    {
+        $data = $request->validate([
+            'tracking_code' => ['required', 'string', 'max:150'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+        ]);
+        $batch = $this->ownedPickupBatch($request, $trip);
+        try {
+            $result = $batches->scan($request->user(), $batch, $data['tracking_code'], $data['scan_method'] ?? 'MANUAL');
+        } catch (RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'already_verified' => $result['already_verified'],
+            'assignment_id' => $result['assignment']->id,
+            'shipment_status' => $result['assignment']->shipment?->current_status,
+            'message' => $result['already_verified'] ? 'Parcel already verified.' : 'Parcel verified and collected.',
+        ]]);
+    }
+
+    public function markPickupNotCollected(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
+    {
+        $data = $request->validate([
+            'rider_assignment_id' => ['required', 'integer'],
+            'reason' => ['required', 'string', 'max:1000'],
+        ]);
+        $batch = $this->ownedPickupBatch($request, $trip);
+        try {
+            $assignment = $batches->markNotCollected($request->user(), $batch, (int) $data['rider_assignment_id'], $data['reason']);
+        } catch (RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'assignment_id' => $assignment->id,
+            'status' => $assignment->status,
+            'reason' => $assignment->rejection_reason,
+        ]]);
+    }
+
+    public function finishPickupBatch(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
+    {
+        return $this->operatePickupBatch($request, $trip, fn (RiderLocalTrip $batch) => $batches->finishSellerPickup($request->user(), $batch), 'Seller pickup batch completed.');
+    }
+
+    public function verifyPickup(Request $request, RiderAssignment $assignment, SellerPickupBatchService $batches): JsonResponse
     {
         $this->assertAssignment($request, $assignment, RiderAssignment::TYPE_PICKUP);
-        $data = $request->validate(['tracking_code' => ['required', 'string', 'max:150']]);
-        $expected = (string) $assignment->shipment?->tracking_number;
-        $verified = $expected !== '' && hash_equals($expected, trim($data['tracking_code']));
+        $data = $request->validate([
+            'tracking_code' => ['required', 'string', 'max:150'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+        ]);
+        $item = RiderLocalTripItem::query()
+            ->where('rider_assignment_id', $assignment->id)
+            ->whereHas('trip', fn ($query) => $query->where('trip_type', RiderLocalTrip::TYPE_PICKUP)->whereNotNull('seller_profile_id'))
+            ->with('trip')
+            ->latest('id')
+            ->first();
+        if (! $item?->trip) {
+            return response()->json(['success' => false, 'message' => 'This parcel is not part of a seller pickup batch.'], 409);
+        }
+        try {
+            $result = $batches->scan($request->user(), $item->trip, $data['tracking_code'], $data['scan_method'] ?? 'MANUAL');
+        } catch (RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
-        return response()->json(['success' => true, 'data' => ['verified' => $verified]]);
+        return response()->json(['success' => true, 'data' => [
+            'verified' => true,
+            'already_verified' => $result['already_verified'],
+            'shipment_status' => $result['assignment']->shipment?->current_status,
+        ]]);
     }
 
     public function updateLocation(Request $request, RiderAssignment $assignment, RiderLocationService $locations): JsonResponse
@@ -365,6 +460,68 @@ class RiderApiController extends Controller
         $rider = $request->user()->riderProfile;
         abort_unless($rider && $rider->status === 'ACTIVE', 403, 'An active rider profile is required.');
         return $rider;
+    }
+
+    private function ownedPickupBatch(Request $request, int $tripId): RiderLocalTrip
+    {
+        abort_unless(app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady(), 503, 'Seller pickup batch workflow is unavailable until its additive schema migration is installed.');
+        $rider = $this->rider($request);
+
+        return RiderLocalTrip::query()
+            ->where('rider_profile_id', $rider->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->whereNotNull('seller_profile_id')
+            ->with(['items.riderAssignment.shipment'])
+            ->findOrFail($tripId);
+    }
+
+    private function operatePickupBatch(Request $request, int $tripId, callable $operation, string $message): JsonResponse
+    {
+        $batch = $this->ownedPickupBatch($request, $tripId);
+        try {
+            $updated = $operation($batch);
+        } catch (RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json(['success' => true, 'message' => $message, 'data' => [
+            'id' => $updated->id,
+            'batch_number' => 'P-'.$updated->id,
+            'status' => $updated->status,
+        ]]);
+    }
+
+    private function pickupBatchPayload(RiderLocalTrip $trip): array
+    {
+        $items = $trip->items->map(function (RiderLocalTripItem $item): array {
+            $assignment = $item->riderAssignment;
+            $shipment = $assignment?->shipment;
+
+            return [
+                'assignment_id' => $assignment?->id,
+                'tracking' => $shipment?->tracking_number,
+                'seller_order_number' => $shipment?->sellerOrder?->seller_order_number,
+                'products' => $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->values() ?? collect(),
+                'assignment_status' => $assignment?->status,
+                'shipment_status' => $shipment?->current_status,
+                'not_collected_reason' => $assignment?->rejection_reason,
+            ];
+        })->values();
+        $collected = $items->where('assignment_status', 'COMPLETED')->count();
+
+        return [
+            'id' => $trip->id,
+            'batch_number' => 'P-'.$trip->id,
+            'status' => $trip->status,
+            'seller' => $trip->seller?->business_name,
+            'pickup_address' => $trip->seller?->businessAddress?->formatted(),
+            'logistics_center' => $trip->logisticsCenter?->business_name,
+            'destination_address' => $trip->logisticsCenter?->address?->formatted(),
+            'parcel_count' => $items->count(),
+            'approved_capacity' => $trip->approved_parcel_capacity,
+            'collected_count' => $collected,
+            'items' => $items,
+        ];
     }
 
     private function assertAssignment(Request $request, RiderAssignment $assignment, string $type): void

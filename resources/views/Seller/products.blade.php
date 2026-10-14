@@ -59,6 +59,9 @@
     @elseif(session('status'))
         <div class="sl-alert sl-alert-success" role="status">{{ session('status') }}</div>
     @endif
+    @if($currentMode === 'inventory' && $errors->any())
+        <div class="sl-form-errors" role="alert"><strong>Stock was not updated.</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>
+    @endif
     @if (in_array($currentMode, ['add', 'edit'], true))
         <div class="sl-page-toolbar">
             <div><a href="{{ route('seller.products') }}" class="sl-editor-back">&larr; Back to Products</a><h2>{{ $editing ? 'Edit '.data_get($product, 'name') : 'Create New Product' }}</h2><p>Add product information, pricing, images, and availability.</p></div>
@@ -169,27 +172,88 @@
         </form>
 
     @elseif ($currentMode === 'inventory')
-        <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Stock Control</span><h2>Inventory Overview</h2><p>Review stock levels and update quantities as products move.</p></div><a href="{{ route('seller.products.export') }}" class="sl-btn sl-btn-ghost">Export CSV</a></div>
-        <section class="sl-stat-grid sl-stat-grid-4">
-            <x-seller.stat-card label="Total SKUs" :value="$sellerProducts->count()" icon="products" />
-            <x-seller.stat-card label="In Stock" :value="$sellerProducts->where('stock','>',0)->count()" icon="products" />
-            <x-seller.stat-card label="Low Stock" :value="$sellerProducts->where('stock','>',0)->where('stock','<=',5)->count()" direction="down" change="Needs review" icon="inventory" />
-            <x-seller.stat-card label="Out of Stock" :value="$sellerProducts->where('stock',0)->count()" direction="down" change="Action needed" icon="inventory" />
-        </section>
-        <section class="sl-card">
-            <div class="sl-table-toolbar"><div class="sl-search-input"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" placeholder="Search product or SKU" data-product-search></div><select class="sl-select" data-product-status-filter><option value="all">All stock levels</option><option value="low">Low stock</option><option value="out">Out of stock</option><option value="healthy">Healthy</option></select></div>
-            <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Product</th><th>SKU</th><th>Available</th><th>Status</th><th>Update</th></tr></thead><tbody>
-                @forelse(($inventoryProducts ?? $sellerProducts) as $item)
-                    @php $level = $item['stock'] === 0 ? 'out' : ($item['stock'] <= 5 ? 'low' : 'healthy'); @endphp
-                    <tr data-product-row data-product-name="{{ mb_strtolower($item['name'].' '.$item['sku']) }}" data-product-status="{{ $level }}"><td><div class="sl-product-cell"><img src="{{ $item['image'] ?: $productImageFallback }}" alt="{{ $item['name'] }}" loading="lazy" onerror="this.onerror=null;this.src='{{ $productImageFallback }}'"><strong>{{ $item['name'] }}</strong></div></td><td>{{ $item['sku'] }}</td><td><strong>{{ $item['stock'] }}</strong></td><td><span class="sl-status {{ $level === 'out' ? 'is-danger' : ($level === 'low' ? 'is-warning' : 'is-success') }}">{{ ucfirst($level) }}</span></td><td><form method="POST" action="{{ route('seller.products.stock', $item['db_id']) }}" class="sl-inline-stock">@csrf @method('PATCH')<input name="stock" type="number" min="0" value="{{ $item['stock'] }}"><button class="sl-btn sl-btn-soft sl-btn-sm" type="submit">Update</button></form></td></tr>
+        <div class="sl-inventory-page">
+            <header class="sl-inventory-heading">
+                <div>
+                    <span class="sl-eyebrow">Stock control</span>
+                    <h2>Inventory Overview</h2>
+                    <p>Review stock levels and update quantities per product variant.</p>
+                </div>
+                <a href="{{ route('seller.products.inventory.preview') }}" class="sl-btn sl-btn-primary" data-inventory-preview>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v6h5M10 14h6M10 17h6"/></svg>
+                    Preview PDF
+                </a>
+            </header>
+
+            <section class="sl-inventory-stats" aria-label="Inventory overview">
+                <article class="sl-inventory-stat" aria-label="Total SKUs: {{ $inventoryStats['total'] }}">
+                    <div class="sl-inventory-stat__top"><span class="sl-inventory-stat__icon is-neutral" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg></span></div>
+                    <div class="sl-inventory-stat__content"><span class="sl-inventory-stat__label">Total SKUs</span><strong>{{ $inventoryStats['total'] }}</strong><small>Active variants</small></div>
+                </article>
+                <article class="sl-inventory-stat" aria-label="In Stock: {{ $inventoryStats['in_stock'] }}">
+                    <div class="sl-inventory-stat__top"><span class="sl-inventory-stat__icon is-neutral" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z"/><path d="M12 12v9M4.5 7.8 12 12l7.5-4.2"/></svg></span></div>
+                    <div class="sl-inventory-stat__content"><span class="sl-inventory-stat__label">In Stock</span><strong>{{ $inventoryStats['in_stock'] }}</strong><small>SKUs with units available</small></div>
+                </article>
+                <article class="sl-inventory-stat is-low" aria-label="Low Stock (1–10): {{ $inventoryStats['low_stock'] }}">
+                    <div class="sl-inventory-stat__top"><span class="sl-inventory-stat__icon is-low" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 22 20H2L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg></span></div>
+                    <div class="sl-inventory-stat__content"><span class="sl-inventory-stat__label">Low Stock (1–10)</span><strong>{{ $inventoryStats['low_stock'] }}</strong><small>Needs review</small></div>
+                </article>
+                <article class="sl-inventory-stat is-out" aria-label="Out of Stock: {{ $inventoryStats['out_of_stock'] }}">
+                    <div class="sl-inventory-stat__top"><span class="sl-inventory-stat__icon is-out" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg></span></div>
+                    <div class="sl-inventory-stat__content"><span class="sl-inventory-stat__label">Out of Stock</span><strong>{{ $inventoryStats['out_of_stock'] }}</strong><small>Needs restocking</small></div>
+                </article>
+            </section>
+
+            <section class="sl-card sl-inventory-panel" aria-labelledby="inventory-products-title">
+                <header class="sl-inventory-panel__head">
+                    <div class="sl-inventory-panel__title">
+                        <h3 id="inventory-products-title">Inventory by product</h3>
+                        <p>Manage quantities and stock status for each variant.</p>
+                    </div>
+                    <div class="sl-inventory-toolbar">
+                        <label class="sl-search-input"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span class="sr-only">Search inventory</span><input type="search" placeholder="Search product, variant, or SKU" data-product-search></label>
+                        <label class="sl-inventory-filter"><span class="sr-only">Filter variants by stock level</span><select class="sl-select" data-product-status-filter><option value="all">All stock levels</option><option value="low">Low Stock (1–10)</option><option value="out">Out of Stock</option><option value="healthy">Healthy (11+)</option></select></label>
+                    </div>
+                </header>
+                <div class="sl-inventory-groups" data-inventory-groups>
+                @forelse($inventoryGroups as $group)
+                    @php($isExpanded = (int) $expandedInventoryProductId === (int) $group['db_id'])
+                    <article class="sl-inventory-product" data-inventory-product data-product-id="{{ $group['db_id'] }}" data-product-name="{{ mb_strtolower($group['name']) }}">
+                        <header class="sl-inventory-product__summary">
+                            <img class="sl-inventory-product__image" src="{{ $group['image'] ?: $productImageFallback }}" alt="{{ $group['name'] }}" loading="lazy" onerror="this.onerror=null;this.src='{{ $productImageFallback }}'">
+                            <div class="sl-inventory-product__identity"><h3>{{ $group['name'] }}</h3><span>{{ $group['variant_count'] }} active {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} total units</span></div>
+                            <div class="sl-inventory-product__badges" aria-label="Stock summary">
+                                <span class="sl-inventory-badge is-low"><strong>{{ $group['low_stock_count'] }}</strong> Low Stock</span>
+                                <span class="sl-inventory-badge is-out"><strong>{{ $group['out_of_stock_count'] }}</strong> Out of Stock</span>
+                                <span class="sl-inventory-badge is-healthy"><strong>{{ $group['variant_count'] - $group['low_stock_count'] - $group['out_of_stock_count'] }}</strong> Healthy</span>
+                            </div>
+                            <button class="sl-btn sl-btn-soft sl-btn-sm sl-inventory-toggle" type="button" data-inventory-toggle aria-expanded="{{ $isExpanded ? 'true' : 'false' }}" aria-controls="inventory-variants-{{ $group['db_id'] }}">
+                                <span data-inventory-toggle-label>{{ $isExpanded ? 'Collapse' : 'Manage' }} variants</span><span aria-hidden="true" class="sl-inventory-toggle__icon">{{ $isExpanded ? '−' : '+' }}</span>
+                            </button>
+                        </header>
+                        <div class="sl-inventory-variants" id="inventory-variants-{{ $group['db_id'] }}" data-inventory-variants @unless($isExpanded) hidden @endunless>
+                            @foreach($group['variants'] as $item)
+                                <article class="sl-inventory-variant" data-inventory-variant data-product-status="{{ $item['stock_level'] }}" data-variant-search="{{ mb_strtolower($item['variant'].' '.$item['sku']) }}">
+                                    <div class="sl-inventory-variant__field is-variant"><span>Variant</span><strong>{{ $item['variant'] }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-sku"><span>SKU</span><strong>{{ $item['sku'] ?: 'Not assigned' }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-price"><span>Price</span><strong>₱{{ number_format($item['price'], 2) }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-available"><span>Available</span><strong>{{ $item['stock'] }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-status"><span>Status</span><span class="sl-status {{ $item['stock_level'] === 'out' ? 'is-danger' : ($item['stock_level'] === 'low' ? 'is-warning' : 'is-success') }}">{{ $item['stock_status'] }}</span></div>
+                                    <form method="POST" action="{{ route('seller.products.variants.stock', ['product' => $item['db_id'], 'variant' => $item['variant_id']]) }}" class="sl-inline-stock sl-inventory-variant__update">@csrf @method('PATCH')<label class="sr-only" for="inventory-stock-{{ $item['variant_id'] }}">Update stock for {{ $item['variant'] }}</label><input id="inventory-stock-{{ $item['variant_id'] }}" name="stock" type="number" min="0" max="999999" required value="{{ $item['stock'] }}"><button class="sl-btn sl-btn-soft sl-btn-sm" type="submit">Update stock</button></form>
+                                </article>
+                            @endforeach
+                        </div>
+                    </article>
                 @empty
-                    <tr><td colspan="5"><div class="sl-empty-state"><h3>No inventory records yet</h3><p>Published products will appear here after they are saved.</p></div></td></tr>
+                    <div class="sl-empty-state"><h3>No inventory records yet</h3><p>Active product variants will appear here after they are saved.</p></div>
                 @endforelse
-            </tbody></table></div><div class="sl-no-results" data-product-empty hidden>No products match your filters.</div>
-        </section>
+                </div>
+                <div class="sl-no-results" data-product-empty hidden>No products or variants match your filters.</div>
+            </section>
+        </div>
     @else
         <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Catalog</span><h2>Product Management</h2><p>Create, edit, archive, restore, filter, and export listings.</p></div><a href="{{ route('seller.products', ['mode' => 'add']) }}" class="sl-btn sl-btn-primary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add Product</a></div>
-        <section class="sl-mini-stats"><div><span>All Products</span><strong>{{ $sellerProducts->count() }}</strong></div><div><span>Active</span><strong>{{ $sellerProducts->where('status_key','ACTIVE')->count() }}</strong></div><div><span>Low Stock</span><strong>{{ $sellerProducts->where('stock','>',0)->where('stock','<=',5)->count() }}</strong></div><div><span>Archived</span><strong>{{ $sellerProducts->where('status_key','ARCHIVED')->count() }}</strong></div></section>
+        <section class="sl-mini-stats"><div><span>All Products</span><strong>{{ $sellerProducts->count() }}</strong></div><div><span>Active</span><strong>{{ $sellerProducts->where('status_key','ACTIVE')->count() }}</strong></div><div><span>Low-stock products</span><strong>{{ $sellerProducts->where('low_stock_count','>',0)->count() }}</strong></div><div><span>Archived</span><strong>{{ $sellerProducts->where('status_key','ARCHIVED')->count() }}</strong></div></section>
         @if(($complianceCases ?? collect())->isNotEmpty())
             <section class="sl-card sl-product-compliance-notices"><header class="sl-card-head"><div><span class="sl-eyebrow">Seller compliance</span><h2>Compliance Notices</h2><p>Warnings and Admin decisions connected to your products.</p></div><a class="sl-btn sl-btn-ghost sl-btn-sm" href="{{ route('seller.compliance') }}">View All</a></header><div class="sl-compliance-notice-list">@foreach($complianceCases->take(3) as $case)<article><div><strong>{{ $case->case_number }}</strong><span>{{ $case->product?->name ?: 'Account-level seller case' }} · {{ str($case->violation_type)->replace('_', ' ')->headline() }}</span><small>{{ $case->opened_at?->format('M d, Y') ?? 'Date unavailable' }}</small></div><div><span class="sl-status {{ in_array($case->status, ['RESOLVED', 'CLOSED'], true) ? 'is-success' : ($case->status === 'UNDER_REVIEW' ? 'is-info' : 'is-warning') }}">{{ str($case->status)->replace('_', ' ')->headline() }}</span><a class="sl-btn sl-btn-ghost sl-btn-sm" href="{{ route('seller.compliance.show', $case) }}">View Details</a></div></article>@endforeach</div></section>
         @endif

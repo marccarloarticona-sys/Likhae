@@ -9,6 +9,7 @@ use App\Models\Seller\Product;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
@@ -29,7 +30,7 @@ class AdminProtectionRuleController extends Controller
     public function store(Request $request): RedirectResponse
     {
         abort_unless(Schema::hasTable('fragile_protection_rules'), 503, 'Protection rules are pending additive migration approval.');
-        $rule = $request->validate($this->rules());
+        $rule = $this->validateRule($request);
         $rule['active'] = $request->boolean('active');
         $rule['created_by_user_id'] = $request->user()->id;
         FragileProtectionRule::query()->create($rule);
@@ -40,7 +41,7 @@ class AdminProtectionRuleController extends Controller
     public function update(Request $request, FragileProtectionRule $protectionRule): RedirectResponse
     {
         abort_unless(Schema::hasTable('fragile_protection_rules'), 503, 'Protection rules are pending additive migration approval.');
-        $rule = $request->validate($this->rules());
+        $rule = $this->validateRule($request);
         $rule['active'] = $request->boolean('active');
         $protectionRule->update($rule);
 
@@ -59,8 +60,8 @@ class AdminProtectionRuleController extends Controller
     private function rules(): array
     {
         return [
-            'category_id' => ['nullable', 'integer', Rule::exists('categories', 'id')],
-            'subcategory_id' => ['nullable', 'integer', Rule::exists('categories', 'id')],
+            'category_id' => ['nullable', 'integer', Rule::exists('categories', 'id')->whereNull('parent_id')],
+            'subcategory_id' => ['nullable', 'integer', Rule::exists('categories', 'id')->whereNotNull('parent_id')],
             'product_id' => ['nullable', 'integer', Rule::exists('products', 'id')],
             'risk_level' => ['nullable', 'string', 'max:32'],
             'calculation_type' => ['required', Rule::in(['PERCENTAGE', 'FLAT', 'HYBRID'])],
@@ -74,5 +75,34 @@ class AdminProtectionRuleController extends Controller
             'effective_from' => ['nullable', 'date'],
             'effective_until' => ['nullable', 'date', 'after_or_equal:effective_from'],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function validateRule(Request $request): array
+    {
+        $validator = Validator::make($request->all(), $this->rules());
+        $validator->after(function ($validator) use ($request): void {
+            $targets = ['category_id', 'subcategory_id', 'product_id'];
+            $targetCount = collect($targets)->filter(fn (string $field): bool => filled($request->input($field)))->count();
+            if ($targetCount !== 1) {
+                $validator->errors()->add('category_id', 'Choose exactly one target: a category, subcategory, or product.');
+            }
+
+            $type = strtoupper((string) $request->input('calculation_type'));
+            $percentage = $request->input('percentage_rate');
+            $flatAmount = $request->input('flat_amount');
+            $hasPercentage = is_numeric($percentage) && (float) $percentage > 0;
+            $hasFlatAmount = is_numeric($flatAmount) && (float) $flatAmount > 0;
+
+            if ($type === 'PERCENTAGE' && ! $hasPercentage) {
+                $validator->errors()->add('percentage_rate', 'Enter a percentage greater than zero for a percentage rule.');
+            } elseif ($type === 'FLAT' && ! $hasFlatAmount) {
+                $validator->errors()->add('flat_amount', 'Enter a flat amount greater than zero for a flat rule.');
+            } elseif ($type === 'HYBRID' && ! $hasPercentage && ! $hasFlatAmount) {
+                $validator->errors()->add('percentage_rate', 'A hybrid rule needs a percentage or a flat amount greater than zero.');
+            }
+        });
+
+        return $validator->validate();
     }
 }

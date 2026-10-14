@@ -37,6 +37,7 @@
 
     <div class="sl-toast" data-sl-toast data-flash="{{ session('status') }}" data-error="{{ $errors->first() }}" role="status" aria-live="polite"></div>
     <x-notification-popover />
+    <x-logout-confirmation />
     @if(data_get(auth()->user()?->notification_preferences, 'seller_ai_assistant_enabled', true))
         <x-workspace.ai-assistant workspace="seller" :page="$activePage" :page-title="$pageTitle" />
     @endif

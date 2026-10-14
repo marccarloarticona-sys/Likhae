@@ -11,6 +11,7 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
 use App\Support\RiderVehicleType;
@@ -50,38 +51,38 @@ class DispatchController extends Controller
     public function pickups(Request $request, LogisticsSchemaReadiness $schema): View
     {
         $center = $this->center($request);
+        abort_unless($center, 403);
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickups = PickupRequest::query()
             ->whereIn('status', ['PENDING', 'APPROVED'])
-            ->whereHas('shipment', function ($query) use ($center, $tracking) {
-                if ($center) {
-                    $query->where(function ($q) use ($center) {
-                        $q->where('logistics_center_id', $center->id)
-                            ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
-                                ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id)));
-                        });
-                }
+            ->where(fn ($query) => $query->whereNull('notes')->orWhere('notes', 'not like', 'SELLER_DROPOFF:%'))
+            ->whereHas('shipment', function ($query) use ($center, $tracking): void {
+                $query->where('current_status', 'READY_FOR_PICKUP')
+                    ->where(fn ($centerQuery) => $centerQuery->where('logistics_center_id', $center->id)
+                        ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
+                            ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id))));
                 if ($tracking !== '') {
                     $query->where('tracking_number', $tracking);
                 }
             })
+            ->whereDoesntHave('shipment.riderAssignments', fn ($assignment) => $assignment
+                ->where('assignment_type', 'PICKUP')->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))
             ->with(['shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.order.address', 'shipment.serviceArea', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address'])
-            ->latest()
-            ->paginate(15)
-            ->withQueryString();
+            ->latest('id')
+            ->get()
+            ->unique('shipment_id')
+            ->values();
 
         $riders = RiderProfile::query()
-<<<<<<< HEAD
             ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
-            ->where('status', 'ACTIVE')
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
+            ->whereNotNull('approved_parcel_capacity')
+            ->where('approved_parcel_capacity', '>', 0)
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
-            ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->where('logistics_center_id', $center->id)
             ->withCount(['assignments as active_pickup_assignments_count' => fn ($query) => $query
                 ->where('assignment_type', 'PICKUP')
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
@@ -90,51 +91,75 @@ class DispatchController extends Controller
             ->get();
 
         $workflow = app(ShipmentWorkflowService::class);
-        $pickupAreaIds = $pickups->getCollection()->mapWithKeys(fn ($pickup) => [
-            $pickup->shipment_id => $workflow->sellerPickupServiceArea($pickup->shipment, $center)?->id,
-        ]);
-        $pickupEligibleRiderIds = $pickups->getCollection()->mapWithKeys(fn ($pickup) => [
-            $pickup->shipment_id => $riders
-                ->filter(fn (RiderProfile $rider) =>
-                    (int) $rider->active_pickup_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS
-                    && $workflow->riderCoversSellerPickupArea($pickup->shipment, $rider))
-                ->pluck('id')
-                ->values(),
-        ]);
-        $localTripsByRider = collect();
-        if ($schema->localTripsReady()) {
-            $localTripsByRider = RiderLocalTrip::query()
+        $sellerPickupQueue = $pickups->groupBy(fn ($pickup): int => (int) $pickup->shipment?->sellerOrder?->seller_profile_id)
+            ->map(function ($sellerRequests) use ($center, $riders, $workflow): array {
+                $seller = $sellerRequests->first()?->shipment?->sellerOrder?->sellerProfile;
+                $firstShipment = $sellerRequests->first()?->shipment;
+                $area = $firstShipment ? $workflow->sellerPickupServiceArea($firstShipment, $center) : null;
+
+                return [
+                    'seller' => $seller,
+                    'area' => $area,
+                    'shipments' => $sellerRequests->map(fn ($pickup) => $pickup->shipment)->filter()->values(),
+                    'eligible_riders' => $firstShipment
+                        ? $riders->filter(fn (RiderProfile $rider) =>
+                            (int) $rider->active_pickup_assignments_count < min(
+                                ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS,
+                                (int) $rider->approved_parcel_capacity,
+                            )
+                            && $workflow->riderCoversSellerPickupArea($firstShipment, $rider))->values()
+                        : collect(),
+                ];
+            })
+            ->filter(fn (array $group): bool => $group['seller'] !== null)
+            ->values();
+
+        $activePickupBatches = $schema->sellerPickupBatchesReady()
+            ? RiderLocalTrip::query()
+                ->where('logistics_center_id', $center->id)
                 ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
-                ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY])
-                ->whereIn('rider_profile_id', $riders->pluck('id'))
-                ->withCount(['items as load_count' => fn ($query) => $query->whereIn('status', ['QUEUED', 'LOADED'])])
+                ->whereNotNull('seller_profile_id')
+                ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])
+                ->with(['seller.businessAddress', 'rider.user', 'items.riderAssignment.shipment'])
+                ->latest()
                 ->get()
-                ->groupBy('rider_profile_id');
-        }
+            : collect();
 
         $mapMarkers = app(MapDataService::class)->forShipments(
-            $pickups->getCollection()->map->shipment->filter(),
+            $pickups->map->shipment->filter(),
             includeSeller: true,
             viewer: auth()->user(),
         );
-        return view('Logistics.pickups.index', compact('pickups', 'riders', 'center', 'pickupAreaIds', 'pickupEligibleRiderIds', 'localTripsByRider', 'mapMarkers'));
+        return view('Logistics.pickups.index', [
+            'center' => $center,
+            'tracking' => $tracking,
+            'sellerPickupQueue' => $sellerPickupQueue,
+            'activePickupBatches' => $activePickupBatches,
+            'riders' => $riders,
+            'mapMarkers' => $mapMarkers,
+            'pickupSchemaReady' => $schema->sellerPickupBatchesReady(),
+        ]);
     }
 
     public function receive(Request $request): View
     {
         $center = $this->center($request);
+        $pickupBatchesReady = app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady();
         $tracking = trim((string) $request->query('tracking', ''));
 
         $shipments = Shipment::query()
             ->where(function ($query): void {
                 $query->where('current_status', 'PICKED_UP')
-                    ->orWhere(function ($dropoff): void {
-                        $dropoff->where('current_status', 'READY_FOR_PICKUP')
-                            ->whereHas('pickupRequests', fn ($requests) => $requests
-                                ->whereIn('status', ['PENDING', 'APPROVED'])
-                                ->where('notes', 'like', 'SELLER_DROPOFF:%'));
-                    });
+                    ->orWhere(fn ($dropoffs) => $dropoffs
+                        ->where('current_status', 'READY_FOR_PICKUP')
+                        ->whereHas('pickupRequests', fn ($pickup) => $pickup
+                            ->whereIn('status', ['PENDING', 'APPROVED'])
+                            ->where('notes', 'like', 'SELLER_DROPOFF:%')));
             })
+            ->whereDoesntHave('riderAssignments.localTripItems.trip', fn ($trip) => $trip
+                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                ->when($pickupBatchesReady, fn ($query) => $query->whereNotNull('seller_profile_id'))
+                ->where('status', RiderLocalTrip::EN_ROUTE_TO_HUB))
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
             ->when($center, fn ($query) => $query->where(function ($q) use ($center) {
                 $q->where('logistics_center_id', $center->id)
@@ -146,7 +171,16 @@ class DispatchController extends Controller
             ->paginate(15)
             ->withQueryString();
 
-        return view('Logistics.parcels.receive', compact('shipments', 'center'));
+        $receivedBatches = RiderLocalTrip::query()
+            ->where('logistics_center_id', $center?->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->when($pickupBatchesReady, fn ($query) => $query->whereNotNull('seller_profile_id'))
+            ->where('status', RiderLocalTrip::EN_ROUTE_TO_HUB)
+            ->with(['seller', 'rider.user', 'items.riderAssignment.shipment.sellerOrder'])
+            ->latest()
+            ->get();
+
+        return view('Logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches'));
     }
 
     public function sorting(Request $request): View
@@ -187,12 +221,8 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $riders = RiderProfile::query()
-<<<<<<< HEAD
             ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
-            ->where('status', 'ACTIVE')
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
@@ -264,7 +294,7 @@ class DispatchController extends Controller
         $this->ensureShipmentBelongsToCenter($shipment, $center);
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer', 'exists:rider_profiles,id'],
-            'assignment_type' => ['required', 'string', 'in:PICKUP,DELIVERY'],
+            'assignment_type' => ['required', 'string', 'in:DELIVERY'],
             'local_trip_id' => ['nullable', 'integer'],
         ]);
 
@@ -291,81 +321,45 @@ class DispatchController extends Controller
         return back()->with('status', 'Rider assignment created.');
     }
 
-    public function assignPickup(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow, LogisticsSchemaReadiness $schema, LocalRiderTripService $localTrips): RedirectResponse
+    public function assignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches): RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
         $this->ensureShipmentBelongsToCenter($shipment, $center);
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer', 'exists:rider_profiles,id'],
-            'coverage_override' => ['nullable', 'boolean'],
-            'coverage_override_reason' => ['required_if:coverage_override,1', 'nullable', 'string', 'max:1000'],
-            'local_trip_id' => ['nullable', 'integer'],
         ]);
-
-        $pickup = $shipment->pickupRequests()->whereIn('status', ['PENDING', 'APPROVED'])->latest()->firstOrFail();
-
-        $rider = RiderProfile::query()->find($data['rider_profile_id']);
-        if (! $rider || (int) $rider->logistics_center_id !== (int) $center->id) {
-            return back()
-                ->withErrors(['rider_profile_id' => 'Select an active rider from this logistics center.'])
-                ->withInput();
-        }
-        $coverageOverride = (bool) ($data['coverage_override'] ?? false);
-        $pickupArea = $workflow->sellerPickupServiceArea($shipment, $center);
-
-        if ($coverageOverride && $pickupArea) {
-            $hasCoveredRider = RiderProfile::query()
-                ->where('logistics_center_id', $center->id)
-<<<<<<< HEAD
-                ->whereIn('status', ['ACTIVE', 'WARNED'])
-=======
-                ->where('status', 'ACTIVE')
-                ->whereIn('vehicle_type', RiderVehicleType::localValues())
-                ->whereHas('user', fn ($query) => $query
-                    ->where('account_type', \App\Models\User::TYPE_RIDER)
-                    ->where('status', \App\Models\User::STATUS_ACTIVE))
->>>>>>> 655974ca4c09a9fc45abf384cd4057d5b727e0d7
-                ->whereHas('areaAssignments', fn ($query) => $query
-                    ->where('service_area_id', $pickupArea->id)
-                    ->where('is_active', true))
-                ->exists();
-
-            if ($hasCoveredRider) {
-                return back()
-                    ->withErrors(['rider_profile_id' => 'A rider already covers this pickup area. Select that rider instead of using the shortage override.'])
-                    ->withInput();
-            }
-        }
-
         try {
-            DB::transaction(function () use ($workflow, $shipment, $rider, $request, $coverageOverride, $data, $pickup): void {
-                $assignment = $workflow->assignRider(
-                    $shipment,
-                    $rider,
-                    'PICKUP',
-                    $request->user(),
-                    $coverageOverride,
-                    $data['coverage_override_reason'] ?? null,
-                );
-                if (app(LogisticsSchemaReadiness::class)->localTripsReady() && ! empty($data['local_trip_id'])) {
-                    $trip = RiderLocalTrip::query()->findOrFail((int) $data['local_trip_id']);
-                    app(LocalRiderTripService::class)->addAssignment($request->user(), $trip, $assignment);
-                }
-                if ($pickup->status === 'PENDING') {
-                    $workflow->approvePickup($pickup, $request->user());
-                }
-            });
+            $batches->create($request->user(), $center, (int) $data['rider_profile_id'], [$shipment->id]);
         } catch (\RuntimeException $exception) {
             return back()
                 ->withErrors(['rider_profile_id' => $exception->getMessage()])
                 ->withInput();
         }
 
-        return back()->with('status', 'Pickup rider assigned.');
+        return back()->with('status', 'One-parcel seller pickup batch assigned.');
     }
 
-    public function autoAssignPickup(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow): RedirectResponse
+    public function assignPickupBatch(Request $request, SellerPickupBatchService $batches): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        $data = $request->validate([
+            'rider_profile_id' => ['required', 'integer', 'exists:rider_profiles,id'],
+            'shipment_ids' => ['required', 'array', 'min:1', 'max:10'],
+            'shipment_ids.*' => ['required', 'integer', 'distinct', 'exists:shipments,id'],
+        ]);
+
+        try {
+            $trip = $batches->create($request->user(), $center, (int) $data['rider_profile_id'], $data['shipment_ids']);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Seller pickup batch #P-'.$trip->id.' assigned with '.$trip->items->count().' parcel(s).');
+    }
+
+    public function autoAssignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches, ShipmentWorkflowService $workflow): RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
@@ -376,10 +370,12 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => 'Seller drop-off parcels are received at the center and cannot be auto-assigned for pickup.']);
         }
 
-        $pickupArea = $workflow->sellerPickupServiceArea($shipment, $center);
         $rider = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
             ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->whereIn('vehicle_type', RiderVehicleType::localValues())
+            ->whereNotNull('approved_parcel_capacity')
+            ->where('approved_parcel_capacity', '>', 0)
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
@@ -389,27 +385,25 @@ class DispatchController extends Controller
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->get()
             ->filter(fn (RiderProfile $candidate): bool =>
-                (int) $candidate->active_pickup_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS
+                (int) $candidate->active_pickup_assignments_count < min(
+                    ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS,
+                    (int) $candidate->approved_parcel_capacity,
+                )
                 && $workflow->riderCoversSellerPickupArea($shipment, $candidate))
             ->sortBy('active_pickup_assignments_count')
             ->first();
 
         if (! $rider) {
-            return back()->withErrors(['rider_profile_id' => $pickupArea
-                ? 'No eligible rider covers this pickup area and has capacity for another parcel.'
-                : 'The seller pickup address is not covered by an active service area.']);
+            return back()->withErrors(['rider_profile_id' => 'No eligible rider covers this pickup area and has capacity for another parcel.']);
         }
 
         try {
-            if ($pickup->status === 'PENDING') {
-                $workflow->approvePickup($pickup, $request->user());
-            }
-            $workflow->assignRider($shipment, $rider, 'PICKUP', $request->user());
+            $trip = $batches->create($request->user(), $center, (int) $rider->id, [$shipment->id]);
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Pickup auto-assigned to '.$rider->user?->name.'.');
+        return back()->with('status', 'Pickup auto-assigned to '.$rider->user?->name.' in batch #P-'.$trip->id.'.');
     }
 
     public function approvePickup(Request $request, PickupRequest $pickupRequest, ShipmentWorkflowService $workflow): RedirectResponse
@@ -444,7 +438,29 @@ class DispatchController extends Controller
             'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
         ]);
 
+        $pickupItem = $shipment->riderAssignments()
+            ->where('assignment_type', 'PICKUP')
+            ->latest('id')
+            ->with('localTripItems.trip')
+            ->get()
+            ->flatMap->localTripItems
+            ->first(fn ($item) => $item->trip?->trip_type === RiderLocalTrip::TYPE_PICKUP);
+
+        $alreadyReceived = $shipment->current_status === 'AT_SORTING_CENTER';
         $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
+
+        if ($alreadyReceived) {
+            return redirect()->route('logistics.parcels.receive')->with('status', 'Parcel was already received. No duplicate intake scan was created.');
+        }
+
+        if ($pickupItem?->trip) {
+            $trip = $pickupItem->trip->fresh();
+            $message = $trip?->status === RiderLocalTrip::COMPLETED
+                ? 'Parcel received. All collected parcels in pickup batch #P-'.$trip->id.' have reached the sorting center.'
+                : 'Parcel received. Scan each remaining parcel in the pickup batch separately.';
+
+            return redirect()->route('logistics.parcels.receive')->with('status', $message);
+        }
 
         return redirect()
             ->route('logistics.sorting', ['tracking' => $shipment->tracking_number])

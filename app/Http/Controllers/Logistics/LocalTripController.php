@@ -76,7 +76,7 @@ class LocalTripController extends Controller
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer'],
             'service_area_id' => ['required', 'integer'],
-            'trip_type' => ['required', 'in:PICKUP,DELIVERY'],
+            'trip_type' => ['required', 'in:DELIVERY'],
         ]);
         try {
             $trip = $this->trips->createTrip(

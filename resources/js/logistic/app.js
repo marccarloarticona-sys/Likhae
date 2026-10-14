@@ -20,9 +20,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeSunIcon = document.getElementById('themeSunIcon');
     const themeToggleTrack = document.getElementById('themeToggleTrack');
 
-    const logoutButton = document.getElementById('logisticsLogoutButton');
-
-
     function openSidebar() {
         if (!sidebar || !sidebarOverlay) {
             return;
@@ -149,15 +146,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initializeParcelScanners();
 
-
-    logoutButton?.addEventListener('click', () => {
-        const confirmed = window.confirm('Do you want to log out?');
-
-        if (!confirmed) {
-            return;
-        }
-
-        window.location.href = '/';
-    });
 
 });

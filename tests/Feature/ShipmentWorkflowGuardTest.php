@@ -23,25 +23,14 @@ class ShipmentWorkflowGuardTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_pickup_cannot_complete_without_the_matching_waybill_code(): void
+    public function test_unbatched_pickup_cannot_bypass_seller_specific_assignment(): void
     {
         [$user, $shipment, $assignment] = $this->pickupFixture();
 
-        try {
-            app(ShipmentWorkflowService::class)->riderTransition($assignment, 'pickup_complete', $user, []);
-            $this->fail('Pickup completion should require the actual scanned waybill code.');
-        } catch (ValidationException) {
-            $this->assertDatabaseHas('shipments', ['id' => $shipment->id, 'current_status' => 'READY_FOR_PICKUP']);
-            $this->assertDatabaseMissing('parcel_scans', ['shipment_id' => $shipment->id]);
-        }
-
-        try {
-            app(ShipmentWorkflowService::class)->riderTransition($assignment, 'pickup_complete', $user, ['scanned_code' => 'WRONG-CODE']);
-            $this->fail('Pickup completion should reject an incorrect waybill code.');
-        } catch (ValidationException) {
-            $this->assertDatabaseHas('shipments', ['id' => $shipment->id, 'current_status' => 'READY_FOR_PICKUP']);
-            $this->assertDatabaseMissing('parcel_scans', ['shipment_id' => $shipment->id]);
-        }
+        $this->expectException(\RuntimeException::class);
+        app(ShipmentWorkflowService::class)->riderTransition($assignment, 'pickup_complete', $user, [
+            'scanned_code' => $shipment->tracking_number,
+        ]);
     }
 
     public function test_started_assignment_cannot_be_rejected(): void
@@ -50,6 +39,14 @@ class ShipmentWorkflowGuardTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         app(ShipmentWorkflowService::class)->riderTransition($assignment, 'reject', $user, ['reason' => 'too late']);
+    }
+
+    public function test_pickup_cannot_start_without_a_seller_specific_batch(): void
+    {
+        [$user, $shipment, $assignment] = $this->pickupFixture('ACCEPTED');
+
+        $this->expectException(\RuntimeException::class);
+        app(ShipmentWorkflowService::class)->riderTransition($assignment, 'start', $user);
     }
 
     public function test_stale_rider_accept_request_returns_a_validation_error_instead_of_a_server_error(): void

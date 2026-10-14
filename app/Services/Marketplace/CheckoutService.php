@@ -46,6 +46,11 @@ class CheckoutService
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
     {
         return $items
+            ->filter(function (CartItem $item): bool {
+                $item->loadMissing('productVariant.product');
+
+                return (int) ($item->productVariant?->product?->seller_profile_id ?? 0) > 0;
+            })
             ->groupBy(fn (CartItem $item) => (int) $item->productVariant->product->seller_profile_id)
             ->map(function (Collection $sellerItems, int $sellerId) use ($buyer): Collection {
                 return Voucher::query()
@@ -106,8 +111,18 @@ class CheckoutService
             /** @var CartItem $item */
             $item->loadMissing(['productVariant.product.sellerProfile', 'productVariant.optionValues.option']);
             $variant = $item->productVariant;
-            $product = $variant->product;
-            $seller = $product->sellerProfile;
+            $product = $variant?->product;
+            $seller = $product?->sellerProfile;
+            if (! $variant
+                || ! $product
+                || $product->status !== 'ACTIVE'
+                || ! $seller
+                || $seller->status !== 'ACTIVE') {
+                throw ValidationException::withMessages([
+                    'cart' => 'One or more selected products or shops are no longer available. Remove the unavailable item from your cart and try again.',
+                ]);
+            }
+
             $sellerId = (int) $seller->id;
             $lineTotal = $variant->final_price * (int) $item->quantity;
             $subtotal += $lineTotal;
@@ -218,6 +233,7 @@ class CheckoutService
         array|string $voucherCodes = [],
         ?int $logisticsCenterId = null,
         array $protectionItemIds = [],
+        array $sellerNotes = [],
     ): Order
     {
         if (strtoupper($paymentMethod) !== 'COD') {
@@ -236,6 +252,8 @@ class CheckoutService
                 'cart' => 'Select at least one cart item before checkout.',
             ]);
         }
+
+        $sellerNotes = $this->normalizeSellerNotes($items, $sellerNotes);
 
         $logisticsProvider = $logisticsCenterId === null
             ? null
@@ -272,7 +290,7 @@ class CheckoutService
             }
         }
 
-        return DB::transaction(function () use ($buyer, $address, $items, $paymentMethod, $voucherCodes, $logisticsProvider, $automaticRouting, $protectionItemIds): Order {
+        return DB::transaction(function () use ($buyer, $address, $items, $paymentMethod, $voucherCodes, $logisticsProvider, $automaticRouting, $protectionItemIds, $sellerNotes): Order {
             $variantIds = $items->pluck('product_variant_id')->unique()->values();
             $lockedVariants = ProductVariant::query()
                 ->whereIn('id', $variantIds)
@@ -386,6 +404,7 @@ class CheckoutService
                     'seller_order_number' => $this->uniqueNumber('seller_orders', 'seller_order_number', 'SO'),
                     'order_id' => $order->id,
                     'seller_profile_id' => $sellerId,
+                    'buyer_note' => $sellerNotes[$sellerId] ?? null,
                     'voucher_id' => $group['voucher']?->id,
                     'status' => 'PLACED',
                     'item_subtotal' => $group['item_subtotal'],
@@ -472,6 +491,42 @@ class CheckoutService
 
             return $order->load(['sellerOrders.items', 'address', 'payments']);
         });
+    }
+
+    /**
+     * Keep checkout notes scoped to sellers represented in the selected items.
+     *
+     * @param array<int|string, mixed> $sellerNotes
+     * @return array<int, string|null>
+     */
+    public function normalizeSellerNotes(Collection $items, array $sellerNotes): array
+    {
+        $sellerIds = $items
+            ->map(function (CartItem $item): int {
+                $item->loadMissing('productVariant.product');
+
+                return (int) $item->productVariant?->product?->seller_profile_id;
+            })
+            ->filter(fn (int $sellerId): bool => $sellerId > 0)
+            ->unique()
+            ->values();
+
+        $normalized = [];
+        foreach ($sellerNotes as $sellerId => $note) {
+            $sellerIdString = (string) $sellerId;
+            if ((! is_int($sellerId) && ! ctype_digit($sellerIdString))
+                || (int) $sellerId <= 0
+                || ! $sellerIds->contains((int) $sellerId)) {
+                throw ValidationException::withMessages([
+                    'seller_notes' => 'A seller note can only be added for a seller in this checkout.',
+                ]);
+            }
+
+            $trimmed = trim((string) ($note ?? ''));
+            $normalized[(int) $sellerId] = $trimmed !== '' ? $trimmed : null;
+        }
+
+        return $normalized;
     }
 
     private function createShipmentForSellerOrder(

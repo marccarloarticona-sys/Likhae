@@ -720,9 +720,79 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    const setInventoryExpanded = (product, expanded, updateUrl = true) => {
+        const button = select('[data-inventory-toggle]', product);
+        const panel = select('[data-inventory-variants]', product);
+        if (!button || !panel) return;
+
+        button.setAttribute('aria-expanded', String(expanded));
+        panel.hidden = !expanded;
+        const label = select('[data-inventory-toggle-label]', button);
+        if (label) label.textContent = `${expanded ? 'Collapse' : 'Manage'} variants`;
+        const icon = select('.sl-inventory-toggle__icon', button);
+        if (icon) icon.textContent = expanded ? '−' : '+';
+
+        if (updateUrl && window.history?.replaceState) {
+            const url = new URL(window.location.href);
+            if (expanded) url.searchParams.set('expanded_product', product.dataset.productId || '');
+            else if (url.searchParams.get('expanded_product') === product.dataset.productId) url.searchParams.delete('expanded_product');
+            window.history.replaceState({}, '', url);
+        }
+    };
+
+    selectAll('[data-inventory-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const product = button.closest('[data-inventory-product]');
+            if (product) setInventoryExpanded(product, button.getAttribute('aria-expanded') !== 'true');
+        });
+    });
+
     const filterProductRows = () => {
-        const query = (select('[data-product-search]')?.value || '').trim().toLowerCase();
-        const status = select('[data-product-status-filter]')?.value || 'all';
+        const searchInput = select('[data-product-search]');
+        const statusFilter = select('[data-product-status-filter]');
+        const rawQuery = (searchInput?.value || '').trim();
+        const query = rawQuery.toLowerCase();
+        const status = statusFilter?.value || 'all';
+        const previewLink = select('[data-inventory-preview]');
+        if (previewLink) {
+            const previewUrl = new URL(previewLink.href, window.location.origin);
+            if (rawQuery) previewUrl.searchParams.set('search', rawQuery);
+            else previewUrl.searchParams.delete('search');
+            if (status !== 'all') previewUrl.searchParams.set('status', status);
+            else previewUrl.searchParams.delete('status');
+            previewLink.href = `${previewUrl.pathname}${previewUrl.search}`;
+        }
+
+        const inventoryContainer = select('[data-inventory-groups]');
+        if (inventoryContainer) {
+            const products = selectAll('[data-inventory-product]', inventoryContainer);
+            let visibleProducts = 0;
+
+            products.forEach((product) => {
+                const productMatches = !query || (product.dataset.productName || '').includes(query);
+                const variants = selectAll('[data-inventory-variant]', product);
+                let visibleVariants = 0;
+                variants.forEach((variant) => {
+                    const matchesSearch = !query || productMatches || (variant.dataset.variantSearch || '').includes(query);
+                    const matchesStatus = status === 'all' || variant.dataset.productStatus === status;
+                    const show = matchesSearch && matchesStatus;
+                    variant.hidden = !show;
+                    if (show) visibleVariants += 1;
+                });
+
+                const showProduct = visibleVariants > 0;
+                product.hidden = !showProduct;
+                if (showProduct) visibleProducts += 1;
+
+                // A variant/SKU match is specific enough to open its product group automatically.
+                if (showProduct && query && !productMatches) setInventoryExpanded(product, true);
+            });
+
+            const empty = select('[data-product-empty]');
+            if (empty) empty.hidden = products.length === 0 || visibleProducts > 0;
+            return;
+        }
+
         const rows = selectAll('[data-product-row]');
         let visible = 0;
         rows.forEach((row) => {

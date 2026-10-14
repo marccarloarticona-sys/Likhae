@@ -29,9 +29,25 @@
             <form method="POST" action="{{ route('seller.orders.status',$dbId) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="prepare"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Begin Preparation</button></form>
         @elseif ($statusKey === 'preparing')
             <a target="_blank" href="{{ route('seller.orders.waybill',$dbId) }}" class="sl-btn sl-btn-ghost sl-btn-sm">Print Waybill</a>
-            <form method="POST" action="{{ route('seller.orders.status',$dbId) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="ready"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Ready for Pickup</button></form>
+            <details class="sl-courier-select">
+                <summary class="sl-btn sl-btn-primary sl-btn-sm cursor-pointer">Choose Handover Method</summary>
+                <form method="POST" action="{{ route('seller.logistics.pickup',$dbId) }}">
+                    @csrf
+                    <div class="sl-provider-list">
+                        <label class="sl-provider-option"><input type="radio" name="handover_method" value="logistics_pickup" checked><span class="sl-radio-mark"></span><span class="sl-provider-logo">LP</span><span class="sl-provider-main"><strong>Request Logistics Pickup</strong><small>Logistics assigns an eligible rider to collect the parcel.</small></span></label>
+                        <label class="sl-provider-option"><input type="radio" name="handover_method" value="seller_dropoff"><span class="sl-radio-mark"></span><span class="sl-provider-logo">DO</span><span class="sl-provider-main"><strong>Seller Drop-off</strong><small>Bring the parcel and waybill to your assigned center.</small></span></label>
+                    </div>
+                    <div class="sl-form-grid">
+                        <label class="sl-field"><span>Preferred pickup date</span><input name="pickup_date" type="date" value="{{ now()->addDay()->toDateString() }}"></label>
+                        <label class="sl-field"><span>Pickup window</span><select name="pickup_window"><option>10:00 AM - 12:00 PM</option><option>1:00 PM - 3:00 PM</option><option>3:00 PM - 5:00 PM</option></select></label>
+                        <label class="sl-field sl-span-2"><span>Handover note</span><textarea name="pickup_note" rows="2" maxlength="1000">Package is sealed and the waybill is attached.</textarea></label>
+                    </div>
+                    <div class="px-4 pb-4"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Save Handover Choice</button></div>
+                </form>
+            </details>
         @elseif ($statusKey === 'ready-for-pickup')
-            <span class="sl-status is-info">Waiting for Logistics</span>
+            <span class="sl-status is-info">{{ data_get($order, 'pickup_status', 'Waiting for Logistics') }}</span>
+            @if(data_get($order, 'pickup_status') === 'Pickup scheduled')<small class="text-muted">{{ data_get($order, 'pickup_batch') }} · {{ data_get($order, 'pickup_rider') }} · {{ data_get($order, 'pickup_batch_size') }} parcels</small>@endif
         @elseif ($statusKey === 'shipping')
             <a href="{{ route('seller.logistics',['view'=>'tracking','order'=>$id]) }}" class="sl-btn sl-btn-primary sl-btn-sm">Track Shipment</a>
         @elseif ($statusKey === 'returns')

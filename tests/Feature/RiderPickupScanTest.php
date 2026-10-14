@@ -19,7 +19,7 @@ class RiderPickupScanTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_pickup_confirmation_requires_a_matching_scan_result(): void
+    public function test_pickup_assignment_without_a_seller_batch_cannot_be_scanned_individually(): void
     {
         $this->withoutVite();
         $centerOwner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
@@ -104,19 +104,20 @@ class RiderPickupScanTest extends TestCase
 
         $this->actingAs($riderUser)
             ->get(route('rider.pickups.show', $assignment))
-            ->assertOk()
-            ->assertSee('Scan and verify the seller')
-            ->assertSee('data-rider-live-location', false)
-            ->assertSee('Foreground browser tracking only')
-            ->assertDontSee('Confirm Picked Up');
+            ->assertStatus(409);
 
-        $this->get(route('rider.pickups.show', ['assignment' => $assignment, 'tracking' => 'WRONG-CODE']))
-            ->assertOk()
-            ->assertSee('does not match this pickup assignment')
-            ->assertDontSee('>Confirm Picked Up</button>', false);
+        $this->actingAs($riderUser)
+            ->from(route('rider.pickups.show', $assignment))
+            ->patch(route('rider.assignments.transition', $assignment), [
+                'action' => 'pickup_complete',
+                'scanned_code' => $tracking,
+            ])
+            ->assertRedirect(route('rider.pickups.show', $assignment))
+            ->assertSessionHasErrors('action');
 
-        $this->get(route('rider.pickups.show', ['assignment' => $assignment, 'tracking' => $tracking]))
-            ->assertOk()
-            ->assertSee('Confirm Picked Up');
+        $this->assertDatabaseHas('shipments', [
+            'id' => $shipment->id,
+            'current_status' => 'READY_FOR_PICKUP',
+        ]);
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Fulfillment;
 
+use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
@@ -17,7 +18,7 @@ class LocalRiderEligibilityService
     {
         return RiderProfile::query()
             ->where('logistics_center_id', $center->id)
-            ->where('status', 'ACTIVE')
+            ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereHas('user', fn (Builder $query) => $query
                 ->where('account_type', User::TYPE_RIDER)
@@ -41,14 +42,40 @@ class LocalRiderEligibilityService
         }
         $address = $center->address;
 
-        if (! $address?->province_code || ! $address?->municipality_code) {
+        if (! $address?->province_code || ! $address?->municipality_code
+            || ! $address?->province_name || ! $address?->municipality_name) {
             throw new RuntimeException('Configure a canonical PSGC province and municipality for this logistics center before saving coverage.');
         }
 
-        if (trim((string) $address->province_code) !== trim($provinceCode)
-            || trim((string) $address->municipality_code) !== trim($municipalityCode)) {
+        $canonical = $this->canonicalMunicipality($center);
+        if (! $canonical
+            || $canonical['province_code'] !== trim($provinceCode)
+            || $canonical['municipality_code'] !== trim($municipalityCode)) {
             throw new RuntimeException('A service area must belong to this logistics center’s canonical province and municipality.');
         }
+    }
+
+    /**
+     * @return array{region_code: string, province_code: string, province_name: string, municipality_code: string, municipality_name: string}|null
+     */
+    public function canonicalMunicipality(LogisticsCenter $center): ?array
+    {
+        if (! $center->relationLoaded('address')) {
+            $center->load('address');
+        }
+        $address = $center->address;
+
+        if (! $address?->province_code || ! $address?->province_name
+            || ! $address?->municipality_code || ! $address?->municipality_name) {
+            return null;
+        }
+
+        return PhilippineAddressController::canonicalMunicipalityFor(
+            (string) $address->province_code,
+            (string) $address->province_name,
+            (string) $address->municipality_code,
+            (string) $address->municipality_name,
+        );
     }
 
     public function singleBarangayLocation(LogisticsCenter $center, ?ServiceArea $area): ?ServiceAreaLocation
@@ -115,14 +142,13 @@ class LocalRiderEligibilityService
         if (! $center->relationLoaded('address')) {
             $center->load('address');
         }
-        $address = $center->address;
+        $canonical = $this->canonicalMunicipality($center);
 
         return $center->status === 'ACTIVE'
             && filled($centerAttributes['approved_by_user_id'] ?? null)
             && filled($centerAttributes['approved_at'] ?? null)
-            && filled($address?->province_code)
-            && filled($address?->municipality_code)
-            && trim((string) $address->province_code) === trim((string) $provinceCode)
-            && trim((string) $address->municipality_code) === trim((string) $municipalityCode);
+            && $canonical !== null
+            && $canonical['province_code'] === trim((string) $provinceCode)
+            && $canonical['municipality_code'] === trim((string) $municipalityCode);
     }
 }

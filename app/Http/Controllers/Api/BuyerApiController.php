@@ -164,6 +164,8 @@ class BuyerApiController extends Controller
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['integer'],
+            'seller_notes' => ['nullable', 'array'],
+            'seller_notes.*' => ['nullable', 'string', 'max:500'],
         ]);
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
         $items = $cart->selectedItems($request->user(), $ids);
@@ -178,6 +180,7 @@ class BuyerApiController extends Controller
             ->unique()
             ->values()
             ->all();
+        $sellerNotes = $checkout->normalizeSellerNotes($items, (array) ($data['seller_notes'] ?? []));
         $order = $checkout->placeOrder(
             $request->user(),
             $address,
@@ -186,6 +189,7 @@ class BuyerApiController extends Controller
             $voucherCodes,
             null,
             $protectionItemIds,
+            $sellerNotes,
         );
 
         return response()->json([

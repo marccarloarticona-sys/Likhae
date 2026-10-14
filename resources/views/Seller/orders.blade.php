@@ -11,29 +11,13 @@
 
 @section('title', $isLogistics ? 'Logistics' : ($currentMode === 'show' && $order ? 'Order #'.$order['id'] : 'Orders'))
 @section('active', $isLogistics ? 'logistics' : 'orders')
-@section('subtitle', $isLogistics ? 'Assign couriers, submit pickup requests, and monitor shipments.' : 'Review purchases and move each order through fulfillment.')
+@section('subtitle', $isLogistics ? 'Review Seller pickup progress and parcel tracking.' : 'Review purchases and move each order through fulfillment.')
 
 @section('content')
 <div class="sl-page">
     @if ($isLogistics && $currentMode === 'couriers')
-        <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Logistics</span><h2>Request Pickup</h2><p>Prepared orders can now create a real delivery/pickup record.</p></div><a href="{{ route('seller.orders',['status'=>'ready-pickup']) }}" class="sl-btn sl-btn-ghost">Ready Pickup Orders</a></div>
-        @if($order)
-            <div class="sl-logistics-layout">
-                <section class="sl-card sl-logistics-order"><header class="sl-card-head"><div><span class="sl-eyebrow">Prepared Package</span><h2>Order #{{ $order['id'] }}</h2><p>Confirm the parcel information before requesting logistics.</p></div><span class="sl-status is-info">{{ $order['status'] }}</span></header><div class="sl-package-summary"><x-product-thumbnail :item="$order['first_item']" size="72" class="sl-order-thumb"/><div><strong>{{ $order['product'] }}</strong><span>{{ $order['buyer'] }} · Qty {{ $order['quantity'] }}</span><small>{{ $order['shipping_address'] }}</small></div><strong>₱{{ number_format($order['total'],2) }}</strong></div></section>
-                <form class="sl-card sl-courier-select" method="POST" action="{{ route('seller.logistics.pickup',$order['db_id']) }}">
-                    @csrf
-                    <header class="sl-card-head"><div><span class="sl-eyebrow">Parcel Handover</span><h2>Choose a handover method</h2><p>Logistics assigns riders. Choose pickup or deliver directly to the assigned center.</p></div></header>
-                    <div class="sl-provider-list">
-                        <label class="sl-provider-option"><input type="radio" name="handover_method" value="logistics_pickup" checked><span class="sl-radio-mark"></span><span class="sl-provider-logo">LP</span><span class="sl-provider-main"><strong>Request Logistics Pickup</strong><small>Logistics will assign an eligible pickup rider.</small></span></label>
-                        <label class="sl-provider-option"><input type="radio" name="handover_method" value="seller_dropoff"><span class="sl-radio-mark"></span><span class="sl-provider-logo">DO</span><span class="sl-provider-main"><strong>Seller Drop-off</strong><small>Bring the parcel to the assigned LIKHAE Logistics Center.</small></span></label>
-                    </div>
-                    <div class="sl-form-grid"><label class="sl-field"><span>Preferred pickup date</span><input name="pickup_date" type="date" value="{{ now()->addDay()->toDateString() }}"></label><label class="sl-field"><span>Preferred pickup window</span><select name="pickup_window"><option>10:00 AM - 12:00 PM</option><option>1:00 PM - 3:00 PM</option><option>3:00 PM - 5:00 PM</option></select></label><label class="sl-field sl-span-2"><span>Handover note</span><textarea name="pickup_note" rows="3">Package is sealed and the waybill is attached.</textarea></label></div>
-                    <div class="sl-form-actions"><button type="submit" class="sl-btn sl-btn-primary">Confirm Handover Method</button></div>
-                </form>
-            </div>
-        @else
-            <section class="sl-card"><x-seller.empty-state title="No order available" message="Prepare an order before requesting pickup." action="View Orders" :href="route('seller.orders')" /></section>
-        @endif
+        <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Seller Pickup</span><h2>Pickup Status</h2><p>Mark a packed parcel Ready for Pickup. Logistics groups ready parcels by seller and assigns a local rider.</p></div><a href="{{ route('seller.orders',['status'=>'ready-for-pickup']) }}" class="sl-btn sl-btn-ghost">Ready for Pickup Orders</a></div>
+        <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Waiting for Logistics</span><h2>{{ $readyPickupCount ?? 0 }} ready parcel(s)</h2><p>Logistics will assign a local rider to collect ready parcels from your registered business address.</p></div></header><a href="{{ route('seller.orders',['status'=>'ready-for-pickup']) }}" class="sl-btn sl-btn-primary">View Ready for Pickup</a></section>
 
     @elseif ($isLogistics && $currentMode === 'pickups')
         @php
@@ -64,7 +48,10 @@
         @if($order)
             <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Order Details</span><h2>Order #{{ $order['id'] }}</h2><p>Placed {{ $order['date'] }}</p></div><a href="{{ route('seller.orders',['status'=>$order['status_key']]) }}" class="sl-btn sl-btn-ghost">Back to Orders</a></div>
             <x-shared.mapbox :markers="$order['map_markers']" title="Order delivery map" height="220px" class="sl-map-seller" navigation />
-            <section class="sl-card sl-order-provider-detail"><h3>Logistics Assignment</h3><p>The selected provider receives the pickup request for this parcel.</p><dl class="sl-detail-list"><div><dt>Logistics Provider</dt><dd>{{ data_get($order, 'logistics_provider', 'Not assigned') }}</dd></div><div><dt>Courier</dt><dd>{{ data_get($order, 'shipping', 'Waiting for Logistics') }}</dd></div></dl></section>
+            <section class="sl-card sl-order-provider-detail"><h3>Seller Pickup</h3><p>{{ data_get($order, 'pickup_status', 'Waiting for Logistics') }}</p><dl class="sl-detail-list"><div><dt>Pickup Batch</dt><dd>{{ data_get($order, 'pickup_batch', 'Not assigned') }}</dd></div><div><dt>Assigned Rider</dt><dd>{{ data_get($order, 'pickup_rider', 'Waiting for Logistics') }}</dd></div><div><dt>Parcels in this pickup</dt><dd>{{ data_get($order, 'pickup_batch_size', '—') }}</dd></div>@if(($order['pickup_status'] ?? '') === 'Picked up')<div><dt>Collected by Rider</dt><dd>{{ data_get($order, 'pickup_collected_at')?->format('M d, Y g:i A') ?? 'Time unavailable' }}</dd></div><div><dt>Now heading to</dt><dd>{{ data_get($order, 'pickup_hub', 'Assigned logistics center') }}</dd></div>@endif</dl></section>
+            @if(filled($order['buyer_note'] ?? null))
+                <section class="sl-card" data-buyer-note><h3>Buyer Note</h3><p class="whitespace-pre-line">{{ $order['buyer_note'] }}</p></section>
+            @endif
             <div class="sl-order-detail-layout"><div class="sl-order-detail-main"><section class="sl-card"><header class="sl-card-head"><div><h2>Ordered Product</h2><p>Items included in this purchase.</p></div><span class="sl-status is-warning">{{ $order['status'] }}</span></header><div class="sl-package-summary"><x-product-thumbnail :item="$order['first_item']" size="72" class="sl-order-thumb"/><div><strong>{{ $order['product'] }}</strong><span>Variation: {{ $order['variant'] }}</span><small>₱{{ number_format($order['total']/$order['quantity'],2) }} × {{ $order['quantity'] }}</small></div><strong>₱{{ number_format($order['total'],2) }}</strong></div></section>
             <section class="sl-card"><header class="sl-card-head"><div><h2>Fulfillment Actions</h2><p>Available actions depend on the current status.</p></div></header><div class="sl-action-panel"><span class="sl-action-panel-icon">✓</span><div><strong>{{ $order['status'] }}</strong><p>Use the valid next action to move the order through fulfillment.</p></div>
                 @if($order['status_key']==='placed')<form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="confirm"><button class="sl-btn sl-btn-primary" type="submit">Accept Order</button></form>@endif
@@ -72,15 +59,7 @@
                 @if($order['status_key']==='preparing')<form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="ready"><button class="sl-btn sl-btn-primary" type="submit">Ready for Pickup</button></form>@endif
                 @if($order['status_key']==='ready-for-pickup')
                     <a target="_blank" class="sl-btn sl-btn-ghost" href="{{ route('seller.orders.waybill',$order['db_id']) }}">Print Waybill</a>
-                    @php
-                        $pickupAssignments = data_get($order, 'delivery.riderAssignments');
-                        $pickupAssignment = $pickupAssignments
-                            ?->where('assignment_type', 'PICKUP')
-                            ->whereIn('status', ['ACCEPTED', 'IN_PROGRESS'])
-                            ->sortByDesc('id')
-                            ->first();
-                    @endphp
-                    @if($pickupAssignment)<form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="handover_confirm"><button class="sl-btn sl-btn-primary" type="submit">Confirm Rider Handover</button></form>@else<span class="sl-status is-info">Waiting for Logistics assignment</span>@endif
+                    @if(($order['pickup_status'] ?? '') === 'Pickup scheduled')<span class="sl-status is-info">Pickup scheduled · {{ $order['pickup_rider'] }}</span>@elseif(($order['pickup_status'] ?? '') === 'Waiting for Logistics')<span class="sl-status is-info">Waiting for Logistics assignment</span>@endif
                 @endif
                 @if($order['status_key']==='shipping')<a href="{{ route('seller.logistics',['view'=>'tracking','order'=>$order['id']]) }}" class="sl-btn sl-btn-primary">Track Shipment</a>@endif
             </div></section></div><aside class="sl-order-detail-side"><section class="sl-card"><h3>Buyer Information</h3><dl class="sl-detail-list"><div><dt>Name</dt><dd>{{ $order['buyer'] }}</dd></div><div><dt>Delivery Address</dt><dd>{{ $order['shipping_address'] }}</dd></div></dl><a href="{{ route('seller.messages',['buyer'=>$order['buyer_id']]) }}" class="sl-btn sl-btn-soft sl-btn-block">Message Buyer</a></section><section class="sl-card"><h3>Payment Summary</h3><dl class="sl-price-list"><div><dt>Order total</dt><dd>₱{{ number_format($order['total'],2) }}</dd></div><div class="is-total"><dt>Payment</dt><dd>{{ $order['payment'] }}</dd></div></dl></section></aside></div>
@@ -88,6 +67,7 @@
 
     @else
         <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Order Management</span><h2>Manage Orders</h2><p>Review orders and move each purchase through fulfillment.</p></div><a href="{{ route('seller.orders.export') }}" class="sl-btn sl-btn-ghost">Export CSV</a></div>
+        @if($currentStatus==='ready-for-pickup')<section class="sl-card"><strong>{{ $readyPickupCount ?? 0 }} parcel(s) waiting for pickup.</strong><p>Newly ready parcels wait for Logistics assignment. Once assigned, this order shows the rider and pickup batch.</p></section>@endif
         <section class="sl-order-tabs" aria-label="Order filters">
             @foreach(['all'=>'All Orders','placed'=>'Placed','confirmed'=>'Confirmed','preparing'=>'Preparing','ready-for-pickup'=>'Ready for Pickup','shipping'=>'Shipping','completed'=>'Completed','cancelled'=>'Cancelled','returns'=>'Returns/Refunds'] as $key=>$label)<a href="{{ route('seller.orders',['status'=>$key]) }}" class="{{ $currentStatus===$key?'is-active':'' }}">{{ $label }} @if(($statusCounts[$key]??0)>0)<span>{{ $statusCounts[$key] }}</span>@endif</a>@endforeach
         </section>

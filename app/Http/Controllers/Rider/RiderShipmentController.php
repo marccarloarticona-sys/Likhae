@@ -58,6 +58,7 @@ class RiderShipmentController extends Controller
 
         $assignments = RiderAssignment::query()
             ->where('rider_profile_id', $rider->id)
+            ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
             ->with(['shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress'])
             ->latest()
             ->paginate(15);
@@ -69,6 +70,9 @@ class RiderShipmentController extends Controller
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider && (int) $assignment->rider_profile_id === (int) $rider->id, 403);
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP) {
+            return back()->withErrors(['action' => 'Seller pickup actions must be performed from the Seller Pickup Assignment page.']);
+        }
 
         $uploadedProof = $request->file('proof_file');
         if ($request->input('action') === 'delivery_success' && $uploadedProof instanceof UploadedFile && ! $uploadedProof->isValid()) {

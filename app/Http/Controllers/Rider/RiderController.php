@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
 use App\Models\Rider\RiderAssignment;
+use App\Models\Rider\RiderLocalTrip;
 use App\Models\Buyer\Address;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\RiderEarningPool;
@@ -15,7 +16,9 @@ use App\Services\Account\ProfilePhotoService;
 use App\Services\Communication\ConversationService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
+use App\Support\RiderVehicleType;
 use App\Services\Maps\MapDataService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -27,19 +30,31 @@ use Illuminate\View\View;
 
 class RiderController extends Controller
 {
-    public function dashboard(Request $request): View
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): View|RedirectResponse
     {
         $rider = $this->rider($request);
+        if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
+            return redirect()->route('rider.transfers');
+        }
+        abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
 
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $finance = $this->financeSummary($rider, app(FinanceSchemaReadiness::class));
+        $pendingPickupCount = $schema->sellerPickupBatchesReady()
+            ? RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
+                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                ->whereNotNull('seller_profile_id')
+                ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS])
+                ->count()
+            : (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count();
         $riderStats = [
-            ['label' => 'Pending pickups', 'value' => (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
+            ['label' => 'Pending pickups', 'value' => $pendingPickupCount],
             ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
             ['label' => 'In progress', 'value' => (clone $assignments)->where('status', 'IN_PROGRESS')->count()],
             ['label' => 'COD unremitted', 'value' => 'PHP '.number_format($finance['unremitted_cash'], 2)],
         ];
         $recentAssignments = (clone $assignments)
+            ->delivery()
             ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address'])
             ->latest()
             ->limit(8)
@@ -76,6 +91,7 @@ class RiderController extends Controller
 
         $assignments = RiderAssignment::query()
             ->where('rider_profile_id', $rider->id)
+            ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
             ->with(['shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user'])
             ->latest()
             ->paginate(15);
@@ -120,35 +136,20 @@ class RiderController extends Controller
         return view('Rider.pickups.index', compact('pickups', 'pickupStats', 'assignments', 'rider'));
     }
 
-    public function pickupShow(Request $request, RiderAssignment $assignment): View
+    public function pickupShow(Request $request, RiderAssignment $assignment, LogisticsSchemaReadiness $schema): RedirectResponse
     {
         $rider = $this->rider($request);
         abort_unless((int) $assignment->rider_profile_id === (int) $rider->id && $assignment->assignment_type === 'PICKUP', 403);
+        abort_unless($schema->sellerPickupBatchesReady(), 503, 'Seller pickup batch workflow is unavailable until its additive schema migration is installed.');
 
-        $assignment->load(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'liveLocation']);
+        $pickupTrip = $assignment->localTripItems()->with('trip')->latest('id')->first()?->trip;
+        abort_unless(
+            $pickupTrip?->trip_type === RiderLocalTrip::TYPE_PICKUP && filled($pickupTrip->seller_profile_id),
+            409,
+            'This parcel is not part of a seller-specific pickup batch.'
+        );
 
-        $shipment = $assignment->shipment;
-        $order = $shipment->sellerOrder->order;
-        $pickup = [
-            'tracking' => $shipment->tracking_number,
-            'status' => $assignment->status,
-            'status_label' => str($assignment->status)->headline(),
-            'seller' => $shipment->sellerOrder->sellerProfile->business_name,
-            'buyer' => $order->address->recipient_name,
-            'address' => $order->address->formatted(),
-            'items' => $shipment->sellerOrder->items->sum('quantity'),
-            'amount' => '₱'.number_format((float) $shipment->sellerOrder->grand_total, 2),
-        ];
-        $verified = $request->filled('tracking') && hash_equals($shipment->tracking_number, (string) $request->query('tracking'));
-        $scanMethod = in_array(strtoupper((string) $request->query('scan_method')), ['QR', 'BARCODE'], true)
-            ? strtoupper((string) $request->query('scan_method'))
-            : 'MANUAL';
-        $delivery = $assignment;
-
-        // Pickup navigation needs only the rider and the seller's confirmed
-        // location. Do not send the unrelated buyer marker to this mobile page.
-        $mapMarkers = app(MapDataService::class)->forShipment($shipment, false, true);
-        return view('Rider.pickups.show', compact('assignment', 'rider', 'pickup', 'verified', 'scanMethod', 'delivery', 'mapMarkers'));
+        return redirect()->route('rider.pickups.batches.show', $pickupTrip->id);
     }
 
     public function deliveries(Request $request): View
@@ -193,23 +194,27 @@ class RiderController extends Controller
         $rider = $this->rider($request);
         abort_unless((int) $assignment->rider_profile_id === (int) $rider->id && $assignment->assignment_type === 'DELIVERY', 403);
 
-        $assignment->load(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.deliveryAttempts', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'liveLocation']);
+        $assignment->load(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.order.payments', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.deliveryAttempts', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.codCollection', 'liveLocation']);
 
         $shipment = $assignment->shipment;
         $order = $shipment->sellerOrder->order;
         $parcel = [
             'tracking' => $shipment->tracking_number,
             'status' => $assignment->status,
-            'status_label' => str($assignment->status)->headline(),
+            'status_label' => str($assignment->status)->replace('_', ' ')->upper()->toString(),
+            'shipment_status' => $shipment->current_status,
+            'shipment_status_label' => str($shipment->current_status)->replace('_', ' ')->upper()->toString(),
             'buyer' => $order->address->recipient_name,
             'contact' => $order->address->contact_number,
             'address' => $order->address->formatted(),
             'amount' => '₱'.number_format((float) $shipment->sellerOrder->grand_total, 2),
+            'cod_expected' => number_format((float) ($shipment->codCollection?->expected_amount ?? $shipment->sellerOrder->grand_total), 2, '.', ''),
+            'has_buyer_pin' => app(MapDataService::class)->addressMarker($order->address, 'order-address-'.$order->address->id, 'Buyer destination') !== null,
         ];
         $delivery = $assignment;
 
         // Delivery navigation needs only the rider and the saved buyer address.
-        $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, false);
+        $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, false, $request->user());
         return view('Rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'mapMarkers'));
     }
 

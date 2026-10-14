@@ -72,6 +72,84 @@ class PhilippineAddressController extends Controller
         }
     }
 
+    /**
+     * Resolve a saved address, including legacy short codes, to its canonical
+     * PSGC province and municipality codes.
+     *
+     * @return array{region_code: string, province_code: string, province_name: string, municipality_code: string, municipality_name: string}|null
+     */
+    public static function canonicalMunicipalityFor(
+        string $provinceCode,
+        string $provinceName,
+        string $municipalityCode,
+        string $municipalityName,
+    ): ?array {
+        try {
+            $service = new self;
+            $regions = $service->list('/regions');
+
+            foreach ($regions as $region) {
+                $regionCode = (string) ($region['code'] ?? '');
+                if ($regionCode === '') {
+                    continue;
+                }
+
+                $provinces = $service->list('/regions/'.rawurlencode($regionCode).'/provinces');
+                if ($provinces === []) {
+                    if (strcasecmp(trim($provinceName), trim((string) ($region['name'] ?? ''))) !== 0) {
+                        continue;
+                    }
+
+                    $municipality = collect($service->list('/regions/'.rawurlencode($regionCode).'/cities-municipalities'))
+                        ->first(fn (array $record): bool =>
+                            (string) ($record['code'] ?? '') === $municipalityCode
+                            || strcasecmp(trim((string) ($record['name'] ?? '')), trim($municipalityName)) === 0
+                        );
+
+                    if ($municipality) {
+                        return [
+                            'region_code' => $regionCode,
+                            'province_code' => $regionCode,
+                            'province_name' => (string) ($region['name'] ?? ''),
+                            'municipality_code' => (string) $municipality['code'],
+                            'municipality_name' => (string) $municipality['name'],
+                        ];
+                    }
+
+                    continue;
+                }
+
+                $province = collect($provinces)->first(fn (array $record): bool =>
+                    (string) ($record['code'] ?? '') === $provinceCode
+                    || strcasecmp(trim((string) ($record['name'] ?? '')), trim($provinceName)) === 0
+                );
+                if (! $province) {
+                    continue;
+                }
+
+                $municipality = collect($service->list('/provinces/'.rawurlencode((string) $province['code']).'/cities-municipalities'))
+                    ->first(fn (array $record): bool =>
+                        (string) ($record['code'] ?? '') === $municipalityCode
+                        || strcasecmp(trim((string) ($record['name'] ?? '')), trim($municipalityName)) === 0
+                    );
+
+                if ($municipality) {
+                    return [
+                        'region_code' => $regionCode,
+                        'province_code' => (string) $province['code'],
+                        'province_name' => (string) $province['name'],
+                        'municipality_code' => (string) $municipality['code'],
+                        'municipality_name' => (string) $municipality['name'],
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            report($e);
+        }
+
+        return null;
+    }
+
     public function postalCode(Request $request): JsonResponse
     {
         $municipalityCode = trim((string) $request->query('municipality', ''));
