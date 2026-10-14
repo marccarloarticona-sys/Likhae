@@ -3,6 +3,7 @@
 namespace App\Models\Rider;
 
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -16,12 +17,13 @@ class RiderLocalTrip extends Model
     public const LOADING = 'LOADING';
     public const READY = 'READY';
     public const IN_PROGRESS = 'IN_PROGRESS';
+    public const EN_ROUTE_TO_HUB = 'EN_ROUTE_TO_HUB';
     public const COMPLETED = 'COMPLETED';
     public const CANCELLED = 'CANCELLED';
     public const EXCEPTION = 'EXCEPTION';
 
     protected $fillable = [
-        'rider_profile_id', 'logistics_center_id', 'trip_type', 'province_code', 'municipality_code',
+        'rider_profile_id', 'logistics_center_id', 'seller_profile_id', 'trip_type', 'province_code', 'municipality_code',
         'barangay_code', 'approved_parcel_capacity', 'status', 'created_by_user_id', 'started_at',
         'completed_at', 'cancelled_at', 'exception_notes',
     ];
@@ -38,6 +40,7 @@ class RiderLocalTrip extends Model
 
     public function rider(): BelongsTo { return $this->belongsTo(RiderProfile::class, 'rider_profile_id'); }
     public function logisticsCenter(): BelongsTo { return $this->belongsTo(LogisticsCenter::class); }
+    public function seller(): BelongsTo { return $this->belongsTo(SellerProfile::class, 'seller_profile_id'); }
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by_user_id'); }
     public function items(): HasMany { return $this->hasMany(RiderLocalTripItem::class, 'rider_local_trip_id'); }
 

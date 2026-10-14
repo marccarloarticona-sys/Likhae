@@ -197,6 +197,7 @@ function updateNavigationPanel(shell, { rider = null, target = null, route = nul
     shell._likhaeNavigationSnapshot = { rider, target, route, status };
     panel.hidden = false;
     const destination = navigationDestination(target);
+    const buyerPinMissing = rider?.active_destination_kind === 'buyer' && !markerCoordinates(target);
     const assignmentLabel = rider?.assignment_type === 'PICKUP' ? 'Pickup navigation' : 'Delivery navigation';
     const setText = (selector, value) => {
         const element = panel.querySelector(selector);
@@ -204,17 +205,21 @@ function updateNavigationPanel(shell, { rider = null, target = null, route = nul
     };
 
     setText('[data-map-navigation-assignment]', rider ? assignmentLabel : 'Waiting for active Rider GPS');
-    setText('[data-map-navigation-destination]', destination.name || 'Active destination');
-    setText('[data-map-navigation-address]', destination.address || 'Saved destination coordinates');
+    setText('[data-map-navigation-destination]', buyerPinMissing ? 'Delivery pin required' : (destination.name || 'Active destination'));
+    setText('[data-map-navigation-address]', buyerPinMissing
+        ? 'The Buyer has not confirmed an exact destination pin for this order.'
+        : (destination.address || 'Saved destination coordinates'));
     const remainingDuration = route
         ? (Number.isFinite(route.arrivalAt)
             ? Math.max(0, (route.arrivalAt - Date.now()) / 1000)
             : route.duration)
         : null;
-    setText('[data-map-navigation-eta]', route ? formatRouteDuration(remainingDuration) : '—');
-    setText('[data-map-navigation-distance]', route ? formatRoadDistance(route.distance) : '—');
-    setText('[data-map-navigation-arrival]', route ? formatArrivalTime(route.duration, route.arrivalAt) : '—');
-    setText('[data-map-navigation-status]', status || (rider ? 'Live GPS position available' : 'Waiting for live GPS'));
+    setText('[data-map-navigation-eta]', route ? formatRouteDuration(remainingDuration) : 'Unavailable');
+    setText('[data-map-navigation-distance]', route ? formatRoadDistance(route.distance) : 'Unavailable');
+    setText('[data-map-navigation-arrival]', route ? formatArrivalTime(route.duration, route.arrivalAt) : 'Unavailable');
+    setText('[data-map-navigation-status]', status || (rider
+        ? rider.location_fresh === true ? 'Live GPS position available' : 'Last GPS update is delayed. Navigation is using the last known location.'
+        : 'Waiting for live GPS'));
 }
 
 function removeRouteLayer(map, routeId) {
@@ -257,11 +262,13 @@ async function drawPersistedRoutes(map, markers, shell, token) {
                 : !markerCoordinates(activeNavigationTarget)
                     ? activeDestinationKind === 'seller'
                         ? 'Seller pickup coordinates are missing. Ask the seller to confirm the saved address pin.'
+                    : activeDestinationKind === 'buyer'
+                        ? 'DELIVERY PIN REQUIRED — The Buyer has not confirmed an exact destination pin for this order. Navigation will become available once the Buyer confirms the delivery pin.'
                         : 'Saved destination coordinates are unavailable.'
                     : !navigationRider
                         ? 'Waiting for the Rider location.'
                         : activeRider.location_fresh !== true
-                            ? 'Road route is based on the Rider’s last known GPS. Refresh GPS for a current route.'
+                            ? 'Last GPS update is delayed. Navigation is using the last known location. Refresh GPS for a current route.'
                         : sameNavigationTarget && previousNavigation.route
                             ? 'Road route active'
                             : 'Calculating driving route…',
@@ -337,7 +344,7 @@ async function drawPersistedRoutes(map, markers, shell, token) {
                             route: routeState.route,
                             status: rider.location_fresh === true
                                 ? 'Road route updated from live GPS'
-                                : 'Road route shown from the Rider’s last known GPS. Refresh GPS for a current route.',
+                                : 'Last GPS update is delayed. Navigation is using the last known location. Refresh GPS for a current route.',
                         });
                     }
                 })
@@ -471,6 +478,14 @@ function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
             delete shell._likhaeMarkerRefs[key];
         }
     });
+
+    const activeRider = markers.find((marker) => marker.kind === 'rider' && marker.active_rider);
+    const locationState = shell.querySelector('[data-map-location-state]');
+    if (locationState) {
+        locationState.textContent = activeRider && markerCoordinates(activeRider)
+            ? activeRider.location_fresh === true ? 'LIVE' : 'LAST KNOWN LOCATION'
+            : activeRider ? 'WAITING FOR RIDER GPS' : 'LOCATION MAP';
+    }
 
     if (fit && !bounds.isEmpty()) {
         map.fitBounds(bounds, { padding: 54, maxZoom: 14, duration: 0 });
@@ -611,7 +626,7 @@ async function applyRiderLocationEvent(shell, map, mapboxgl, event) {
         ? event?.local_device_gps
             ? 'Road route updated from fresh Rider device GPS. Saving live location…'
             : 'Rider live location updated from the active assignment.'
-        : 'A delayed Rider location was received; the road route now uses that last known GPS. Refresh GPS to update it.', false);
+        : 'Last GPS update is delayed. Navigation is using this Rider’s last known location; refresh GPS to update it.', false);
     return true;
 }
 
@@ -818,6 +833,32 @@ function initMap(shell, mapboxgl) {
     shell.querySelector('[data-map-fullscreen]')?.addEventListener('click', () => toggleFullscreen(shell, map));
     addUserLocation(shell, map, mapboxgl, markers);
     map.on('load', () => {
+        const pinFormId = shell.dataset.mapPinForm;
+        const pinForm = pinFormId ? document.getElementById(pinFormId) : null;
+        if (pinForm) {
+            const latitude = pinForm.querySelector('[name="latitude"]');
+            const longitude = pinForm.querySelector('[name="longitude"]');
+            const saveButton = pinForm.querySelector('[data-delivery-pin-save]');
+            const pinStatus = pinForm.querySelector('[data-delivery-pin-status]');
+            map.getCanvas().style.cursor = 'crosshair';
+            map.on('click', (event) => {
+                const lat = Number(event.lngLat.lat.toFixed(7));
+                const lng = Number(event.lngLat.lng.toFixed(7));
+                latitude.value = lat.toFixed(7);
+                longitude.value = lng.toFixed(7);
+                shell._likhaeSelectedPinMarker?.remove();
+                const markerElement = document.createElement('div');
+                markerElement.className = 'lk-map-marker';
+                markerElement.dataset.kind = 'destination';
+                markerElement.setAttribute('aria-label', 'Selected delivery pin');
+                shell._likhaeSelectedPinMarker = new mapboxgl.Marker({ element: markerElement, anchor: 'bottom' })
+                    .setLngLat([lng, lat])
+                    .addTo(map);
+                if (saveButton) saveButton.disabled = false;
+                if (pinStatus) pinStatus.textContent = `Selected pin: ${lat.toFixed(7)}, ${lng.toFixed(7)}. Review the map, then confirm.`;
+                updateStatus(shell, 'Exact pin selected. Review its position and confirm it below.');
+            });
+        }
         drawPersistedRoutes(map, markers, shell, token);
         configureRiderLocationUpdates(shell);
         bindDeviceRiderLocation(shell, map, mapboxgl);

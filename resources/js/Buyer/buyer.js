@@ -595,6 +595,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 const payload = await response.json();
                 if (!response.ok || !payload.version || payload.version === orderPage.dataset.orderVersion) return;
+                if (orderPage.querySelector('[data-order-detail-status]')) {
+                    window.location.reload();
+                    return;
+                }
                 const displayStatus = (order) => order.status === 'PROCESSING'
                     && order.shipments?.length
                     && order.shipments.every((shipment) => ['DELIVERED', 'COMPLETED'].includes(shipment.status))

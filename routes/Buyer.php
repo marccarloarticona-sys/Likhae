@@ -54,6 +54,7 @@ Route::prefix('buyer')
         Route::get('/returns/payouts/{payout}/proof', [BuyerReturnRefundController::class, 'payoutProof'])->name('returns.payout-proof');
         Route::get('/returns/evidence/{evidence}', [BuyerReturnRefundController::class, 'evidence'])->name('returns.evidence');
         Route::get('/orders/{order}', [BuyerOrderController::class, 'show'])->name('orders.show');
+        Route::post('/orders/{order}/delivery-pin', [BuyerOrderController::class, 'confirmDeliveryPin'])->name('orders.delivery-pin');
         Route::post('/orders/{order}/seller-orders/{sellerOrder}/conversation', [BuyerOrderController::class, 'sellerConversation'])->name('orders.seller-conversation');
         Route::post('/orders/{order}/support/conversation', [BuyerOrderController::class, 'supportConversation'])->name('orders.support-conversation');
         Route::post('/orders/{order}/cancel', [BuyerOrderController::class, 'cancel'])->name('orders.cancel');

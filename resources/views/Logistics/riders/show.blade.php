@@ -82,7 +82,6 @@
             <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] text-amber-800">Transfer schema is not installed. Cross-hub manifest operations remain disabled.</p>
         @endif
     </section>
-
     <x-shared.mapbox :markers="$mapMarkers" title="Rider operations map" height="220px" user-location-target="center" />
 
     <section class="rounded-xl border border-line bg-surface p-5">
@@ -126,6 +125,25 @@
                 <p class="mt-2 text-[9px] text-muted">No moderation actions recorded.</p>
             @endforelse
         </div>
+    </section>
+
+    <section class="rounded-xl border border-line bg-surface p-5">
+        <div>
+            <h2 class="text-[13px] font-semibold text-ink">Approved Transfer Capacity</h2>
+            <p class="mt-1 text-[10px] leading-5 text-muted">Inter-hub manifests require explicit hub approval for parcel count, weight, and volume. Missing values block sealing.</p>
+        </div>
+        @if($manifestSchemaReady)
+            <form method="POST" action="{{ route('logistics.riders.capacity.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-3">
+                @csrf
+                @method('PATCH')
+                <label class="text-[10px] font-semibold text-ink">Parcels<input type="number" min="1" name="approved_parcel_capacity" value="{{ old('approved_parcel_capacity', $rider->approved_parcel_capacity) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
+                <label class="text-[10px] font-semibold text-ink">Weight kg<input type="number" step="0.001" min="0.001" name="approved_weight_capacity_kg" value="{{ old('approved_weight_capacity_kg', $rider->approved_weight_capacity_kg) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
+                <label class="text-[10px] font-semibold text-ink">Volume liters<input type="number" step="0.001" min="0.001" name="approved_volume_capacity_liters" value="{{ old('approved_volume_capacity_liters', $rider->approved_volume_capacity_liters) }}" class="mt-1 w-full rounded-lg border border-line px-3 py-3 text-[10px] font-normal"></label>
+                <button type="submit" class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white sm:col-span-3 sm:justify-self-start">Save Capacity</button>
+            </form>
+        @else
+            <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] text-amber-800">Transfer schema is not installed. Cross-hub manifest operations remain disabled.</p>
+        @endif
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5">

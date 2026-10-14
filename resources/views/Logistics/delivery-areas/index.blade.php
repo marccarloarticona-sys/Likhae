@@ -24,7 +24,7 @@
 
         <x-shared.mapbox :markers="$mapMarkers" title="Delivery area map" height="220px" user-location-target="center" />
 
-        @if ($center->address?->province_code && $center->address?->municipality_code)
+        @if ($centerCanonicalMunicipality)
             <form method="POST" action="{{ route('logistics.delivery-areas.store') }}" class="grid gap-3 border border-line bg-surface p-5 md:grid-cols-2">
                 @csrf
                 <h2 class="font-semibold md:col-span-2">Add barangay coverage</h2>
@@ -38,8 +38,8 @@
                 <div class="md:col-span-2">
                     <x-shared.philippine-address-fields
                         :include-details="false"
-                        :allowed-province-code="$center->address->province_code"
-                        :allowed-municipality-code="$center->address->municipality_code"
+                        :allowed-province-code="$centerCanonicalMunicipality['province_code']"
+                        :allowed-municipality-code="$centerCanonicalMunicipality['municipality_code']"
                         field-class="mt-1 w-full border border-line p-2"
                         wrapper-class="grid gap-3 md:grid-cols-4"
                     />
@@ -58,7 +58,7 @@
             </form>
         @else
             <div class="border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                Configure and approve this center's canonical PSGC province and municipality before adding barangay coverage.
+                Configure this center with a resolvable province and municipality before adding barangay coverage.
             </div>
         @endif
 

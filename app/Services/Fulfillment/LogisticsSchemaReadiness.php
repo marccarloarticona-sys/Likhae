@@ -41,7 +41,19 @@ final class LogisticsSchemaReadiness
     {
         return $this->manifestReady()
             && $this->hasColumns('rider_local_trips', [
-                'rider_profile_id', 'logistics_center_id', 'trip_type', 'province_code',
+                'rider_profile_id', 'logistics_center_id', 'seller_profile_id', 'trip_type', 'province_code',
+                'municipality_code', 'barangay_code', 'approved_parcel_capacity', 'status',
+            ])
+            && $this->hasColumns('rider_local_trip_items', [
+                'rider_local_trip_id', 'rider_assignment_id', 'status',
+            ]);
+    }
+
+    public function sellerPickupBatchesReady(): bool
+    {
+        return $this->hasColumns('rider_profiles', ['approved_parcel_capacity'])
+            && $this->hasColumns('rider_local_trips', [
+                'rider_profile_id', 'logistics_center_id', 'seller_profile_id', 'trip_type', 'province_code',
                 'municipality_code', 'barangay_code', 'approved_parcel_capacity', 'status',
             ])
             && $this->hasColumns('rider_local_trip_items', [

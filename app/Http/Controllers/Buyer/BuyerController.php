@@ -135,7 +135,7 @@ class BuyerController extends Controller
 
         if ($request->boolean('checkout')) {
             $request->session()->put('checkout_cart_item_ids', [$item->id]);
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes']);
+            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_seller_notes']);
 
             return redirect()->route('buyer.checkout');
         }
@@ -170,7 +170,7 @@ class BuyerController extends Controller
         // Buy Now selects only this item and always leaves this endpoint via
         // the checkout page rather than the cart response path.
         $request->session()->put('checkout_cart_item_ids', [$item->id]);
-        $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes']);
+        $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_seller_notes']);
 
         return redirect()->route('buyer.checkout');
     }

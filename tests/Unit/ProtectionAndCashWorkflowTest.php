@@ -37,6 +37,26 @@ class ProtectionAndCashWorkflowTest extends TestCase
         ], 1000));
     }
 
+    public function test_rules_without_a_positive_rate_or_amount_are_not_chargeable(): void
+    {
+        $this->assertNull(FragileProtectionRuleService::calculateFee([
+            'scope' => FragileProtectionRule::SCOPE_PER_UNIT,
+            'calculation_type' => FragileProtectionRule::TYPE_PERCENTAGE,
+            'percentage_rate' => 0,
+        ], 1000));
+        $this->assertNull(FragileProtectionRuleService::calculateFee([
+            'scope' => FragileProtectionRule::SCOPE_PER_LINE,
+            'calculation_type' => FragileProtectionRule::TYPE_FLAT,
+            'flat_amount' => 0,
+        ], 1000));
+        $this->assertNull(FragileProtectionRuleService::calculateFee([
+            'scope' => FragileProtectionRule::SCOPE_PER_UNIT,
+            'calculation_type' => FragileProtectionRule::TYPE_HYBRID,
+            'percentage_rate' => 0,
+            'flat_amount' => 0,
+        ], 1000));
+    }
+
     public function test_price_bands_and_per_line_scope_are_respected(): void
     {
         $rule = [

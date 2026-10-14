@@ -23,15 +23,36 @@ class CheckoutAddressSnapshotTest extends TestCase
 
     public function test_order_keeps_the_selected_address_and_coordinates_after_profile_edit(): void
     {
+        config(['services.psgc.local_first' => true]);
         $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
         $sellerUser = User::factory()->create(['account_type' => User::TYPE_SELLER]);
         $centerUser = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
+
+        $centerAddress = Address::create([
+            'user_id' => $centerUser->id,
+            'label' => 'Center',
+            'recipient_name' => 'Snapshot Center',
+            'contact_number' => $centerUser->contact_number,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+            'street_address' => 'Center Street',
+            'latitude' => '14.0695000',
+            'longitude' => '121.3255000',
+        ]);
 
         $center = LogisticsCenter::create([
             'owner_user_id' => $centerUser->id,
+            'address_id' => $centerAddress->id,
             'code' => 'SNAPSHOT-CENTER',
             'business_name' => 'Snapshot Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
         ]);
         $area = ServiceArea::create([
             'logistics_center_id' => $center->id,
@@ -41,12 +62,12 @@ class CheckoutAddressSnapshotTest extends TestCase
         ]);
         ServiceAreaLocation::create([
             'service_area_id' => $area->id,
-            'province_code' => 'P-SNAPSHOT',
-            'province_name' => 'Snapshot Province',
-            'municipality_code' => 'M-SNAPSHOT',
-            'municipality_name' => 'Snapshot Municipality',
-            'barangay_code' => 'B-SNAPSHOT',
-            'barangay_name' => 'Snapshot Barangay',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
         ]);
 
         $category = Category::create([
@@ -54,9 +75,25 @@ class CheckoutAddressSnapshotTest extends TestCase
             'slug' => 'snapshot-category',
             'is_active' => true,
         ]);
+        $sellerAddress = Address::create([
+            'user_id' => $sellerUser->id,
+            'label' => 'Business',
+            'recipient_name' => 'Snapshot Seller',
+            'contact_number' => $sellerUser->contact_number,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+            'street_address' => 'Seller Pickup Street',
+            'latitude' => '14.0696000',
+            'longitude' => '121.3256000',
+        ]);
         $seller = SellerProfile::create([
             'user_id' => $sellerUser->id,
             'primary_category_id' => $category->id,
+            'business_address_id' => $sellerAddress->id,
             'business_name' => 'Snapshot Seller',
             'status' => 'ACTIVE',
         ]);
@@ -87,12 +124,12 @@ class CheckoutAddressSnapshotTest extends TestCase
             'label' => 'Home',
             'recipient_name' => $buyer->name,
             'contact_number' => $buyer->contact_number,
-            'province_code' => 'P-SNAPSHOT',
-            'province_name' => 'Snapshot Province',
-            'municipality_code' => 'M-SNAPSHOT',
-            'municipality_name' => 'Snapshot Municipality',
-            'barangay_code' => 'B-SNAPSHOT',
-            'barangay_name' => 'Snapshot Barangay',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
             'street_address' => 'Original Street',
             'latitude' => '14.5995000',
             'longitude' => '120.9842000',
@@ -105,7 +142,7 @@ class CheckoutAddressSnapshotTest extends TestCase
             collect([$item]),
             'COD',
             [],
-            $center->id,
+            null,
         );
 
         $address->update([

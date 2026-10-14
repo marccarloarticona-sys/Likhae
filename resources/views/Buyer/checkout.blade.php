@@ -128,7 +128,9 @@
                         <div class="space-y-2 border-t border-stone-100 px-5 py-4">
                             <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available for this checkout</p>
                             @foreach($availableVouchers as $sellerId => $vouchers)
-                                @php($voucherShop = data_get($groups->get($sellerId), 'seller.business_name', 'Shop'))
+                                @php
+                                    $voucherShop = data_get($groups->get($sellerId), 'seller.business_name', 'Shop');
+                                @endphp
                                 <div class="flex flex-wrap items-center gap-2">
                                     <span class="text-[10px] text-stone-500">{{ $voucherShop }}:</span>
                                     @foreach($vouchers as $voucher)
@@ -143,25 +145,76 @@
                 </section>
 
                 @foreach($groups as $sellerId => $group)
-                    <section class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                        <h2 class="text-base font-bold text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
-                        <div class="mt-4 space-y-3">
+                    @php
+                        $sellerSubtotal = (float) data_get($group, 'item_subtotal', 0);
+                        $sellerDiscount = (float) data_get($group, 'voucher_discount', 0);
+                        $sellerShipping = (float) data_get($group, 'shipping_fee', 0);
+                        $sellerProtection = (float) data_get($group, 'protection_total', 0);
+                        $sellerTotal = (float) data_get($group, 'grand_total', 0);
+                    @endphp
+                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}">
+                        <header class="border-b border-stone-100 bg-stone-50 px-5 py-4">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <h2 class="text-base font-bold uppercase tracking-wide text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
+                                <span class="rounded-full bg-white px-3 py-1 text-[10px] font-semibold text-stone-600">{{ collect(data_get($group, 'items', []))->count() }} {{ collect(data_get($group, 'items', []))->count() === 1 ? 'product' : 'products' }} · one seller shipment</span>
+                            </div>
+                        </header>
+                        <div class="space-y-3 p-4 sm:p-5" aria-label="{{ data_get($group, 'seller.business_name', 'Seller') }} products">
                             @foreach(collect(data_get($group, 'items', [])) as $item)
-                                @php($variant = $item->productVariant)
-                                @php($product = $variant->product)
-                                @php($protectionQuote = (array) ($item->protection_quote ?? []))
-                                @if($protectionQuote['eligible'] ?? false)
-                                    <label class="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2 text-[11px] text-amber-950"><input type="checkbox" name="protection_item_ids[]" value="{{ $item->id }}" data-protection-checkbox data-protection-fee="{{ number_format((float) ($protectionQuote['fee'] ?? 0), 2, '.', '') }}" class="mt-0.5" @checked($protectionQuote['selected'] ?? false)><span><strong class="block">Add Additional Care / Fragile Protection</strong><span>PHP {{ number_format((float) ($protectionQuote['fee'] ?? 0), 2) }} · {{ str((string) ($protectionQuote['scope'] ?? ''))->headline() }}</span></span></label>
-                                @endif
-                                <div class="flex gap-3 text-sm"><img class="h-14 w-14 rounded-lg object-cover" src="{{ $imageUrl($product, $variant) }}" alt="{{ $product->name }}"><div class="min-w-0 flex-1"><strong class="line-clamp-2 text-stone-800">{{ $product->name }}</strong><span class="block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }} · Qty {{ $item->quantity }}</span></div><strong>&#8369;{{ number_format((float) $variant->final_price * $item->quantity, 2) }}</strong></div>
+                                @php
+                                    $variant = $item->productVariant;
+                                    $product = $variant->product;
+                                    $protectionQuote = (array) ($item->protection_quote ?? []);
+                                    $unitPrice = (float) $variant->final_price;
+                                    $lineTotal = $unitPrice * (int) $item->quantity;
+                                @endphp
+                                <article class="rounded-xl border border-stone-200 p-3 sm:p-4">
+                                    <div class="flex gap-3">
+                                        <img class="h-16 w-16 shrink-0 rounded-lg border border-stone-100 bg-stone-50 object-cover" src="{{ $imageUrl($product, $variant) }}" alt="{{ $product->name }}">
+                                        <div class="min-w-0 flex-1">
+                                            <strong class="block text-sm font-semibold text-stone-900">{{ $product->name }}</strong>
+                                            <span class="mt-1 block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }}</span>
+                                            <span class="mt-2 block text-xs text-stone-600">&#8369;{{ number_format($unitPrice, 2) }} × {{ $item->quantity }}</span>
+                                        </div>
+                                        <div class="shrink-0 text-right">
+                                            <span class="block text-[10px] uppercase tracking-wide text-stone-400">Line total</span>
+                                            <strong class="mt-1 block text-sm font-bold text-stone-900">&#8369;{{ number_format($lineTotal, 2) }}</strong>
+                                        </div>
+                                    </div>
+                                    @if($protectionQuote['eligible'] ?? false)
+                                        @php
+                                            $careFee = (float) ($protectionQuote['fee'] ?? 0);
+                                            $careUnitFee = (float) ($protectionQuote['unit_fee'] ?? 0);
+                                            $careIsPerUnit = ($protectionQuote['scope'] ?? null) === 'PER_UNIT';
+                                        @endphp
+                                        <label class="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950">
+                                            <input type="checkbox" name="protection_item_ids[]" value="{{ $item->id }}" data-protection-checkbox data-seller-id="{{ $sellerId }}" data-protection-fee="{{ number_format($careFee, 2, '.', '') }}" class="mt-0.5" @checked($protectionQuote['selected'] ?? false)>
+                                            <span>
+                                                <strong class="block">Add Product Protection <span class="font-semibold">+&#8369;{{ number_format($careFee, 2) }}</span></strong>
+                                                <span class="mt-1 block">Optional protection for this item during delivery.</span>
+                                                @if($careIsPerUnit)
+                                                    <span class="mt-1 block text-[11px]">&#8369;{{ number_format($careUnitFee, 2) }} per unit &times; {{ $item->quantity }}</span>
+                                                @endif
+                                            </span>
+                                        </label>
+                                    @endif
+                                </article>
                             @endforeach
                         </div>
-                        <div class="mt-4 space-y-2 border-t border-stone-100 pt-3 text-xs">
-                            <div class="flex justify-between gap-3 text-stone-500"><span>{{ data_get($group, 'seller.business_name', 'Shop') }} subtotal</span><strong class="text-stone-700">&#8369;{{ number_format((float) data_get($group, 'item_subtotal', 0), 2) }}</strong></div>
+                        <div class="space-y-2 border-t border-stone-100 px-5 py-4 text-xs">
+                            <div class="flex justify-between gap-3 text-stone-500"><span>{{ data_get($group, 'seller.business_name', 'Shop') }} subtotal</span><strong class="text-stone-700">&#8369;{{ number_format($sellerSubtotal, 2) }}</strong></div>
                             @if(data_get($group, 'voucher'))
-                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Voucher {{ data_get($group, 'voucher.code') }} &middot; {{ data_get($group, 'seller.business_name', 'Shop') }}</span><strong>-&#8369;{{ number_format((float) data_get($group, 'voucher_discount', 0), 2) }}</strong></div>
+                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Voucher {{ data_get($group, 'voucher.code') }} &middot; {{ data_get($group, 'seller.business_name', 'Shop') }}</span><strong>-&#8369;{{ number_format($sellerDiscount, 2) }}</strong></div>
                             @endif
-                            @if((float) data_get($group, 'protection_total', 0) > 0)<div class="flex justify-between gap-3 text-amber-800"><span>Additional Care</span><strong>&#8369;{{ number_format((float) data_get($group, 'protection_total', 0), 2) }}</strong></div>@endif
+                            <div class="flex justify-between gap-3 text-stone-500"><span>Shipping</span><strong data-seller-shipping-total>&#8369;{{ number_format($sellerShipping, 2) }}</strong></div>
+                            <div class="flex justify-between gap-3 text-amber-800"><span>Additional Care</span><strong data-seller-protection-total>&#8369;{{ number_format($sellerProtection, 2) }}</strong></div>
+                            <div class="flex justify-between gap-3 border-t border-stone-100 pt-2 font-bold text-stone-900"><span>Seller total</span><strong data-seller-total>&#8369;{{ number_format($sellerTotal, 2) }}</strong></div>
+                        </div>
+                        @php($sellerNoteInput = old('seller_notes.'.$sellerId, $sellerNotes[$sellerId] ?? ''))
+                        <div class="mt-4 border-t border-stone-100 pt-4">
+                            <label for="seller-note-{{ $sellerId }}" class="block text-xs font-semibold text-stone-700">Note for {{ data_get($group, 'seller.business_name', 'Seller') }} <span class="font-normal text-stone-500">(optional)</span></label>
+                            <textarea id="seller-note-{{ $sellerId }}" name="seller_notes[{{ $sellerId }}]" rows="3" maxlength="500" data-seller-note class="mt-2 block w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm text-stone-800 outline-none transition focus:border-red-800 focus:ring-4 focus:ring-red-100" placeholder="Add instructions for this seller...">{{ $sellerNoteInput }}</textarea>
+                            <div class="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-500"><p id="seller-note-help-{{ $sellerId }}">Order instructions only. Do not include passwords, card details, or other sensitive information.</p><span data-seller-note-count>{{ mb_strlen((string) $sellerNoteInput) }} / 500</span></div>
                         </div>
                     </section>
                 @endforeach
@@ -169,7 +222,7 @@
                 <section class="rounded-2xl border border-stone-200 bg-white shadow-sm"><div class="border-b border-stone-100 px-5 py-4"><h2 class="text-base font-bold text-stone-900">Payment Method</h2><p class="mt-1 text-xs text-stone-500">New orders use Cash on Delivery. The final-mile delivery rider collects the full amount shown below.</p></div><div class="p-5"><label class="block cursor-pointer"><input type="radio" name="payment_method" value="COD" class="peer sr-only" checked><span class="flex items-start gap-3 rounded-xl border border-red-800 bg-red-50 p-4"><span class="text-red-800">₱</span><span><strong class="block text-xs">Cash on Delivery (COD)</strong><small class="text-[10px] text-stone-500">Pay the product amount plus shipping when your order arrives.</small></span></span></label></div>@error('payment_method')<p class="px-5 pb-5 text-xs font-semibold text-red-700">{{ $message }}</p>@enderror</section>
             </div>
 
-             <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 class="text-base font-bold text-stone-900">Order summary</h2><dl class="mt-4 space-y-3 text-sm"><div class="flex justify-between"><dt class="text-stone-500">Subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div><div class="flex justify-between text-amber-800"><dt>Additional Care</dt><dd id="checkout-protection-total">&#8369;{{ number_format((float) data_get($preview, 'protection_total', 0), 2) }}</dd></div><div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div></dl>@error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror<button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock)>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) ? 'Delivery unavailable' : 'Place Order' }}</button></aside>
+             <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 class="text-base font-bold text-stone-900">Order summary</h2><dl class="mt-4 space-y-3 text-sm"><div class="flex justify-between"><dt class="text-stone-500">Subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div><div class="flex justify-between text-amber-800"><dt>Additional Care</dt><dd id="checkout-protection-total">&#8369;{{ number_format((float) data_get($preview, 'protection_total', 0), 2) }}</dd></div><div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div></dl>@error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror<button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked)>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) ? 'Delivery unavailable' : ($checkoutBlocked ? 'Review cart items' : 'Place Order') }}</button></aside>
         </form>
     @endif
 </div>
@@ -182,17 +235,34 @@
             const total = document.getElementById('checkout-grand-total');
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
-            const initialProtection = Number(@json((float) data_get($preview, 'protection_total', 0)));
-            const parcelCount = Number(@json(max($groups->count(), 1)));
             const money = (value) => `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
             const updateTotals = (input) => {
-                const fee = Number(input?.dataset.shippingFee || 0) * parcelCount;
-                if (shipping) shipping.textContent = money(fee);
-                const protectionFee = [...document.querySelectorAll('[data-protection-checkbox]:checked')]
-                    .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
-                if (protection) protection.textContent = money(protectionFee);
-                if (total) total.textContent = money(Math.max(0, subtotal - discount + fee + protectionFee));
+                let shippingTotal = 0;
+                let protectionTotal = 0;
+
+                document.querySelectorAll('[data-seller-card]').forEach((card) => {
+                    const sellerId = card.dataset.sellerId;
+                    const sellerSubtotal = Number(card.dataset.sellerSubtotal || 0);
+                    const sellerDiscount = Number(card.dataset.sellerDiscount || 0);
+                    const sellerShipping = input
+                        ? Number(input.dataset.shippingFee || 0)
+                        : Number(card.dataset.sellerShippingFee || 0);
+                    const sellerProtection = [...document.querySelectorAll('[data-protection-checkbox]:checked')]
+                        .filter((checkbox) => checkbox.dataset.sellerId === sellerId)
+                        .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
+                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount + sellerShipping + sellerProtection);
+
+                    shippingTotal += sellerShipping;
+                    protectionTotal += sellerProtection;
+                    card.querySelector('[data-seller-shipping-total]')?.replaceChildren(money(sellerShipping));
+                    card.querySelector('[data-seller-protection-total]')?.replaceChildren(money(sellerProtection));
+                    card.querySelector('[data-seller-total]')?.replaceChildren(money(sellerTotal));
+                });
+
+                if (shipping) shipping.textContent = money(shippingTotal);
+                if (protection) protection.textContent = money(protectionTotal);
+                if (total) total.textContent = money(Math.max(0, subtotal - discount + shippingTotal + protectionTotal));
             };
 
             document.querySelectorAll('[data-protection-checkbox]').forEach((input) => {
@@ -203,9 +273,14 @@
                 input.addEventListener('change', () => updateTotals(input));
                 if (input.checked) updateTotals(input);
             });
-            if (!document.querySelector('input[name="logistics_center_id"]:checked') && protection) {
-                protection.textContent = money(initialProtection);
-            }
+            document.querySelectorAll('[data-seller-note]').forEach((textarea) => {
+                const counter = textarea.parentElement?.querySelector('[data-seller-note-count]');
+                const updateCount = () => {
+                    if (counter) counter.textContent = `${Array.from(textarea.value).length} / 500`;
+                };
+                textarea.addEventListener('input', updateCount);
+                updateCount();
+            });
 
             const checkoutForm = document.querySelector('[data-checkout-form]');
             const placeOrderButton = checkoutForm?.querySelector('[data-place-order-submit]');

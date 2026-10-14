@@ -4,6 +4,7 @@
 <div style="display:grid;gap:16px">
     <div class="ad-page-head"><div><span class="ad-overline">Step 8</span><h2>Additional Care / Fragile Protection</h2><p>Rules are inactive until an administrator explicitly activates them. Existing orders keep their checkout snapshots.</p></div></div>
     @if(session('status'))<div class="ad-card ad-card-body">{{ session('status') }}</div>@endif
+    @if($errors->any())<div class="ad-card ad-card-body" role="alert"><strong>Please correct the protection rule:</strong><ul style="margin:.5rem 0 0;padding-left:1.25rem">@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
     @if(!$ready)<div class="ad-card ad-card-body" style="border-color:#f59e0b;background:#fffbeb;color:#92400e">Protection-rule tables are prepared but not installed. No protection fee is chargeable yet.</div>@endif
     <div class="ad-card ad-card-body">
         <h2>Create rule</h2><p style="margin:.35rem 0 1rem;color:#78716c">Use one target level per rule. Product overrides subcategory; subcategory overrides category. Rates remain owner-configured.</p>

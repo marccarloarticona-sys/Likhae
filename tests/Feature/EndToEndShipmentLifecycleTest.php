@@ -15,6 +15,8 @@ use App\Models\Seller\Category;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
+use App\Services\Fulfillment\LocalRiderTripService;
+use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -34,11 +36,27 @@ class EndToEndShipmentLifecycleTest extends TestCase
         $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
         $sellerUser = User::factory()->create(['account_type' => User::TYPE_SELLER]);
         $centerUser = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
+        $centerAddress = Address::create([
+            'user_id' => $centerUser->id,
+            'label' => 'Sorting Center',
+            'recipient_name' => $centerUser->name,
+            'contact_number' => $centerUser->contact_number,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+            'street_address' => 'Sorting Center Street',
+        ]);
         $center = LogisticsCenter::create([
             'owner_user_id' => $centerUser->id,
+            'address_id' => $centerAddress->id,
             'code' => 'E2E-CENTER',
             'business_name' => 'E2E Sorting Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $centerUser->id,
+            'approved_at' => now(),
         ]);
         $area = ServiceArea::create([
             'logistics_center_id' => $center->id,
@@ -48,12 +66,12 @@ class EndToEndShipmentLifecycleTest extends TestCase
         ]);
         ServiceAreaLocation::create([
             'service_area_id' => $area->id,
-            'province_code' => 'P-E2E',
-            'province_name' => 'Test Province',
-            'municipality_code' => 'M-E2E',
-            'municipality_name' => 'Test Municipality',
-            'barangay_code' => 'B-E2E',
-            'barangay_name' => 'Test Barangay',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
         ]);
 
         $category = Category::create(['name' => 'E2E Category', 'slug' => 'e2e-category', 'is_active' => true]);
@@ -62,12 +80,12 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'label' => 'Business',
             'recipient_name' => $sellerUser->name,
             'contact_number' => $sellerUser->contact_number,
-            'province_code' => 'P-E2E',
-            'province_name' => 'Test Province',
-            'municipality_code' => 'M-E2E',
-            'municipality_name' => 'Test Municipality',
-            'barangay_code' => 'B-E2E',
-            'barangay_name' => 'Test Barangay',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
             'street_address' => 'Seller Pickup Street',
         ]);
         $seller = SellerProfile::create([
@@ -88,12 +106,12 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'order_id' => $order->id,
             'recipient_name' => $buyer->name,
             'contact_number' => $buyer->contact_number,
-            'province_code' => 'P-E2E',
-            'province_name' => 'Test Province',
-            'municipality_code' => 'M-E2E',
-            'municipality_name' => 'Test Municipality',
-            'barangay_code' => 'B-E2E',
-            'barangay_name' => 'Test Barangay',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
             'street_address' => '1 Test Street',
         ]);
         $sellerOrder = SellerOrder::create([
@@ -125,13 +143,12 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'is_active' => true,
             'assigned_at' => now(),
         ]);
-        $pickupAssignment = $workflow->assignRider($shipment, $pickupRider, 'PICKUP', $centerUser);
-        $workflow->riderTransition($pickupAssignment, 'accept', $pickupRiderUser);
-        $workflow->riderTransition($pickupAssignment, 'start', $pickupRiderUser);
-        $workflow->riderTransition($pickupAssignment, 'pickup_complete', $pickupRiderUser, [
-            'scan_method' => 'BARCODE',
-            'scanned_code' => $shipment->tracking_number,
-        ]);
+        $batches = app(SellerPickupBatchService::class);
+        $pickupBatch = $batches->create($centerUser, $center, $pickupRider->id, [$shipment->id]);
+        $batches->accept($pickupRiderUser, $pickupBatch);
+        $pickupBatch = $batches->start($pickupRiderUser, $pickupBatch->fresh());
+        $batches->scan($pickupRiderUser, $pickupBatch, $shipment->tracking_number, 'BARCODE');
+        $batches->finishSellerPickup($pickupRiderUser, $pickupBatch->fresh());
 
         $this->actingAs($buyer)
             ->get(route('buyer.orders.show', $order))
@@ -153,7 +170,11 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'is_active' => true,
             'assigned_at' => now(),
         ]);
+        $localTrips = app(LocalRiderTripService::class);
+        $deliveryTrip = $localTrips->createTrip($centerUser, $deliveryRider, $area, 'DELIVERY');
         $deliveryAssignment = $workflow->assignRider($shipment->fresh(), $deliveryRider, 'DELIVERY', $centerUser);
+        $localTrips->addAssignment($centerUser, $deliveryTrip, $deliveryAssignment);
+        $localTrips->loadTrip($centerUser, $deliveryTrip);
         $workflow->riderTransition($deliveryAssignment, 'accept', $deliveryRiderUser);
         $workflow->riderTransition($deliveryAssignment, 'start', $deliveryRiderUser);
         $this->actingAs($deliveryRiderUser)
@@ -208,6 +229,7 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'user_id' => $user->id,
             'logistics_center_id' => $center->id,
             'vehicle_type' => 'motorcycle',
+            'approved_parcel_capacity' => 10,
             'plate_number' => 'E2E-PLATE-'.uniqid(),
             'drivers_license_number' => 'E2E-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',

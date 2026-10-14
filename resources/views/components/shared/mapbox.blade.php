@@ -8,6 +8,8 @@
     'riderGps' => false,
     'userLocationTarget' => null,
     'navigation' => false,
+    'liveTracking' => true,
+    'pinFormId' => null,
     'class' => '',
 ])
 
@@ -21,13 +23,14 @@
     data-map-zoom="{{ $zoom ?: config('mapbox.default_zoom') }}"
     data-map-user-target="{{ $userLocationTarget }}"
     data-map-rider-gps="{{ $riderGps ? 'true' : 'false' }}"
-    data-map-live="{{ auth()->check() ? 'true' : 'false' }}"
+    data-map-live="{{ auth()->check() && $liveTracking ? 'true' : 'false' }}"
     data-map-navigation="{{ $navigation ? 'true' : 'false' }}"
+    data-map-pin-form="{{ $pinFormId }}"
     style="--lk-map-height: {{ $height }}"
 >
     <div class="lk-map-toolbar">
         <div>
-            <span class="lk-map-kicker">LIVE LOCATION</span>
+            <span class="lk-map-kicker" data-map-location-state>LOCATION MAP</span>
             <h2>{{ $title }}</h2>
         </div>
         <div class="lk-map-actions">
@@ -49,9 +52,9 @@
                 <span class="lk-map-navigation__status" data-map-navigation-status>Waiting for live GPS</span>
             </div>
             <div class="lk-map-navigation__metrics">
-                <div><strong data-map-navigation-eta>—</strong><span>estimated time</span></div>
-                <div><strong data-map-navigation-distance>—</strong><span>road distance</span></div>
-                <div><strong data-map-navigation-arrival>—</strong><span>estimated arrival</span></div>
+                <div><strong data-map-navigation-eta>Unavailable</strong><span>estimated time</span></div>
+                <div><strong data-map-navigation-distance>Unavailable</strong><span>road distance</span></div>
+                <div><strong data-map-navigation-arrival>Unavailable</strong><span>estimated arrival</span></div>
             </div>
             <div class="lk-map-navigation__destination">
                 <strong data-map-navigation-destination>Active destination</strong>

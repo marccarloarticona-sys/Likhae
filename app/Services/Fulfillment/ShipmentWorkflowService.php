@@ -191,9 +191,7 @@ class ShipmentWorkflowService
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
 
-            $rider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
-            $rider->load('user');
-            if ($rider->status !== 'ACTIVE'
+            if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 || $rider->user?->account_type !== User::TYPE_RIDER
                 || $rider->user?->status !== User::STATUS_ACTIVE) {
                 throw new RuntimeException('Only active riders can receive assignments.');
@@ -306,11 +304,6 @@ class ShipmentWorkflowService
                 ->with(['serviceArea', 'pickupRequests', 'sellerOrder'])
                 ->lockForUpdate()
                 ->firstOrFail();
-            $dropoffRequest = $shipment->pickupRequests()->whereIn('status', ['PENDING', 'APPROVED'])
-                ->where('notes', 'like', 'SELLER_DROPOFF:%')->latest()->first();
-            $isSellerDropoff = $shipment->current_status === 'READY_FOR_PICKUP' && $dropoffRequest;
-            $this->requireShipmentStatus($shipment, $isSellerDropoff ? ['READY_FOR_PICKUP'] : ['PICKED_UP'], 'receive the parcel at the sorting center');
-
             if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This parcel belongs to another logistics center.');
             }
@@ -322,6 +315,19 @@ class ShipmentWorkflowService
             if ($code === '' || ! hash_equals($shipment->tracking_number, $code)) {
                 throw ValidationException::withMessages(['scanned_code' => 'The scanned parcel code does not match the shipment tracking number.']);
             }
+
+            if ($shipment->current_status === 'AT_SORTING_CENTER') {
+                return $shipment;
+            }
+            $dropoffRequest = $shipment->pickupRequests
+                ->whereIn('status', ['PENDING', 'APPROVED'])
+                ->first(fn (PickupRequest $pickup): bool => str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:'));
+            $isSellerDropoff = $shipment->current_status === 'READY_FOR_PICKUP' && $dropoffRequest !== null;
+            $this->requireShipmentStatus(
+                $shipment,
+                $isSellerDropoff ? ['READY_FOR_PICKUP'] : ['PICKED_UP'],
+                'receive the parcel at the sorting center',
+            );
 
             $this->recordScan($shipment, $actor, 'CENTER_RECEIVE', $method, $code, 'SUCCESS', $center);
             $shipment->update([
@@ -337,6 +343,7 @@ class ShipmentWorkflowService
             $this->recordEvent($shipment, 'AT_SORTING_CENTER', $actor, 'Parcel received at logistics center.', null, $center);
 
             $shipment->sellerOrder?->update(['status' => 'PICKED_UP']);
+            $this->localTrips->syncPickupIntake($shipment);
 
             return $shipment->refresh();
         });
@@ -424,10 +431,20 @@ class ShipmentWorkflowService
             $this->assertRiderActor($assignment, $actor);
             $shipment = $assignment->shipment;
 
+            if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP && $action === 'reject') {
+                throw new RuntimeException('A seller pickup batch cannot be partially rejected. Resolve a parcel as not collected at the seller or contact Logistics to reassign the batch.');
+            }
+
+            if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP
+                && in_array($action, ['accept', 'start', 'pickup_complete', 'pickup_not_collected'], true)) {
+                $this->localTrips->assertSellerPickupBatchAssignment($assignment);
+            }
+
             match ($action) {
                 'accept' => $this->acceptAssignment($assignment, $shipment, $actor),
                 'start' => $this->startAssignment($assignment, $shipment, $actor),
                 'pickup_complete' => $this->completePickup($assignment, $shipment, $actor, $payload),
+                'pickup_not_collected' => $this->markPickupNotCollected($assignment, $shipment, $actor, $payload),
                 'delivery_success' => $this->completeDelivery($assignment, $shipment, $actor, $payload),
                 'delivery_failed' => $this->failDelivery($assignment, $shipment, $actor, $payload),
                 'reject' => $this->rejectAssignment($assignment, $shipment, $actor, (string) ($payload['reason'] ?? 'Rejected by rider.')),
@@ -706,7 +723,12 @@ class ShipmentWorkflowService
         );
 
         $this->generateWaybill($shipment, $actor);
-        $this->recordEvent($shipment, 'READY_FOR_PICKUP', $actor, $sellerDropoff ? 'Seller registered a drop-off at the assigned logistics center.' : 'Seller marked parcel ready for pickup.');
+        $this->recordEvent(
+            $shipment,
+            'READY_FOR_PICKUP',
+            $actor,
+            $sellerDropoff ? 'Seller registered a drop-off at the assigned logistics center.' : 'Seller marked parcel ready for pickup.',
+        );
     }
 
     private function cancelSellerOrder(SellerOrder $sellerOrder, Shipment $shipment, User $actor): void
@@ -799,12 +821,34 @@ class ShipmentWorkflowService
         $this->recordScan($shipment, $actor, 'PICKUP_COLLECTED', strtoupper((string) ($payload['scan_method'] ?? 'MANUAL')), $scannedCode, 'SUCCESS', null, $assignment);
 
         $shipment->update(['current_status' => 'PICKED_UP']);
+        $shipment->sellerOrder?->update(['status' => 'PICKED_UP']);
         $assignment->update([
             'status' => 'COMPLETED',
             'completed_at' => now(),
         ]);
         $shipment->pickupRequests()->where('status', 'APPROVED')->update(['status' => 'FULFILLED']);
         $this->recordEvent($shipment, 'PICKED_UP', $actor, 'Pickup rider collected the parcel from seller.', $assignment);
+    }
+
+    private function markPickupNotCollected(RiderAssignment $assignment, Shipment $shipment, User $actor, array $payload): void
+    {
+        if ($assignment->assignment_type !== RiderAssignment::TYPE_PICKUP) {
+            throw new RuntimeException('This assignment is not a pickup assignment.');
+        }
+        $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'mark a pickup parcel as not collected');
+        $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'mark a pickup parcel as not collected');
+
+        $reason = trim((string) ($payload['reason'] ?? ''));
+        if ($reason === '') {
+            throw new RuntimeException('A reason is required when a seller parcel is not collected.');
+        }
+
+        $assignment->update([
+            'status' => 'REJECTED',
+            'completed_at' => now(),
+            'rejection_reason' => $reason,
+        ]);
+        $this->recordEvent($shipment, $shipment->current_status, $actor, 'Pickup parcel not collected: '.$reason, $assignment);
     }
 
     private function completeDelivery(RiderAssignment $assignment, Shipment $shipment, User $actor, array $payload): void

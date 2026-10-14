@@ -433,6 +433,28 @@
         ];
     }
 
+    if ($role === 'rider') {
+        $riderVehicle = data_get($user, 'riderProfile.vehicle_type');
+        $allowedRiderItems = \App\Support\RiderVehicleType::isLocalBarangay($riderVehicle)
+            ? ['pickups', 'deliveries', 'trips', 'history', 'earnings', 'messages', 'notifications', 'account', 'settings']
+            : (\App\Support\RiderVehicleType::isInterLogistics($riderVehicle)
+                ? ['transfers', 'earnings', 'messages', 'notifications', 'account', 'settings']
+                : ['earnings', 'messages', 'notifications', 'account', 'settings']);
+
+        $groups = collect($groups)
+            ->map(function (array $group) use ($allowedRiderItems): array {
+                $group['items'] = collect($group['items'])
+                    ->filter(fn (array $item): bool => in_array($item['key'], $allowedRiderItems, true))
+                    ->values()
+                    ->all();
+
+                return $group;
+            })
+            ->filter(fn (array $group): bool => $group['items'] !== [])
+            ->values()
+            ->all();
+    }
+
     $routeActive = function (array $routes) {
         return collect($routes)
             ->contains(fn ($route) => request()->routeIs($route));

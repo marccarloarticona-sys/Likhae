@@ -123,9 +123,9 @@
             </header>
             <div class="sl-alert-list">
                 @forelse ($inventoryAlerts as $product)
-                    <article class="sl-stock-alert {{ $product['stock'] === 0 ? 'is-critical' : ($product['stock'] <= 5 ? 'is-warning' : 'is-neutral') }}">
-                        <span class="sl-stock-icon">{{ $product['stock'] }}</span>
-                        <div><small>{{ $product['stock'] === 0 ? 'OUT OF STOCK' : 'LOW STOCK' }}</small><strong>{{ $product['name'] }}</strong><span>{{ $product['stock'] }} remaining</span></div>
+                    <article class="sl-stock-alert {{ $product['out_count'] > 0 ? 'is-critical' : 'is-warning' }}">
+                        <span class="sl-stock-icon">{{ $product['out_count'] + $product['low_count'] }}</span>
+                        <div><small>INVENTORY NEEDS ATTENTION</small><strong>{{ $product['name'] }}</strong><span>{{ $product['out_count'] }} out of stock · {{ $product['low_count'] }} low stock variants</span></div>
                         <a href="{{ route('seller.products', ['mode' => 'inventory']) }}" class="sl-btn sl-btn-ghost sl-btn-sm">Update</a>
                     </article>
                 @empty

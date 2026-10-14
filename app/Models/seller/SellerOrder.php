@@ -24,6 +24,7 @@ class SellerOrder extends Model
         'seller_order_number',
         'order_id',
         'seller_profile_id',
+        'buyer_note',
         'voucher_id',
         'status',
         'item_subtotal',

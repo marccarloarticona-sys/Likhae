@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
 use Illuminate\Http\RedirectResponse;
@@ -13,14 +14,23 @@ use Illuminate\View\View;
 
 class SellerOrderController extends Controller
 {
-    public function index(Request $request): View
+    public function index(Request $request, LogisticsSchemaReadiness $schema): View
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
 
+        $orderRelations = ['order.buyer', 'order.address', 'order.payments', 'items.product.images', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress'];
+        $pickupBatchSchemaReady = $schema->sellerPickupBatchesReady();
+        if ($pickupBatchSchemaReady) {
+            $orderRelations = [...$orderRelations,
+                'shipment.riderAssignments.localTripItems.trip.seller',
+                'shipment.riderAssignments.localTripItems.trip.logisticsCenter.address',
+                'shipment.riderAssignments.localTripItems.trip.items',
+            ];
+        }
         $orders = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
-            ->with(['order.buyer', 'order.address', 'order.payments', 'items.product.images', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress'])
+            ->with($orderRelations)
             ->latest()
             ->get();
 
@@ -52,6 +62,8 @@ class SellerOrderController extends Controller
             ->selectRaw('status, COUNT(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status');
+        $readyPickupCount = $orders->filter(fn (SellerOrder $order): bool =>
+            $order->status === 'READY_FOR_PICKUP' && $order->shipment?->current_status === 'READY_FOR_PICKUP')->count();
 
         return view('Seller.orders', [
             'seller' => $seller,
@@ -59,7 +71,7 @@ class SellerOrderController extends Controller
             'counts' => $counts,
             'activeStatus' => strtoupper((string) $request->query('status', '')),
             'status' => $requestedStatus,
-            'sellerOrders' => $orders->map(fn (SellerOrder $order): array => $this->viewOrder($order)),
+            'sellerOrders' => $orders->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady)),
             'refundRequests' => $refundRequests,
             'refundCounts' => $refundCounts,
             'refundStatus' => $refundStatus,
@@ -67,6 +79,7 @@ class SellerOrderController extends Controller
                 ->groupBy(fn (SellerOrder $order): string => $this->statusKey($order->status))
                 ->map->count()
                 ->put('returns', (int) $refundCounts->sum()),
+            'readyPickupCount' => $readyPickupCount,
         ]);
     }
 
@@ -88,6 +101,7 @@ class SellerOrderController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+
         $data = $request->validate([
             'handover_method' => ['required', 'string', 'in:logistics_pickup,seller_dropoff'],
             'pickup_date' => ['nullable', 'date', 'after_or_equal:today'],
@@ -107,7 +121,7 @@ class SellerOrderController extends Controller
             : 'Logistics pickup requested.');
     }
 
-    private function viewOrder(SellerOrder $order): array
+    private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady): array
     {
         $address = $order->order?->address;
         $items = $order->items;
@@ -115,6 +129,20 @@ class SellerOrderController extends Controller
             ?->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->sortByDesc('id')
             ->first();
+        $pickupAssignment = $order->shipment?->riderAssignments
+            ?->where('assignment_type', 'PICKUP')
+            ->sortByDesc('id')
+            ->first();
+        $pickupBatch = $pickupBatchSchemaReady
+            ? $pickupAssignment?->localTripItems?->sortByDesc('id')->first()?->trip
+            : null;
+        $pickupStatus = match (true) {
+            $order->shipment?->current_status === 'PICKED_UP' => 'Picked up',
+            $pickupBatch?->status === 'EN_ROUTE_TO_HUB' => 'In transit to logistics',
+            $pickupAssignment && in_array($pickupAssignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true) => 'Pickup scheduled',
+            $order->shipment?->current_status === 'READY_FOR_PICKUP' => 'Waiting for Logistics',
+            default => null,
+        };
 
         return [
             'id' => $order->seller_order_number,
@@ -122,6 +150,7 @@ class SellerOrderController extends Controller
             'date' => $order->created_at?->format('M d, Y g:i A'),
             'buyer_id' => $order->order?->buyer_user_id,
             'buyer' => $order->order?->buyer?->name ?? 'Buyer',
+            'buyer_note' => $order->buyer_note,
             'product' => $items->pluck('product_name')->filter()->join(', '),
             'first_item' => $items->first(),
             'variant' => $items->pluck('variant_description')->filter()->join(', ') ?: 'Standard',
@@ -129,7 +158,14 @@ class SellerOrderController extends Controller
             'total' => (float) $order->grand_total,
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),
             'logistics_provider' => $order->shipment?->logisticsCenter?->business_name ?? 'Not assigned',
-            'shipping' => $assignment?->riderProfile?->user?->name ?? 'Waiting for Logistics',
+            'shipping' => $assignment?->riderProfile?->user?->name ?? $pickupAssignment?->riderProfile?->user?->name ?? 'Waiting for Logistics',
+            'pickup_status' => $pickupStatus,
+            'pickup_batch' => $pickupBatch ? 'P-'.$pickupBatch->id : null,
+            'pickup_batch_size' => $pickupBatch?->items?->count() ?? ($pickupAssignment ? 1 : null),
+            'pickup_rider' => $pickupAssignment?->riderProfile?->user?->name,
+            'pickup_assigned_at' => $pickupAssignment?->assigned_at,
+            'pickup_collected_at' => $pickupAssignment?->completed_at,
+            'pickup_hub' => $pickupBatch?->logisticsCenter?->business_name ?? $order->shipment?->logisticsCenter?->business_name,
             'shipping_address' => $address?->formatted() ?? 'Address unavailable',
             'status' => str($order->status)->replace('_', ' ')->title()->toString(),
             'status_key' => $this->statusKey($order->status),

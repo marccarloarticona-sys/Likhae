@@ -6,8 +6,10 @@
     $name = data_get($product, 'name', 'Product');
     $image = data_get($product, 'image');
     $stock = (int) data_get($product, 'stock', 0);
+    $lowStockCount = (int) data_get($product, 'low_stock_count', 0);
+    $outOfStockCount = (int) data_get($product, 'out_of_stock_count', 0);
     $status = data_get($product, 'status', 'Active');
-    $stockTone = $stock <= 5 ? 'is-danger' : ($stock <= 12 ? 'is-warning' : 'is-ok');
+    $stockTone = $stock === 0 && $outOfStockCount > 0 ? 'is-danger' : ($lowStockCount > 0 || $outOfStockCount > 0 ? 'is-warning' : 'is-ok');
 @endphp
 
 <article class="sl-mobile-product" data-product-row data-product-name="{{ mb_strtolower($name) }}" data-product-status="{{ mb_strtolower($status) }}">

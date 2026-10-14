@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\OrderAddress;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
 use App\Models\Logistics\ShipmentEvent;
@@ -25,6 +26,7 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Maps\MapDataService;
 use App\Services\Marketplace\BuyerOrderActionService;
+use App\Support\AddressCoordinateValidator;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -180,7 +182,7 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
-        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'sellerOrders.shipment.riderAssignments.riderProfile.user', 'sellerOrders.shipment.riderAssignments.liveLocation', 'sellerOrders.shipment.logisticsCenter.address', 'address', 'payments', 'disputes'];
+        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'sellerOrders.shipment.deliveryAttempts', 'sellerOrders.shipment.riderAssignments.riderProfile.user', 'sellerOrders.shipment.riderAssignments.liveLocation', 'sellerOrders.shipment.logisticsCenter.address', 'address', 'payments', 'disputes'];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
             $orderRelations[] = 'returnRefundRequests';
@@ -202,7 +204,8 @@ class BuyerOrderController extends Controller
                 : [];
         });
         $reviewImagesById = $reviewImages->urlsFor($selectedOrder->sellerOrders->flatMap->items->pluck('review')->filter());
-        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->map->shipment->filter());
+        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->map->shipment->filter(), includeSeller: true);
+        $deliveryPinRequired = $this->canConfirmDeliveryPin($selectedOrder, $selectedOrder->address);
 
         return view('Buyer.orders', [
             'mode' => 'show',
@@ -210,9 +213,54 @@ class BuyerOrderController extends Controller
             'riderRatingsByShipment' => $riderRatingsByShipment,
             'reviewImagesById' => $reviewImagesById,
             'mapMarkers' => $mapMarkers,
+            'deliveryPinRequired' => $deliveryPinRequired,
             'selectedOrderActionState' => $selectedOrderActionState,
             'orders' => $request->user()->orders()->with(['sellerOrders.shipment'])->latest()->paginate(10),
         ]);
+    }
+
+    public function confirmDeliveryPin(Request $request, Order $order): RedirectResponse
+    {
+        abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
+        $data = $request->validate(AddressCoordinateValidator::rules());
+        AddressCoordinateValidator::assertValid($data);
+
+        DB::transaction(function () use ($request, $order, $data): void {
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            abort_unless((int) $lockedOrder->buyer_user_id === (int) $request->user()->id, 403);
+            $orderAddress = OrderAddress::query()
+                ->where('order_id', $lockedOrder->id)
+                ->lockForUpdate()
+                ->first();
+
+            abort_unless($this->canConfirmDeliveryPin($lockedOrder, $orderAddress), 409, 'This order can no longer receive a delivery pin through this flow.');
+
+            // Attach the explicitly confirmed pin to the historical order
+            // snapshot only. Never copy from or update the Buyer account address.
+            $orderAddress->update([
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+            ]);
+        });
+
+        return redirect()->route('buyer.orders.show', $order)->with('buyer_notice', 'Delivery pin confirmed for this order.');
+    }
+
+    private function canConfirmDeliveryPin(Order $order, ?OrderAddress $address): bool
+    {
+        if (! $address || (int) $address->order_id !== (int) $order->id
+            || filled($address->latitude) || filled($address->longitude)
+            || in_array($order->status, ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'], true)) {
+            return false;
+        }
+
+        $order->loadMissing('sellerOrders.shipment');
+
+        return ! $order->sellerOrders->contains(fn ($sellerOrder): bool => in_array(
+            $sellerOrder->shipment?->current_status,
+            ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'],
+            true,
+        ));
     }
 
     public function sellerConversation(Request $request, Order $order, SellerOrder $sellerOrder, ConversationService $conversations): RedirectResponse
@@ -321,25 +369,8 @@ class BuyerOrderController extends Controller
             $state = $actions->state($lockedOrder, $this->returnRefundStorageReady());
             abort_if($state['active_dispute'], 409, 'Resolve the active return/refund request before confirming receipt.');
             abort_unless($state['can_confirm_received'], 409, 'Receipt can only be confirmed once, after every parcel has been delivered.');
-
-            $lockedOrder->update([
-                'status' => 'COMPLETED',
-                'completed_at' => now(),
-            ]);
-
-            foreach ($lockedOrder->sellerOrders as $sellerOrder) {
-            $sellerOrder->update(['status' => 'COMPLETED']);
-            if ($sellerOrder->shipment) {
-                $sellerOrder->shipment->update(['current_status' => 'COMPLETED']);
-                ShipmentEvent::query()->create([
-                    'shipment_id' => $sellerOrder->shipment->id,
-                    'status' => 'COMPLETED',
-                    'actor_user_id' => $request->user()->id,
-                    'notes' => 'Buyer confirmed receipt.',
-                    'occurred_at' => now(),
-                ]);
-            }
-            }
+            $completed = $actions->completeReceipt($lockedOrder, $request->user(), 'Buyer confirmed receipt.');
+            abort_unless($completed, 409, 'This order can no longer be completed.');
         });
 
         if ($request->expectsJson()) {
