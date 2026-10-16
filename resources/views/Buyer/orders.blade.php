@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+﻿@extends('layouts.buyer')
 @section('title', 'My Orders')
 @section('active', 'orders')
 
@@ -25,16 +25,16 @@
     $visibleOrders = in_array($filter, ['', 'ALL', 'RETURNS', 'DELIVERED'], true) ? $orderCollection : $orderCollection->where('status', $filter);
     $liveOrders = $mode === 'show' && isset($selectedOrder) ? collect([$selectedOrder]) : $orderCollection;
     $liveOrderIds = $liveOrders->pluck('id')->map(fn ($id) => (int) $id)->values();
-    $liveShipmentIds = $liveOrders->flatMap(fn ($order) => $order->sellerOrders->pluck('shipment')->filter()->pluck('id'))->map(fn ($id) => (int) $id)->unique()->values();
+    $liveShipmentIds = $liveOrders->flatMap(fn ($order) => $order->sellerOrders->flatMap->shipments->pluck('id'))->map(fn ($id) => (int) $id)->unique()->values();
     $liveOrderVersion = sha1($liveOrders->sortBy('id')->map(fn ($order) => [
         'id' => (int) $order->id,
         'status' => (string) $order->status,
         'updated_at' => $order->updated_at?->toIso8601String(),
-        'shipments' => $order->sellerOrders->map(fn ($sellerOrder) => $sellerOrder->shipment ? [
-            'id' => (int) $sellerOrder->shipment->id,
-            'status' => (string) $sellerOrder->shipment->current_status,
-            'updated_at' => $sellerOrder->shipment->updated_at?->toIso8601String(),
-        ] : null)->filter()->sortBy('id')->values()->all(),
+        'shipments' => $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->map(fn ($shipment) => [
+            'id' => (int) $shipment->id,
+            'status' => (string) $shipment->current_status,
+            'updated_at' => $shipment->updated_at?->toIso8601String(),
+        ]))->sortBy('id')->values()->all(),
     ])->values()->toJson());
 @endphp
 
@@ -42,24 +42,25 @@
     @if(session('buyer_notice'))<div class="mb-4 rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('buyer_notice') }}</div>@endif
 
     @if($mode === 'success')
-        <section class="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm"><div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-900">✓</div><span class="mt-5 block text-[10px] font-bold uppercase tracking-widest text-red-800">Order placed</span><h1 class="mt-2 text-2xl font-bold text-stone-950">Thank you for your order</h1><p class="mt-2 text-sm text-stone-500">{{ $selectedOrder?->order_number ? 'Order '.$selectedOrder->order_number.' was placed successfully.' : 'Your order was placed successfully.' }}</p><div class="mt-6 flex justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.orders') }}">View My Orders</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Continue Shopping</a></div></section>
+        <section class="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm"><div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-900">âœ“</div><span class="mt-5 block text-[10px] font-bold uppercase tracking-widest text-red-800">Order placed</span><h1 class="mt-2 text-2xl font-bold text-stone-950">Thank you for your order</h1><p class="mt-2 text-sm text-stone-500">{{ $selectedOrder?->order_number ? 'Order '.$selectedOrder->order_number.' was placed successfully.' : 'Your order was placed successfully.' }}</p><div class="mt-6 flex justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.orders') }}">View My Orders</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Continue Shopping</a></div></section>
     @elseif($mode === 'show' && $selectedOrder)
         @php
-            $detailDelivered = $selectedOrder->sellerOrders->isNotEmpty() && $selectedOrder->sellerOrders->every(fn ($sellerOrder) => in_array($sellerOrder->shipment?->current_status, ['DELIVERED', 'COMPLETED'], true));
-            $shippingEvents = $selectedOrder->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())->sortBy('occurred_at');
+            $allShipments = $selectedOrder->sellerOrders->flatMap->shipments;
+            $detailDelivered = $selectedOrder->sellerOrders->isNotEmpty() && $selectedOrder->sellerOrders->every(fn ($sellerOrder) => $sellerOrder->shipments->isNotEmpty() && $sellerOrder->shipments->every(fn ($shipment) => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true)));
+            $shippingEvents = $allShipments->flatMap->events->sortBy('occurred_at');
             $automaticReceiptEvent = $shippingEvents->first(fn ($event) => $event->status === 'COMPLETED' && str_starts_with((string) $event->notes, 'Order automatically confirmed received after 3 days'));
-            $deliveryAssignment = $selectedOrder->sellerOrders->pluck('shipment')->filter()->flatMap->riderAssignments->where('assignment_type', 'DELIVERY')->sortByDesc('id')->first();
+            $deliveryAssignment = $allShipments->flatMap->riderAssignments->where('assignment_type', 'DELIVERY')->sortByDesc('id')->first();
             $payment = $selectedOrder->payments->first();
         @endphp
-        <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1><p>{{ $detailDelivered && $selectedOrder->status !== 'COMPLETED' ? 'Delivered — please confirm receipt' : str($selectedOrder->status)->headline() }}</p></div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to Orders</a></div></div>
+        <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1><p>{{ $detailDelivered && $selectedOrder->status !== 'COMPLETED' ? 'Delivered â€” please confirm receipt' : str($selectedOrder->status)->headline() }}</p></div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to Orders</a></div></div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 class="text-lg font-bold text-stone-900">Shipping information</h2>
             <div class="mt-4 grid gap-4 md:grid-cols-2">
-                <div><p class="text-xs font-semibold uppercase tracking-wide text-stone-500">Current status</p><div class="mt-2 flex flex-wrap gap-2" data-order-detail-status>@foreach($selectedOrder->sellerOrders as $sellerOrder)@if($sellerOrder->shipment)<span class="inline-flex rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-900">{{ str($sellerOrder->shipment->current_status)->headline() }}</span>@endif @endforeach</div>@if($deliveryAssignment)<p class="mt-2 text-sm text-stone-600">Rider: {{ $deliveryAssignment->riderProfile?->user?->name ?? 'Assigned rider' }}</p>@endif</div>
+                <div><p class="text-xs font-semibold uppercase tracking-wide text-stone-500">Current parcel statuses</p><div class="mt-2 flex flex-wrap gap-2" data-order-detail-status>@foreach($allShipments as $shipment)<span class="inline-flex rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-900">{{ str($shipment->current_status)->headline() }}</span>@endforeach</div>@if($deliveryAssignment)<p class="mt-2 text-sm text-stone-600">Rider: {{ $deliveryAssignment->riderProfile?->user?->name ?? 'Assigned rider' }}</p>@endif</div>
                 <div><p class="text-xs font-semibold uppercase tracking-wide text-stone-500">Delivery information</p><strong class="mt-1 block">{{ $selectedOrder->address?->recipient_name }}</strong><p class="text-sm text-stone-600">{{ $selectedOrder->address?->contact_number }}<br>{{ $selectedOrder->address?->formatted() }}</p></div>
             </div>
             @php
-                $orderShipmentStatuses = $selectedOrder->sellerOrders->pluck('shipment.current_status')->filter()->unique()->values();
+                $orderShipmentStatuses = $allShipments->pluck('current_status')->filter()->unique()->values();
                 $overallStatus = $orderShipmentStatuses->count() === 1 ? $orderShipmentStatuses->first() : null;
             $shippingMessage = $automaticReceiptEvent
                 ? 'Your order was automatically marked as received after 3 days.'
@@ -90,11 +91,11 @@
         @if($deliveryPinRequired)
             <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 shadow-sm" aria-labelledby="delivery-pin-required-heading">
                 <h2 id="delivery-pin-required-heading" class="text-lg font-bold text-amber-950">Delivery pin required</h2>
-                <p class="mt-2 text-sm text-amber-950">Confirm the exact delivery location for this existing order so the assigned rider can navigate to you. The address text below stays unchanged; only this order’s missing map pin will be saved.</p>
+                <p class="mt-2 text-sm text-amber-950">Confirm the exact delivery location for this existing order so the assigned rider can navigate to you. The address text below stays unchanged; only this orderâ€™s missing map pin will be saved.</p>
                 <p class="mt-3 rounded-xl border border-amber-200 bg-white/80 px-4 py-3 text-sm text-stone-800"><strong>Saved order address:</strong> {{ $selectedOrder->address?->formatted() }}</p>
-                <h3 class="mt-4 text-base font-bold text-stone-900">Live Delivery Map · Confirm Delivery Pin</h3>
+                <h3 class="mt-4 text-base font-bold text-stone-900">Live Delivery Map Â· Confirm Delivery Pin</h3>
                 <p class="mt-3 text-sm font-semibold text-stone-800">Tap the exact location on the map. Zoom in before selecting the house or handoff point.</p>
-                <x-shared.mapbox :markers="[]" title="Confirm exact delivery location" height="320px" :allow-user-location="false" pin-form-id="delivery-pin-form" :zoom="8" :live-tracking="$selectedOrder->sellerOrders->contains(fn ($sellerOrder) => $sellerOrder->shipment?->current_status === 'OUT_FOR_DELIVERY')" />
+                <x-shared.mapbox :markers="[]" title="Confirm exact delivery location" height="320px" :allow-user-location="false" pin-form-id="delivery-pin-form" :zoom="8" :live-tracking="$allShipments->contains(fn ($shipment) => $shipment->current_status === 'OUT_FOR_DELIVERY')" />
                 <form id="delivery-pin-form" method="POST" action="{{ route('buyer.orders.delivery-pin', $selectedOrder) }}" class="mt-4 grid gap-3" data-delivery-pin-form>
                     @csrf
                     <input type="hidden" name="latitude" value="">
@@ -106,15 +107,15 @@
         @else
             <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" aria-labelledby="buyer-live-map-heading">
                 <div class="mb-4"><h2 id="buyer-live-map-heading" class="text-lg font-bold text-stone-900">Live Delivery Map</h2><p class="mt-1 text-sm text-stone-600">Saved seller, sorting center, and buyer locations are shown when available. Rider movement appears only during an active delivery phase.</p></div>
-                <x-shared.mapbox :markers="$mapMarkers" title="Live delivery locations for this order" height="280px" :allow-user-location="false" :live-tracking="$selectedOrder->sellerOrders->contains(fn ($sellerOrder) => $sellerOrder->shipment?->current_status === 'OUT_FOR_DELIVERY')" />
-                <ul class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-stone-600" aria-label="Map marker legend"><li>● Buyer destination</li><li>● Seller / sorting center</li><li>● Rider location when available</li></ul>
+                <x-shared.mapbox :markers="$mapMarkers" title="Live delivery locations for this order" height="280px" :allow-user-location="false" :live-tracking="$allShipments->contains(fn ($shipment) => $shipment->current_status === 'OUT_FOR_DELIVERY')" />
+                <ul class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-stone-600" aria-label="Map marker legend"><li>â— Buyer destination</li><li>â— Seller / sorting center</li><li>â— Rider location when available</li></ul>
             </section>
         @endif
         @foreach($selectedOrder->sellerOrders as $sellerOrder)
+          @forelse($sellerOrder->shipments as $shipment)
             @php
-                $shipment = $sellerOrder->shipment;
-                $shipmentStatus = $shipment?->current_status;
-                $shipmentEvents = $shipment?->events ?? collect();
+                $shipmentStatus = $shipment->current_status;
+                $shipmentEvents = $shipment->events;
                 $latestEventByStatus = $shipmentEvents->sortBy('occurred_at')->keyBy('status');
                 $timelineSteps = [
                     'PLACED' => 'Order placed',
@@ -138,7 +139,7 @@
                     ? 'Automatically confirmed received'
                     : 'Buyer confirmed receipt';
                 $deliveryProof = in_array($shipmentStatus, ['DELIVERED', 'COMPLETED'], true)
-                    ? $shipment?->deliveryAttempts
+                    ? $shipment->deliveryAttempts
                         ?->where('status', 'DELIVERED')
                         ->filter(fn ($attempt) => filled($attempt->proof_path) && \Illuminate\Support\Facades\Storage::disk('public')->exists($attempt->proof_path))
                         ->sortByDesc('attempted_at')
@@ -161,10 +162,9 @@
                     default => 'Delivery updates will appear here.',
                 };
             @endphp
-            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" aria-labelledby="shipment-{{ $shipment?->id ?? $sellerOrder->id }}-heading">
-                <div class="flex flex-wrap items-start justify-between gap-3"><div><span class="text-xs font-semibold uppercase tracking-wide text-stone-500">Store</span><h2 id="shipment-{{ $shipment?->id ?? $sellerOrder->id }}-heading" class="text-lg font-bold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name }}</h2><p class="mt-1 text-sm text-stone-600">{{ $sellerOrder->seller_order_number }}</p></div><form method="POST" action="{{ route('buyer.orders.seller-conversation', [$selectedOrder, $sellerOrder]) }}">@csrf<button type="submit" class="text-sm font-semibold text-red-900">Contact Seller</button></form></div>
-                @if($shipment)
-                    <div class="mt-4 flex flex-wrap items-center gap-2"><span class="rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-900">{{ str($shipmentStatus)->headline() }}</span><span class="text-xs text-stone-500">Tracking: <strong class="text-stone-700">{{ $shipment->tracking_number }}</strong></span></div>
+            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" aria-labelledby="shipment-{{ $shipment->id }}-heading">
+                <div class="flex flex-wrap items-start justify-between gap-3"><div><span class="text-xs font-semibold uppercase tracking-wide text-stone-500">Store</span><h2 id="shipment-{{ $shipment->id }}-heading" class="text-lg font-bold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name }}</h2><p class="mt-1 text-sm text-stone-600">{{ $sellerOrder->seller_order_number }}</p>@if($shipment->orderItem)<p class="mt-1 text-sm font-semibold text-stone-800">{{ $shipment->orderItem->product_name }} Â· Qty {{ $shipment->orderItem->quantity }}</p>@endif</div><form method="POST" action="{{ route('buyer.orders.seller-conversation', [$selectedOrder, $sellerOrder]) }}">@csrf<button type="submit" class="text-sm font-semibold text-red-900">Contact Seller</button></form></div>
+                    <div class="mt-4 flex flex-wrap items-center gap-2"><span class="rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-900">{{ str($shipmentStatus)->headline() }}</span><span class="text-xs text-stone-500">Parcel tracking: <strong class="text-stone-700">{{ $shipment->tracking_number }}</strong></span></div>
                     <p class="mt-3 rounded-xl bg-[#fcf7f2] px-4 py-3 text-sm text-stone-700">{{ $shipmentMessage }}</p>
                     <div class="mt-5 rounded-xl border border-stone-100 p-4"><h3 class="mb-4 font-bold text-stone-900">Tracking Timeline</h3><ol class="lk-shipment-timeline" aria-label="Tracking timeline for {{ $shipment->tracking_number }}">
                         @foreach($timelineSteps as $stepStatus => $stepLabel)
@@ -179,7 +179,7 @@
                             @endphp
                             <li class="lk-shipment-step {{ $stepIsCurrent ? 'is-current' : ($stepIsComplete ? 'is-complete' : '') }}" @if($stepIsCurrent) aria-current="step" @endif>
                                 <span class="lk-shipment-step__date">@if($stepEvent?->occurred_at)<time datetime="{{ $stepEvent->occurred_at->toIso8601String() }}">{{ $stepEvent->occurred_at->format('M j, Y') }}<span class="block">{{ $stepEvent->occurred_at->format('g:i A') }}</span></time>@else Pending @endif</span>
-                                <span class="lk-shipment-step__dot" aria-hidden="true">{{ $stepIsComplete ? '✓' : '' }}</span>
+                                <span class="lk-shipment-step__dot" aria-hidden="true">{{ $stepIsComplete ? 'âœ“' : '' }}</span>
                                 <span class="lk-shipment-step__label">{{ $stepLabel }}@if($stepDetail)<span class="mt-1 block text-xs font-normal text-stone-500">{{ $stepDetail }}</span>@endif</span>
                             </li>
                         @endforeach
@@ -190,28 +190,30 @@
                     @if($deliveryProof)
                         @php $proofUrl = route('delivery-events.proof', $deliveryProof); @endphp
                         <section class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4" aria-labelledby="proof-{{ $shipment->id }}-heading" data-proof-of-delivery>
-                            <div class="flex items-start gap-3"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-100 font-bold text-emerald-800" aria-hidden="true">✓</span><div class="min-w-0 flex-1"><h3 id="proof-{{ $shipment->id }}-heading" class="font-bold text-stone-900">Proof of Delivery</h3><p class="mt-1 text-sm text-stone-600">Your parcel was successfully delivered.</p></div></div>
+                            <div class="flex items-start gap-3"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-100 font-bold text-emerald-800" aria-hidden="true">âœ“</span><div class="min-w-0 flex-1"><h3 id="proof-{{ $shipment->id }}-heading" class="font-bold text-stone-900">Proof of Delivery</h3><p class="mt-1 text-sm text-stone-600">Your parcel was successfully delivered.</p></div></div>
                             <dl class="mt-4 grid gap-2 text-sm">
-                                <div class="flex flex-wrap gap-x-2"><dt class="font-semibold text-stone-600">Delivered:</dt><dd class="text-stone-800">@if($deliveryProof->attempted_at)<time datetime="{{ $deliveryProof->attempted_at->toIso8601String() }}">{{ $deliveryProof->attempted_at->timezone('Asia/Manila')->format('M j, Y') }} · {{ $deliveryProof->attempted_at->timezone('Asia/Manila')->format('g:i A') }}</time>@else Successfully @endif</dd></div>
+                                <div class="flex flex-wrap gap-x-2"><dt class="font-semibold text-stone-600">Delivered:</dt><dd class="text-stone-800">@if($deliveryProof->attempted_at)<time datetime="{{ $deliveryProof->attempted_at->toIso8601String() }}">{{ $deliveryProof->attempted_at->timezone('Asia/Manila')->format('M j, Y') }} Â· {{ $deliveryProof->attempted_at->timezone('Asia/Manila')->format('g:i A') }}</time>@else Successfully @endif</dd></div>
                                 <div class="flex flex-wrap gap-x-2"><dt class="font-semibold text-stone-600">Tracking:</dt><dd class="break-all text-stone-800">{{ $shipment->tracking_number }}</dd></div>
                             </dl>
                             <a class="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto" href="{{ $proofUrl }}" target="_blank" rel="noopener noreferrer">View Full Photo</a>
                         </section>
                     @endif
-                @endif
-                <div class="mt-5 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div><div class="mt-3 flex justify-between border-t border-stone-100 pt-3 text-sm"><span class="font-semibold">Seller order total</span><strong>&#8369;{{ number_format((float) $sellerOrder->grand_total, 2) }}</strong></div>
+                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
             </section>
+          @empty
+            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p></section>
+          @endforelse
         @endforeach
         @php
-            $hasPickedUpParcel = $selectedOrder->sellerOrders->contains(fn ($sellerOrder) => in_array($sellerOrder->shipment?->current_status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true));
+            $hasPickedUpParcel = $allShipments->contains(fn ($shipment) => in_array($shipment->current_status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true));
             $actionState = $selectedOrderActionState;
             $returnRequest = $actionState['latest_request'] ?? null;
         @endphp
         <div class="lk-order-actions mt-5">
-            @if(!$hasPickedUpParcel && in_array($selectedOrder->status, ['PLACED', 'PROCESSING'], true))<form method="POST" action="{{ route('buyer.orders.cancel', $selectedOrder) }}" data-confirm-title="Cancel this order?" data-confirm-message="This will cancel the order and begin any applicable refund process." data-confirm-label="Cancel order" data-confirm-tone="danger">@csrf<button class="lk-btn lk-btn-light" type="submit">Cancel Order</button></form>@endif
+            @if(!$hasPickedUpParcel && in_array($selectedOrder->status, ['PLACED', 'PROCESSING'], true))<form method="POST" action="{{ route('buyer.orders.cancel', $selectedOrder) }}">@csrf<button class="lk-btn lk-btn-light" type="submit">Cancel Order</button></form>@endif
             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}">Return / Refund</a>@endif
-            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
-            @if($actionState['can_confirm_received'])<div class="max-w-xl"><form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" data-confirm-title="Confirm order received?" data-confirm-message="Confirm that you received every parcel. This will complete the order and enable product reviews." data-confirm-label="Confirm received" data-confirm-set-field="confirm_receipt">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@if($actionState['auto_confirm_at'] ?? null)<p class="mt-2 text-sm text-stone-600">If you do not confirm receipt, this order will automatically be marked as received on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}.</p>@endif</div>@endif
+            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request Â· {{ str($returnRequest->status)->headline() }}</a>@endif
+            @if($actionState['can_confirm_received'])<div class="max-w-xl"><form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@if($actionState['auto_confirm_at'] ?? null)<p class="mt-2 text-sm text-stone-600">If you do not confirm receipt, this order will automatically be marked as received on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}.</p>@endif</div>@endif
         </div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <h2 class="text-lg font-bold text-stone-900">Order and payment information</h2>
@@ -231,7 +233,7 @@
                 <div class="mt-4 space-y-4">
                     @foreach($selectedOrder->sellerOrders->flatMap->items as $item)
                         @php
-                            $deliveryAssignment = $item->sellerOrder->shipment?->riderAssignments->where('assignment_type', 'DELIVERY')->sortByDesc('id')->first();
+                            $deliveryAssignment = $item->shipment?->riderAssignments->where('assignment_type', 'DELIVERY')->sortByDesc('id')->first();
                         @endphp
                         <form method="POST" enctype="multipart/form-data" action="{{ route('buyer.orders.review.store', $item) }}" class="grid gap-3 rounded-xl border border-stone-200 p-4">
                             @csrf
@@ -239,7 +241,7 @@
                                 <x-product-thumbnail :item="$item" size="56"/>
                                 <div>
                                     <strong class="block">{{ $item->product_name }}</strong>
-                                    <small class="text-stone-500">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</small>
+                                    <small class="text-stone-500">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</small>
                                 </div>
                             </div>
 
@@ -249,21 +251,21 @@
                                     @foreach(range(1, 5) as $rating)
                                         <label class="cursor-pointer">
                                             <input class="peer sr-only" type="radio" name="rating" value="{{ $rating }}" @checked((int) $item->review?->rating === $rating) @disabled($item->review)>
-                                            <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-300 text-lg text-yellow-500 hover:border-yellow-400 hover:bg-yellow-50 peer-checked:border-yellow-500 peer-checked:bg-yellow-400 peer-checked:text-yellow-950">★</span>
+                                            <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-300 text-lg text-yellow-500 hover:border-yellow-400 hover:bg-yellow-50 peer-checked:border-yellow-500 peer-checked:bg-yellow-400 peer-checked:text-yellow-950">â˜…</span>
                                             <span class="sr-only">{{ $rating }} product stars</span>
                                         </label>
                                     @endforeach
                                 </div>
                             </fieldset>
 
-                            @if($item->sellerOrder->items->first()?->id === $item->id && $deliveryAssignment)
+                            @if($deliveryAssignment)
                                 <fieldset>
                                     <legend class="text-sm font-semibold">Delivery rider rating <span class="font-normal text-stone-500">{{ $deliveryAssignment->riderProfile?->user?->name }}</span></legend>
                                     <div class="mt-2 flex flex-wrap gap-2">
                                         @foreach(range(1, 5) as $rating)
                                             <label class="cursor-pointer">
-                                                <input class="peer sr-only" type="radio" name="rider_rating" value="{{ $rating }}" @checked(($riderRatingsByShipment[$item->sellerOrder->shipment->id] ?? null) === $rating) @disabled($item->review)>
-                                                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-300 text-lg text-yellow-500 hover:border-yellow-400 hover:bg-yellow-50 peer-checked:border-yellow-500 peer-checked:bg-yellow-400 peer-checked:text-yellow-950">★</span>
+                                                <input class="peer sr-only" type="radio" name="rider_rating" value="{{ $rating }}" @checked(($riderRatingsByShipment[$item->shipment->id] ?? null) === $rating) @disabled($item->review)>
+                                                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-300 text-lg text-yellow-500 hover:border-yellow-400 hover:bg-yellow-50 peer-checked:border-yellow-500 peer-checked:bg-yellow-400 peer-checked:text-yellow-950">â˜…</span>
                                                 <span class="sr-only">{{ $rating }} rider stars</span>
                                             </label>
                                         @endforeach
@@ -310,30 +312,54 @@
         <div class="mt-5 space-y-4">
             @forelse($visibleOrders as $order)
                 @php
-                    $displayStatus = $order->status === 'PROCESSING' && $order->sellerOrders->isNotEmpty() && $order->sellerOrders->every(fn ($sellerOrder) => in_array($sellerOrder->shipment?->current_status, ['DELIVERED', 'COMPLETED'], true)) ? 'DELIVERED' : $order->status;
-                    $previewItem = $order->sellerOrders->flatMap->items->first();
-                    $itemCount = $order->sellerOrders->sum(fn ($sellerOrder) => $sellerOrder->items->sum('quantity'));
+                    $orderShipments = $order->sellerOrders->flatMap->shipments;
+                    $displayStatus = $order->status === 'PROCESSING' && $order->sellerOrders->isNotEmpty() && $orderShipments->isNotEmpty() && $order->sellerOrders->every(fn ($sellerOrder) => $sellerOrder->shipments->isNotEmpty() && $sellerOrder->shipments->every(fn ($shipment) => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true))) ? 'DELIVERED' : $order->status;
+                    $itemLineCount = $order->sellerOrders->sum(fn ($sellerOrder) => $sellerOrder->items->count());
+                    $unitCount = $order->sellerOrders->sum(fn ($sellerOrder) => $sellerOrder->items->sum('quantity'));
                     $returnRequest = $returnRefundReady ? $order->returnRefundRequests->sortByDesc('submitted_at')->first() : null;
                     $actionState = $orderActionStates->get($order->id, []);
                 @endphp
                 <article class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" data-order-id="{{ $order->id }}">
                     <div class="flex flex-wrap items-start justify-between gap-3">
-                        <div class="flex min-w-0 items-center gap-4">
-                            <x-product-thumbnail :item="$previewItem" size="72" />
-                            <div class="min-w-0">
-                                <span class="text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y g:i A') }}</span>
-                                <h2 class="mt-1 font-bold text-stone-900">{{ $order->order_number }}</h2>
-                                @if($previewItem)<p class="mt-1 truncate text-sm text-stone-500">{{ $previewItem->product_name }}@if($itemCount > 1) <span aria-label="and {{ $itemCount - 1 }} more item{{ $itemCount === 2 ? '' : 's' }}">+ {{ $itemCount - 1 }} more</span>@endif</p>@endif
-                            </div>
+                        <div class="min-w-0">
+                            <span class="text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y g:i A') }}</span>
+                            <h2 class="mt-1 font-bold text-stone-900">{{ $order->order_number }}</h2>
+                            <p class="mt-1 text-sm text-stone-500">{{ $order->sellerOrders->count() }} seller(s) Â· {{ $itemLineCount }} product line(s) Â· {{ $unitCount }} unit(s)</p>
                         </div>
-                        <span class="rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold" data-order-status-id="{{ $order->id }}">{{ $returnRequest ? 'Return / Refund · '.str($returnRequest->status)->headline() : str($displayStatus)->headline() }}</span>
+                        <span class="rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold" data-order-status-id="{{ $order->id }}">{{ $returnRequest ? 'Return / Refund Â· '.str($returnRequest->status)->headline() : str($displayStatus)->headline() }}</span>
+                    </div>
+                    <div class="mt-4 space-y-3">
+                        @foreach($order->sellerOrders as $sellerOrder)
+                            <section class="rounded-xl border border-stone-200 bg-stone-50/70 p-4" aria-label="Items from {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}">
+                                <div class="flex flex-wrap items-start justify-between gap-2 border-b border-stone-200 pb-3">
+                                    <div>
+                                        <h3 class="font-semibold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h3>
+                                        <p class="mt-1 text-xs text-stone-500">Seller order {{ $sellerOrder->seller_order_number }}</p>
+                                    </div>
+                                    <span class="text-xs text-stone-500">{{ $sellerOrder->shipments->count() }} separate parcel(s)</span>
+                                </div>
+                                <ul class="divide-y divide-stone-200">
+                                    @foreach($sellerOrder->items as $item)
+                                        <li class="flex items-center gap-3 py-3 last:pb-0">
+                                            <x-product-thumbnail :item="$item" size="56" />
+                                            <div class="min-w-0 flex-1">
+                                                <p class="font-medium text-stone-900">{{ $item->product_name }}</p>
+                                                <p class="mt-1 text-xs text-stone-500">Variant: {{ $item->variant_description ?: 'Standard' }} Â· Qty: {{ $item->quantity }} Â· Unit price: &#8369;{{ number_format((float) $item->unit_price, 2) }}</p>
+                                                @if($item->shipment)<p class="mt-1 text-xs text-stone-600">Parcel: {{ str($item->shipment->current_status)->replace("_", " ")->title() }} · Tracking <strong>{{ $item->shipment->tracking_number }}</strong></p>@else<p class="mt-1 text-xs text-stone-500">Parcel label not assigned yet</p>@endif
+                                            </div>
+                                            <strong class="shrink-0 text-sm text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            </section>
+                        @endforeach
                     </div>
                     <div class="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-stone-100 pt-4">
-                        <div><span class="block text-xs text-stone-500">{{ $itemCount }} item(s)</span><strong>&#8369;{{ number_format((float) $order->grand_total, 2) }}</strong></div>
+                        <div><span class="block text-xs text-stone-500">{{ $unitCount }} unit(s)</span><strong>&#8369;{{ number_format((float) $order->grand_total, 2) }}</strong></div>
                         <div class="lk-order-card-actions">
                             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Return / Refund</a>@endif
-                            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request · {{ str($returnRequest->status)->headline() }}</a>@endif
-                            @if($actionState['can_confirm_received'])<div><form method="POST" action="{{ route('buyer.orders.received', $order) }}" data-confirm-title="Confirm order received?" data-confirm-message="Confirm that you received every parcel. This will complete the order and enable product reviews." data-confirm-label="Confirm received" data-confirm-set-field="confirm_receipt">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@if($actionState['auto_confirm_at'] ?? null)<p class="mt-2 max-w-xs text-xs text-stone-600">Automatic receipt on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</p>@endif</div>@endif
+                            @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request Â· {{ str($returnRequest->status)->headline() }}</a>@endif
+                            @if($actionState['can_confirm_received'])<div><form method="POST" action="{{ route('buyer.orders.received', $order) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@if($actionState['auto_confirm_at'] ?? null)<p class="mt-2 max-w-xs text-xs text-stone-600">Automatic receipt on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</p>@endif</div>@endif
                             <a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
                         </div>
                     </div>

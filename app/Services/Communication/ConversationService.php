@@ -11,7 +11,9 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
+use RuntimeException;
 
 class ConversationService
 {
@@ -93,11 +95,16 @@ class ConversationService
             ->whereHas('participants', fn ($query) => $query->where('users.id', $user->id))
             ->firstOrFail();
 
+        $columns = ['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at'];
+        if (Schema::hasColumn('messages', 'attachment_path')) {
+            $columns[] = 'attachment_path';
+        }
+
         $query = Message::query()
             ->where('conversation_id', $conversation->id)
             ->when($afterId, fn ($query) => $query->where('id', '>', $afterId)->oldest('id'), fn ($query) => $query->latest('sent_at')->latest('id'))
             ->limit(max(1, min($limit, 50)))
-            ->get(['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at']);
+            ->get($columns);
 
         return $afterId ? $query->values() : $query->reverse()->values();
     }
@@ -114,6 +121,7 @@ class ConversationService
             'body' => $message->body,
             'time' => $sentAt?->diffForHumans() ?? 'Just now',
             'sent_at' => $sentAt?->toIso8601String(),
+            'attachment_url' => filled($message->attachment_path) ? route('seller.messages.attachments.show', $message->id) : null,
         ];
     }
 
@@ -129,18 +137,26 @@ class ConversationService
         string $body,
         array $context = [],
         ?Conversation $conversation = null,
+        ?string $attachmentPath = null,
     ): Message
     {
-        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation): Message {
+        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation, $attachmentPath): Message {
             $conversation ??= $this->findOrCreate($sender, $recipientUserId, $context);
             $now = now();
 
-            $message = Message::create([
+            $attributes = [
                 'conversation_id' => $conversation->id,
                 'sender_user_id' => $sender->id,
                 'body' => $body,
                 'sent_at' => $now,
-            ]);
+            ];
+            if ($attachmentPath !== null) {
+                if (! Schema::hasColumn('messages', 'attachment_path')) {
+                    throw new RuntimeException('The message attachment schema has not been deployed.');
+                }
+                $attributes['attachment_path'] = $attachmentPath;
+            }
+            $message = Message::create($attributes);
 
             $conversation->updated_at = $now;
             $conversation->saveQuietly();

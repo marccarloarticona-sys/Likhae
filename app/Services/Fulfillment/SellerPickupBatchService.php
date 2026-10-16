@@ -199,7 +199,11 @@ final class SellerPickupBatchService
             }
             $this->assertBatchCapacity($trip);
 
-            foreach ($trip->items as $item) {
+            $activeItems = $trip->items->filter(fn (RiderLocalTripItem $item): bool => $item->riderAssignment?->status !== 'CANCELLED');
+            if ($activeItems->isEmpty()) {
+                throw new RuntimeException('No active parcels remain in this seller pickup batch.');
+            }
+            foreach ($activeItems as $item) {
                 $assignment = $item->riderAssignment;
                 if (! $assignment || $assignment->status !== 'ASSIGNED') {
                     throw new RuntimeException('Every parcel in this batch must still be assigned before acceptance.');
@@ -221,7 +225,11 @@ final class SellerPickupBatchService
                 throw new RuntimeException('Accept the seller pickup batch before starting it.');
             }
 
-            foreach ($trip->items as $item) {
+            $activeItems = $trip->items->filter(fn (RiderLocalTripItem $item): bool => $item->riderAssignment?->status !== 'CANCELLED');
+            if ($activeItems->isEmpty()) {
+                throw new RuntimeException('No active parcels remain in this seller pickup batch.');
+            }
+            foreach ($activeItems as $item) {
                 $assignment = $item->riderAssignment;
                 if (! $assignment || $assignment->status !== 'ACCEPTED') {
                     throw new RuntimeException('Every parcel in this batch must be accepted before pickup starts.');
@@ -248,7 +256,7 @@ final class SellerPickupBatchService
                 $candidate->riderAssignment?->shipment
                 && hash_equals((string) $candidate->riderAssignment->shipment->tracking_number, $code));
             if (! $item || $code === '') {
-                throw new RuntimeException('This parcel is not part of this seller pickup assignment.');
+                throw new RuntimeException('Tracking number does not match this job.');
             }
 
             $assignment = $item->riderAssignment;

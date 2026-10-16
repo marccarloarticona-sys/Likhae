@@ -2,6 +2,8 @@
     'product',
     'compact' => false,
     'guest' => false,
+    'deal' => false,
+    'catalogListing' => false,
 ])
 
 @php
@@ -31,14 +33,16 @@
         \Illuminate\Support\Str::slug($seller)
     );
 
-    $price = max(
-        0,
-        (float) data_get($product, 'min_price', 0)
-    );
+    $dealVariant = $deal ? data_get($product, 'deal_variant') : null;
+    $price = max(0, (float) ($deal
+        ? data_get($dealVariant, 'price', 0)
+        : data_get($product, 'min_price', 0)));
 
     $oldPrice = max(
         0,
-        (float) data_get($product, 'old_price', 0)
+        (float) ($deal
+            ? data_get($dealVariant, 'original_price', 0)
+            : data_get($product, 'old_price', 0))
     );
 
     $rating = min(
@@ -65,11 +69,15 @@
     $variants = collect(data_get($product, 'variants', []));
     $hasVariations = $variants->count() > 1;
     $singleVariant = $hasVariations ? null : $variants->first();
-    $canAddToCart = data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
-    $discountVariant = $variants
-        ->filter(fn ($variant) => (float) data_get($variant, 'discount_amount', 0) > 0)
-        ->sortByDesc(fn ($variant) => (float) data_get($variant, 'discount_amount', 0))
-        ->first();
+    $sellerOnVacation = $catalogListing && (bool) data_get($product, 'seller.vacation_mode', false);
+    $outOfStock = $catalogListing && (int) data_get($product, 'stock', $variants->sum('stock')) < 1;
+    $canAddToCart = ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
+    $discountVariant = $deal
+        ? $dealVariant
+        : $variants
+            ->filter(fn ($variant) => (float) data_get($variant, 'discount_amount', 0) > 0)
+            ->sortByDesc(fn ($variant) => (float) data_get($variant, 'discount_amount', 0))
+            ->first();
     $discountType = strtolower((string) data_get($discountVariant, 'discount_type', data_get($product, 'discount_type', 'none')));
     $discountValue = (float) data_get($discountVariant, 'discount_value', data_get($product, 'discount_value', 0));
     $discount = $discountVariant
@@ -807,6 +815,15 @@
                     <span>
                         Add to Cart
                     </span>
+                </button>
+            @elseif($catalogListing && ($sellerOnVacation || $outOfStock))
+                <button type="button" class="lk-add-cart" disabled aria-disabled="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
+                        <circle cx="9" cy="20" r="1"/>
+                        <circle cx="18" cy="20" r="1"/>
+                    </svg>
+                    <span>{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</span>
                 </button>
             @elseif($hasVariations)
                 <a

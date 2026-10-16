@@ -12,6 +12,17 @@
         ?: (data_get($demoUser, 'role') === 'buyer' || !$guest ? 'Buyer Account' : 'Guest Shopper');
     $initials = collect(explode(' ', trim($buyerName)))->filter()->take(2)->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))->implode('') ?: 'BA';
     $searchRoute = $guest ? route('home') : route('buyer.products');
+    $searchValue = request()->query('q', request()->query('search', ''));
+    $searchValue = is_scalar($searchValue) ? (string) $searchValue : '';
+    $catalogSearchParameters = [];
+    if (!$guest && Route::currentRouteName() === 'buyer.products') {
+        foreach (['category', 'min_price', 'max_price', 'rating', 'location', 'sort', 'view'] as $key) {
+            $value = request()->query($key);
+            if (is_scalar($value) && (string) $value !== '') {
+                $catalogSearchParameters[$key] = (string) $value;
+            }
+        }
+    }
     $cartCount = (int) data_get($buyerUiCounts ?? [], 'cart', 0);
     $notificationCount = (int) data_get($buyerUiCounts ?? [], 'notifications', 0);
     $profilePhoto = data_get($user, 'profile_photo_path');
@@ -38,8 +49,13 @@
         <div class="lk-header-title"><strong>{{ preg_replace('/\s+-\s+LIKHAE$/', '', $title) }}</strong><span>Shop smart with LIKHAE</span></div>
     @endif
     <form action="{{ $searchRoute }}" method="GET" class="lk-search" role="search">
+        @if(!$guest && Route::currentRouteName() === 'buyer.products')
+            @foreach($catalogSearchParameters as $key => $value)
+                <input type="hidden" name="{{ $key }}" value="{{ $value }}">
+            @endforeach
+        @endif
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input type="search" name="q" value="{{ request('q') }}" placeholder="Search products, categories, local sellers..." aria-label="Search marketplace">
+        <input type="search" name="q" value="{{ $searchValue }}" placeholder="Search products, categories, local sellers..." aria-label="Search marketplace">
         <button type="submit" aria-label="Search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
     </form>
     @if($guest)

@@ -28,6 +28,8 @@ class LogisticsRidersPageTest extends TestCase
             'code' => 'RIDERS-PAGE-CENTER',
             'business_name' => 'Riders Page Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $owner->id,
+            'approved_at' => now(),
         ]);
 
         $first = null;
@@ -57,6 +59,8 @@ class LogisticsRidersPageTest extends TestCase
             'code' => 'OTHER-RIDERS-CENTER',
             'business_name' => 'Other Riders Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $otherOwner->id,
+            'approved_at' => now(),
         ]);
         $otherRider = User::factory()->create(['account_type' => User::TYPE_RIDER]);
         RiderProfile::create([
@@ -81,6 +85,46 @@ class LogisticsRidersPageTest extends TestCase
             ->assertSee($first->email);
     }
 
+    public function test_riders_page_labels_local_delivery_and_four_wheel_inter_logistics_roles(): void
+    {
+        $owner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS, 'status' => User::STATUS_ACTIVE]);
+        $center = LogisticsCenter::create([
+            'owner_user_id' => $owner->id,
+            'code' => 'RIDER-CLASS-CENTER',
+            'business_name' => 'Rider Classification Center',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $owner->id,
+            'approved_at' => now(),
+        ]);
+
+        foreach ([
+            ['name' => 'Local Delivery Rider', 'vehicle_type' => 'motorcycle', 'plate' => 'CLASS-MOTO-001'],
+            ['name' => 'Inter Logistics Driver', 'vehicle_type' => 'closed_van', 'plate' => 'CLASS-VAN-001'],
+        ] as $entry) {
+            $user = User::factory()->create([
+                'name' => $entry['name'],
+                'account_type' => User::TYPE_RIDER,
+                'status' => User::STATUS_ACTIVE,
+            ]);
+            RiderProfile::create([
+                'user_id' => $user->id,
+                'logistics_center_id' => $center->id,
+                'vehicle_type' => $entry['vehicle_type'],
+                'plate_number' => $entry['plate'],
+                'drivers_license_number' => $entry['plate'].'-LICENSE',
+                'status' => 'ACTIVE',
+            ]);
+        }
+
+        $this->actingAs($owner)
+            ->get(route('logistics.riders'))
+            ->assertOk()
+            ->assertSee('Local Delivery')
+            ->assertSee('4-Wheel Inter-Logistics Drivers')
+            ->assertSee('4-Wheel Inter-Logistics Driver')
+            ->assertSee('Closed Van');
+    }
+
     public function test_rider_detail_renders_and_reassigns_delivery_area(): void
     {
         $owner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
@@ -89,6 +133,8 @@ class LogisticsRidersPageTest extends TestCase
             'code' => 'RIDER-DETAIL-CENTER',
             'business_name' => 'Rider Detail Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $owner->id,
+            'approved_at' => now(),
         ]);
         $riderUser = User::factory()->create([
             'account_type' => User::TYPE_RIDER,

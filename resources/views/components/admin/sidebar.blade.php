@@ -220,6 +220,13 @@
                     ],
                 ],
                 [
+                    'key' => 'marketing',
+                    'label' => 'Platform Marketing',
+                    'route' => 'admin.marketing',
+                    'icon' => 'finance',
+                    'active' => ['admin.marketing', 'admin.marketing.*'],
+                ],
+                [
                     'key' => 'categories',
                     'label' => 'Categories',
                     'route' => 'admin.categories',

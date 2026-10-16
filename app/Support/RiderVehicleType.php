@@ -41,6 +41,12 @@ final class RiderVehicleType
         return [self::MOTORCYCLE, self::TRICYCLE];
     }
 
+    /** @return list<string> */
+    public static function interLogisticsValues(): array
+    {
+        return [self::VAN, self::CLOSED_VAN, self::TRUCK];
+    }
+
     public static function role(?string $vehicleType): string
     {
         return match (self::normalize($vehicleType)) {

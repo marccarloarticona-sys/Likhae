@@ -493,7 +493,7 @@
                     <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-4">
                         <div>
                             <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
-                            <p class="mt-1 text-[11px] text-stone-500">Enter one code. Checkout will match it to the eligible shop.</p>
+                            <p class="mt-1 text-[11px] text-stone-500">Enter one seller voucher or one marketplace voucher code.</p>
                         </div>
                         <label for="cart-voucher-code" class="block text-[11px] font-semibold text-stone-700">Voucher code</label>
                         <div class="flex gap-2">
@@ -506,7 +506,9 @@
                                 <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available for your cart</p>
                                 @foreach($availableVouchers as $sellerId => $vouchers)
                                     @php
-                                        $sellerName = data_get($cartItems->first(fn ($cartItem) => (int) data_get($cartItem, 'productVariant.product.seller_profile_id') === (int) $sellerId), 'productVariant.product.sellerProfile.business_name') ?? 'Shop';
+                                        $sellerName = (string) $sellerId === 'platform'
+                                            ? 'LIKHAE Platform'
+                                            : (data_get($cartItems->first(fn ($cartItem) => (int) data_get($cartItem, 'productVariant.product.seller_profile_id') === (int) $sellerId), 'productVariant.product.sellerProfile.business_name') ?? 'Shop');
                                     @endphp
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="text-[10px] text-stone-500">{{ $sellerName }}:</span>

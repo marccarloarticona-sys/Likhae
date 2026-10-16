@@ -25,7 +25,7 @@ class TransferController extends Controller
     public function index(Request $request): View
     {
         $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
-        if (! $this->schema->transferReady()) {
+        if (! $this->schema->manifestReady()) {
             return view('Logistics.transfers.index', [
                 'center' => $center,
                 'transferReady' => false,
@@ -33,6 +33,7 @@ class TransferController extends Controller
                 'incoming' => collect(),
                 'destinations' => collect(),
                 'readyLegs' => collect(),
+                'drivers' => collect(),
             ]);
         }
 
@@ -41,19 +42,23 @@ class TransferController extends Controller
             'transferReady' => true,
             'outgoing' => TransferManifest::query()
                 ->where('origin_logistics_center_id', $center->id)
+                ->with('assignedDriver.user')
                 ->withCount('items')
                 ->latest()
                 ->paginate(10, ['*'], 'outgoing_page'),
             'incoming' => TransferManifest::query()
                 ->where('destination_logistics_center_id', $center->id)
+                ->with('assignedDriver.user')
                 ->withCount('items')
                 ->latest()
                 ->paginate(10, ['*'], 'incoming_page'),
             'destinations' => LogisticsCenter::query()->active()->whereKeyNot($center->id)->orderBy('business_name')->get(['id', 'business_name', 'code']),
+            'drivers' => $this->manifests->eligibleDriversForCenter((int) $center->id),
             'readyLegs' => ShipmentTransferLeg::query()
                 ->where('origin_logistics_center_id', $center->id)
                 ->where('status', ShipmentTransferLeg::READY)
                 ->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $center->id))
+                ->whereDoesntHave('manifestItems', fn ($items) => $items->whereHas('manifest', fn ($manifest) => $manifest->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])))
                 ->with('shipment')
                 ->orderBy('sequence_no')
                 ->limit(100)
@@ -64,13 +69,20 @@ class TransferController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
-        $data = $request->validate(['destination_logistics_center_id' => ['required', 'integer']]);
+        $data = $request->validate([
+            'destination_logistics_center_id' => ['required', 'integer'],
+            'notes' => ['nullable', 'string', 'max:2000'],
+            'assigned_driver_rider_profile_id' => ['nullable', 'integer', 'exists:rider_profiles,id'],
+        ]);
         $destination = LogisticsCenter::query()->active()->findOrFail($data['destination_logistics_center_id']);
+        $driver = ! empty($data['assigned_driver_rider_profile_id'])
+            ? RiderProfile::query()->findOrFail($data['assigned_driver_rider_profile_id'])
+            : null;
 
         try {
-            $manifest = $this->manifests->create($request->user(), $center, $destination, $request->input('notes'));
+            $manifest = $this->manifests->create($request->user(), $center, $destination, $data['notes'] ?? null, $driver);
         } catch (RuntimeException $exception) {
-            return back()->withErrors(['manifest' => $exception->getMessage()])->withInput();
+            return back()->withErrors(['assigned_driver_rider_profile_id' => $exception->getMessage()])->withInput();
         }
 
         return redirect()->route('logistics.transfers.show', $manifest)->with('status', 'Transfer manifest created in draft.');
@@ -82,6 +94,7 @@ class TransferController extends Controller
         $manifest = $this->loadManifest($manifest);
         abort_unless((int) $manifest->origin_logistics_center_id === (int) $center->id
             || (int) $manifest->destination_logistics_center_id === (int) $center->id, 403);
+        $isOriginCenter = (int) $manifest->origin_logistics_center_id === (int) $center->id;
 
         $manifest->load(['originLogisticsCenter', 'destinationLogisticsCenter', 'assignedDriver.user', 'items.transferLeg.shipment.sellerOrder.items']);
         $readyLegs = ShipmentTransferLeg::query()
@@ -89,19 +102,17 @@ class TransferController extends Controller
             ->where('destination_logistics_center_id', $manifest->destination_logistics_center_id)
             ->where('status', ShipmentTransferLeg::READY)
             ->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $manifest->origin_logistics_center_id))
+            ->whereDoesntHave('manifestItems', fn ($items) => $items
+                ->whereHas('manifest', fn ($manifestQuery) => $manifestQuery->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])))
             ->with('shipment')
             ->orderBy('sequence_no')
             ->limit(100)
             ->get();
-        $drivers = RiderProfile::query()
-            ->where('logistics_center_id', $manifest->origin_logistics_center_id)
-            ->where('status', 'ACTIVE')
-            ->whereIn('vehicle_type', ['van', 'closed_van', 'truck'])
-            ->with('user')
-            ->orderBy('id')
-            ->get();
+        $drivers = $isOriginCenter
+            ? $this->manifests->eligibleDriversForCenter((int) $manifest->origin_logistics_center_id, (int) $manifest->id)
+            : collect();
 
-        return view('Logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers'));
+        return view('Logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers', 'isOriginCenter'));
     }
 
     public function addLeg(Request $request, int $manifest): RedirectResponse
@@ -114,6 +125,29 @@ class TransferController extends Controller
             return back()->withErrors(['transfer_leg_id' => $exception->getMessage()]);
         }
         return back()->with('status', 'Transfer leg added to the manifest.');
+    }
+
+    public function recordItemMeasurements(Request $request, int $manifest, int $item): RedirectResponse
+    {
+        $manifest = $this->loadManifest($manifest);
+        $data = $request->validate([
+            'parcel_weight_kg' => ['required', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
+            'parcel_volume_liters' => ['required', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
+        ]);
+
+        try {
+            $this->manifests->recordItemMeasurements(
+                $request->user(),
+                $manifest,
+                TransferManifestItem::query()->findOrFail($item),
+                (string) $data['parcel_weight_kg'],
+                (string) $data['parcel_volume_liters'],
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['measurements' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Measured parcel weight and volume saved.');
     }
 
     public function assignDriver(Request $request, int $manifest): RedirectResponse
@@ -138,24 +172,20 @@ class TransferController extends Controller
     {
         $manifest = $this->loadManifest($manifest);
         $data = $request->validate([
-            'scanned_codes' => ['required', 'array', 'min:1'],
-            'scanned_codes.*' => ['required', 'string', 'max:150'],
-            'scan_methods' => ['required', 'array', 'min:1'],
-            'scan_methods.*' => ['required', 'in:QR,BARCODE,MANUAL'],
+            'scanned_codes' => ['required', 'array'],
+            'scanned_codes.*' => ['required', 'string', 'max:120', 'distinct'],
         ]);
-
-        return $this->runAction(
-            $request,
-            $manifest,
-            fn () => $this->manifests->release($request->user(), $manifest, $data['scanned_codes'], $data['scan_methods']),
-            'Sender handover scans accepted and manifest released.',
-        );
+        return $this->runAction($request, $manifest, fn () => $this->manifests->release($request->user(), $manifest, $data['scanned_codes']), 'Manifest released with custody scans.');
     }
 
     public function depart(Request $request, int $manifest): RedirectResponse
     {
         $manifest = $this->loadManifest($manifest);
-        return $this->runAction($request, $manifest, fn () => $this->manifests->depart($request->user(), $manifest), 'Manifest marked in transit.');
+        $data = $request->validate([
+            'scanned_codes' => ['required', 'array'],
+            'scanned_codes.*' => ['required', 'string', 'max:120', 'distinct'],
+        ]);
+        return $this->runAction($request, $manifest, fn () => $this->manifests->depart($request->user(), $manifest, $data['scanned_codes']), 'Manifest marked in transit.');
     }
 
     public function arrive(Request $request, int $manifest): RedirectResponse
@@ -174,23 +204,15 @@ class TransferController extends Controller
 
     public function receiveItem(Request $request, int $item): RedirectResponse
     {
-        abort_unless($this->schema->transferReady(), 503, 'Transfer schema is not installed.');
+        abort_unless($this->schema->manifestReady(), 503, 'Transfer manifest and approved rider capacity schema is not installed.');
         $item = TransferManifestItem::query()->findOrFail($item);
         $data = $request->validate([
             'outcome' => ['required', 'in:RECEIVED,MISSING,DAMAGED'],
-            'scanned_code' => ['required_if:outcome,RECEIVED', 'nullable', 'string', 'max:150'],
-            'scan_method' => ['required_if:outcome,RECEIVED', 'nullable', 'in:QR,BARCODE,MANUAL'],
+            'scanned_code' => ['required_if:outcome,RECEIVED,DAMAGED', 'nullable', 'string', 'max:120'],
             'notes' => ['nullable', 'string', 'max:2000'],
         ]);
         try {
-            $this->manifests->receiveItem(
-                $request->user(),
-                $item,
-                $data['outcome'],
-                $data['scanned_code'] ?? null,
-                $data['scan_method'] ?? 'MANUAL',
-                $data['notes'] ?? null,
-            );
+            $this->manifests->receiveItem($request->user(), $item, $data['outcome'], $data['scanned_code'] ?? null, $data['notes'] ?? null);
         } catch (RuntimeException $exception) {
             return back()->withErrors(['outcome' => $exception->getMessage()]);
         }
@@ -209,7 +231,7 @@ class TransferController extends Controller
 
     private function loadManifest(int $id): TransferManifest
     {
-        abort_unless($this->schema->transferReady(), 503, 'Transfer schema is not installed.');
+        abort_unless($this->schema->manifestReady(), 503, 'Transfer manifest and approved rider capacity schema is not installed.');
 
         return TransferManifest::query()->findOrFail($id);
     }

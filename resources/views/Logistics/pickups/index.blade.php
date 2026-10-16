@@ -33,7 +33,7 @@
                 <summary class="cursor-pointer list-none border-b border-line px-5 py-4">
                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div><h3 class="font-bold text-ink">{{ $seller?->business_name ?? 'Seller unavailable' }}</h3><p class="mt-1 text-sm text-muted">{{ $address?->formatted() ?? 'Pickup address unavailable' }}</p></div>
-                        <span class="text-sm font-semibold text-ink">{{ $shipments->count() }} ready {{ str('parcel')->plural($shipments->count()) }} · {{ $center->business_name }}</span>
+                        <span class="text-sm font-semibold text-ink">{{ $shipments->count() }} ready {{ str('parcel')->plural($shipments->count()) }} Â· {{ $center->business_name }}</span>
                     </div>
                 </summary>
                 <div class="p-5">
@@ -42,11 +42,13 @@
                         @csrf
                         <div class="grid gap-2">
                             @foreach($shipments as $shipment)
+                                @php($pickupRequest = $group['pickup_requests']->get($shipment->id))
                                 <label class="flex cursor-pointer items-start gap-3 border border-line p-3 hover:bg-page-secondary">
                                     <input type="checkbox" name="shipment_ids[]" value="{{ $shipment->id }}" class="mt-1" data-pickup-parcel>
                                     <span class="min-w-0 flex-1">
                                         <span class="block font-semibold text-primary">{{ $shipment->tracking_number }}</span>
-                                        <span class="mt-1 block text-xs text-muted">{{ $shipment->sellerOrder?->seller_order_number }} · {{ $shipment->sellerOrder?->items?->pluck('product_name')->filter()->join(', ') }}</span>
+                                        @if(filled($pickupRequest?->notes))<span class="mt-1 block text-xs text-muted">Seller handover: {{ str($pickupRequest->notes)->after(':') }}</span>@endif
+                                        <span class="mt-1 block text-xs text-muted">{{ $shipment->sellerOrder?->seller_order_number }} Â· {{ ($shipment->orderItem?->product_name ?? $shipment->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</span>
                                     </span>
                                     <span class="text-xs font-semibold text-muted">READY_FOR_PICKUP</span>
                                 </label>
@@ -58,13 +60,13 @@
                                 <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
                                     <option value="">{{ $eligibleRiders->isEmpty() ? 'No eligible rider assigned to this pickup barangay' : 'Select motorcycle or tricycle rider' }}</option>
                                     @foreach($eligibleRiders as $rider)
-                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · cap {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}</option>
+                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}">{{ $rider->user?->name }} Â· {{ str($rider->vehicle_type)->headline() }} Â· cap {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}</option>
                                     @endforeach
                                 </select>
                             </label>
                             <button type="submit" disabled data-pickup-submit class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Assign Selected Parcels</button>
                         </div>
-                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected · 1 to the rider's approved capacity, up to 10 parcels.</p>
+                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected Â· 1 to the rider's approved capacity, up to 10 parcels.</p>
                     </form>
                     <div class="mt-3 flex flex-wrap gap-2">
                         @foreach($shipments as $shipment)
@@ -89,13 +91,13 @@
                 @php($collectedItems = $batch->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED'))
                 @php($collected = $collectedItems->count())
                 @php($received = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER')->count())
-                @php($phase = match($batch->status) { 'LOADING' => 'Waiting for rider acceptance', 'READY' => 'Accepted · waiting for pickup start', 'EN_ROUTE_TO_HUB' => 'In transit to hub', default => 'In progress at seller' })
+                @php($phase = match($batch->status) { 'LOADING' => 'Waiting for rider acceptance', 'READY' => 'Accepted Â· waiting for pickup start', 'EN_ROUTE_TO_HUB' => 'In transit to hub', default => 'In progress at seller' })
                 <article class="border border-line bg-surface p-5">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div><p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup Batch #P-{{ $batch->id }}</p><h3 class="mt-1 font-bold text-ink">{{ $batch->seller?->business_name }}</h3><p class="mt-1 text-sm text-muted">{{ $batch->seller?->businessAddress?->formatted() }}</p><p class="mt-1 text-sm text-muted">Rider: {{ $batch->rider?->user?->name }}</p></div>
                         <span class="font-semibold text-ink">{{ $phase }}</span>
                     </div>
-                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned · {{ $collected }}/{{ $total }} seller scans complete@if($collected > 0) · {{ $received }}/{{ $collected }} received at hub@endif</p>
+                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned Â· {{ $collected }}/{{ $total }} seller scans complete@if($collected > 0) Â· {{ $received }}/{{ $collected }} received at hub@endif</p>
                     @if($batch->status === 'EN_ROUTE_TO_HUB')
                         <div class="mt-3 grid gap-2 sm:grid-cols-2">@foreach($collectedItems as $item)<div class="border border-line px-3 py-2 text-sm"><strong>{{ $item->riderAssignment?->shipment?->tracking_number }}</strong><span class="ml-2 text-xs {{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'text-green-700' : 'text-amber-800' }}">{{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'Received' : 'Expected' }}</span></div>@endforeach</div>
                     @endif

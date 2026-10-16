@@ -14,3 +14,7 @@ Schedule::command('likhae:auto-confirm-delivered-orders')
     ->hourly()
     ->timezone('Asia/Manila')
     ->withoutOverlapping();
+Schedule::command('likhae:expire-rider-assignment-offers')
+    ->everyMinute()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping();

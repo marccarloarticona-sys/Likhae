@@ -10,6 +10,7 @@ class Voucher extends Model
 {
     protected $fillable = [
         'seller_profile_id',
+        'platform_code_key',
         'code',
         'name',
         'discount_type',

@@ -6,7 +6,9 @@ use App\Http\Controllers\Admin\AdminOperationsController;
 use App\Http\Controllers\Admin\AdminFinanceController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
 use App\Http\Controllers\Admin\AdminCashRefundController;
+use App\Http\Controllers\Admin\AdminMarketingController;
 use App\Http\Controllers\Admin\AdminUserController;
+use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use App\Http\Controllers\WorkspaceSettingsController;
 use Illuminate\Support\Facades\Route;
@@ -16,6 +18,8 @@ Route::prefix('admin')
     ->middleware(['auth', 'verified', EnsureWorkspaceRole::class.':admin'])
     ->group(function () {
         Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
+        Route::get('/routing-review', [AdminRoutingReviewController::class, 'index'])->name('routing-review');
+        Route::post('/routing-review/{shipment}/resolve', [AdminRoutingReviewController::class, 'resolve'])->name('routing-review.resolve');
 
         /*
         |--------------------------------------------------------------------------
@@ -49,6 +53,12 @@ Route::prefix('admin')
         Route::post('/users/{user}/reactivate', [AdminUserController::class, 'reactivate'])->name('users.reactivate');
 
         Route::get('/products', [AdminOperationsController::class, 'products'])->name('products');
+        Route::get('/marketing', [AdminMarketingController::class, 'index'])->name('marketing');
+        Route::post('/marketing/campaigns', [AdminMarketingController::class, 'storeCampaign'])->name('marketing.campaigns.store');
+        Route::patch('/marketing/campaigns/{voucher}', [AdminMarketingController::class, 'updateCampaign'])->name('marketing.campaigns.update');
+        Route::patch('/marketing/campaigns/{voucher}/toggle', [AdminMarketingController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
+        Route::post('/marketing/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('marketing.announcements.store');
+        Route::patch('/marketing/announcements/{announcement}/toggle', [AdminMarketingController::class, 'toggleAnnouncement'])->name('marketing.announcements.toggle');
         Route::get('/compliance', [AdminOperationsController::class, 'compliance'])->name('compliance');
         Route::get('/compliance-export', [AdminOperationsController::class, 'exportCompliance'])->name('compliance.export');
         Route::get('/compliance/{case}', [AdminOperationsController::class, 'showComplianceCase'])->name('compliance.show');
@@ -93,7 +103,7 @@ Route::prefix('admin')
         Route::get('/finance-export', [AdminOperationsController::class, 'exportFinance'])->name('finance.export');
         Route::get('/reports-export', [AdminOperationsController::class, 'exportReport'])->name('reports.export');
         Route::post('/messages/send', [AdminOperationsController::class, 'sendMessage'])->name('messages.send');
-        Route::post('/announcements', [AdminOperationsController::class, 'storeAnnouncement'])->name('announcements.store');
+        Route::post('/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('announcements.store');
         Route::patch('/settings', [AdminOperationsController::class, 'updateSettings'])->name('settings.update');
         Route::post('/policies', [AdminOperationsController::class, 'storePolicy'])->name('policies.store');
         Route::patch('/policies/{policy}', [AdminOperationsController::class, 'updatePolicy'])->name('policies.update');

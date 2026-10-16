@@ -313,14 +313,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const scope = event.currentTarget.closest('.lk-detail-info-card') || document;
         const picker = one('[data-variation-picker]', scope);
         if (picker && all('[data-variation-choice-group]', picker).some((group) => !one('[data-variation-choice][aria-pressed="true"]', group))) {
-            showToast('Select every variation option before continuing.');
+            showToast('Please select a variation.');
             return;
         }
         const variation = selectedVariation(scope);
         const cartUrl = event.currentTarget.dataset.cartUrl;
 
         if (!variation?.id || !cartUrl) {
-            showToast('Select an available product variation first.');
+            showToast(picker ? 'Please select a valid variation.' : 'Please select a variation.');
+            return;
+        }
+
+        if (variation.stock < 1) {
+            showToast('This variation is out of stock.');
+            return;
+        }
+
+        const requestedQuantity = Number(one('[data-quantity-input]', scope)?.value || 1);
+        if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) {
+            showToast('Enter a valid quantity.');
+            return;
+        }
+        if (requestedQuantity > variation.stock) {
+            showToast('Requested quantity exceeds available stock.');
             return;
         }
 
@@ -332,7 +347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const fields = {
             _token: one('meta[name="csrf-token"]')?.content || '',
             product_variant_id: variation.id,
-            quantity: one('[data-quantity-input]', scope)?.value || 1,
+            quantity: requestedQuantity,
         };
 
         if (event.currentTarget.dataset.checkout !== '1') {
@@ -355,6 +370,47 @@ document.addEventListener('DOMContentLoaded', () => {
         form.submit();
     }));
 
+    all('[data-buy-now-form]').forEach((form) => form.addEventListener('submit', (event) => {
+        const scope = form.closest('.lk-detail-info-card') || document;
+        const picker = one('[data-variation-picker]', scope);
+        if (picker && all('[data-variation-choice-group]', picker).some((group) => !one('[data-variation-choice][aria-pressed="true"]', group))) {
+            event.preventDefault();
+            showToast('Please select a variation.');
+            return;
+        }
+
+        const variation = selectedVariation(scope);
+        if (!variation?.id) {
+            event.preventDefault();
+            showToast(picker ? 'Please select a valid variation.' : 'Please select a variation.');
+            return;
+        }
+        if (variation.stock < 1) {
+            event.preventDefault();
+            showToast('This variation is out of stock.');
+            return;
+        }
+
+        const requestedQuantity = Number(one('[data-quantity-input]', scope)?.value || 1);
+        if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) {
+            event.preventDefault();
+            showToast('Enter a valid quantity.');
+            return;
+        }
+        if (requestedQuantity > variation.stock) {
+            event.preventDefault();
+            showToast('Requested quantity exceeds available stock.');
+            return;
+        }
+
+        const variantField = one('input[name="product_variant_id"]', form);
+        const quantityField = one('input[name="quantity"]', form);
+        if (variantField) variantField.value = variation.id;
+        if (quantityField) quantityField.value = String(requestedQuantity);
+        const button = one('[data-test-buy-now]', form);
+        if (button) button.disabled = true;
+    }));
+
     all('[data-cart-add-form]').forEach((form) => form.addEventListener('submit', async (event) => {
         event.preventDefault();
 
@@ -374,7 +430,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const availability = one('[data-variant-availability]', product);
             const quantity = one('[data-quantity-input]', product);
             const price = one('.lk-detail-price', product);
-            if (availability) availability.textContent = variation?.id ? (stock ? `${stock} available` : 'Out of stock') : (one('[data-variation-picker]', product) ? 'Select all variations' : 'Out of stock');
+            const hasStock = Object.values(stocks).some((value) => Number(value) > 0);
+            if (availability) availability.textContent = variation?.id
+                ? (stock ? `${stock} available` : 'Out of stock')
+                : (hasStock && one('[data-variation-picker]', product) ? 'Select all variations' : 'Out of stock');
             if (price && variation?.id) price.textContent = `₱${variation.price.toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
             const oldPrice = one('[data-variation-old-price]', product);
             const discountBadge = one('[data-variation-discount-badge-wrapper]', product);
@@ -391,12 +450,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 discountBadge.hidden = !(discountAmount > 0);
                 if (discountBadgeText) {
                     discountBadgeText.textContent = discountType === 'fixed'
-                        ? `₱${(variation?.discountValue || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})} OFF`
+                        ? `₱${discountAmount.toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})} OFF`
                         : `${(variation?.discountValue || 0).toLocaleString('en-PH', {maximumFractionDigits: 2})}% OFF`;
                 }
             }
             if (quantity) { quantity.max = Math.max(1, stock); quantity.value = Math.min(Number(quantity.value || 1), Math.max(1, stock)); }
-            all('[data-product-purchase]', product).forEach((control) => { control.disabled = stock < 1; control.setAttribute('aria-disabled', String(stock < 1)); });
+            const purchaseBlocked = stock < 1 || product.dataset.sellerVacation === '1';
+            all('[data-product-purchase]', product).forEach((control) => { control.disabled = purchaseBlocked; control.setAttribute('aria-disabled', String(purchaseBlocked)); });
         };
         all('[data-variation-option]', product).forEach((button) => button.addEventListener('click', sync));
         sync();

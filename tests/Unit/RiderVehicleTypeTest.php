@@ -32,4 +32,15 @@ class RiderVehicleTypeTest extends TestCase
     {
         $this->assertSame(['motorcycle', 'tricycle'], RiderVehicleType::localValues());
     }
+
+    public function test_inter_logistics_assignment_values_exclude_local_and_legacy_vehicles(): void
+    {
+        $this->assertSame(['van', 'closed_van', 'truck'], RiderVehicleType::interLogisticsValues());
+        $this->assertTrue(RiderVehicleType::isInterLogistics('Van'));
+        $this->assertTrue(RiderVehicleType::isInterLogistics('closed van'));
+        $this->assertTrue(RiderVehicleType::isInterLogistics('truck'));
+        $this->assertFalse(RiderVehicleType::isInterLogistics('motorcycle'));
+        $this->assertFalse(RiderVehicleType::isInterLogistics('tricycle'));
+        $this->assertFalse(RiderVehicleType::isInterLogistics('car'));
+    }
 }

@@ -7,6 +7,7 @@ use App\Models\Buyer\Order;
 use App\Models\Logistics\ShipmentEvent;
 use App\Models\User;
 use Carbon\CarbonInterface;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class BuyerOrderActionService
@@ -18,32 +19,35 @@ class BuyerOrderActionService
     /** @return array<string, mixed> */
     public function state(Order $order, bool $returnRefundStorageReady = true): array
     {
-        $order->loadMissing('sellerOrders.shipment.events', 'disputes');
+        $order->loadMissing('sellerOrders.shipments.events', 'disputes');
 
         if ($returnRefundStorageReady) {
             $order->loadMissing('returnRefundRequests.sellerRequests');
         }
 
-        $deliveryStates = $order->sellerOrders->map(function ($sellerOrder): array {
-            $shipment = $sellerOrder->shipment;
-            $deliveredEvents = $shipment?->events
+        $shipments = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments);
+        $deliveryStates = $shipments->map(function ($shipment): array {
+            $deliveredEvents = $shipment->events
                 ->where('status', 'DELIVERED')
-                ->filter(fn ($event): bool => $event->occurred_at instanceof CarbonInterface)
-                ?? collect();
+                ->filter(fn ($event): bool => $event->occurred_at instanceof CarbonInterface);
 
             return [
-                'delivered' => $shipment && in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true),
+                'delivered' => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true),
                 'has_delivery_timestamp' => $deliveredEvents->isNotEmpty(),
             ];
         });
-        $allDelivered = $order->sellerOrders->isNotEmpty()
+        $allSellerOrdersHaveParcels = $order->sellerOrders->isNotEmpty()
+            && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipments->isNotEmpty());
+        $allDelivered = $allSellerOrdersHaveParcels
+            && $shipments->isNotEmpty()
             && $deliveryStates->every(fn (array $state): bool => $state['delivered']);
         $allDeliveredWithTimestamps = $allDelivered
             && $deliveryStates->every(fn (array $state): bool => $state['has_delivery_timestamp']);
-        $allAwaitingReceipt = $order->sellerOrders->isNotEmpty()
-            && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment?->current_status === 'DELIVERED');
-        $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
+        $allAwaitingReceipt = $allSellerOrdersHaveParcels
+            && $shipments->isNotEmpty()
+            && $shipments->every(fn ($shipment): bool => $shipment->current_status === 'DELIVERED');
+        $deliveredAt = $shipments
+            ->flatMap(fn ($shipment) => $shipment->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
         $returnDeadline = $deliveredAt?->copy()->addDays(5);
@@ -98,16 +102,51 @@ class BuyerOrderActionService
             && Schema::hasTable('return_refund_events');
     }
 
+    public function confirmReceipt(Order $order, User $buyer, bool $returnRefundStorageReady = true): bool
+    {
+        return DB::transaction(function () use ($order, $buyer, $returnRefundStorageReady): bool {
+            $locked = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ((int) $locked->buyer_user_id !== (int) $buyer->id) {
+                return false;
+            }
+            $locked->load('sellerOrders.shipments.events', 'disputes');
+
+            if ($locked->status === 'COMPLETED') {
+                return $locked->sellerOrders->isNotEmpty()
+                    && $locked->sellerOrders->every(fn ($sellerOrder): bool =>
+                        $sellerOrder->status === 'COMPLETED'
+                        && $sellerOrder->shipments->isNotEmpty()
+                        && $sellerOrder->shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED'));
+            }
+
+            $state = $this->state($locked, $returnRefundStorageReady);
+            if ($state['active_dispute'] || ! $state['can_confirm_received']) {
+                return false;
+            }
+
+            return $this->completeReceipt($locked, $buyer, 'Buyer confirmed receipt.');
+        });
+    }
+
     /**
      * Apply the shared receipt transition. The caller must hold a transaction
      * and have rechecked the applicable receipt eligibility while locking the order.
      */
     public function completeReceipt(Order $order, ?User $actor, string $reason): bool
     {
-        $order->loadMissing('sellerOrders.shipment.events');
+        $order->loadMissing('sellerOrders.shipments.events');
+
+        if ($order->status === 'COMPLETED') {
+            return $order->sellerOrders->isNotEmpty()
+                && $order->sellerOrders->every(fn ($sellerOrder): bool =>
+                    $sellerOrder->status === 'COMPLETED'
+                    && $sellerOrder->shipments->isNotEmpty()
+                    && $sellerOrder->shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED'));
+        }
 
         if ($order->status !== 'PROCESSING' || $order->sellerOrders->isEmpty()
-            || $order->sellerOrders->contains(fn ($sellerOrder): bool => ! $sellerOrder->shipment)) {
+            || $order->sellerOrders->contains(fn ($sellerOrder): bool => $sellerOrder->shipments->isEmpty()
+                || $sellerOrder->shipments->contains(fn ($shipment): bool => $shipment->current_status !== 'DELIVERED'))) {
             return false;
         }
 
@@ -119,17 +158,18 @@ class BuyerOrderActionService
 
         foreach ($order->sellerOrders as $sellerOrder) {
             $sellerOrder->update(['status' => 'COMPLETED']);
-            $shipment = $sellerOrder->shipment;
-            $shipment->update(['current_status' => 'COMPLETED']);
+            foreach ($sellerOrder->shipments as $shipment) {
+                $shipment->update(['current_status' => 'COMPLETED']);
 
-            if (! $shipment->events->contains('status', 'COMPLETED')) {
-                ShipmentEvent::query()->create([
-                    'shipment_id' => $shipment->id,
-                    'status' => 'COMPLETED',
-                    'actor_user_id' => $actor?->id,
-                    'notes' => $reason,
-                    'occurred_at' => $completedAt,
-                ]);
+                if (! $shipment->events->contains('status', 'COMPLETED')) {
+                    ShipmentEvent::query()->create([
+                        'shipment_id' => $shipment->id,
+                        'status' => 'COMPLETED',
+                        'actor_user_id' => $actor?->id,
+                        'notes' => $reason,
+                        'occurred_at' => $completedAt,
+                    ]);
+                }
             }
         }
 

@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
 use App\Http\Controllers\Logistics\LogisticsRemittanceController;
+use App\Http\Controllers\Logistics\RiderApplicationController;
 use App\Http\Controllers\Logistics\LocalTripController;
 use App\Http\Controllers\Logistics\TransferController;
 use App\Http\Controllers\WorkspaceAiController;
@@ -63,6 +64,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/transfers', [TransferController::class, 'store'])->name('transfers.store');
         Route::get('/transfers/{manifest}', [TransferController::class, 'show'])->name('transfers.show');
         Route::post('/transfers/{manifest}/items', [TransferController::class, 'addLeg'])->name('transfers.items.store');
+        Route::patch('/transfers/{manifest}/items/{item}/measurements', [TransferController::class, 'recordItemMeasurements'])->name('transfers.items.measurements');
         Route::patch('/transfers/{manifest}/driver', [TransferController::class, 'assignDriver'])->name('transfers.driver.update');
         Route::post('/transfers/{manifest}/seal', [TransferController::class, 'seal'])->name('transfers.seal');
         Route::post('/transfers/{manifest}/release', [TransferController::class, 'release'])->name('transfers.release');
@@ -82,10 +84,13 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/waybills/{tracking}', [DispatchController::class, 'waybill'])->name('waybills.show');
 
         Route::get('/riders', [LogisticsPortalController::class, 'riders'])->name('riders');
-        Route::get('/riders/applications', [LogisticsPortalController::class, 'riderApplications'])->name('riders.applications');
-        Route::get('/riders/applications/{application}', [LogisticsPortalController::class, 'riderApplicationShow'])->name('riders.application.show');
-        Route::post('/riders/applications/{application}/approve', [LogisticsPortalController::class, 'approveRider'])->name('riders.approve');
-        Route::post('/riders/applications/{application}/reject', [LogisticsPortalController::class, 'rejectRider'])->name('riders.reject');
+        Route::get('/riders/applications', [RiderApplicationController::class, 'index'])->name('riders.applications');
+        Route::get('/riders/applications/{application}', [RiderApplicationController::class, 'show'])->name('riders.application.show');
+        Route::post('/riders/applications/{application}/approve', [RiderApplicationController::class, 'approve'])->name('riders.approve');
+        Route::post('/riders/applications/{application}/reject', [RiderApplicationController::class, 'reject'])->name('riders.reject');
+        Route::get('/riders/applications/{application}/documents/{document}', [RiderApplicationController::class, 'document'])->name('riders.application.documents.show');
+        Route::post('/riders/applications/{application}/documents/{document}/verify', [RiderApplicationController::class, 'verifyDocument'])->name('riders.application.documents.verify');
+        Route::post('/riders/applications/{application}/documents/{document}/reject', [RiderApplicationController::class, 'rejectDocument'])->name('riders.application.documents.reject');
         Route::get('/riders/{rider}', [LogisticsPortalController::class, 'riderShow'])->name('riders.show');
         Route::patch('/riders/{rider}/moderation', [LogisticsPortalController::class, 'moderateRider'])->name('riders.moderation.update');
         Route::patch('/riders/{rider}/area', [LogisticsPortalController::class, 'reassignRiderArea'])->name('riders.area.update');

@@ -15,6 +15,7 @@ class Announcement extends Model
         'created_by_user_id',
         'title',
         'body',
+        'target_audience',
         'published_at',
         'expires_at',
         'is_active',

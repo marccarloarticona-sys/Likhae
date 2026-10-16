@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Http\Controllers\Admin\AdminOperationsController;
 use App\Models\Admin\SellerComplianceAction;
 use App\Models\Buyer\Address;
+use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
@@ -72,6 +74,7 @@ class AdminProductsRemainingIssuesTest extends TestCase
             'Accept' => 'application/json',
             'Authorization' => 'Bearer '.$plainToken,
         ])->postJson(route('api.v1.buyer.checkout.store'), [
+            'checkout_attempt_key' => '00000000-0000-4000-8000-000000000020',
             'cart_item_ids' => [$item->id],
             'address_id' => $address->id,
             'payment_method' => 'COD',
@@ -176,12 +179,24 @@ class AdminProductsRemainingIssuesTest extends TestCase
         $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
         $variant = $product->variants()->where('is_active', true)->firstOrFail();
         $address = $buyer->addresses()->where('label', 'Home')->firstOrFail();
-        $address->forceFill([
-            'barangay_code' => 'SAN-MIGUEL',
-            'barangay_name' => 'San Miguel',
+        $canonicalAddress = [
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+        ];
+        $address->forceFill($canonicalAddress + [
             'latitude' => 14.2400,
             'longitude' => 121.3600,
         ])->save();
+        $product->sellerProfile->businessAddress->forceFill($canonicalAddress)->save();
+        $center = LogisticsCenter::query()->firstOrFail();
+        $center->address()->update($canonicalAddress);
+        ServiceAreaLocation::query()
+            ->whereHas('serviceArea', fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->update($canonicalAddress);
         $item = app(CartService::class)->add($buyer, $product, $variant->id, 1);
 
         return [$buyer, $address->fresh(), $item, $product->fresh(), $variant->fresh()];

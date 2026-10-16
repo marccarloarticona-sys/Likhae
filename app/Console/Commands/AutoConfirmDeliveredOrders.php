@@ -23,7 +23,7 @@ class AutoConfirmDeliveredOrders extends Command
         Order::query()
             ->where('status', 'PROCESSING')
             ->whereHas('sellerOrders')
-            ->whereHas('sellerOrders.shipment.events', function ($query) use ($cutoff): void {
+            ->whereHas('sellerOrders.shipments.events', function ($query) use ($cutoff): void {
                 $query->where('status', 'DELIVERED')
                     ->whereNotNull('occurred_at')
                     ->where('occurred_at', '<=', $cutoff);
@@ -42,7 +42,7 @@ class AutoConfirmDeliveredOrders extends Command
                         }
 
                         $order->load([
-                            'sellerOrders.shipment.events',
+                            'sellerOrders.shipments.events',
                             'disputes',
                             ...($returnRefundStorageReady ? ['returnRefundRequests.sellerRequests'] : []),
                         ]);

@@ -9,6 +9,7 @@
             'BUYER' => 'Buyer',
             'SELLER' => 'Seller',
             'LOGISTICS' => 'Logistics',
+            'RIDER' => 'Rider',
         ];
         $statusOptions = [
             'NEEDS_REVIEW' => 'All awaiting review',
@@ -22,7 +23,7 @@
             <div>
                 <span class="ad-overline">Account onboarding</span>
                 <h2>Registration applications</h2>
-                <p>Review Buyer, Seller, and Logistics registrations submitted through the account registration flow.</p>
+                <p>View Buyer, Seller, Logistics, and Rider registrations submitted through the account registration flow. Rider decisions belong to their selected logistics center.</p>
             </div>
             <span class="ad-muted">Updated {{ now()->format('M j, Y · g:i A') }}</span>
         </div>
@@ -43,14 +44,14 @@
             <x-admin.stat-card
                 label="Pending"
                 :value="number_format($registrationStats['pending'])"
-                detail="Awaiting administrator review."
+                detail="Awaiting their assigned reviewer."
                 icon="users"
                 tone="warning"
             />
             <x-admin.stat-card
                 label="Under review"
                 :value="number_format($registrationStats['under_review'])"
-                detail="Currently being reviewed by Admin."
+                detail="Currently being reviewed."
                 icon="case"
                 tone="blue"
             />
@@ -112,6 +113,7 @@
                                 $user = $application->user;
                                 $address = $user?->addresses?->firstWhere('is_default', true) ?? $user?->addresses?->first();
                                 $businessName = $application->sellerData?->business_name ?? $application->logisticsData?->business_name;
+                                $rider = $application->riderData;
                             @endphp
                             <tr>
                                 <td>
@@ -119,6 +121,8 @@
                                     <small>{{ $application->application_number }}</small>
                                     @if($businessName)
                                         <small>{{ $businessName }}</small>
+                                    @elseif($rider)
+                                        <small>{{ str($rider->vehicle_type)->headline() }} · {{ $rider->plate_number }}</small>
                                     @endif
                                 </td>
                                 <td>{{ str($user?->account_type ?? 'UNKNOWN')->headline() }}</td>
@@ -136,7 +140,7 @@
                                     </span>
                                 </td>
                                 <td>
-                                    <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.registrations.show', $application) }}">Review</a>
+                                    <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.registrations.show', $application) }}">{{ $user?->account_type === 'RIDER' ? 'View' : 'Review' }}</a>
                                 </td>
                             </tr>
                         @empty

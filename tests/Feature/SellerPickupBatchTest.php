@@ -176,7 +176,7 @@ class SellerPickupBatchTest extends TestCase
             app(SellerPickupBatchService::class)->scan($riderUser, $trip, $outside->tracking_number, 'MANUAL');
             $this->fail('A waybill outside the current batch must be rejected.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('not part of this seller pickup assignment', strtolower($exception->getMessage()));
+            $this->assertSame('Tracking number does not match this job.', $exception->getMessage());
             $this->assertSame('READY_FOR_PICKUP', $outside->fresh()->current_status);
             $this->assertDatabaseMissing('parcel_scans', ['shipment_id' => $outside->id, 'scan_type' => 'PICKUP_COLLECTED']);
         }

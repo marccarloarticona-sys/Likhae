@@ -54,6 +54,9 @@ class MapboxComponentTest extends TestCase
         $this->assertStringContainsString('data-map-navigation-eta', $html);
         $this->assertStringContainsString('data-map-navigation-distance', $html);
         $this->assertStringContainsString('data-map-navigation-arrival', $html);
+        $this->assertStringContainsString('data-map-navigation-eta>—</strong>', $html);
+        $this->assertStringNotContainsString('Unavailable</strong>', $html);
+        $this->assertStringContainsString('function navigationMetricPlaceholder', file_get_contents(resource_path('js/shared/mapbox.js')));
         $this->assertStringContainsString('#800000', file_get_contents(resource_path('css/shared/mapbox.css')));
     }
 

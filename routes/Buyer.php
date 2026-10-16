@@ -28,7 +28,7 @@ Route::prefix('buyer')
         Route::delete('/wishlist', [BuyerController::class, 'removeWishlistItems'])->name('wishlist.remove');
         Route::get('/shop/{seller}', [BuyerController::class, 'shop'])->name('shop');
 
-        Route::get('/flash-deals', fn () => redirect()->route('buyer.products', ['focus' => 'deals']))->name('flash-deals');
+        Route::get('/flash-deals', [BuyerController::class, 'flashDeals'])->name('flash-deals');
         Route::get('/local-finds', fn () => redirect()->route('buyer.products', ['focus' => 'local']))->name('local-finds');
 
         Route::get('/cart', [BuyerController::class, 'cart'])->name('cart');

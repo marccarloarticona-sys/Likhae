@@ -10,6 +10,7 @@ use App\Models\Communication\Conversation;
 use App\Models\Communication\ConversationParticipant;
 use App\Models\Communication\Message;
 use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
@@ -18,8 +19,10 @@ use App\Services\Communication\ConversationService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -27,7 +30,10 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\ViewErrorBag;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\View\View;
 
 class BuyerController extends Controller
@@ -46,33 +52,383 @@ class BuyerController extends Controller
             'best-selling'
         )->limit(2)->get()
             ->map(fn (Product $product) => $this->catalog->productPayload($product));
+        $dealProducts = $this->discountedProductsQuery()
+            ->limit(4)
+            ->get()
+            ->map(fn (Product $product) => $this->dealProductPayload($product))
+            ->filter()
+            ->values();
 
         return view('Buyer.home', [
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
             'heroProducts' => $bestSellingProducts,
+            'dealProducts' => $dealProducts,
             'categories' => $this->catalog->categories(),
+        ]);
+    }
+
+    public function flashDeals(Request $request): View
+    {
+        $query = $this->catalog->applyFilters($this->discountedProductsQuery(), $request);
+        $products = $this->catalog->applySort(
+            $query,
+            $request->query('sort', 'best-selling')
+        )->paginate(24)->withQueryString();
+
+        $dealProducts = $products->getCollection()
+            ->map(fn (Product $product) => $this->dealProductPayload($product))
+            ->filter()
+            ->values();
+
+        return view('Buyer.flash-deals', [
+            'products' => $products,
+            'dealProducts' => $dealProducts,
+        ]);
+    }
+
+    private function discountedProductsQuery(): Builder
+    {
+        return $this->catalog->visibleQuery()
+            ->whereHas('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('price', '>', 0)
+                ->where('discount_value', '>', 0)
+                ->where(function (Builder $discountType): void {
+                    $discountType->whereNull('discount_type')
+                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
+                }));
+    }
+
+    /** @return array<string, mixed>|null */
+    private function dealProductPayload(Product $product): ?array
+    {
+        $dealVariant = $product->variants
+            ->filter(fn (ProductVariant $variant): bool => $variant->is_active
+                && $variant->stock > 0
+                && $variant->discount_amount > 0)
+            ->sortBy(fn (ProductVariant $variant): float => $variant->final_price)
+            ->first();
+
+        if (! $dealVariant) {
+            return null;
+        }
+
+        return array_merge($this->catalog->productPayload($product), [
+            'deal_variant' => $this->catalog->variantPayload($dealVariant),
         ]);
     }
 
     public function products(Request $request): View
     {
-        $products = $this->catalog->paginated($request, 24);
+        [$filters, $catalogFilterValues, $catalogErrors] = $this->validatedCatalogFilters($request);
+        $query = $this->filterBuyerCatalog($this->catalog->visibleQuery(), $filters);
+        $invalidPriceRange = $catalogErrors->has('min_price') || $catalogErrors->has('max_price');
+        if ($invalidPriceRange) {
+            $query->whereRaw('1 = 0');
+        }
+        $paginator = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest')
+            ->paginate(24, ['*'], 'page', max(1, (int) ($filters['page'] ?? 1)))
+            ->appends($this->catalogQueryParameters($filters));
+        $searchSuggestions = ! $invalidPriceRange && $paginator->total() === 0 && $filters['q'] !== ''
+            ? $this->catalogSearchSuggestions($filters)
+            : [];
 
         return view('Buyer.products', [
-            'products' => $products,
-            'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
+            'products' => $paginator,
+            'buyerProducts' => $paginator->getCollection()->map(fn (Product $product) => $this->buyerCatalogPayload($product)),
             'categories' => $this->catalog->categories(),
-            'catalogMaxPrice' => $this->catalog->maxVisiblePrice(),
             'catalogTotal' => $this->catalog->visibleQuery()->count(),
-            'focus' => $request->query('focus'),
+            'catalogLocations' => $this->catalogLocations(),
+            'searchSuggestions' => $searchSuggestions,
+            'catalogFilterValues' => $catalogFilterValues,
+            'catalogQueryParameters' => $this->catalogQueryParameters($filters),
+            'catalogErrors' => $catalogErrors,
         ]);
+    }
+
+    /** @return array{array<string, mixed>, array<string, string>, ViewErrorBag} */
+    private function validatedCatalogFilters(Request $request): array
+    {
+        $query = $request->query();
+        if (! array_key_exists('q', $query) && array_key_exists('search', $query)) {
+            $query['q'] = $query['search'];
+        }
+        foreach (['q', 'search', 'category', 'location', 'sort', 'view'] as $key) {
+            if (isset($query[$key]) && is_string($query[$key])) {
+                $query[$key] = trim($query[$key]);
+                if (in_array($key, ['category', 'sort', 'view'], true)) {
+                    $query[$key] = strtolower($query[$key]);
+                }
+            }
+        }
+
+        $validator = Validator::make($query, [
+            'q' => ['nullable', 'string', 'max:120'],
+            'search' => ['nullable', 'string', 'max:120'],
+            'category' => ['nullable', 'string', 'max:120'],
+            'min_price' => ['nullable', 'numeric', 'min:0'],
+            'max_price' => ['nullable', 'numeric', 'min:0'],
+            'rating' => ['nullable', 'numeric', 'between:0,5'],
+            'location' => ['nullable', 'string', 'max:150'],
+            'sort' => ['nullable', 'string', Rule::in(['latest', 'price-low', 'price-high', 'best-rated', 'best-selling', 'oldest', 'name', 'featured'])],
+            'view' => ['nullable', 'string', Rule::in(['grid', 'list'])],
+            'page' => ['nullable', 'integer', 'min:1', 'max:1000000'],
+        ]);
+
+        $validator->after(function ($validator) use ($query): void {
+            if ($validator->errors()->has('min_price') || $validator->errors()->has('max_price')) {
+                return;
+            }
+
+            $minimum = $query['min_price'] ?? null;
+            $maximum = $query['max_price'] ?? null;
+            if ($minimum !== null && $minimum !== '' && $maximum !== null && $maximum !== ''
+                && (float) $minimum > (float) $maximum) {
+                $message = 'Maximum price must be greater than or equal to minimum price.';
+                $validator->errors()->add('min_price', $message);
+                $validator->errors()->add('max_price', $message);
+            }
+        });
+
+        $hasErrors = $validator->fails();
+        $filters = $hasErrors ? $validator->valid() : $validator->validated();
+        $filters['q'] = trim((string) ($filters['q'] ?? ''));
+        $filters['category'] = strtolower(trim((string) ($filters['category'] ?? '')));
+        $filters['location'] = trim((string) ($filters['location'] ?? ''));
+        $filters['sort'] = strtolower(trim((string) ($filters['sort'] ?? 'latest')));
+        if ($filters['sort'] === 'featured') {
+            $filters['sort'] = 'latest';
+        }
+        $filters['view'] = strtolower(trim((string) ($filters['view'] ?? 'grid')));
+
+        $filterValues = [];
+        foreach (['q', 'category', 'min_price', 'max_price', 'rating', 'location', 'sort', 'view'] as $key) {
+            $value = $query[$key] ?? '';
+            $filterValues[$key] = is_scalar($value) ? trim((string) $value) : '';
+        }
+        $errors = new ViewErrorBag;
+        $errors->put('default', $validator->errors());
+
+        return [$filters, $filterValues, $errors];
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function filterBuyerCatalog(Builder $query, array $filters, bool $includeSearch = true): Builder
+    {
+        $search = $includeSearch ? (string) ($filters['q'] ?? '') : '';
+        if ($search !== '') {
+            $escapedSearch = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($search));
+            $pattern = '%'.$escapedSearch.'%';
+            $query->where(function (Builder $matches) use ($pattern): void {
+                $matches->whereRaw("LOWER(products.name) LIKE ? ESCAPE '!'", [$pattern])
+                    ->orWhereRaw("LOWER(products.description) LIKE ? ESCAPE '!'", [$pattern])
+                    ->orWhereHas('category', fn (Builder $category) => $category->whereRaw("LOWER(categories.name) LIKE ? ESCAPE '!'", [$pattern]))
+                    ->orWhereHas('sellerProfile', fn (Builder $seller) => $seller->whereRaw("LOWER(seller_profiles.business_name) LIKE ? ESCAPE '!'", [$pattern]));
+            });
+        }
+
+        $category = (string) ($filters['category'] ?? '');
+        if ($category !== '' && $category !== 'all') {
+            $query->whereHas('category', function (Builder $categoryQuery) use ($category): void {
+                $categoryQuery->where('slug', $category)
+                    ->orWhereHas('parent', fn (Builder $parent) => $parent->where('slug', $category));
+            });
+        }
+
+        $minimum = $filters['min_price'] ?? null;
+        $maximum = $filters['max_price'] ?? null;
+        if (($minimum !== null && $minimum !== '') || ($maximum !== null && $maximum !== '')) {
+            $sellingPrice = $this->variantSellingPriceSubquery();
+            if ($minimum !== null && $minimum !== '') {
+                $this->whereSellingPrice($query, '>=', (string) $minimum, $sellingPrice);
+            }
+            if ($maximum !== null && $maximum !== '') {
+                $this->whereSellingPrice($query, '<=', (string) $maximum, $sellingPrice);
+            }
+        }
+
+        $minimumRating = (float) ($filters['rating'] ?? 0);
+        if ($minimumRating > 0) {
+            $ratedProductIds = DB::table('order_items')
+                ->join('reviews', 'reviews.order_item_id', '=', 'order_items.id')
+                ->where('reviews.status', 'PUBLISHED')
+                ->whereNotNull('reviews.rating')
+                ->groupBy('order_items.product_id')
+                ->havingRaw('CAST(AVG(reviews.rating) AS DECIMAL(3, 2)) >= CAST(? AS DECIMAL(3, 2))', [(string) $minimumRating])
+                ->select('order_items.product_id');
+
+            $query->whereIn('products.id', $ratedProductIds);
+        }
+
+        $location = (string) ($filters['location'] ?? '');
+        if ($location !== '') {
+            $query->whereHas('sellerProfile', fn (Builder $seller) => $seller
+                ->whereRaw('LOWER(TRIM(seller_profiles.location)) = ?', [mb_strtolower($location)]));
+        }
+
+        return $query;
+    }
+
+    private function variantSellingPriceSubquery(): Builder
+    {
+        $priceExpression = $this->variantSellingPriceSql();
+
+        return ProductVariant::query()
+            ->selectRaw("MIN({$priceExpression})")
+            ->whereColumn('product_variants.product_id', 'products.id')
+            ->where('product_variants.is_active', true);
+    }
+
+    private function whereSellingPrice(Builder $query, string $operator, string $price, Builder $sellingPrice): void
+    {
+        $subquery = $sellingPrice->toSql();
+        $bindings = array_merge($sellingPrice->getBindings(), [$price]);
+
+        $query->whereRaw(
+            "CAST(({$subquery}) AS DECIMAL(12, 2)) {$operator} CAST(? AS DECIMAL(12, 2))",
+            $bindings,
+        );
+    }
+
+    private function variantSellingPriceSql(): string
+    {
+        $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
+        $value = 'COALESCE(product_variants.discount_value, 0)';
+        $price = 'product_variants.price';
+
+        return "CAST(CASE
+            WHEN {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
+            WHEN ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
+            ELSE {$price}
+        END AS DECIMAL(12, 2))";
+    }
+
+    private function sortBuyerCatalog(Builder $query, string $sort): Builder
+    {
+        return match ($sort) {
+            'price-low' => $query->orderBy($this->variantSellingPriceSubquery())->orderBy('products.id'),
+            'price-high' => $query->orderByDesc($this->variantSellingPriceSubquery())->orderBy('products.id'),
+            'best-rated' => $query->orderByDesc('reviews_avg_rating')->orderByDesc('products.id'),
+            'best-selling' => $query->orderByDesc('order_items_sum_quantity')->orderByDesc('products.id'),
+            'oldest' => $query->orderBy('products.created_at')->orderBy('products.id'),
+            'name' => $query->orderBy('products.name')->orderBy('products.id'),
+            default => $query->orderByDesc('products.created_at')->orderByDesc('products.id'),
+        };
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function catalogSearchSuggestions(array $filters): array
+    {
+        $term = mb_strtolower((string) ($filters['q'] ?? ''));
+        if (mb_strlen($term) < 3) {
+            return [];
+        }
+
+        $candidates = $this->filterBuyerCatalog($this->catalog->visibleQuery(), $filters, false)
+            ->setEagerLoads([])
+            ->orderBy('products.name')
+            ->limit(2000)
+            ->get(['products.id', 'products.name']);
+        $threshold = max(1, min(3, (int) ceil(mb_strlen($term) * 0.25)));
+
+        return $candidates
+            ->map(fn (Product $product): array => [
+                'name' => (string) $product->name,
+                'distance' => $this->searchSuggestionDistance($term, (string) $product->name),
+            ])
+            ->filter(fn (array $candidate): bool => $candidate['distance'] > 0 && $candidate['distance'] <= $threshold)
+            ->sortBy('distance')
+            ->unique(fn (array $candidate): string => mb_strtolower($candidate['name']))
+            ->take(3)
+            ->pluck('name')
+            ->values()
+            ->all();
+    }
+
+    private function searchSuggestionDistance(string $term, string $name): int
+    {
+        $normalizedName = mb_strtolower(trim((string) preg_replace('/[^\pL\pN]+/u', ' ', $name)));
+        $words = preg_split('/\s+/u', $normalizedName, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $candidates = [$normalizedName, str_replace(' ', '', $normalizedName), ...$words];
+
+        for ($size = 2; $size <= min(3, count($words)); $size++) {
+            for ($start = 0; $start <= count($words) - $size; $start++) {
+                $candidates[] = implode('', array_slice($words, $start, $size));
+                $candidates[] = implode(' ', array_slice($words, $start, $size));
+            }
+        }
+
+        return collect($candidates)
+            ->map(fn (string $candidate): int => levenshtein($term, $candidate))
+            ->min() ?? PHP_INT_MAX;
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function catalogQueryParameters(array $filters): array
+    {
+        $parameters = [];
+        foreach (['q', 'category', 'min_price', 'max_price', 'rating', 'location', 'sort', 'view'] as $key) {
+            $value = $filters[$key] ?? null;
+            if ($value !== null && $value !== ''
+                && ! ($key === 'category' && $value === 'all')
+                && ! ($key === 'rating' && (string) $value === '0')
+                && ! ($key === 'sort' && $value === 'latest')
+                && ! ($key === 'view' && $value === 'grid')) {
+                $parameters[$key] = $value;
+            }
+        }
+
+        return $parameters;
+    }
+
+    private function buyerCatalogPayload(Product $product): array
+    {
+        $payload = $this->catalog->productPayload($product);
+        $payload['seller']['vacation_mode'] = (bool) $product->sellerProfile?->vacation_mode;
+        $payload['seller']['location'] = (string) ($product->sellerProfile?->location ?? '');
+
+        return $payload;
+    }
+
+    private function catalogLocations()
+    {
+        return SellerProfile::query()
+            ->whereNotNull('location')
+            ->whereHas('products', fn (Builder $products) => $products->visible())
+            ->select('location')
+            ->distinct()
+            ->orderBy('location')
+            ->pluck('location')
+            ->map(fn ($location) => trim((string) $location))
+            ->filter()
+            ->unique(fn ($location) => mb_strtolower($location))
+            ->values();
+    }
+
+    private function ensureBuyerProductCanBePurchased(Product $product): void
+    {
+        $product->loadMissing('sellerProfile.user');
+        abort_unless(
+            $product->status === 'ACTIVE'
+                && $product->sellerProfile?->status === 'ACTIVE'
+                && $product->sellerProfile?->user?->status === User::STATUS_ACTIVE,
+            404
+        );
+
+        if ($product->sellerProfile->vacation_mode) {
+            throw ValidationException::withMessages([
+                'product_variant_id' => 'This seller is currently on vacation and is not accepting purchases.',
+            ]);
+        }
     }
 
     public function product(string $slug): View
     {
         $product = $this->catalog->findVisibleBySlug($slug);
         $productPayload = $this->catalog->productPayload($product, true);
+        $productPayload['seller']['vacation_mode'] = (bool) $product->sellerProfile?->vacation_mode;
         $productPayload['seller_rating'] = $product->sellerProfile
             ? $this->catalog->sellerRating($product->sellerProfile)
             : 0;
@@ -123,13 +479,19 @@ class BuyerController extends Controller
 
     public function addCart(Request $request, Product $product): RedirectResponse|JsonResponse
     {
-        abort_unless($product->status === 'ACTIVE', 404);
+        $this->ensureBuyerProductCanBePurchased($product);
 
         $data = $request->validate([
-            'product_variant_id' => ['required', 'integer', Rule::exists('product_variants', 'id')->where('product_id', $product->id)],
+            'product_variant_id' => ['required', 'integer', Rule::exists('product_variants', 'id')->where('product_id', $product->id)->where('is_active', true)],
             'quantity' => ['nullable', 'integer', 'min:1', 'max:999'],
             'checkout' => ['nullable', 'boolean'],
+        ], [
+            'product_variant_id.required' => 'Please select a variation.',
+            'product_variant_id.integer' => 'Please select a variation.',
+            'product_variant_id.exists' => 'The selected variation is invalid or unavailable.',
         ]);
+
+        $this->ensureBuyerVariantIsAvailable($product, (int) $data['product_variant_id']);
 
         $item = $this->cartService->add($request->user(), $product, (int) $data['product_variant_id'], (int) ($data['quantity'] ?? 1));
 
@@ -152,12 +514,18 @@ class BuyerController extends Controller
 
     public function buyNow(Request $request, Product $product): RedirectResponse
     {
-        abort_unless($product->status === 'ACTIVE', 404);
+        $this->ensureBuyerProductCanBePurchased($product);
 
         $data = $request->validate([
-            'product_variant_id' => ['required', 'integer', Rule::exists('product_variants', 'id')->where('product_id', $product->id)],
+            'product_variant_id' => ['required', 'integer', Rule::exists('product_variants', 'id')->where('product_id', $product->id)->where('is_active', true)],
             'quantity' => ['nullable', 'integer', 'min:1', 'max:999'],
+        ], [
+            'product_variant_id.required' => 'Please select a variation.',
+            'product_variant_id.integer' => 'Please select a variation.',
+            'product_variant_id.exists' => 'The selected variation is invalid or unavailable.',
         ]);
+
+        $this->ensureBuyerVariantIsAvailable($product, (int) $data['product_variant_id']);
 
         $item = $this->cartService->add(
             $request->user(),
@@ -173,6 +541,26 @@ class BuyerController extends Controller
         $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_seller_notes']);
 
         return redirect()->route('buyer.checkout');
+    }
+
+    private function ensureBuyerVariantIsAvailable(Product $product, int $variantId): void
+    {
+        $variant = ProductVariant::query()
+            ->where('product_id', $product->id)
+            ->where('is_active', true)
+            ->find($variantId);
+
+        if (! $variant) {
+            throw ValidationException::withMessages([
+                'product_variant_id' => 'The selected variation is invalid or unavailable.',
+            ]);
+        }
+
+        if ((int) $variant->stock < 1) {
+            throw ValidationException::withMessages([
+                'product_variant_id' => 'This variation is out of stock.',
+            ]);
+        }
     }
 
     public function updateCart(Request $request, CartItem $item): RedirectResponse
@@ -407,15 +795,20 @@ class BuyerController extends Controller
 
         $activeVouchers = Voucher::query()
             ->with('sellerProfile')
-            ->withCount('sellerOrders')
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
-            ->get()
-            ->filter(fn (Voucher $voucher): bool => $voucher->usage_limit === null || $voucher->seller_orders_count < $voucher->usage_limit)
+            ->get();
+        $redemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers);
+        $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers, (int) $buyer->id);
+        $activeVouchers = $activeVouchers
+            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
+                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
+                && ($voucher->per_user_limit === null
+                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit))
             ->map(fn (Voucher $voucher): array => [
                 'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
-                'status' => $voucher->sellerProfile?->business_name ?? 'Platform voucher',
+                'status' => $voucher->sellerProfile?->business_name ?? 'LIKHAE Platform',
                 'value' => $voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
                     : '₱'.number_format((float) $voucher->discount_value, 2).' off',
@@ -429,9 +822,10 @@ class BuyerController extends Controller
 
         $voucherHistory = $orders->flatMap(fn ($order) => $order->sellerOrders
             ->whereNotNull('voucher_id')
-            ->map(fn ($sellerOrder): array => [
-                'voucher' => $sellerOrder->voucher?->code ?? 'Voucher',
-                'benefit' => '-₱'.number_format((float) $sellerOrder->voucher_discount, 2),
+            ->groupBy('voucher_id')
+            ->map(fn ($sellerOrders): array => [
+                'voucher' => $sellerOrders->first()->voucher?->code ?? 'Voucher',
+                'benefit' => '-₱'.number_format((float) $sellerOrders->sum('voucher_discount'), 2),
                 'order' => $order->order_number,
                 'status' => str($order->status)->headline()->toString(),
             ]))->values();
@@ -455,9 +849,6 @@ class BuyerController extends Controller
             'voucherHistory' => $voucherHistory,
             'pointsBalance' => ($completedOrders->count() * 50) + ($reviews->count() * 20),
             'pointActivities' => $pointActivities,
-            'availableCashback' => 0,
-            'pendingCashback' => 0,
-            'cashbackActivities' => collect(),
         ]);
     }
 

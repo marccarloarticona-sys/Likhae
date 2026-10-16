@@ -19,7 +19,7 @@
     <section class="rounded-3xl border border-line bg-surface p-8">
         <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Pickup Batch #P-{{ $pickup->id }}</span>
         <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup->seller?->business_name ?? 'Seller unavailable' }}</h1>
-        <p class="mt-2 text-sm font-semibold text-muted">{{ $total }} {{ str('parcel')->plural($total) }} · {{ $collected }}/{{ $total }} collected</p>
+        <p class="mt-2 text-sm font-semibold text-muted">{{ $total }} {{ str('parcel')->plural($total) }} Â· {{ $collected }}/{{ $total }} collected</p>
         <p class="mt-4 text-sm text-muted">Status: <strong class="text-ink">{{ match($pickup->status) { 'LOADING' => 'Assigned', 'READY' => 'Accepted', 'IN_PROGRESS' => $pickupFinished ? 'Seller pickup complete' : 'In progress', 'EN_ROUTE_TO_HUB' => 'In transit to logistics center', 'COMPLETED' => 'Completed', default => str($pickup->status)->headline() } }}</strong></p>
 
         <ol class="mt-6 grid gap-2 text-xs sm:grid-cols-4">
@@ -36,8 +36,9 @@
         <article class="rounded-3xl border border-line bg-surface p-8">
             <h2 class="text-lg font-bold text-ink">Pickup and destination</h2>
             <dl class="mt-5 grid gap-4 text-sm">
+                <div><dt class="text-muted">Seller contact</dt><dd class="mt-1 font-semibold text-ink">@if(filled($pickup->seller?->user?->contact_number))<a href="tel:{{ preg_replace('/[^0-9+]/', '', $pickup->seller->user->contact_number) }}">{{ $pickup->seller->user->contact_number }}</a>@else Contact unavailable @endif</dd></div>
                 <div><dt class="text-muted">Seller pickup address</dt><dd class="mt-1 whitespace-pre-line font-semibold text-ink">{{ $sellerAddress }}</dd></div>
-                <div><dt class="text-muted">Authorized logistics / sorting center</dt><dd class="mt-1 whitespace-pre-line font-semibold text-ink">{{ $pickup->logisticsCenter?->business_name }} · {{ $hubAddress }}</dd></div>
+                <div><dt class="text-muted">Authorized logistics / sorting center</dt><dd class="mt-1 whitespace-pre-line font-semibold text-ink">{{ $pickup->logisticsCenter?->business_name }} Â· {{ $hubAddress }}</dd></div>
             </dl>
         </article>
 
@@ -45,12 +46,12 @@
             <h2 class="text-lg font-bold text-ink">Pickup actions</h2>
             <div class="mt-5 grid gap-3">
                 @if($pickup->status === 'LOADING')
-                    <form method="POST" action="{{ route('rider.pickups.batches.accept', $pickup->id) }}" data-confirm-title="Accept seller pickup batch?" data-confirm-message="Accept responsibility for collecting these parcels from the seller?" data-confirm-label="Accept pickup">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
+                    <form method="POST" action="{{ route('rider.pickups.batches.accept', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Pickup</button></form>
                 @elseif($pickup->status === 'READY')
-                    <form method="POST" action="{{ route('rider.pickups.batches.start', $pickup->id) }}" data-confirm-title="Start seller pickup?" data-confirm-message="Start the assigned pickup route to the seller?" data-confirm-label="Start pickup">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
+                    <form method="POST" action="{{ route('rider.pickups.batches.start', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Pickup</button></form>
                 @elseif($pickup->status === 'IN_PROGRESS' && $pickupFinished)
                     <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">All assigned parcels are resolved. Continue with {{ $collected }} collected parcel(s).</div>
-                    <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}" data-confirm-title="Finish seller pickup?" data-confirm-message="Close collection and start the route to the assigned logistics center?" data-confirm-label="Start route to logistics">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup · Start Route to Logistics</button></form>
+                    <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup Â· Start Route to Logistics</button></form>
                 @elseif($pickup->status === 'EN_ROUTE_TO_HUB')
                     <div class="border border-primary/20 bg-primary-soft p-4 text-sm font-semibold text-primary">Seller pickup complete. Deliver {{ $collected }} collected parcel(s) to the assigned logistics center for individual intake scans.</div>
                 @elseif($pickup->status === 'COMPLETED')
@@ -68,12 +69,20 @@
         </div>
 
         @if($pickup->status === 'IN_PROGRESS' && ! $pickupFinished)
-            <form method="POST" action="{{ route('rider.pickups.batches.scan', $pickup->id) }}" class="mt-5 flex flex-col gap-3 sm:flex-row">
-                @csrf
-                <input name="scanned_code" value="{{ old('scanned_code') }}" required autocomplete="off" class="min-h-12 min-w-0 flex-1 rounded-xl border border-line bg-white px-4 text-sm" placeholder="Scan or enter a waybill number" aria-label="Scan seller waybill">
-                <select name="scan_method" class="min-h-12 rounded-xl border border-line bg-white px-4 text-sm" aria-label="Scan method"><option value="BARCODE">Barcode</option><option value="QR">QR code</option><option value="MANUAL">Manual</option></select>
-                <button class="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Verify Parcel</button>
-            </form>
+            <div class="mt-5">
+                <x-parcel-scanner
+                    :action="route('rider.pickups.batches.scan', $pickup->id)"
+                    :tracking="old('scanned_code', '')"
+                    :method="old('scan_method', 'MANUAL')"
+                    form-method="POST"
+                    input-name="scanned_code"
+                    input-label="Scan seller waybill"
+                    input-placeholder="Scan or enter a waybill number"
+                    title="Scan Pickup Barcode"
+                    description="Scan the seller waybill with your camera or enter its tracking number. Each accepted scan verifies one assigned parcel."
+                    button="Verify Parcel"
+                />
+            </div>
         @endif
 
         <div class="mt-5 grid gap-3">
@@ -82,9 +91,9 @@
                 @php($shipment = $assignment?->shipment)
                 <article class="rounded-2xl border border-line p-4">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ') }}</p></div>
+                        <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ ($shipment?->orderItem?->product_name ?? $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</p></div>
                         @if($assignment?->status === 'COMPLETED')
-                            <span class="text-sm font-semibold text-green-700">✓ Received by rider · waiting for logistics intake</span>
+                            <span class="text-sm font-semibold text-green-700">âœ“ Received by rider Â· waiting for logistics intake</span>
                         @elseif(in_array($assignment?->status, ['REJECTED', 'CANCELLED'], true))
                             <span class="text-sm font-semibold text-amber-800">Not collected: {{ $assignment->rejection_reason ?: 'Resolved' }}</span>
                         @else
@@ -95,7 +104,7 @@
                     @if($pickup->status === 'IN_PROGRESS' && $assignment?->status === 'IN_PROGRESS')
                         <details class="mt-3 border-t border-line pt-3">
                             <summary class="cursor-pointer text-xs font-semibold text-muted">Mark parcel not collected</summary>
-                            <form method="POST" action="{{ route('rider.pickups.batches.not-collected', $pickup->id) }}" class="mt-3 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]" data-confirm-title="Mark parcel not collected?" data-confirm-message="Save this reason and leave the parcel in the seller pickup queue?" data-confirm-label="Save reason" data-confirm-tone="danger">
+                            <form method="POST" action="{{ route('rider.pickups.batches.not-collected', $pickup->id) }}" class="mt-3 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
                                 @csrf
                                 <input type="hidden" name="rider_assignment_id" value="{{ $assignment->id }}">
                                 <select name="reason" required class="min-h-10 border border-line bg-white px-3 text-sm">

@@ -6,7 +6,7 @@
 
 @section('title', 'Marketing')
 @section('active', 'marketing')
-@section('subtitle', 'Create and manage vouchers for your store.')
+@section('subtitle', 'Manage store vouchers and review marketplace campaigns.')
 
 @section('content')
 <div class="sl-page">
@@ -17,6 +17,19 @@
         <div><span>Active</span><strong>{{ number_format($activeVouchers->count()) }}</strong></div>
         <div><span>Total Uses</span><strong>{{ number_format($vouchers->getCollection()->sum('seller_orders_count')) }}</strong></div>
         <div><span>Usage Limit</span><strong>{{ number_format($vouchers->getCollection()->sum('usage_limit')) }}</strong></div>
+    </section>
+
+    <section class="sl-card">
+        <div class="sl-table-toolbar"><div><h3>LIKHAE Platform Campaigns</h3><p>Marketplace wide promotions available to buyers. These campaigns are managed by LIKHAE.</p></div></div>
+        @if(!$platformCampaignsReady)
+            <div style="padding:16px;color:#765b4c">Platform campaign storage is not installed yet. This section will show active marketplace campaigns after the prepared schema migration is applied.</div>
+        @else
+            <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Campaign / Code</th><th>Benefit</th><th>Minimum Spend</th><th>Redemptions</th><th>Validity</th><th>Access</th></tr></thead><tbody>
+                @forelse($platformCampaigns as $campaign)
+                    <tr><td><strong>{{ $campaign->name }}</strong><small class="sl-code">{{ $campaign->code }}</small></td><td>{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 0).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off</td><td>₱{{ number_format((float) $campaign->minimum_order_amount, 2) }}</td><td>{{ number_format((int) $campaign->redemption_count) }} / {{ $campaign->usage_limit ?: 'Unlimited' }}</td><td>{{ $campaign->starts_at?->format('M d') ?: 'Now' }} – {{ $campaign->ends_at?->format('M d, Y') ?: 'No end' }}</td><td><span class="sl-status is-neutral">Read only</span></td></tr>
+                @empty<tr><td colspan="6">No active platform campaigns are available right now.</td></tr>@endforelse
+            </tbody></table></div>
+        @endif
     </section>
 
     <section class="sl-card">

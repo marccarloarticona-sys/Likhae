@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 use Throwable;
 
 class RegistrationWorkflowService
@@ -158,15 +159,34 @@ class RegistrationWorkflowService
                         continue;
                     }
 
-                    $path = $file->store('registration/'.$application->application_number, 'registrations');
+                    $directory = 'registration/'
+                        .strtolower($user->account_type).'/'
+                        .$application->application_number.'/'
+                        .strtolower($type);
+                    $mimeType = $file->getMimeType();
+                    $path = in_array($mimeType, ['image/jpeg', 'image/png', 'image/webp'], true)
+                        ? app(ImageOptimizationService::class)->store($file, $directory, 'registrations')
+                        : $file->store($directory, 'registrations');
+
+                    if (! is_string($path)) {
+                        throw new RuntimeException('The registration document could not be stored.');
+                    }
+
                     $storedPaths[] = $path;
+                    $storedMimeType = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+                        'jpg', 'jpeg' => 'image/jpeg',
+                        'png' => 'image/png',
+                        'webp' => 'image/webp',
+                        'pdf' => 'application/pdf',
+                        default => $mimeType ?: 'application/octet-stream',
+                    };
 
                     ApplicationDocument::create([
                         'registration_application_id' => $application->id,
                         'document_type' => $type,
                         'file_path' => $path,
                         'original_name' => $file->getClientOriginalName(),
-                        'mime_type' => $file->getClientMimeType(),
+                        'mime_type' => $storedMimeType,
                         'verification_status' => 'PENDING',
                     ]);
                 }
@@ -174,7 +194,10 @@ class RegistrationWorkflowService
                 // Handle optional profile picture
                 if ($request->hasFile('profile_picture')) {
                     $profilePicture = $request->file('profile_picture');
-                    $path = app(ImageOptimizationService::class)->store($profilePicture, 'profile-photos');
+                    $path = app(ImageOptimizationService::class)->store(
+                        $profilePicture,
+                        'profile-photos/'.strtolower($user->account_type).'/'.$user->id,
+                    );
                     $publicPaths[] = $path;
                     $user->update(['profile_photo_path' => $path]);
                 } else {
@@ -195,7 +218,7 @@ class RegistrationWorkflowService
 
                         $path = app(ImageOptimizationService::class)->store(
                             $request->file($input),
-                            'seller-branding',
+                            'seller-branding/'.$sellerProfile->id.'/'.$input,
                         );
                         $publicPaths[] = $path;
                         $sellerProfile->{$column} = $path;

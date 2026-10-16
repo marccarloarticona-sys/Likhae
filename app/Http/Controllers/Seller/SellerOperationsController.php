@@ -8,6 +8,7 @@ use App\Models\Finance\SellerSettlement;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\Voucher;
+use App\Models\Buyer\OrderItem;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Reports\SellerReportPdfService;
@@ -16,7 +17,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Response;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
+use RuntimeException;
 
 class SellerOperationsController extends Controller
 {
@@ -157,8 +160,8 @@ class SellerOperationsController extends Controller
 
         $orders = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
-            ->with(['order.address', 'items', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user'])
-            ->whereHas('shipment')
+            ->with(['order.address', 'items', 'shipments.orderItem', 'shipments.events', 'shipments.pickupRequests', 'shipments.riderAssignments.riderProfile.user'])
+            ->whereHas('shipments')
             ->latest()
             ->paginate(15);
 
@@ -173,14 +176,68 @@ class SellerOperationsController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
 
-        $shipment = $workflow->ensureShipment($sellerOrder);
-        $shipment->loadMissing(['sellerOrder.items', 'sellerOrder.order.address', 'waybills', 'events']);
+        try {
+            $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
+        } catch (RuntimeException $exception) {
+            $sellerOrder->load(['items', 'shipments.orderItem', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
+            $legacyShipment = $sellerOrder->shipments->count() === 1 ? $sellerOrder->shipments->first() : null;
+            if (! $legacyShipment || $legacyShipment->order_item_id !== null) {
+                throw $exception;
+            }
+
+            return view('Seller.waybill', [
+                'sellerOrder' => $sellerOrder,
+                'shipment' => $legacyShipment->loadMissing($this->waybillRelations()),
+                'item' => null,
+                'waybill' => $legacyShipment->waybills()->latest('format_version')->first(),
+            ]);
+        }
+        $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
+        $shipments->each(fn ($shipment) => $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]));
+
+        return view('Seller.waybills', [
+            'sellerOrder' => $sellerOrder,
+            'shipments' => $shipments,
+        ]);
+    }
+
+    public function waybillItem(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): View
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+
+        try {
+            $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
+        } catch (RuntimeException $exception) {
+            if ($sellerOrder->shipments()->whereNull('order_item_id')->exists()) {
+                abort(409, $exception->getMessage());
+            }
+
+            throw $exception;
+        }
+        $shipment = $shipments->firstWhere('order_item_id', $orderItem->id);
+        abort_unless($shipment, 404, 'A parcel label has not been linked to this order item.');
+        $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
+        $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]);
 
         return view('Seller.waybill', [
-            'sellerOrder' => $sellerOrder->fresh(['items', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']),
+            'sellerOrder' => $sellerOrder,
             'shipment' => $shipment,
+            'item' => $shipment->orderItem,
             'waybill' => $shipment->waybills()->latest('format_version')->first(),
         ]);
+    }
+
+    /** @return array<int, string> */
+    private function waybillRelations(): array
+    {
+        $relations = ['waybills', 'events'];
+        if (Schema::hasTable('cod_collections')) {
+            $relations[] = 'codCollection';
+        }
+
+        return $relations;
     }
 
     public function exportOrders(Request $request)
@@ -190,14 +247,14 @@ class SellerOperationsController extends Controller
 
         $rows = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
-            ->with('shipment')
+            ->with('shipments')
             ->latest()
             ->get()
             ->map(fn (SellerOrder $order): array => [
                 $order->seller_order_number,
                 $order->status,
                 number_format((float) $order->grand_total, 2, '.', ''),
-                $order->shipment?->tracking_number,
+                $order->shipments->pluck('tracking_number')->join('|'),
                 optional($order->created_at)->toDateTimeString(),
             ]);
 
@@ -291,7 +348,9 @@ class SellerOperationsController extends Controller
             })
             ->whereBetween('created_at', [$from, $to])
             ->sum('commission_amount');
+        $financeSchemaReady = app(FinanceSchemaReadiness::class)->step7Ready();
         $settlementSummary = [
+            'finance_schema_ready' => $financeSchemaReady,
             'original_product_amount' => 0.0,
             'discounts' => 0.0,
             'seller_payable' => 0.0,
@@ -299,7 +358,7 @@ class SellerOperationsController extends Controller
             'outstanding_balance' => 0.0,
             'pending_settlement' => 0.0,
         ];
-        if (app(FinanceSchemaReadiness::class)->step7Ready()) {
+        if ($financeSchemaReady) {
             $settlements = SellerSettlement::query()->where('seller_profile_id', $sellerId)->whereBetween('created_at', [$from, $to]);
             $settlementSummary = [
                 'original_product_amount' => (float) (clone $settlements)->sum('original_product_amount'),

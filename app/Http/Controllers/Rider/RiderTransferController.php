@@ -44,9 +44,35 @@ class RiderTransferController extends Controller
         return $this->run($request, $manifest, fn (TransferManifest $model) => $this->manifests->driverAccept($request->user(), $model), 'Transfer manifest accepted.');
     }
 
+    public function decline(Request $request, int $manifest): RedirectResponse
+    {
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'max:1000'],
+        ]);
+        abort_unless($this->schema->transferReady(), 503, 'Transfer schema is not installed.');
+        $rider = $request->user()->riderProfile;
+        abort_unless($rider, 403);
+
+        try {
+            $model = TransferManifest::query()
+                ->where('assigned_driver_rider_profile_id', $rider->id)
+                ->findOrFail($manifest);
+            $this->manifests->driverDecline($request->user(), $model, $data['reason']);
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['manifest' => $exception->getMessage()]);
+        }
+
+        return redirect()->route('rider.transfers')
+            ->with('status', 'Transfer manifest declined and returned to the origin hub dispatch queue.');
+    }
+
     public function start(Request $request, int $manifest): RedirectResponse
     {
-        return $this->run($request, $manifest, fn (TransferManifest $model) => $this->manifests->driverStart($request->user(), $model), 'Inter-hub transport started with departure custody scans.');
+        $data = $request->validate([
+            'scanned_codes' => ['required', 'array'],
+            'scanned_codes.*' => ['required', 'string', 'max:120', 'distinct'],
+        ]);
+        return $this->run($request, $manifest, fn (TransferManifest $model) => $this->manifests->driverStart($request->user(), $model, $data['scanned_codes']), 'Inter-hub transport started with departure custody scans.');
     }
 
     private function run(Request $request, int $id, callable $action, string $message): RedirectResponse

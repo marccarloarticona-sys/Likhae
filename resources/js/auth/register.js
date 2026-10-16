@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
     |--------------------------------------------------------------------------
     */
 
-    function setAccountType(type) {
+    function setAccountType(type, preserveStep = false) {
 
         const seller =
             type === 'seller';
@@ -303,7 +303,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const sellerBranding = document.querySelector('[data-seller-branding]');
-        if (sellerBranding) sellerBranding.hidden = !seller;
+        if (sellerBranding) {
+            sellerBranding.hidden = !seller;
+            sellerBranding.querySelectorAll('input[type="file"]').forEach((input) => {
+                input.disabled = !seller;
+            });
+        }
         const sellerTypeField = document.querySelector('[data-seller-type-field]');
         const sellerTypeInput = document.getElementById('seller_type');
         if (sellerTypeField) sellerTypeField.hidden = !seller;
@@ -596,7 +601,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sellerProgressStep.hidden = !(seller || logistics || rider);
             sellerProgressStep.lastElementChild.textContent = rider ? 'Vehicle' : 'Business';
         }
-        currentStep = 0;
+        if (!preserveStep) currentStep = 0;
 
 
         showStep(
@@ -624,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
     );
 
     document.getElementById('seller_type')?.addEventListener('change', () => {
-        setAccountType(accountTypeInput?.value || 'buyer');
+        setAccountType(accountTypeInput?.value || 'buyer', true);
     });
 
 
@@ -988,14 +993,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 /*
                 |----------------------------------------------------------
-                | Ignore disabled / non-required fields
+                | Ignore disabled fields
                 |----------------------------------------------------------
                 */
 
                 if (
                     field.disabled
-                    ||
-                    !field.required
                 ) {
 
                     field.classList.remove(
@@ -1366,6 +1369,52 @@ document.addEventListener('DOMContentLoaded', () => {
     |--------------------------------------------------------------------------
     */
 
+    let storePhotoCropInProgress = false;
+    let storePhotoCropComplete = false;
+
+    function hasSelectedStorePhotos() {
+        return [...form.querySelectorAll('[data-store-photo]')]
+            .some((input) => !input.disabled && input.files?.length);
+    }
+
+    function validateUploadLimits() {
+        const perFileLimit = Number(form.dataset.phpUploadMaxBytes || 0);
+        const postLimit = Number(form.dataset.phpPostMaxBytes || 0);
+        const files = [...form.querySelectorAll('input[type="file"]:not(:disabled)')]
+            .flatMap((input) => [...(input.files || [])].map((file) => ({input, file})));
+        const oversized = perFileLimit > 0
+            ? files.find(({file}) => file.size > perFileLimit)
+            : null;
+
+        if (oversized) {
+            const maxMb = (perFileLimit / 1024 / 1024).toFixed(1);
+            const message = `This server accepts files up to ${maxMb} MB each. Choose a smaller file.`;
+            const stepIndex = getSteps().findIndex((step) => findStepElement(step.name)?.contains(oversized.input));
+            if (stepIndex >= 0) showStep(stepIndex);
+            oversized.input.setCustomValidity(message);
+            oversized.input.setAttribute('aria-invalid', 'true');
+            showStepError(message);
+            oversized.input.closest('.upload-box, .register-field')?.scrollIntoView({behavior: 'smooth', block: 'center'});
+            return false;
+        }
+
+        if (postLimit > 0) {
+            const encoder = new TextEncoder();
+            const estimatedBytes = [...new FormData(form)].reduce((size, [name, value]) => (
+                size + 512 + encoder.encode(name).length
+                + (value instanceof File ? value.size : encoder.encode(String(value)).length)
+            ), 16 * 1024);
+
+            if (estimatedBytes > postLimit) {
+                const maxMb = (postLimit / 1024 / 1024).toFixed(1);
+                showStepError(`The selected files exceed this server's ${maxMb} MB total upload limit. Choose smaller files before submitting.`);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     form?.addEventListener(
         'submit',
         (event) => {
@@ -1384,8 +1433,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 confirmation.reportValidity();
                 return;
             }
-            submitButton.disabled = true;
-            submitLabel.textContent = 'Submitting application...';
+            if (!hasSelectedStorePhotos() || storePhotoCropComplete) {
+                if (!validateUploadLimits()) {
+                    event.preventDefault();
+                    return;
+                }
+                submitButton.disabled = true;
+                submitLabel.textContent = 'Submitting application...';
+            }
 
         }
     );
@@ -1559,6 +1614,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (error) {
                             input.reportValidity();
                             input.value = '';
+                            input.setCustomValidity('');
                             fileName.textContent = 'No file selected';
                             return;
                         }
@@ -2315,7 +2371,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const message = Array.isArray(messages) ? messages[0] : String(messages);
         fields.forEach((field) => {
             field.setAttribute('aria-invalid', 'true');
-            const wrapper = field.closest('.register-field');
+            firstInvalid ||= field;
+            const wrapper = field.closest('.register-field, .upload-box');
             if (!wrapper || wrapper.querySelector(`[data-inline-error="${name}"]`)) return;
             const inline = document.createElement('small');
             inline.className = 'register-inline-error';
@@ -2323,18 +2380,18 @@ document.addEventListener('DOMContentLoaded', () => {
             inline.setAttribute('role', 'alert');
             inline.textContent = message;
             wrapper.append(inline);
-            firstInvalid ||= field;
         });
     });
     if (firstInvalid) {
         const steps = getSteps();
-        const invalidStep = steps.findIndex((step) => step.contains(firstInvalid));
+        const invalidStep = steps.findIndex((step) => findStepElement(step.name)?.contains(firstInvalid));
         if (invalidStep >= 0) showStep(invalidStep);
         firstInvalid.focus({preventScroll: true});
         firstInvalid.scrollIntoView({behavior: 'smooth', block: 'center'});
     }
 
     document.querySelectorAll('[data-store-photo]').forEach((input) => input.addEventListener('change', () => {
+        storePhotoCropComplete = false;
         const file = input.files?.[0];
         const preview = document.querySelector(`[data-store-photo-preview="${input.dataset.storePhoto}"]`);
         const maxBytes = input.dataset.storePhoto === 'avatar' ? 5 * 1024 * 1024 : 8 * 1024 * 1024;
@@ -2343,6 +2400,7 @@ document.addEventListener('DOMContentLoaded', () => {
             input.value = '';
             input.setCustomValidity(`Choose an image smaller than ${input.dataset.storePhoto === 'avatar' ? '5' : '8'} MB.`);
             input.reportValidity();
+            input.setCustomValidity('');
             return;
         }
         input.setCustomValidity('');
@@ -2366,18 +2424,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.querySelectorAll('[data-store-photo-zoom], [data-store-photo-x], [data-store-photo-y]').forEach((control) => {
-        control.addEventListener('input', () => updateStorePhotoPreview(control.dataset.storePhotoZoom || control.dataset.storePhotoX || control.dataset.storePhotoY));
+        control.addEventListener('input', () => {
+            storePhotoCropComplete = false;
+            updateStorePhotoPreview(control.dataset.storePhotoZoom || control.dataset.storePhotoX || control.dataset.storePhotoY);
+        });
     });
 
-    let storePhotoCropInProgress = false;
     form?.addEventListener('submit', async (event) => {
-        if (event.defaultPrevented || storePhotoCropInProgress) return;
+        if (event.defaultPrevented || storePhotoCropInProgress || storePhotoCropComplete) return;
         const selected = [...document.querySelectorAll('[data-store-photo]')]
             .map((input) => ({input, file: input.files?.[0], key: input.dataset.storePhoto}))
-            .filter((item) => item.file);
+            .filter((item) => item.file && !item.input.disabled);
         if (!selected.length) return;
         event.preventDefault();
         storePhotoCropInProgress = true;
+        submitButton.disabled = true;
+        submitLabel.textContent = 'Optimizing shop photos...';
         try {
             for (const {input, file, key} of selected) {
                 const image = await createImageBitmap(file);
@@ -2403,7 +2465,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.warn('Shop photo crop failed; sending the selected original image.', error);
         }
-        form.submit();
+        storePhotoCropInProgress = false;
+        storePhotoCropComplete = true;
+        submitButton.disabled = false;
+        form.requestSubmit();
     });
 
 });

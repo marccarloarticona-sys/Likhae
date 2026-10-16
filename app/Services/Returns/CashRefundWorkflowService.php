@@ -5,6 +5,7 @@ namespace App\Services\Returns;
 use App\Models\Admin\CommissionTransaction;
 use App\Models\Buyer\ReturnRefundRequestItem;
 use App\Models\Finance\FinancialLedgerEntry;
+use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Returns\CashRefundObligation;
 use App\Models\Returns\ReturnCustodyEvent;
 use App\Models\Returns\ReturnInspection;
@@ -150,7 +151,11 @@ class CashRefundWorkflowService
         if (! Schema::hasTable('financial_ledger_entries')) {
             return;
         }
-        $sellerOrder = $sellerRequest->sellerOrder()->with(['commissionTransaction', 'shipment.financialAllocation'])->first();
+        $sellerOrder = $sellerRequest->sellerOrder()->with(['commissionTransaction', 'shipments'])->first();
+        $allocation = $sellerOrder
+            ? ShipmentFinancialAllocation::query()->where('seller_order_id', $sellerOrder->id)->first()
+            : null;
+        $allocationShipmentId = $allocation?->shipment_id ?? $sellerOrder?->shipments?->first()?->id;
         $amount = (float) $obligation->product_refund_amount;
         $commission = $sellerOrder?->commissionTransaction;
         $base = max(0.01, (float) ($sellerOrder?->item_subtotal ?? $amount));
@@ -166,8 +171,8 @@ class CashRefundWorkflowService
             FinancialLedgerEntry::query()->firstOrCreate(
                 ['idempotency_key' => $entry['key']],
                 [
-                    'shipment_financial_allocation_id' => $sellerOrder?->shipment?->financialAllocation?->id,
-                    'shipment_id' => $sellerOrder?->shipment?->id,
+                    'shipment_financial_allocation_id' => $allocation?->id,
+                    'shipment_id' => $allocationShipmentId,
                     'seller_order_id' => $sellerRequest->seller_order_id,
                     'order_id' => $sellerRequest->request?->order_id,
                     'account_type' => $entry['account_type'],

@@ -9,8 +9,9 @@ use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
-use App\Services\Fulfillment\LocalRiderTripService;
+use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
@@ -27,25 +28,28 @@ class DispatchController extends Controller
         return $this->assignments($request);
     }
 
-    public function parcels(Request $request): View
+    public function parcels(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = $this->center($request);
-        $status = strtoupper((string) $request->query('status', ''));
+        abort_unless($center, 403);
+        $filters = $shipmentQuery->filters($request, true);
+        $status = $filters['status'] ?? '';
 
-        $shipments = Shipment::query()
-            ->when($center, fn ($query) => $query->where(function ($q) use ($center) {
-                $q->where('logistics_center_id', $center->id)
-                    ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
-                        ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id)));
-            }))
-            ->when($status !== '', fn ($query) => $query->where('current_status', $status))
+        $query = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $filters);
+        if (isset(LogisticsShipmentQuery::CATEGORIES[$status])) {
+            $shipmentQuery->category($query, $status);
+        } elseif ($status !== '') {
+            $query->where('current_status', $status);
+        }
+
+        $shipments = $query
             ->with(['sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
             ->latest()
             ->paginate(15)
             ->withQueryString();
 
         $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
-        return view('Logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers'));
+        return view('Logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
     }
 
     public function pickups(Request $request, LogisticsSchemaReadiness $schema): View
@@ -100,6 +104,7 @@ class DispatchController extends Controller
                 return [
                     'seller' => $seller,
                     'area' => $area,
+                    'pickup_requests' => $sellerRequests->keyBy('shipment_id'),
                     'shipments' => $sellerRequests->map(fn ($pickup) => $pickup->shipment)->filter()->values(),
                     'eligible_riders' => $firstShipment
                         ? $riders->filter(fn (RiderProfile $rider) =>
@@ -242,7 +247,7 @@ class DispatchController extends Controller
         if ($schema->localTripsReady()) {
             $localTripsByRider = RiderLocalTrip::query()
                 ->where('trip_type', RiderLocalTrip::TYPE_DELIVERY)
-                ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY])
+                ->where('status', RiderLocalTrip::LOADING)
                 ->whereIn('rider_profile_id', $riders->pluck('id'))
                 ->withCount(['items as load_count' => fn ($query) => $query->whereIn('status', ['QUEUED', 'LOADED'])])
                 ->get()
@@ -250,10 +255,11 @@ class DispatchController extends Controller
         }
 
         $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
-        return view('Logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'mapMarkers'));
+        $localTripDispatchReady = $schema->localTripsReady();
+        return view('Logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady', 'mapMarkers'));
     }
 
-    public function tracking(Request $request): View
+    public function tracking(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $shipment = null;
         $tracking = trim((string) $request->query('tracking'));
@@ -261,13 +267,8 @@ class DispatchController extends Controller
         if ($tracking !== '') {
             $center = $this->center($request);
             abort_unless($center, 403);
-            $shipment = Shipment::query()
+            $shipment = $shipmentQuery->visibleTo($center)
                 ->where('tracking_number', $tracking)
-                ->where(function ($query) use ($center) {
-                    $query->where('logistics_center_id', $center->id)
-                        ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
-                            ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id)));
-                })
                 ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'events.actor', 'scans', 'deliveryAttempts', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
                 ->first();
         }
@@ -276,18 +277,18 @@ class DispatchController extends Controller
         return view('Logistics.tracking.index', compact('shipment', 'tracking', 'mapMarkers'));
     }
 
-    public function show(Shipment $shipment): View
+    public function show(Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = request()->user()?->logisticsCenter;
         abort_unless($center, 403);
-        $this->ensureShipmentBelongsToCenter($shipment, $center);
+        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
         $shipment->load(['sellerOrder.items.product.images', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address', 'events.actor', 'scans', 'deliveryAttempts']);
 
         $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, true);
         return view('Logistics.parcels.show', compact('shipment', 'mapMarkers'));
     }
 
-    public function assign(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow, LogisticsSchemaReadiness $schema, LocalRiderTripService $localTrips): RedirectResponse
+    public function assign(Request $request, Shipment $shipment, LogisticsSchemaReadiness $schema, FinalMileDispatchService $dispatch): RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
@@ -295,30 +296,33 @@ class DispatchController extends Controller
         $data = $request->validate([
             'rider_profile_id' => ['required', 'integer', 'exists:rider_profiles,id'],
             'assignment_type' => ['required', 'string', 'in:DELIVERY'],
-            'local_trip_id' => ['nullable', 'integer'],
+            'local_trip_id' => ['required', 'integer', 'min:0'],
         ]);
-
-        $rider = RiderProfile::query()->find($data['rider_profile_id']);
-        if (! $rider || (int) $rider->logistics_center_id !== (int) $center->id) {
-            return back()
-                ->withErrors(['rider_profile_id' => 'Select an active rider from this logistics center.'])
-                ->withInput();
+        if (! $schema->localTripsReady()) {
+            return back()->withErrors(['rider_profile_id' => 'Local rider trip schema is not installed; final-mile dispatch is disabled.'])->withInput();
         }
+
+        $createdNewTrip = (int) $data['local_trip_id'] === 0;
         try {
-            DB::transaction(function () use ($workflow, $localTrips, $shipment, $rider, $data, $request, $schema): void {
-                $assignment = $workflow->assignRider($shipment, $rider, $data['assignment_type'], $request->user());
-                if ($schema->localTripsReady() && ! empty($data['local_trip_id'])) {
-                    $trip = RiderLocalTrip::query()->findOrFail((int) $data['local_trip_id']);
-                    $localTrips->addAssignment($request->user(), $trip, $assignment);
-                }
-            });
+            $trip = $dispatch->dispatch(
+                $request->user(),
+                $center,
+                $shipment,
+                RiderProfile::query()->findOrFail((int) $data['rider_profile_id']),
+                $createdNewTrip ? null : (int) $data['local_trip_id'],
+            );
         } catch (\RuntimeException $exception) {
             return back()
                 ->withErrors(['rider_profile_id' => $exception->getMessage()])
                 ->withInput();
         }
 
-        return back()->with('status', 'Rider assignment created.');
+        if ($createdNewTrip) {
+            return redirect()->route('logistics.local-trips.show', $trip->id)
+                ->with('status', 'A compatible loading trip was created and the parcel was added. Scan every parcel before loading it.');
+        }
+
+        return back()->with('status', 'Parcel added to local trip #'.$trip->id.'. Add other same-barangay parcels, then scan and load the trip.');
     }
 
     public function assignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches): RedirectResponse
@@ -509,7 +513,7 @@ class DispatchController extends Controller
         $shipment = Shipment::query()
             ->where('tracking_number', $tracking)
             ->where('logistics_center_id', $center->id)
-            ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
+            ->with(['orderItem', 'sellerOrder.items', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
             ->firstOrFail();
 
         return view('Logistics.waybill', compact('shipment'));

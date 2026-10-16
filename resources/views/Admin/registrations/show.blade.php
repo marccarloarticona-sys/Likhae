@@ -9,6 +9,29 @@
     $address = $user?->addresses?->firstWhere('is_default', true) ?? $user?->addresses?->first();
     $seller = $application->sellerData;
     $logistics = $application->logisticsData;
+    $rider = $application->riderData;
+    $canAdminReview = in_array($user?->account_type, ['BUYER', 'SELLER', 'LOGISTICS'], true);
+    $applicationPhotos = [];
+    $profilePhotoPath = $user?->profile_photo_path;
+    if (filled($profilePhotoPath)) {
+        $applicationPhotos[] = [
+            'label' => 'Profile photo',
+            'url' => str($profilePhotoPath)->startsWith(['http://', 'https://'])
+                ? $profilePhotoPath
+                : \Illuminate\Support\Facades\Storage::disk('public')->url($profilePhotoPath),
+        ];
+    }
+    foreach (['avatar_path' => 'Store avatar', 'banner_path' => 'Store banner'] as $column => $label) {
+        $path = $user?->sellerProfile?->{$column};
+        if (filled($path)) {
+            $applicationPhotos[] = [
+                'label' => $label,
+                'url' => str($path)->startsWith(['http://', 'https://'])
+                    ? $path
+                    : \Illuminate\Support\Facades\Storage::disk('public')->url($path),
+            ];
+        }
+    }
     $documentReviewRoutesAvailable = app('router')->has('admin.registrations.documents.verify')
         && app('router')->has('admin.registrations.documents.reject');
 @endphp
@@ -77,6 +100,34 @@
         </div>
     @endif
 
+    @if($rider)
+        <div class="ad-card ad-card-body" style="margin-bottom:16px;">
+            <h2>Rider Information</h2>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:16px;">
+                <div><small>Vehicle</small><strong style="display:block;">{{ str($rider->vehicle_type)->headline() }}</strong></div>
+                <div><small>Plate Number</small><strong style="display:block;">{{ $rider->plate_number ?: 'Not provided' }}</strong></div>
+                <div><small>Driver's License Number</small><strong style="display:block;">{{ $rider->drivers_license_number ?: 'Not provided' }}</strong></div>
+                <div><small>Selected Logistics Center</small><strong style="display:block;">{{ $rider->targetLogisticsCenter?->business_name ?: 'Not provided' }}</strong></div>
+            </div>
+        </div>
+    @endif
+
+    @if($applicationPhotos)
+        <div class="ad-card ad-card-body" style="margin-bottom:16px;">
+            <h2>Application Photos</h2>
+            <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;">
+                @foreach($applicationPhotos as $photo)
+                    <article style="width:min(100%,360px);padding:14px;border:1px solid var(--ad-border);border-radius:14px;">
+                        <strong style="display:block;margin-bottom:10px;">{{ $photo['label'] }}</strong>
+                        <a href="{{ $photo['url'] }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ $photo['label'] }}">
+                            <img src="{{ $photo['url'] }}" alt="{{ $photo['label'] }}" loading="lazy" style="display:block;width:100%;height:240px;object-fit:contain;background:#f8fafc;border-radius:10px;">
+                        </a>
+                    </article>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     <div class="ad-card ad-card-body" style="margin-bottom:16px;">
         <h2>Submitted Documents</h2>
         <div class="ad-inline-actions" style="margin-top:16px;flex-wrap:wrap;">
@@ -120,7 +171,7 @@
                             @endif
                         </small>
                     </div>
-                    @if($documentReviewRoutesAvailable && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+                    @if($canAdminReview && $documentReviewRoutesAvailable && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
                         <div style="display:grid;gap:10px;margin-top:12px;">
                             <form method="POST" action="{{ route('admin.registrations.documents.verify', [$application, $document]) }}">
                                 @csrf
@@ -140,7 +191,12 @@
         </div>
     </div>
 
-    @if(in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+    @if(! $canAdminReview && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+        <div class="ad-card ad-card-body">
+            <h2>Decision</h2>
+            <p>This rider application is reviewed by {{ $rider?->targetLogisticsCenter?->business_name ?: 'the selected logistics center' }}.</p>
+        </div>
+    @elseif(in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
         <div class="ad-card ad-card-body">
             <h2>Decision</h2>
             <div style="display:grid;gap:16px;margin-top:16px;">

@@ -9,6 +9,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\User;
 use App\Support\FinancialRules;
+use App\Support\OrderItemParcelAmount;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -23,22 +24,33 @@ class CodCollectionService
             return null;
         }
 
-        $shipment->loadMissing('sellerOrder.order');
+        $shipment->loadMissing('sellerOrder.order', 'sellerOrder.items', 'orderItem');
         $sellerOrder = $shipment->sellerOrder;
         if (! $sellerOrder?->order) {
             throw new RuntimeException('A COD collection requires an order and seller-order reference.');
         }
 
-        return CodCollection::query()->firstOrCreate(
+        $expectedAmount = $shipment->orderItem
+            ? OrderItemParcelAmount::forItem($sellerOrder, $shipment->orderItem)['total']
+            : (float) $sellerOrder->grand_total;
+
+        $collection = CodCollection::query()->firstOrCreate(
             ['shipment_id' => $shipment->id],
             [
                 'seller_order_id' => $sellerOrder->id,
                 'order_id' => $sellerOrder->order_id,
                 'logistics_center_id' => $shipment->destination_logistics_center_id ?: $shipment->logistics_center_id,
-                'expected_amount' => number_format((float) $sellerOrder->grand_total, 2, '.', ''),
+                'expected_amount' => number_format($expectedAmount, 2, '.', ''),
                 'status' => CodCollection::PENDING,
             ],
         );
+
+        if ($collection->status === CodCollection::PENDING
+            && FinancialRules::cents($collection->expected_amount) !== FinancialRules::cents($expectedAmount)) {
+            $collection->update(['expected_amount' => number_format($expectedAmount, 2, '.', '')]);
+        }
+
+        return $collection->refresh();
     }
 
     public function attachDeliveryRider(Shipment $shipment, RiderAssignment $assignment): ?CodCollection

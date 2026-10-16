@@ -243,7 +243,7 @@ class AccountNotificationService
                     Mail::to($user->email)->send(new AccountAlert(
                         type: $notification->type,
                         title: $notification->title,
-                        message: $notification->message,
+                        body: $notification->message,
                         actionUrl: $notification->action_url ?: '/notifications',
                         actionLabel: 'View notification',
                         userName: $user->name,

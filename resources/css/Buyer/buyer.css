@@ -2393,6 +2393,28 @@ body.lk-sidebar-is-collapsed .lk-nav-toggle {
     text-underline-offset: 3px;
 }
 
+.lk-filter-error {
+    margin: 7px 0 0;
+    color: var(--lk-maroon);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.lk-search-suggestions {
+    margin: 0;
+    color: var(--lk-muted);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.lk-search-suggestions a {
+    color: var(--lk-maroon);
+    font-weight: 800;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
 .lk-products-main {
     display: grid;
     min-width: 0;

@@ -2,17 +2,16 @@
 
 @section('title', 'Rewards & Vouchers')
 @section('active', 'rewards')
-@section('subtitle', 'Manage vouchers, points, and cashback in one place.')
+@section('subtitle', 'Manage vouchers, points, and voucher history in one place.')
 
 @php
-    $tab = in_array(request('tab'), ['vouchers', 'points', 'cashback'], true)
+    $tab = in_array(request('tab'), ['vouchers', 'points'], true)
         ? request('tab')
         : 'vouchers';
 
     $tabs = [
         'vouchers' => 'My Vouchers',
         'points' => 'Reward Points',
-        'cashback' => 'Cashback',
     ];
 @endphp
 
@@ -104,8 +103,7 @@
 
     .lk-voucher-card,
     .lk-reward-panel,
-    .lk-points-card,
-    .lk-cashback-card {
+    .lk-points-card {
         overflow: hidden;
 
         border: 1px solid var(--lk-border);
@@ -125,8 +123,7 @@
     }
 
     .lk-voucher-card:hover,
-    .lk-points-card:hover,
-    .lk-cashback-card:hover {
+    .lk-points-card:hover {
         transform: translateY(-3px);
         border-color: var(--lk-tan);
         box-shadow: var(--lk-shadow-card);
@@ -433,113 +430,12 @@
         color: var(--lk-muted);
     }
 
-    .lk-cashback-grid {
-        display: grid;
-        grid-template-columns: 340px minmax(0, 1fr);
-        gap: 16px;
-    }
-
-    .lk-cashback-card {
-        padding: 22px;
-    }
-
-    .lk-cashback-label {
-        display: block;
-
-        color: var(--lk-muted);
-
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-    .lk-cashback-value {
-        display: block;
-        margin-top: 8px;
-
-        color: var(--lk-maroon);
-
-        font-size: 38px;
-        font-weight: 950;
-        letter-spacing: -0.05em;
-        line-height: 1;
-    }
-
-    .lk-cashback-card h2 {
-        margin: 0;
-
-        color: var(--lk-text);
-
-        font-size: 18px;
-        font-weight: 950;
-        letter-spacing: -0.035em;
-    }
-
-    .lk-cashback-card p {
-        margin: 9px 0 0;
-
-        color: var(--lk-muted);
-
-        font-size: 13px;
-        line-height: 1.75;
-    }
-
-    .lk-cashback-pending {
-        margin-top: 18px;
-        padding: 14px;
-
-        border: 1px solid #EAD39A;
-        border-radius: 14px;
-
-        background: #FFF6DE;
-        color: var(--lk-warning);
-
-        font-size: 12px;
-        font-weight: 800;
-    }
-
-    .lk-cashback-activity-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 120px 120px 120px;
-        gap: 14px;
-
-        padding: 14px 0;
-
-        border-bottom: 1px solid #EFE1D5;
-
-        color: var(--lk-brown);
-        font-size: 12px;
-    }
-
-    .lk-cashback-activity-row:last-child {
-        border-bottom: 0;
-    }
-
-    .lk-cashback-activity-row strong {
-        color: var(--lk-text);
-        font-weight: 900;
-    }
-
-    .lk-cashback-activity-row span {
-        color: var(--lk-muted);
-    }
-
-    .lk-cashback-activity-row .lk-cashback-amount {
-        color: var(--lk-maroon);
-        font-weight: 900;
-    }
-
-    .lk-cashback-activity-row time {
-        color: var(--lk-muted-2);
-        text-align: right;
-    }
-
     @media (max-width: 1100px) {
         .lk-reward-voucher-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .lk-points-layout,
-        .lk-cashback-grid {
+        .lk-points-layout {
             grid-template-columns: 1fr;
         }
     }
@@ -559,21 +455,12 @@
             width: 100%;
         }
 
-        .lk-cashback-activity-row {
-            grid-template-columns: 1fr;
-            gap: 4px;
-        }
-
-        .lk-cashback-activity-row time {
-            text-align: left;
-        }
     }
 
     html.dark .lk-rewards-tabs,
     html.dark .lk-voucher-card,
     html.dark .lk-reward-panel,
     html.dark .lk-points-card,
-    html.dark .lk-cashback-card,
     html.dark .lk-earn-item {
         background: #211B17 !important;
         border-color: #3B2E27 !important;
@@ -597,18 +484,13 @@
     html.dark .lk-voucher-card h2,
     html.dark .lk-reward-panel h2,
     html.dark .lk-points-card h2,
-    html.dark .lk-cashback-card h2,
-    html.dark .lk-activity-row strong,
-    html.dark .lk-cashback-activity-row strong {
+    html.dark .lk-activity-row strong {
         color: #F5EFE8 !important;
     }
 
     html.dark .lk-voucher-card p,
     html.dark .lk-activity-row time,
-    html.dark .lk-activity-row small,
-    html.dark .lk-cashback-card p,
-    html.dark .lk-cashback-activity-row span,
-    html.dark .lk-cashback-activity-row time {
+    html.dark .lk-activity-row small {
         color: #C8B7AD !important;
     }
 
@@ -625,16 +507,13 @@
     }
 
     html.dark .lk-reward-table td,
-    html.dark .lk-activity-row,
-    html.dark .lk-cashback-activity-row {
+    html.dark .lk-activity-row {
         border-color: #3B2E27 !important;
         color: #C8B7AD !important;
     }
 
     html.dark .lk-reward-table td strong,
-    html.dark .lk-activity-amount,
-    html.dark .lk-cashback-value,
-    html.dark .lk-cashback-activity-row .lk-cashback-amount {
+    html.dark .lk-activity-amount {
         color: #EBA99D !important;
     }
 </style>
@@ -692,6 +571,7 @@
                             <span class="lk-voucher-status">
                                 {{ $voucher['status'] }}
                             </span>
+
 
                             <h2>
                                 {{ $voucher['value'] }}
@@ -888,86 +768,6 @@
                         <span class="lk-activity-amount">
                             0 points
                         </span>
-                    </div>
-                @endforelse
-            </div>
-        </section>
-    @else
-        <section class="lk-cashback-grid">
-            <article class="lk-cashback-card">
-                <span class="lk-cashback-label">
-                    Available cashback
-                </span>
-
-                <strong class="lk-cashback-value">
-                    PHP {{ number_format($availableCashback, 2) }}
-                </strong>
-
-                <a
-                    href="{{ route('buyer.checkout') }}"
-                    class="lk-btn lk-btn-red mt-5"
-                >
-                    Go to Checkout
-                </a>
-            </article>
-
-            <article class="lk-cashback-card">
-                <h2>
-                    How cashback works
-                </h2>
-
-                <p>
-                    Eligible purchases earn cashback after the order is completed.
-                    Use the balance on a future checkout before its expiration date.
-                </p>
-
-                <div class="lk-cashback-pending">
-                    PHP {{ number_format($pendingCashback, 2) }} pending - available when current orders are completed.
-                </div>
-            </article>
-        </section>
-
-        <section class="lk-reward-panel">
-            <h2>
-                Cashback activity
-            </h2>
-
-            <div class="lk-activity-list">
-                @forelse($cashbackActivities as $activity)
-                    <div class="lk-cashback-activity-row">
-                        <strong>
-                            {{ $activity['order'] }}
-                        </strong>
-
-                        <span>
-                            {{ $activity['type'] }}
-                        </span>
-
-                        <span class="lk-cashback-amount">
-                            {{ $activity['amount'] }}
-                        </span>
-
-                        <time>
-                            {{ $activity['date'] }}
-                        </time>
-                    </div>
-                @empty
-                    <div class="lk-cashback-activity-row">
-                        <strong>
-                            No cashback activity yet
-                        </strong>
-
-                        <span>
-                            Earned
-                        </span>
-
-                        <span class="lk-cashback-amount">
-                            PHP 0.00
-                        </span>
-
-                        <time>
-                            -
-                        </time>
                     </div>
                 @endforelse
             </div>

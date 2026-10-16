@@ -15,7 +15,9 @@ final class TransferCapacityService
         if (! RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
             throw new RuntimeException('Only an approved van, closed van, or truck may carry an inter-logistics manifest.');
         }
-        if ($driver->status !== 'ACTIVE' || $driver->user?->account_type !== 'RIDER') {
+        if ($driver->status !== 'ACTIVE'
+            || $driver->user?->account_type !== \App\Models\User::TYPE_RIDER
+            || $driver->user?->status !== \App\Models\User::STATUS_ACTIVE) {
             throw new RuntimeException('The assigned inter-logistics driver is not active and authorized.');
         }
 
@@ -33,22 +35,22 @@ final class TransferCapacityService
             throw new RuntimeException('The manifest exceeds the driver\'s approved parcel capacity.');
         }
 
-        $weight = 0.0;
-        $volume = 0.0;
+        $weight = 0;
+        $volume = 0;
         foreach ($parcelRows as $parcel) {
             if (! array_key_exists('weight_kg', $parcel) || $parcel['weight_kg'] === null
                 || ! array_key_exists('volume_liters', $parcel) || $parcel['volume_liters'] === null) {
                 throw new RuntimeException('The manifest cannot be sealed because parcel weight or volume is missing.');
             }
-            $parcelWeight = (float) $parcel['weight_kg'];
-            $parcelVolume = (float) $parcel['volume_liters'];
+            $parcelWeight = $this->thousandths($parcel['weight_kg']);
+            $parcelVolume = $this->thousandths($parcel['volume_liters']);
             if ($parcelWeight <= 0 || $parcelVolume <= 0) {
                 throw new RuntimeException('The manifest cannot be sealed because parcel weight and volume must be positive.');
             }
             $weight += $parcelWeight;
             $volume += $parcelVolume;
         }
-        if ($weight > (float) $weightCapacity || $volume > (float) $volumeCapacity) {
+        if ($weight > $this->thousandths($weightCapacity) || $volume > $this->thousandths($volumeCapacity)) {
             throw new RuntimeException('The manifest exceeds the driver\'s approved weight or volume capacity.');
         }
     }
@@ -61,5 +63,10 @@ final class TransferCapacityService
         if ($parcelCount > 10) {
             throw new RuntimeException('A local motorcycle or tricycle trip cannot exceed 10 parcels.');
         }
+    }
+
+    private function thousandths(mixed $value): int
+    {
+        return (int) round((float) $value * 1000, 0, PHP_ROUND_HALF_UP);
     }
 }

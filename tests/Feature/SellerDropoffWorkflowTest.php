@@ -66,6 +66,7 @@ class SellerDropoffWorkflowTest extends TestCase
         $workflow = app(ShipmentWorkflowService::class);
         $workflow->sellerTransition($sellerOrder, 'confirm', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'prepare', $sellerUser);
+        $workflow->sellerTransition($sellerOrder, 'pack', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'ready', $sellerUser);
 
         $shipment = $sellerOrder->shipment()->firstOrFail();

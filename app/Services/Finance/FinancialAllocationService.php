@@ -34,7 +34,7 @@ class FinancialAllocationService
             return null;
         }
 
-        $shipment->loadMissing('sellerOrder.items', 'sellerOrder.order', 'destinationLogisticsCenter', 'logisticsCenter');
+        $shipment->loadMissing('sellerOrder.items', 'sellerOrder.shipments.riderAssignments', 'sellerOrder.order', 'destinationLogisticsCenter', 'logisticsCenter');
         $sellerOrder = $shipment->sellerOrder;
         $items = $sellerOrder?->items ?? collect();
         if (! $sellerOrder?->order || $items->isEmpty() || $items->contains(fn ($item): bool => $item->original_unit_price === null)) {
@@ -42,19 +42,31 @@ class FinancialAllocationService
             return null;
         }
 
+        if ($sellerOrder->shipments->isNotEmpty()
+            && $sellerOrder->shipments->contains(fn (Shipment $parcel): bool => ! in_array($parcel->current_status, ['DELIVERED', 'COMPLETED'], true))) {
+            // The order-level financial allocation is finalized once, after
+            // every item parcel has been delivered and its COD is recorded.
+            return null;
+        }
+
         $allocation = DB::transaction(function () use ($shipment, $sellerOrder, $items): ShipmentFinancialAllocation {
             $allocation = ShipmentFinancialAllocation::query()->firstOrCreate(
-                ['shipment_id' => $shipment->id],
-                $this->attributes($shipment, $sellerOrder, $items),
+                ['seller_order_id' => $sellerOrder->id],
+                ['shipment_id' => $shipment->id] + $this->attributes($shipment, $sellerOrder, $items),
             );
             $this->provisionSettlementRows($allocation, $shipment, $sellerOrder);
 
             return $allocation->refresh();
         });
 
-        $shipment->loadMissing('riderAssignments');
-        foreach ($shipment->riderAssignments->whereIn('assignment_type', ['PICKUP', 'DELIVERY']) as $assignment) {
-            $this->syncRiderParticipant($shipment, (int) $assignment->rider_profile_id, $assignment->assignment_type, $assignment->id);
+        $pool = $allocation->riderPool()->with('participants')->first();
+        if ($pool) {
+            foreach ($sellerOrder->shipments->flatMap->riderAssignments->whereIn('assignment_type', ['PICKUP', 'DELIVERY']) as $assignment) {
+                $pool->participants()->firstOrCreate(
+                    ['rider_profile_id' => $assignment->rider_profile_id, 'participant_role' => $assignment->assignment_type],
+                    ['rider_assignment_id' => $assignment->id, 'status' => 'PENDING'],
+                );
+            }
         }
 
         return $allocation;
@@ -206,7 +218,7 @@ class FinancialAllocationService
         // allocation. Link that existing immutable entry once the allocation
         // is available without creating a second collection entry.
         FinancialLedgerEntry::query()
-            ->where('shipment_id', $shipment->id)
+            ->where('seller_order_id', $sellerOrder->id)
             ->where('entry_type', 'COD_COLLECTED')
             ->whereNull('shipment_financial_allocation_id')
             ->update(['shipment_financial_allocation_id' => $allocation->id]);

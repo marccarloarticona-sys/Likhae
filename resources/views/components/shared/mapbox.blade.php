@@ -52,9 +52,9 @@
                 <span class="lk-map-navigation__status" data-map-navigation-status>Waiting for live GPS</span>
             </div>
             <div class="lk-map-navigation__metrics">
-                <div><strong data-map-navigation-eta>Unavailable</strong><span>estimated time</span></div>
-                <div><strong data-map-navigation-distance>Unavailable</strong><span>road distance</span></div>
-                <div><strong data-map-navigation-arrival>Unavailable</strong><span>estimated arrival</span></div>
+                <div><strong data-map-navigation-eta>—</strong><span>estimated time</span></div>
+                <div><strong data-map-navigation-distance>—</strong><span>road distance</span></div>
+                <div><strong data-map-navigation-arrival>—</strong><span>estimated arrival</span></div>
             </div>
             <div class="lk-map-navigation__destination">
                 <strong data-map-navigation-destination>Active destination</strong>

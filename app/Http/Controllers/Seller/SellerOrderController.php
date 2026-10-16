@@ -3,13 +3,17 @@
 namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
+use App\Models\Buyer\OrderItem;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
+use App\Support\FinancialRules;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Illuminate\View\View;
 
 class SellerOrderController extends Controller
@@ -19,23 +23,94 @@ class SellerOrderController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
 
-        $orderRelations = ['order.buyer', 'order.address', 'order.payments', 'items.product.images', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress'];
+        $filters = $request->validate([
+            'status' => ['nullable', 'string', 'in:all,placed,confirmed,preparing,ready-for-pickup,shipping,completed,cancelled,returns'],
+            'q' => ['nullable', 'string', 'max:200'],
+            'from_date' => ['nullable', 'date_format:Y-m-d'],
+            'to_date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from_date'],
+        ]);
+        $requestedStatus = strtolower((string) ($filters['status'] ?? 'all'));
+        $search = trim((string) ($filters['q'] ?? ''));
+        $fromDate = $filters['from_date'] ?? null;
+        $toDate = $filters['to_date'] ?? null;
+
+        $selectedOrderView = null;
+        if ($request->query('mode') === 'show') {
+            $orderNumber = $request->validate([
+                'order' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9-]+$/'],
+            ])['order'];
+            $candidate = SellerOrder::query()->where('seller_order_number', $orderNumber)->first();
+            abort_unless($candidate, 404);
+            abort_unless((int) $candidate->seller_profile_id === (int) $seller->id, 403);
+        }
+
+        $orderRelations = ['order.buyer', 'order.address', 'order.payments', 'voucher', 'items.product.images', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress'];
+        $orderRelations = [...$orderRelations,
+            'items.shipment.events',
+            'shipments.events',
+            'shipments.pickupRequests',
+            'shipments.riderAssignments.riderProfile.user',
+            'shipments.riderAssignments.liveLocation',
+            'shipments.logisticsCenter.address',
+            'shipments.sellerOrder.sellerProfile.businessAddress',
+        ];
+        if (Schema::hasTable('cod_collections')) {
+            $orderRelations = [...$orderRelations, 'items.shipment.codCollection', 'shipments.codCollection'];
+        }
         $pickupBatchSchemaReady = $schema->sellerPickupBatchesReady();
         if ($pickupBatchSchemaReady) {
             $orderRelations = [...$orderRelations,
-                'shipment.riderAssignments.localTripItems.trip.seller',
-                'shipment.riderAssignments.localTripItems.trip.logisticsCenter.address',
-                'shipment.riderAssignments.localTripItems.trip.items',
+                'shipments.riderAssignments.localTripItems.trip.seller',
+                'shipments.riderAssignments.localTripItems.trip.logisticsCenter.address',
+                'shipments.riderAssignments.localTripItems.trip.items',
             ];
         }
-        $orders = SellerOrder::query()
-            ->where('seller_profile_id', $seller->id)
+        $ownedOrders = SellerOrder::query()->where('seller_profile_id', $seller->id);
+        $ordersQuery = (clone $ownedOrders)
             ->with($orderRelations)
-            ->latest()
-            ->get();
+            ->latest();
 
-        $requestedStatus = strtolower((string) $request->query('status', 'all'));
-        $refundSearch = trim((string) $request->query('q', ''));
+        $statusValues = match ($requestedStatus) {
+            'placed' => ['PLACED'],
+            'confirmed' => ['CONFIRMED'],
+            'preparing' => ['PREPARING'],
+            'ready-for-pickup' => ['READY_FOR_PICKUP'],
+            'shipping' => ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED', 'RETURNED'],
+            'completed' => ['COMPLETED'],
+            'cancelled' => ['CANCELLED'],
+            default => null,
+        };
+        if ($statusValues !== null) {
+            $ordersQuery->whereIn('status', $statusValues);
+        }
+        if ($search !== '') {
+            $ordersQuery->where(function ($query) use ($search): void {
+                $query->where('seller_order_number', 'like', '%'.$search.'%')
+                    ->orWhereHas('order', function ($orderQuery) use ($search): void {
+                        $orderQuery->where('order_number', 'like', '%'.$search.'%')
+                            ->orWhereHas('buyer', fn ($buyerQuery) => $buyerQuery
+                                ->where('first_name', 'like', '%'.$search.'%')
+                                ->orWhere('last_name', 'like', '%'.$search.'%')
+                                ->orWhere('email', 'like', '%'.$search.'%'));
+                    })
+                    ->orWhereHas('items', fn ($itemQuery) => $itemQuery->where('product_name', 'like', '%'.$search.'%'));
+            });
+        }
+        foreach ([['from_date', '>='], ['to_date', '<=']] as [$dateField, $operator]) {
+            $date = $filters[$dateField] ?? null;
+            if ($date) {
+                $ordersQuery->whereHas('order', fn ($orderQuery) => $orderQuery
+                    ->whereRaw('DATE(COALESCE(placed_at, created_at)) '.$operator.' ?', [$date]));
+            }
+        }
+        $orders = $ordersQuery->get();
+
+        if ($request->query('mode') === 'show') {
+            $selectedRecord = (clone $ownedOrders)->where('seller_order_number', $orderNumber)->with($orderRelations)->firstOrFail();
+            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady);
+        }
+
+        $refundSearch = $requestedStatus === 'returns' ? $search : '';
         $refundStatus = strtoupper((string) $request->query('refund_status', ''));
         $refundBaseQuery = SellerReturnRefundRequest::query()->where('seller_profile_id', $seller->id);
         $refundCounts = (clone $refundBaseQuery)
@@ -57,13 +132,14 @@ class SellerOrderController extends Controller
             ->latest();
         $refundRequests = $requestedStatus === 'returns' ? $refundQuery->paginate(15)->withQueryString() : null;
 
-        $counts = SellerOrder::query()
-            ->where('seller_profile_id', $seller->id)
+        $counts = (clone $ownedOrders)
             ->selectRaw('status, COUNT(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status');
-        $readyPickupCount = $orders->filter(fn (SellerOrder $order): bool =>
-            $order->status === 'READY_FOR_PICKUP' && $order->shipment?->current_status === 'READY_FOR_PICKUP')->count();
+        $statusCounts = $counts->mapWithKeys(fn ($count, $status): array => [$this->statusKey((string) $status) => (int) $count]);
+        $statusCounts->put('returns', (int) $refundCounts->sum());
+        $readyPickupCount = (clone $ownedOrders)->where('status', 'READY_FOR_PICKUP')->with('shipments')->get()
+            ->sum(fn (SellerOrder $order): int => $order->shipments->where('current_status', 'READY_FOR_PICKUP')->count());
 
         return view('Seller.orders', [
             'seller' => $seller,
@@ -71,14 +147,15 @@ class SellerOrderController extends Controller
             'counts' => $counts,
             'activeStatus' => strtoupper((string) $request->query('status', '')),
             'status' => $requestedStatus,
+            'search' => $search,
+            'fromDate' => $fromDate,
+            'toDate' => $toDate,
+            'selectedOrderView' => $selectedOrderView,
             'sellerOrders' => $orders->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady)),
             'refundRequests' => $refundRequests,
             'refundCounts' => $refundCounts,
             'refundStatus' => $refundStatus,
-            'statusCounts' => $orders
-                ->groupBy(fn (SellerOrder $order): string => $this->statusKey($order->status))
-                ->map->count()
-                ->put('returns', (int) $refundCounts->sum()),
+            'statusCounts' => $statusCounts,
             'readyPickupCount' => $readyPickupCount,
         ]);
     }
@@ -88,13 +165,77 @@ class SellerOrderController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
 
+        if ($request->input('action') === 'cancel' && is_string($request->input('cancellation_reason'))) {
+            $request->merge(['cancellation_reason' => trim($request->input('cancellation_reason'))]);
+        }
+
         $data = $request->validate([
-            'action' => ['required', 'string', 'in:confirm,prepare,ready,handover_confirm,cancel'],
+            'action' => ['required', 'string', 'in:confirm,prepare,pack,ready,handover_confirm,cancel'],
+            'cancellation_reason' => ['required_if:action,cancel', 'nullable', 'string', 'max:500'],
+            'shipment_ids' => ['required_if:action,pack,ready,handover_confirm', 'array', 'min:1', 'max:100'],
+            'shipment_ids.*' => ['integer', 'distinct', 'min:1'],
         ]);
 
-        $workflow->sellerTransition($sellerOrder, $data['action'], $request->user());
+        if (in_array(($data['action'] ?? null), ['ready', 'handover_confirm'], true)
+            && count($data['shipment_ids'] ?? []) > \App\Support\LocalTripCapacityRules::MAX_PARCELS_PER_TRIP) {
+            return back()->withErrors(['shipment_ids' => 'Select 1 to 10 parcels at a time.']);
+        }
+
+        try {
+            $workflow->sellerTransition(
+                $sellerOrder,
+                $data['action'],
+                $request->user(),
+                $data['cancellation_reason'] ?? null,
+                $data['shipment_ids'] ?? null,
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['parcels' => $exception->getMessage()]);
+        }
 
         return back()->with('status', 'Seller order updated successfully.');
+    }
+
+    public function recordParcelMeasurements(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+
+        $data = $request->validate([
+            'parcel_weight_kg' => ['required', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
+            'parcel_volume_liters' => ['required', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
+        ]);
+        $shipment = $orderItem->shipment()->firstOrFail();
+
+        try {
+            $workflow->recordPackedMeasurements(
+                $shipment,
+                $request->user(),
+                (string) $data['parcel_weight_kg'],
+                (string) $data['parcel_volume_liters'],
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['measurements' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Measured packed weight and volume saved for this parcel.');
+    }
+
+    public function ensureParcels(Request $request, SellerOrder $sellerOrder, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+
+        try {
+            $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
+        } catch (RuntimeException $exception) {
+            return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
+                ->withErrors(['parcels' => $exception->getMessage()]);
+        }
+
+        return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
+            ->with('status', $shipments->count().' parcel waybill(s) are now linked to their product lines. Print each label before handoff.');
     }
 
     public function handover(Request $request, SellerOrder $sellerOrder, ShipmentWorkflowService $workflow): RedirectResponse
@@ -105,16 +246,28 @@ class SellerOrderController extends Controller
         $data = $request->validate([
             'handover_method' => ['required', 'string', 'in:logistics_pickup,seller_dropoff'],
             'pickup_date' => ['nullable', 'date', 'after_or_equal:today'],
-            'pickup_window' => ['nullable', 'string', 'max:80'],
+            'pickup_window' => ['nullable', 'string', 'in:10:00 AM - 12:00 PM,1:00 PM - 3:00 PM,3:00 PM - 5:00 PM'],
             'pickup_note' => ['nullable', 'string', 'max:1000'],
+            'shipment_ids' => ['required', 'array', 'min:1', 'max:10'],
+            'shipment_ids.*' => ['required', 'integer', 'distinct', 'min:1'],
         ]);
 
-        $workflow->requestSellerHandover(
-            $sellerOrder,
-            $request->user(),
-            $data['handover_method'] === 'seller_dropoff',
-            collect([$data['pickup_note'] ?? null, $data['pickup_date'] ?? null, $data['pickup_window'] ?? null])->filter()->implode(' · '),
-        );
+        try {
+            $handoverNote = collect([
+                filled($data['pickup_date'] ?? null) ? 'Preferred date: '.$data['pickup_date'] : null,
+                filled($data['pickup_window'] ?? null) ? 'Preferred window: '.$data['pickup_window'] : null,
+                filled($data['pickup_note'] ?? null) ? 'Note: '.trim($data['pickup_note']) : null,
+            ])->filter()->implode(' | ');
+            $workflow->requestSellerHandover(
+                $sellerOrder,
+                $request->user(),
+                $data['handover_method'] === 'seller_dropoff',
+                $handoverNote,
+                $data['shipment_ids'],
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['parcels' => $exception->getMessage()]);
+        }
 
         return redirect()->route('seller.orders')->with('status', $data['handover_method'] === 'seller_dropoff'
             ? 'Drop-off registered. Bring the parcel and tracking number to your assigned logistics center.'
@@ -125,39 +278,88 @@ class SellerOrderController extends Controller
     {
         $address = $order->order?->address;
         $items = $order->items;
-        $assignment = $order->shipment?->riderAssignments
+        $shipments = $order->shipments;
+        $packedCheckpoint = fn ($shipment): bool => $shipment && $shipment->events->contains(
+            fn ($event): bool => $event->status === 'PREPARING' && str_starts_with((string) $event->notes, 'SELLER_PACKED_CHECKPOINT:'),
+        );
+        $parcelRows = $items->map(fn ($item): array => [
+            'item' => $item,
+            'shipment' => $item->shipment,
+            'packed' => $packedCheckpoint($item->shipment),
+        ])->values();
+        $assignments = $shipments->flatMap->riderAssignments;
+        $assignment = $assignments
             ?->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->sortByDesc('id')
             ->first();
-        $pickupAssignment = $order->shipment?->riderAssignments
+        $pickupAssignment = $assignments
             ?->where('assignment_type', 'PICKUP')
             ->sortByDesc('id')
             ->first();
         $pickupBatch = $pickupBatchSchemaReady
             ? $pickupAssignment?->localTripItems?->sortByDesc('id')->first()?->trip
             : null;
+        $parcelStatuses = $shipments->pluck('current_status');
         $pickupStatus = match (true) {
-            $order->shipment?->current_status === 'PICKED_UP' => 'Picked up',
+            $parcelStatuses->isNotEmpty() && $parcelStatuses->every(fn (string $status): bool => in_array($status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true)) => 'Picked up',
             $pickupBatch?->status === 'EN_ROUTE_TO_HUB' => 'In transit to logistics',
             $pickupAssignment && in_array($pickupAssignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true) => 'Pickup scheduled',
-            $order->shipment?->current_status === 'READY_FOR_PICKUP' => 'Waiting for Logistics',
+            $parcelStatuses->contains('READY_FOR_PICKUP') => 'Waiting for Logistics',
             default => null,
         };
+
+        $itemSubtotalCents = FinancialRules::cents($order->item_subtotal);
+        $voucherCents = FinancialRules::cents($order->voucher_discount);
+        $shippingCents = FinancialRules::cents($order->shipping_fee);
+        $protectionCents = FinancialRules::cents($order->protection_total ?? 0);
+        $grandTotalCents = FinancialRules::cents($order->grand_total);
+        $codCollections = $shipments
+            ->filter(fn ($shipment): bool => $shipment->relationLoaded('codCollection'))
+            ->map(fn ($shipment) => $shipment->getRelation('codCollection'))
+            ->filter();
+        $codAmountCents = $codCollections->isNotEmpty()
+            ? $codCollections->sum(fn ($collection): int => FinancialRules::cents($collection->expected_amount))
+            : $items->sum(fn ($item): int => FinancialRules::cents(\App\Support\OrderItemParcelAmount::forItem($order, $item)['total']));
+        $paidOnline = $order->order?->payments?->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID') ?? false;
+        $pickupIrreversible = $assignments->contains(fn ($candidate): bool => $candidate->assignment_type === 'PICKUP'
+            && in_array($candidate->status, ['IN_PROGRESS', 'COMPLETED'], true));
+        $codCollected = $codCollections->contains(fn ($collection): bool => in_array($collection->status, ['COLLECTED', 'REMITTED', 'DISCREPANCY'], true));
 
         return [
             'id' => $order->seller_order_number,
             'db_id' => $order->id,
-            'date' => $order->created_at?->format('M d, Y g:i A'),
+            'date' => ($order->order?->placed_at ?? $order->order?->created_at ?? $order->created_at)?->format('M d, Y g:i A'),
+            'placed_at' => $order->order?->placed_at ?? $order->order?->created_at ?? $order->created_at,
             'buyer_id' => $order->order?->buyer_user_id,
             'buyer' => $order->order?->buyer?->name ?? 'Buyer',
             'buyer_note' => $order->buyer_note,
-            'product' => $items->pluck('product_name')->filter()->join(', '),
-            'first_item' => $items->first(),
-            'variant' => $items->pluck('variant_description')->filter()->join(', ') ?: 'Standard',
-            'quantity' => (int) $items->sum('quantity'),
+            'items' => $items->values(),
+            'parcels' => $parcelRows,
+            'ready_parcels' => $parcelRows->filter(fn (array $parcel): bool => $parcel['packed']
+                && $parcel['shipment']?->current_status === 'PREPARING')->values(),
+            'unpacked_parcels' => $parcelRows->filter(fn (array $parcel): bool => ! $parcel['packed']
+                && $parcel['shipment']?->current_status === 'PREPARING')->values(),
+            'ready_parcel_count' => $shipments->where('current_status', 'READY_FOR_PICKUP')->count(),
+            'unresolved_legacy_shipments' => $shipments->whereNull('order_item_id')->values(),
+            'has_unresolved_legacy_shipment' => $items->count() > 1
+                && $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
+            'parcels_need_setup' => $items->contains(fn ($item): bool => ! $item->shipment)
+                || $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
+            'packed' => $shipments->isNotEmpty() && $shipments->every($packedCheckpoint),
+            'product_search' => $items->pluck('product_name')->filter()->implode(' '),
             'total' => (float) $order->grand_total,
+            'item_subtotal' => (float) $order->item_subtotal,
+            'voucher_discount' => (float) $order->voucher_discount,
+            'voucher_code' => $order->voucher?->code,
+            'shipping_fee' => (float) $order->shipping_fee,
+            'protection_total' => (float) ($order->protection_total ?? 0),
+            'cod_amount' => $order->order?->payments?->first()?->method === 'COD' ? $codAmountCents / 100 : null,
+            'financial_reconciles' => $itemSubtotalCents - $voucherCents + $shippingCents + $protectionCents === $grandTotalCents,
+            'can_cancel' => in_array($order->status, ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'], true)
+                && ! $paidOnline && ! $pickupIrreversible && ! $codCollected,
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),
-            'logistics_provider' => $order->shipment?->logisticsCenter?->business_name ?? 'Not assigned',
+            'logistics_provider' => $shipments->firstWhere('current_status', 'READY_FOR_PICKUP')?->logisticsCenter?->business_name
+                ?? $shipments->first()?->logisticsCenter?->business_name ?? 'Not assigned',
             'shipping' => $assignment?->riderProfile?->user?->name ?? $pickupAssignment?->riderProfile?->user?->name ?? 'Waiting for Logistics',
             'pickup_status' => $pickupStatus,
             'pickup_batch' => $pickupBatch ? 'P-'.$pickupBatch->id : null,
@@ -165,12 +367,12 @@ class SellerOrderController extends Controller
             'pickup_rider' => $pickupAssignment?->riderProfile?->user?->name,
             'pickup_assigned_at' => $pickupAssignment?->assigned_at,
             'pickup_collected_at' => $pickupAssignment?->completed_at,
-            'pickup_hub' => $pickupBatch?->logisticsCenter?->business_name ?? $order->shipment?->logisticsCenter?->business_name,
+            'pickup_hub' => $pickupBatch?->logisticsCenter?->business_name ?? $shipments->first()?->logisticsCenter?->business_name,
             'shipping_address' => $address?->formatted() ?? 'Address unavailable',
             'status' => str($order->status)->replace('_', ' ')->title()->toString(),
             'status_key' => $this->statusKey($order->status),
-            'delivery' => $order->shipment,
-            'map_markers' => app(MapDataService::class)->forShipment($order->shipment, true, true),
+            'delivery' => $shipments->first(),
+            'map_markers' => app(MapDataService::class)->forShipments($shipments, includeSeller: true),
         ];
     }
 

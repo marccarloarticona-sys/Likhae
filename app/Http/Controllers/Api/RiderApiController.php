@@ -130,7 +130,7 @@ class RiderApiController extends Controller
             'already_verified' => $result['already_verified'],
             'assignment_id' => $result['assignment']->id,
             'shipment_status' => $result['assignment']->shipment?->current_status,
-            'message' => $result['already_verified'] ? 'Parcel already verified.' : 'Parcel verified and collected.',
+            'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
         ]]);
     }
 
@@ -582,7 +582,7 @@ class RiderApiController extends Controller
 
     private function assignmentImage(RiderAssignment $assignment): ?string
     {
-        $images = $assignment->shipment?->sellerOrder?->items?->first()?->product?->images ?? collect();
+        $images = $assignment->shipment?->orderItem?->product?->images ?? collect();
         $path = $images->firstWhere('is_primary', true)?->file_path ?? $images->first()?->file_path;
         return $path ? Storage::url($path) : null;
     }

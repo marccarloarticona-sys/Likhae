@@ -49,16 +49,22 @@ class RiderOperationalPagesTest extends TestCase
         $this->get(route('rider.deliveries'))
             ->assertOk()
             ->assertSee('Delivery Assignments')
+            ->assertSee('Scan Waybill')
+            ->assertSee('data-parcel-scanner', false)
+            ->assertSee('name="tracking"', false)
             ->assertSee('No active delivery assignments found.');
 
         $this->get(route('rider.history'))
             ->assertOk()
             ->assertSee('Pickup and Delivery History')
+            ->assertSee('From date')
             ->assertSee('No rider history found yet.');
 
         $this->get(route('rider.earnings'))
             ->assertOk()
             ->assertSee('My Earnings')
+            ->assertSee("Today's earnings")
+            ->assertSee("This week's earnings")
             ->assertSee('No real earnings records are available yet.');
     }
 }

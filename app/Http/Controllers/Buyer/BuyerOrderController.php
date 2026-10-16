@@ -49,7 +49,7 @@ class BuyerOrderController extends Controller
         if ($request->filled('order')) {
             $order = $request->user()
                 ->orders()
-                ->with(['sellerOrders.items.product', 'sellerOrders.shipment', 'address', 'payments'])
+                ->with(['sellerOrders.items.product', 'sellerOrders.shipments.orderItem', 'address', 'payments'])
                 ->where('order_number', $request->query('order'))
                 ->first();
         }
@@ -57,7 +57,7 @@ class BuyerOrderController extends Controller
         return view('Buyer.orders', [
             'mode' => 'success',
             'selectedOrder' => $order,
-            'orders' => $request->user()->orders()->with(['sellerOrders.shipment', 'payments'])->latest()->paginate(10),
+            'orders' => $request->user()->orders()->with(['sellerOrders.shipments', 'payments'])->latest()->paginate(10),
         ]);
     }
 
@@ -79,8 +79,8 @@ class BuyerOrderController extends Controller
                 ->where('status', 'PROCESSING')
                 ->where(function ($query) use ($deliveredShipmentStatuses): void {
                     $query
-                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                        ->orWhereHas('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
+                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipments'))
+                        ->orWhereHas('sellerOrders.shipments', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
                 })
                 ->count(),
         );
@@ -89,8 +89,8 @@ class BuyerOrderController extends Controller
             (clone $buyerOrders)
                 ->where('status', 'PROCESSING')
                 ->whereHas('sellerOrders')
-                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                ->whereDoesntHave('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses))
+                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipments'))
+                ->whereDoesntHave('sellerOrders.shipments', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses))
                 ->count(),
         );
         $orderStatusCounts->put('ALL', (clone $buyerOrders)->count());
@@ -101,7 +101,7 @@ class BuyerOrderController extends Controller
 
         $orderQuery = $request->user()
             ->orders()
-            ->with(['sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'payments', 'disputes']);
+            ->with(['sellerOrders.sellerProfile', 'sellerOrders.items.shipment', 'sellerOrders.items.product.images', 'sellerOrders.shipments.orderItem', 'sellerOrders.shipments.events', 'payments', 'disputes']);
 
         if ($returnRefundReady) {
             $orderQuery->with('returnRefundRequests');
@@ -115,15 +115,15 @@ class BuyerOrderController extends Controller
             $orderQuery
                 ->where('status', 'PROCESSING')
                 ->whereHas('sellerOrders')
-                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                ->whereDoesntHave('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
+                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipments'))
+                ->whereDoesntHave('sellerOrders.shipments', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
         } elseif ($filter === 'PROCESSING') {
             $orderQuery
                 ->where('status', 'PROCESSING')
                 ->where(function ($query) use ($deliveredShipmentStatuses): void {
                     $query
-                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                        ->orWhereHas('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
+                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipments'))
+                        ->orWhereHas('sellerOrders.shipments', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
                 });
         } elseif (in_array($filter, ['PLACED', 'COMPLETED', 'CANCELLED'], true)) {
             $orderQuery->where('status', $filter);
@@ -161,7 +161,7 @@ class BuyerOrderController extends Controller
             ->when($ids->isNotEmpty(), fn ($query) => $query->whereIn('id', $ids))
             ->with([
                 'sellerOrders' => fn ($query) => $query->select(['id', 'order_id']),
-                'sellerOrders.shipment' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at']),
+                'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at']),
             ])
             ->get()
             ->sortBy('id')
@@ -182,29 +182,24 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
-        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'sellerOrders.shipment.deliveryAttempts', 'sellerOrders.shipment.riderAssignments.riderProfile.user', 'sellerOrders.shipment.riderAssignments.liveLocation', 'sellerOrders.shipment.logisticsCenter.address', 'address', 'payments', 'disputes'];
+        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.shipment', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipments.orderItem', 'sellerOrders.shipments.events', 'sellerOrders.shipments.deliveryAttempts', 'sellerOrders.shipments.riderAssignments.riderProfile.user', 'sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.logisticsCenter.address', 'address', 'payments', 'disputes'];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
             $orderRelations[] = 'returnRefundRequests';
         }
         $selectedOrder = $order->load($orderRelations);
         $selectedOrderActionState = $actions->state($selectedOrder, $this->returnRefundStorageReady());
-        $riderRatingsByShipment = $selectedOrder->sellerOrders->mapWithKeys(function ($sellerOrder): array {
-            $shipment = $sellerOrder->shipment;
-            $assignment = $shipment?->riderAssignments
+        $riderRatingsByShipment = $selectedOrder->sellerOrders->flatMap->shipments->mapWithKeys(function ($shipment): array {
+            $assignment = $shipment->riderAssignments
                 ->where('assignment_type', 'DELIVERY')
                 ->sortByDesc('id')
                 ->first();
-            $review = $assignment
-                ? $sellerOrder->items->first(fn ($item) => (int) $item->review?->rider_profile_id === (int) $assignment->rider_profile_id)?->review
-                : null;
+            $review = $shipment->orderItem?->review;
 
-            return $shipment && $assignment
-                ? [$shipment->id => (int) ($review?->rider_rating ?? 0)]
-                : [];
+            return $assignment ? [$shipment->id => (int) ($review?->rider_rating ?? 0)] : [];
         });
         $reviewImagesById = $reviewImages->urlsFor($selectedOrder->sellerOrders->flatMap->items->pluck('review')->filter());
-        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->map->shipment->filter(), includeSeller: true);
+        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->flatMap->shipments, includeSeller: true);
         $deliveryPinRequired = $this->canConfirmDeliveryPin($selectedOrder, $selectedOrder->address);
 
         return view('Buyer.orders', [
@@ -215,7 +210,7 @@ class BuyerOrderController extends Controller
             'mapMarkers' => $mapMarkers,
             'deliveryPinRequired' => $deliveryPinRequired,
             'selectedOrderActionState' => $selectedOrderActionState,
-            'orders' => $request->user()->orders()->with(['sellerOrders.shipment'])->latest()->paginate(10),
+            'orders' => $request->user()->orders()->with(['sellerOrders.shipments'])->latest()->paginate(10),
         ]);
     }
 
@@ -254,10 +249,10 @@ class BuyerOrderController extends Controller
             return false;
         }
 
-        $order->loadMissing('sellerOrders.shipment');
+        $order->loadMissing('sellerOrders.shipments');
 
-        return ! $order->sellerOrders->contains(fn ($sellerOrder): bool => in_array(
-            $sellerOrder->shipment?->current_status,
+        return ! $order->sellerOrders->flatMap->shipments->contains(fn ($shipment): bool => in_array(
+            $shipment->current_status,
             ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'],
             true,
         ));
@@ -306,9 +301,9 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         abort_unless(in_array($order->status, ['PLACED', 'PROCESSING'], true), 409, 'This order can no longer be cancelled.');
-        $order->loadMissing('sellerOrders.shipment');
+        $order->loadMissing('sellerOrders.shipments');
         abort_if(
-            $order->sellerOrders->contains(fn ($sellerOrder): bool => in_array($sellerOrder->shipment?->current_status, [
+            $order->sellerOrders->flatMap->shipments->contains(fn ($shipment): bool => in_array($shipment->current_status, [
                 'PICKED_UP',
                 'AT_SORTING_CENTER',
                 'SORTED',
@@ -334,10 +329,10 @@ class BuyerOrderController extends Controller
 
         foreach ($order->sellerOrders as $sellerOrder) {
             $sellerOrder->update(['status' => 'CANCELLED']);
-            if ($sellerOrder->shipment) {
-                $sellerOrder->shipment->update(['current_status' => 'RETURNED']);
+            foreach ($sellerOrder->shipments as $shipment) {
+                $shipment->update(['current_status' => 'RETURNED']);
                 ShipmentEvent::query()->create([
-                    'shipment_id' => $sellerOrder->shipment->id,
+                    'shipment_id' => $shipment->id,
                     'status' => 'RETURNED',
                     'actor_user_id' => $request->user()->id,
                     'notes' => 'Order cancelled by buyer before fulfillment.',
@@ -364,14 +359,8 @@ class BuyerOrderController extends Controller
             'confirm_receipt' => ['required', 'accepted'],
         ]);
 
-        DB::transaction(function () use ($request, $order, $actions): void {
-            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
-            $state = $actions->state($lockedOrder, $this->returnRefundStorageReady());
-            abort_if($state['active_dispute'], 409, 'Resolve the active return/refund request before confirming receipt.');
-            abort_unless($state['can_confirm_received'], 409, 'Receipt can only be confirmed once, after every parcel has been delivered.');
-            $completed = $actions->completeReceipt($lockedOrder, $request->user(), 'Buyer confirmed receipt.');
-            abort_unless($completed, 409, 'This order can no longer be completed.');
-        });
+        $completed = $actions->confirmReceipt($order, $request->user(), $actions->returnRefundStorageReady());
+        abort_unless($completed, 409, 'Receipt can only be confirmed after every parcel has been delivered and any active return/refund request is resolved.');
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -397,7 +386,7 @@ class BuyerOrderController extends Controller
         }
 
         return view('Buyer.return-refund', [
-            'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipment.events', 'payments']),
+            'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipments.events', 'payments']),
             'issues' => $this->returnRefundIssues(),
             'refundMethods' => $this->refundMethods($order),
             'deliveredAt' => $deliveredAt,
@@ -601,18 +590,18 @@ class BuyerOrderController extends Controller
 
     private function returnRefundEligibility(Order $order): array
     {
-        $order->loadMissing('sellerOrders.shipment.events');
+        $order->loadMissing('sellerOrders.shipments.events');
         abort_unless(in_array($order->status, ['PROCESSING', 'COMPLETED'], true), 409, 'This order is no longer eligible for return or refund.');
         abort_unless(
             $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                    && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true)),
+                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipments->isNotEmpty()
+                    && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true))),
             409,
             'Return or refund can only be requested after delivery.'
         );
 
         $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment->events)
+            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
         $deadline = $deliveredAt?->copy()->addDays(5);
@@ -686,18 +675,18 @@ class BuyerOrderController extends Controller
     private function returnRefundLegacy(Request $request, Order $order): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
-        $order->loadMissing('sellerOrders.shipment.events');
+        $order->loadMissing('sellerOrders.shipments.events');
         abort_unless(in_array($order->status, ['PROCESSING', 'COMPLETED'], true), 409, 'This order is no longer eligible for return or refund.');
         abort_unless(
             $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                    && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true)),
+                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipments->isNotEmpty()
+                    && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true))),
             409,
             'Return or refund can only be requested after delivery.'
         );
 
         $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment->events)
+            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
         abort_unless($deliveredAt && now()->lte($deliveredAt->copy()->addDays(5)), 409, 'The five-day return and refund window has expired.');
@@ -787,7 +776,7 @@ class BuyerOrderController extends Controller
 
     public function review(Request $request, OrderItem $item, RiderRatingService $riderRatings, ReviewImageService $reviewImages): RedirectResponse|JsonResponse
     {
-        $item->loadMissing('review', 'sellerOrder.order', 'sellerOrder.shipment.riderAssignments.riderProfile');
+        $item->loadMissing('review', 'sellerOrder.order', 'shipment.riderAssignments.riderProfile');
         abort_unless((int) $item->sellerOrder->order->buyer_user_id === (int) $request->user()->id, 403);
         abort_unless($item->sellerOrder->order->status === 'COMPLETED', 409, 'You can review after completing the order.');
 
@@ -838,7 +827,7 @@ class BuyerOrderController extends Controller
         }
 
         if (filled($data['rider_rating'] ?? null)) {
-            $assignment = $item->sellerOrder->shipment?->riderAssignments
+            $assignment = $item->shipment?->riderAssignments
                 ->where('assignment_type', 'DELIVERY')
                 ->sortByDesc('id')
                 ->first();
@@ -877,12 +866,11 @@ class BuyerOrderController extends Controller
                 'status' => (string) $order->status,
                 'updated_at' => $order->updated_at?->toIso8601String(),
                 'shipments' => $order->sellerOrders
-                    ->map(fn (SellerOrder $sellerOrder): ?array => $sellerOrder->shipment ? [
-                        'id' => (int) $sellerOrder->shipment->id,
-                        'status' => (string) $sellerOrder->shipment->current_status,
-                        'updated_at' => $sellerOrder->shipment->updated_at?->toIso8601String(),
-                    ] : null)
-                    ->filter()
+                    ->flatMap(fn (SellerOrder $sellerOrder) => $sellerOrder->shipments->map(fn ($shipment): array => [
+                        'id' => (int) $shipment->id,
+                        'status' => (string) $shipment->current_status,
+                        'updated_at' => $shipment->updated_at?->toIso8601String(),
+                    ]))
                     ->sortBy('id')
                     ->values()
                     ->all(),

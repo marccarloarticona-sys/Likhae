@@ -111,25 +111,25 @@
                 <div class="lk-chat-head">
                     <div class="lk-chat-user"><img class="lk-chat-avatar" src="{{ $activeOtherAvatar }}" alt="{{ $activeOtherName }}"><div class="lk-chat-user-copy"><strong>{{ $activeOtherName }}</strong><span class="lk-chat-status" data-message-connection-status><span class="lk-chat-status-dot"></span>Live conversation</span></div></div>
                 </div>
-                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
+                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($activeMessages as $message)
                         @php($fromMe = (int) $message->sender_user_id === (int) auth()->id())
                         <div class="lk-message-row {{ $fromMe ? 'is-mine' : '' }}" data-message-id="{{ $message->id }}">
                             @unless($fromMe)<img class="lk-message-small-avatar" src="{{ $activeOtherAvatar }}" alt="{{ $activeOtherName }}">@endunless
-                            <div><div class="lk-message-bubble">{{ $message->body }}</div><span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span></div>
+                            <div><div class="lk-message-bubble">{{ $message->body }}</div>@if(($sellerMessageAttachments ?? false) && filled($message->attachment_path))<img class="mt-2 max-h-64 max-w-full rounded-lg object-contain" src="{{ route('seller.messages.attachments.show', $message->id) }}" alt="Image attachment" loading="lazy">@endif<span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span></div>
                         </div>
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message.</div>
                     @endforelse
                 </div>
-                <form method="POST" action="{{ $sendRoute }}" class="lk-chat-form" data-live-message-form>@csrf<input type="hidden" name="recipient_user_id" value="{{ $activeOther->id }}"><input type="hidden" name="conversation_id" value="{{ $activeConversation->id }}"><input class="lk-chat-input" name="body" required maxlength="5000" autocomplete="off" placeholder="Type your message to {{ $activeOtherName }}..."><button class="lk-chat-send" type="submit">Send</button></form>
+                <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-chat-form" data-live-message-form>@csrf<input type="hidden" name="recipient_user_id" value="{{ $activeOther->id }}"><input type="hidden" name="conversation_id" value="{{ $activeConversation->id }}"><input class="lk-chat-input" name="body" required maxlength="{{ ($sellerMessageMaxLength ?? 5000) }}" data-message-body autocomplete="off" placeholder="Type your message to {{ $activeOtherName }}..."><span class="text-xs text-stone-500"><span data-message-count>0</span>/{{ ($sellerMessageMaxLength ?? 5000) }}</span>@if($sellerMessageAttachments ?? false)<label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img data-attachment-preview hidden alt="Selected attachment preview"></label>@endif<button class="lk-chat-send" type="submit">Send</button></form>
             @else
                 <div class="lk-chat-empty-state">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 13h5"/></svg>
                     <h3>No conversation selected</h3>
                     <p>Choose a recipient to start a conversation.</p>
-                    <form method="POST" action="{{ $sendRoute }}" class="lk-compose-form">@csrf<select name="recipient_user_id" required><option value="">Select recipient</option>@foreach($contacts ?? [] as $contact)<option value="{{ $contact->id }}">{{ $contact->name }} — {{ str($contact->account_type)->headline() }}</option>@endforeach</select><textarea name="body" required maxlength="5000" rows="4" placeholder="Type your message"></textarea><button class="lk-chat-send" type="submit">Send Message</button></form>
+                    <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-compose-form">@csrf<select name="recipient_user_id" required><option value="">Select recipient</option>@foreach($contacts ?? [] as $contact)<option value="{{ $contact->id }}">{{ $contact->name }} ({{ str($contact->account_type)->headline() }})</option>@endforeach</select><textarea name="body" required maxlength="{{ ($sellerMessageMaxLength ?? 5000) }}" data-message-body rows="4" placeholder="Type your message">{{ old('body') }}</textarea><span class="text-xs text-stone-500"><span data-message-count>0</span>/{{ ($sellerMessageMaxLength ?? 5000) }}</span>@if($sellerMessageAttachments ?? false)<label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img data-attachment-preview hidden alt="Selected attachment preview"></label>@endif<button class="lk-chat-send" type="submit">Send Message</button></form>
                 </div>
             @endif
         </main>
@@ -138,4 +138,24 @@
 
 <script>
 document.querySelectorAll('[data-message-thread]').forEach((thread) => { thread.scrollTop = thread.scrollHeight; });
+document.querySelectorAll('[data-message-body]').forEach((input) => {
+    const counter = input.closest('form')?.querySelector('[data-message-count]');
+    const updateCount = () => { if (counter) counter.textContent = String([...input.value].length); };
+    input.addEventListener('input', updateCount);
+    updateCount();
+});
+document.querySelectorAll('[data-message-attachment-input]').forEach((input) => input.addEventListener('change', () => {
+    const preview = input.closest('form')?.querySelector('[data-attachment-preview]');
+    const file = input.files?.[0];
+    if (!preview) return;
+    if (!file) {
+        preview.hidden = true;
+        preview.removeAttribute('src');
+        return;
+    }
+    if (preview.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+    preview.dataset.previewUrl = URL.createObjectURL(file);
+    preview.src = preview.dataset.previewUrl;
+    preview.hidden = false;
+}));
 </script>

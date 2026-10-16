@@ -4,6 +4,7 @@ namespace App\Services\Fulfillment;
 
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Rider\RiderAssignment;
@@ -134,6 +135,24 @@ final class LocalRiderTripService
                 throw new RuntimeException('This rider assignment is already loaded on an active local trip.');
             }
 
+            if ($assignment->assignment_type === RiderAssignment::TYPE_DELIVERY) {
+                $shipmentAlreadyLoaded = RiderLocalTripItem::query()
+                    ->whereHas('riderAssignment', fn ($query) => $query
+                        ->where('shipment_id', $assignment->shipment_id)
+                        ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                        ->whereKeyNot($assignment->id))
+                    ->whereHas('trip', fn ($query) => $query->whereNotIn('status', [
+                        RiderLocalTrip::COMPLETED,
+                        RiderLocalTrip::CANCELLED,
+                        RiderLocalTrip::EXCEPTION,
+                    ]))
+                    ->lockForUpdate()
+                    ->exists();
+                if ($shipmentAlreadyLoaded) {
+                    throw new RuntimeException('This shipment already belongs to another active delivery trip.');
+                }
+            }
+
             if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP) {
                 $shipmentAlreadyLoaded = RiderLocalTripItem::query()
                     ->whereHas('riderAssignment', fn ($query) => $query
@@ -163,15 +182,20 @@ final class LocalRiderTripService
         });
     }
 
-    public function loadTrip(User $actor, RiderLocalTrip $trip): RiderLocalTrip
+    /** @param array<int|string, string> $scannedCodes keyed by local trip item ID */
+    public function loadTrip(User $actor, RiderLocalTrip $trip, array $scannedCodes = []): RiderLocalTrip
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
-            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
+        return DB::transaction(function () use ($actor, $trip, $scannedCodes): RiderLocalTrip {
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment.shipment')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, true);
             if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
                 throw new RuntimeException('Seller pickup batches are verified one parcel at a time at the seller.');
+            }
+            if ($trip->status === RiderLocalTrip::READY
+                && $trip->items->every(fn (RiderLocalTripItem $item): bool => $item->status === RiderLocalTripItem::LOADED)) {
+                return $trip;
             }
             $this->assertTripOpenForLoading($trip);
             if ($trip->items->isEmpty()) {
@@ -183,6 +207,30 @@ final class LocalRiderTripService
             }
             if ($activeItems->contains(fn (RiderLocalTripItem $item): bool => ! in_array($item->riderAssignment?->status, self::OPEN_ASSIGNMENT_STATUSES, true))) {
                 throw new RuntimeException('Every trip item must have an active rider assignment before loading.');
+            }
+            if (count($scannedCodes) !== $activeItems->count()) {
+                throw new RuntimeException('Scan every parcel in this trip before verifying the load.');
+            }
+
+            foreach ($activeItems as $item) {
+                $code = trim((string) ($scannedCodes[$item->id] ?? ''));
+                $tracking = trim((string) $item->riderAssignment?->shipment?->tracking_number);
+                if ($code === '' || $tracking === '' || strtoupper($code) !== strtoupper($tracking)) {
+                    throw new RuntimeException('The scanned barcode does not match local trip parcel '.$tracking.'.');
+                }
+                ParcelScan::query()->create([
+                    'shipment_id' => $item->riderAssignment->shipment_id,
+                    'scanned_by_user_id' => $actor->id,
+                    'logistics_center_id' => $trip->logistics_center_id,
+                    'rider_assignment_id' => $item->rider_assignment_id,
+                    'transfer_leg_id' => null,
+                    'scan_type' => 'DELIVERY_TRIP_LOAD',
+                    'scan_method' => 'MANUAL',
+                    'scanned_code' => $code,
+                    'result' => 'SUCCESS',
+                    'notes' => 'Parcel barcode scanned during final-mile trip load verification.',
+                    'scanned_at' => now(),
+                ]);
             }
 
             $now = now();

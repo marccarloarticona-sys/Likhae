@@ -12,6 +12,8 @@ use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\Seller\Category;
+use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
@@ -95,6 +97,22 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'business_name' => 'E2E Store',
             'status' => 'ACTIVE',
         ]);
+        $product = Product::create([
+            'seller_profile_id' => $seller->id,
+            'category_id' => $category->id,
+            'name' => 'E2E Parcel Product',
+            'slug' => 'e2e-parcel-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $variant = ProductVariant::create([
+            'product_id' => $product->id,
+            'sku' => 'E2E-PARCEL-SKU',
+            'price' => 100,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
         $order = Order::create([
             'order_number' => 'E2E-ORDER-001',
             'buyer_user_id' => $buyer->id,
@@ -119,10 +137,23 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'order_id' => $order->id,
             'seller_profile_id' => $seller->id,
             'status' => 'PLACED',
+            'item_subtotal' => 100,
             'grand_total' => 100,
+        ]);
+        $sellerOrder->items()->create([
+            'product_id' => $product->id,
+            'product_variant_id' => $variant->id,
+            'product_name' => $product->name,
+            'sku' => $variant->sku,
+            'original_unit_price' => 100,
+            'unit_price' => 100,
+            'quantity' => 1,
+            'discount_amount' => 0,
+            'line_total' => 100,
         ]);
         $workflow->sellerTransition($sellerOrder, 'confirm', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'prepare', $sellerUser);
+        $workflow->sellerTransition($sellerOrder, 'pack', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'ready', $sellerUser);
         $shipment = $sellerOrder->shipment()->firstOrFail();
         $pickupRequest = $shipment->pickupRequests()->firstOrFail();
@@ -174,13 +205,17 @@ class EndToEndShipmentLifecycleTest extends TestCase
         $deliveryTrip = $localTrips->createTrip($centerUser, $deliveryRider, $area, 'DELIVERY');
         $deliveryAssignment = $workflow->assignRider($shipment->fresh(), $deliveryRider, 'DELIVERY', $centerUser);
         $localTrips->addAssignment($centerUser, $deliveryTrip, $deliveryAssignment);
-        $localTrips->loadTrip($centerUser, $deliveryTrip);
+        $tripItem = $deliveryTrip->items()->sole();
+        $localTrips->loadTrip($centerUser, $deliveryTrip, [$tripItem->id => $shipment->tracking_number]);
         $workflow->riderTransition($deliveryAssignment, 'accept', $deliveryRiderUser);
         $workflow->riderTransition($deliveryAssignment, 'start', $deliveryRiderUser);
         $this->actingAs($deliveryRiderUser)
             ->post(route('rider.shipments.transition', $deliveryAssignment), [
                 '_method' => 'PATCH',
                 'action' => 'delivery_success',
+                'scanned_code' => $shipment->tracking_number,
+                'scan_method' => 'BARCODE',
+                'collected_amount' => '100.00',
                 'proof_file' => UploadedFile::fake()->image('e2e-proof.jpg'),
             ])
             ->assertRedirect()

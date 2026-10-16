@@ -73,7 +73,12 @@ class SellerOrder extends Model
 
     public function shipment(): HasOne
     {
-        return $this->hasOne(Shipment::class);
+        return $this->hasOne(Shipment::class)->oldestOfMany();
+    }
+
+    public function shipments(): HasMany
+    {
+        return $this->hasMany(Shipment::class)->orderBy('id');
     }
 
     public function commissionTransaction(): HasOne

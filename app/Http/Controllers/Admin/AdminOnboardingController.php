@@ -17,7 +17,14 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminOnboardingController extends Controller
 {
-    private const ADMIN_MANAGED_ACCOUNT_TYPES = [
+    private const ADMIN_VISIBLE_ACCOUNT_TYPES = [
+        User::TYPE_BUYER,
+        User::TYPE_SELLER,
+        User::TYPE_LOGISTICS,
+        User::TYPE_RIDER,
+    ];
+
+    private const ADMIN_REVIEWABLE_ACCOUNT_TYPES = [
         User::TYPE_BUYER,
         User::TYPE_SELLER,
         User::TYPE_LOGISTICS,
@@ -39,7 +46,7 @@ class AdminOnboardingController extends Controller
                 RegistrationApplication::STATUS_UNDER_REVIEW,
             ])],
             'type' => ['nullable', Rule::in([
-                ...self::ADMIN_MANAGED_ACCOUNT_TYPES,
+                ...self::ADMIN_VISIBLE_ACCOUNT_TYPES,
             ])],
         ]);
 
@@ -53,10 +60,10 @@ class AdminOnboardingController extends Controller
             default => [$status],
         };
 
-        $managedApplications = RegistrationApplication::query()
-            ->whereHas('user', fn ($query) => $query->whereIn('account_type', self::ADMIN_MANAGED_ACCOUNT_TYPES));
+        $visibleApplications = RegistrationApplication::query()
+            ->whereHas('user', fn ($query) => $query->whereIn('account_type', self::ADMIN_VISIBLE_ACCOUNT_TYPES));
 
-        $registrationCounts = (clone $managedApplications)
+        $registrationCounts = (clone $visibleApplications)
             ->select('status')
             ->selectRaw('COUNT(*) AS aggregate')
             ->whereIn('status', [
@@ -66,11 +73,12 @@ class AdminOnboardingController extends Controller
             ->groupBy('status')
             ->pluck('aggregate', 'status');
 
-        $records = (clone $managedApplications)
+        $records = (clone $visibleApplications)
             ->with([
                 'user.addresses',
                 'sellerData.category',
                 'logisticsData.businessAddress',
+                'riderData.targetLogisticsCenter',
             ])
             ->when($statusFilter !== null, fn ($query) => $query->whereIn('status', $statusFilter))
             ->when($type, fn ($query) => $query->whereHas('user', fn ($userQuery) => $userQuery->where('account_type', $type)))
@@ -94,17 +102,15 @@ class AdminOnboardingController extends Controller
     {
         $application->load([
             'user.addresses',
+            'user.sellerProfile',
             'documents.verifier',
             'sellerData.category',
             'logisticsData.businessAddress',
+            'riderData.targetLogisticsCenter',
             'reviewer',
         ]);
 
-        abort_unless(
-            $application->user
-                && in_array($application->user->account_type, self::ADMIN_MANAGED_ACCOUNT_TYPES, true),
-            404,
-        );
+        $this->ensureAdminVisible($application);
 
         return view('Admin.registrations.show', compact('application'));
     }
@@ -161,11 +167,11 @@ class AdminOnboardingController extends Controller
         ApplicationDocument $document,
         Request $request,
     ): StreamedResponse {
-        $this->ensureAdminReviewable($application);
+        $this->ensureAdminVisible($application);
         abort_unless($document->registration_application_id === $application->id, 404);
         abort_unless(Storage::disk('registrations')->exists($document->file_path), 404);
 
-        $extension = pathinfo($document->original_name ?: $document->file_path, PATHINFO_EXTENSION);
+        $extension = pathinfo($document->file_path, PATHINFO_EXTENSION);
         $filename = strtolower($document->document_type).($extension ? '.'.$extension : '');
 
         if ($request->boolean('preview')) {
@@ -248,7 +254,18 @@ class AdminOnboardingController extends Controller
 
         abort_unless(
             $application->user
-                && in_array($application->user->account_type, self::ADMIN_MANAGED_ACCOUNT_TYPES, true),
+                && in_array($application->user->account_type, self::ADMIN_REVIEWABLE_ACCOUNT_TYPES, true),
+            404,
+        );
+    }
+
+    private function ensureAdminVisible(RegistrationApplication $application): void
+    {
+        $application->loadMissing('user');
+
+        abort_unless(
+            $application->user
+                && in_array($application->user->account_type, self::ADMIN_VISIBLE_ACCOUNT_TYPES, true),
             404,
         );
     }

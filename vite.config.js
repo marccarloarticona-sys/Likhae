@@ -60,6 +60,7 @@ export default defineConfig(({ mode }) => {
                     'resources/js/logistic/app.js',
                     'resources/js/logistic/portal.js',
                     'resources/js/rider/app.js',
+                    'resources/js/address/forms.js',
                     'resources/js/shared/likhae-workspace-ai.js',
                     'resources/js/shared/mapbox.js',
                     'resources/js/shared/address-pin.js',

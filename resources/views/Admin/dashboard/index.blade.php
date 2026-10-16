@@ -32,7 +32,7 @@
             </a>
 
             <a
-                href="{{ route('admin.messages', ['tab' => 'announcements']) }}"
+                href="{{ route('admin.marketing', ['section' => 'announcements']) }}#announcements"
                 class="ad-btn ad-btn-primary"
             >
                 New announcement

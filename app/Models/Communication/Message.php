@@ -17,6 +17,7 @@ class Message extends Model
         'conversation_id',
         'sender_user_id',
         'body',
+        'attachment_path',
         'sent_at',
         'edited_at',
     ];

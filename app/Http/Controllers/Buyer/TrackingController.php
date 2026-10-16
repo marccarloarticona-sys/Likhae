@@ -21,7 +21,7 @@ class TrackingController extends Controller
             ->with([
                 'sellerOrder.order.buyer',
                 'sellerOrder.order.address',
-                'sellerOrder.items',
+                'orderItem',
                 'events.actor',
                 'scans',
                 'deliveryAttempts',
@@ -49,6 +49,7 @@ class TrackingController extends Controller
                 'sellerOrder.order.address',
                 'sellerOrder.sellerProfile',
                 'sellerOrder.sellerProfile.businessAddress',
+                'orderItem',
                 'riderAssignments.riderProfile',
                 'riderAssignments.liveLocation',
                 'logisticsCenter.address',

@@ -4,7 +4,7 @@
 
 @php
     $data = $rider ?? [];
-    $status = data_get($data, 'status', 'Pending Approval');
+    $status = data_get($data, 'status', 'Pending');
     $statusClass = match ($status) {
         'Approved' => 'bg-success-soft text-success',
         'Rejected' => 'bg-danger-soft text-danger',
@@ -19,7 +19,8 @@
         ['Address', data_get($data, 'address', 'Not recorded')],
         ['Vehicle Type', data_get($data, 'vehicle', 'Not recorded')],
         ['Plate Number', data_get($data, 'plate', 'Not recorded')],
-        ['Delivery Area', data_get($data, 'area', 'Unassigned')],
+        ["Driver's License Number", data_get($data, 'license', 'Not recorded')],
+        ['Sorting Center', data_get($data, 'center', 'Not recorded')],
         ['Submitted', data_get($data, 'submitted', 'Not recorded')],
     ];
 @endphp
@@ -29,6 +30,11 @@
     @if(session('success'))
         <div class="rounded-xl border border-success/30 bg-success-soft p-4 text-[10px] font-semibold text-success">
             {{ session('success') }}
+        </div>
+    @endif
+    @if($errors->any())
+        <div class="rounded-xl border border-danger/30 bg-danger-soft p-4 text-[10px] font-semibold text-danger" role="alert">
+            {{ $errors->first() }}
         </div>
     @endif
 
@@ -45,7 +51,7 @@
             <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Courier Registration</span>
             <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink sm:text-[38px]">Rider Application</h1>
             <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">
-                Review the applicant profile from the user record before making an approval decision.
+                Review the submitted information and each document before making an approval decision.
             </p>
         </div>
         <span class="rounded-full px-3 py-1 text-[8px] font-semibold {{ $statusClass }}">
@@ -67,27 +73,81 @@
 
     <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="text-[13px] font-semibold text-ink">Documents</h2>
-        <p class="mt-2 text-[10px] leading-6 text-muted">
-            No storage-backed rider document fields are exposed by the current controller payload. This page does not display fake document previews.
-        </p>
+        <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            @forelse($application->documents as $document)
+                @php
+                    $documentUrl = route('logistics.riders.application.documents.show', [$application, $document]);
+                    $previewUrl = $documentUrl.'?preview=1';
+                    $mime = strtolower((string) $document->mime_type);
+                @endphp
+                <article class="rounded-xl border border-line p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <h3 class="text-[11px] font-semibold text-ink">{{ str($document->document_type)->replace('_', ' ')->headline() }}</h3>
+                            <p class="mt-1 break-all text-[9px] text-muted">{{ $document->original_name ?: 'Submitted document' }}</p>
+                        </div>
+                        <a href="{{ $documentUrl }}" class="rounded-lg border border-line px-3 py-2 text-[9px] font-semibold text-ink">Download</a>
+                    </div>
+                    <p class="mt-2 text-[9px] font-semibold text-muted">{{ str($document->verification_status)->headline() }}</p>
+                    <div class="mt-3 flex h-60 items-center justify-center overflow-hidden rounded-lg border border-line bg-page-secondary">
+                        @if(str_starts_with($mime, 'image/'))
+                            <img src="{{ $previewUrl }}" alt="{{ str($document->document_type)->replace('_', ' ')->headline() }}" class="h-full w-full object-contain">
+                        @elseif($mime === 'application/pdf')
+                            <iframe src="{{ $previewUrl }}" title="{{ str($document->document_type)->replace('_', ' ')->headline() }}" class="h-full w-full border-0"></iframe>
+                        @else
+                            <a href="{{ $documentUrl }}" class="text-[10px] font-semibold text-primary">Open document</a>
+                        @endif
+                    </div>
+                    @if($document->rejection_reason)
+                        <p class="mt-2 text-[9px] text-danger">Reason: {{ $document->rejection_reason }}</p>
+                    @endif
+                    @if(in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+                        <div class="mt-3 grid gap-2">
+                            <form method="POST" action="{{ route('logistics.riders.application.documents.verify', [$application, $document]) }}">
+                                @csrf
+                                <button type="submit" class="rounded-lg border border-success/30 px-3 py-2 text-[9px] font-semibold text-success">Mark verified</button>
+                            </form>
+                            <form method="POST" action="{{ route('logistics.riders.application.documents.reject', [$application, $document]) }}" class="grid gap-2">
+                                @csrf
+                                <label class="text-[9px] font-semibold text-muted" for="reason-{{ $document->id }}">Document rejection reason</label>
+                                <textarea id="reason-{{ $document->id }}" name="reason" minlength="3" maxlength="1000" required class="rounded-lg border border-line p-2 text-[10px]"></textarea>
+                                <button type="submit" class="justify-self-start rounded-lg border border-danger/30 px-3 py-2 text-[9px] font-semibold text-danger">Reject document</button>
+                            </form>
+                        </div>
+                    @endif
+                </article>
+            @empty
+                <p class="text-[10px] text-muted">No documents were submitted.</p>
+            @endforelse
+        </div>
     </section>
 
-    @if($status === 'Pending Approval')
+    @if(in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
         <section class="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 md:flex-row md:items-center md:justify-between">
             <div>
                 <h2 class="text-[13px] font-semibold text-ink">Application Decision</h2>
-                <p class="mt-1 text-[9px] text-muted">Approval and rejection update the rider account in the database.</p>
+                <p class="mt-1 text-[9px] text-muted">Verify the required documents before approving this rider.</p>
             </div>
-            <div class="flex flex-wrap gap-2">
-                <form method="POST" action="{{ route('logistics.riders.approve', data_get($data, 'id')) }}" data-confirm-title="Approve rider application?" data-confirm-message="This will activate the rider account." data-confirm-label="Approve">
+            <div class="grid w-full gap-3 md:max-w-md">
+                <form method="POST" action="{{ route('logistics.riders.approve', $application) }}" class="grid gap-2">
                     @csrf
+                    <label class="text-[9px] font-semibold text-muted" for="decision_notes">Approval notes (optional)</label>
+                    <textarea id="decision_notes" name="decision_notes" maxlength="1000" class="rounded-lg border border-line p-2 text-[10px]"></textarea>
                     <button type="submit" class="h-10 rounded-lg bg-success px-4 text-[10px] font-semibold text-white">Approve Application</button>
                 </form>
-                <form method="POST" action="{{ route('logistics.riders.reject', data_get($data, 'id')) }}" data-confirm-title="Reject rider application?" data-confirm-message="This rider application will be rejected." data-confirm-label="Reject" data-confirm-tone="danger">
+                <form method="POST" action="{{ route('logistics.riders.reject', $application) }}" class="grid gap-2">
                     @csrf
+                    <label class="text-[9px] font-semibold text-muted" for="rejection_reason">Application rejection reason</label>
+                    <textarea id="rejection_reason" name="reason" minlength="3" maxlength="1000" required class="rounded-lg border border-line p-2 text-[10px]"></textarea>
                     <button type="submit" class="h-10 rounded-lg border border-danger/30 bg-surface px-4 text-[10px] font-semibold text-danger">Reject Application</button>
                 </form>
             </div>
+        </section>
+    @else
+        <section class="rounded-xl border border-line bg-surface p-5 text-[10px] text-muted">
+            Reviewed {{ $application->reviewed_at?->format('M d, Y h:i A') ?? 'recently' }}.
+            @if($application->decision_notes) Notes: {{ $application->decision_notes }} @endif
+            @if($application->rejection_reason) Reason: {{ $application->rejection_reason }} @endif
         </section>
     @endif
 </div>

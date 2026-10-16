@@ -15,6 +15,7 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\TransferManifest;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
@@ -24,11 +25,13 @@ use App\Services\Communication\ConversationService;
 use App\Services\Fulfillment\LocalRiderEligibilityService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\RegistrationWorkflowService;
 use App\Services\RiderRatingService;
 use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
+use App\Support\RiderVehicleType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -45,10 +48,66 @@ class LogisticsPortalController extends Controller
         private readonly LocalRiderEligibilityService $localRiderEligibility,
     ) {}
 
-    public function dashboard(Request $request): View
+    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
+        $filters = $shipmentQuery->filters($request);
+
+        // Related figures come from one read transaction; the next request reads
+        // current persisted statuses after any rider workflow transaction commits.
+        $shipmentData = DB::transaction(function () use ($center, $filters, $shipmentQuery): array {
+            $base = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $filters);
+            $counts = $shipmentQuery->counts($base);
+            $ready = app(LogisticsSchemaReadiness::class)->automaticRoutingReady();
+            $operational = [
+                'incoming' => (clone $base)->where(function ($query) use ($center, $ready): void {
+                    $query->where(fn ($local) => $local->where('current_status', 'PICKED_UP')
+                        ->where('logistics_center_id', $center->id));
+                    if ($ready) {
+                        $query->orWhereHas('transferLegs', fn ($leg) => $leg
+                            ->where('destination_logistics_center_id', $center->id)
+                            ->whereIn('status', ['RELEASED', 'IN_TRANSIT']));
+                    }
+                })->count(),
+                'outgoing' => $ready ? (clone $base)->whereHas('transferLegs', fn ($leg) => $leg
+                    ->where('origin_logistics_center_id', $center->id)
+                    ->whereIn('status', ['READY', 'RELEASED', 'IN_TRANSIT']))->count() : 0,
+                'sorting' => (clone $base)->where('current_status', 'AT_SORTING_CENTER')->count(),
+                'rider_assignment' => (clone $base)->where('current_status', 'SORTED')
+                    ->whereDoesntHave('riderAssignments', fn ($assignment) => $assignment
+                        ->where('assignment_type', 'DELIVERY')
+                        ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))->count(),
+                'pickup' => (clone $base)->where('current_status', 'ASSIGNED_TO_RIDER')
+                    ->whereHas('riderAssignments', fn ($assignment) => $assignment
+                        ->where('assignment_type', 'PICKUP')
+                        ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))->count(),
+                'last_mile' => (clone $base)->whereIn('current_status', ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'])->count(),
+                'manifests' => 0,
+            ];
+            if (app(LogisticsSchemaReadiness::class)->transferReady()) {
+                $manifests = TransferManifest::query()
+                    ->where(fn ($query) => $query->where('origin_logistics_center_id', $center->id)
+                        ->orWhere('destination_logistics_center_id', $center->id))
+                    ->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
+                if (! empty($filters['from_date'])) {
+                    $manifests->whereDate('created_at', '>=', $filters['from_date']);
+                }
+                if (! empty($filters['to_date'])) {
+                    $manifests->whereDate('created_at', '<=', $filters['to_date']);
+                }
+                $operational['manifests'] = $manifests->count();
+            }
+
+            return [
+                'counts' => $counts,
+                'operational' => $operational,
+                'recentShipments' => (clone $base)
+                    ->with(['originLogisticsCenter', 'destinationLogisticsCenter',
+                        'latestEvent', 'latestRiderAssignment.riderProfile.user'])
+                    ->latest('shipments.updated_at')->limit(10)->get(),
+            ];
+        });
 
         $finance = [
             'rider_cod_obligations' => 0.0,
@@ -73,14 +132,8 @@ class LogisticsPortalController extends Controller
 
         return view('Logistics.dashboard.index', [
             'center' => $center,
-            'stats' => [
-                'shipments' => Shipment::where('logistics_center_id', $center->id)->count(),
-                'for_receive' => Shipment::where('logistics_center_id', $center->id)->whereIn('current_status', ['PICKED_UP', 'READY_FOR_PICKUP'])->count(),
-                'for_sorting' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'AT_SORTING_CENTER')->count(),
-                'for_dispatch' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'SORTED')->count(),
-                'active_riders' => $center->riders()->whereIn('status', ['ACTIVE', 'WARNED'])->count(),
-            ],
-            'recentShipments' => Shipment::where('logistics_center_id', $center->id)->with(['sellerOrder.order.address'])->latest()->limit(10)->get(),
+            'filters' => $filters,
+            ...$shipmentData,
             'financeSummary' => $finance,
         ]);
     }
@@ -177,8 +230,15 @@ class LogisticsPortalController extends Controller
             ['label' => 'Pending', 'value' => (clone $riderQuery)->where('status', 'PENDING')->count()],
             ['label' => 'Suspended / Banned', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])->count()],
         ];
+        $localRiderCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::localValues())->count();
+        $interLogisticsDriverCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::interLogisticsValues())->count();
+        $classificationCounts = [
+            'local' => $localRiderCount,
+            'inter_logistics' => $interLogisticsDriverCount,
+            'other' => max(0, (int) $stats[0]['value'] - $localRiderCount - $interLogisticsDriverCount),
+        ];
 
-        return view('Logistics.riders.index', compact('riders', 'center', 'stats'));
+        return view('Logistics.riders.index', compact('riders', 'center', 'stats', 'classificationCounts'));
     }
 
     public function riderShow(Request $request, RiderProfile $rider, RiderRatingService $riderRatings): View
@@ -593,23 +653,23 @@ class LogisticsPortalController extends Controller
         return back()->with('status', 'Service area updated.');
     }
 
-    public function reports(Request $request): View
+    public function reports(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
 
         return view('Logistics.reports.index', [
             'center' => $center,
-            'shipmentsByStatus' => Shipment::where('logistics_center_id', $center->id)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
+            'shipmentsByStatus' => $shipmentQuery->operationalFor($center)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
             'riderCount' => RiderProfile::where('logistics_center_id', $center->id)->count(),
         ]);
     }
 
-    public function exportReport(Request $request)
+    public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery)
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
-        $rows = Shipment::query()->where('logistics_center_id', $center->id)->latest()->get();
+        $rows = $shipmentQuery->operationalFor($center)->latest()->get();
         $csv = "Tracking,Status,Destination,Updated\n".$rows->map(fn ($shipment) => implode(',', [
             $shipment->tracking_number,
             $shipment->current_status,

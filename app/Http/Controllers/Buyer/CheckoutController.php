@@ -11,6 +11,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 class CheckoutController extends Controller
@@ -27,6 +28,12 @@ class CheckoutController extends Controller
 
         if ($items->isEmpty()) {
             return redirect()->route('buyer.cart')->with('buyer_notice', 'Your cart is empty.');
+        }
+
+        if ($this->containsVacationSeller($items)) {
+            $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes']);
+
+            return redirect()->route('buyer.cart')->with('buyer_notice', 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.');
         }
 
         $voucherCode = trim((string) $request->session()->get('checkout_voucher_code', ''));
@@ -130,6 +137,7 @@ class CheckoutController extends Controller
             'sellerNotes' => $sellerNotes,
             'previewError' => $previewError,
             'checkoutBlocked' => $checkoutBlocked,
+            'checkoutAttemptKey' => old('checkout_attempt_key', (string) Str::uuid()),
         ]);
     }
 
@@ -205,6 +213,12 @@ class CheckoutController extends Controller
         }
 
         $selectedItems = $this->cartService->selectedItems($request->user(), $ownedIds);
+        if ($this->containsVacationSeller($selectedItems)) {
+            throw ValidationException::withMessages([
+                'cart_item_ids' => 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.',
+            ]);
+        }
+
         $protectionIds = collect((array) ($data['protection_item_ids'] ?? []))
             ->map(fn ($id): int => (int) $id)
             ->unique()
@@ -236,7 +250,10 @@ class CheckoutController extends Controller
             ? ['nullable', 'integer']
             : ['required', 'integer', Rule::exists('logistics_centers', 'id')->where('status', 'ACTIVE')];
         $data = $request->validate([
-            'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
+            'checkout_attempt_key' => ['required', 'uuid'],
+            'cart_item_ids' => ['required', 'array', 'min:1'],
+            'cart_item_ids.*' => ['required', 'integer', 'distinct'],
+            'address_id' => ['required', 'integer'],
             'logistics_center_id' => $logisticsRules,
             'payment_method' => ['required', Rule::in(['COD'])],
             'voucher_code' => ['nullable', 'string', 'max:80'],
@@ -255,25 +272,22 @@ class CheckoutController extends Controller
             'payment_method.in' => 'Cash on Delivery is the only payment method available for new orders.',
         ]);
 
-        $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
-        if ($selectedIds === []) {
+        $selectedIds = array_values(array_unique(array_map('intval', (array) ($data['cart_item_ids'] ?? []))));
+        $selectedItems = $this->cartService->selectedItems($request->user(), $selectedIds);
+        if ($this->containsVacationSeller($selectedItems)) {
             throw ValidationException::withMessages([
-                'cart' => 'Your checkout selection expired. Return to your cart or use Buy Now again.',
+                'cart_item_ids' => 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.',
             ]);
         }
 
-        $items = $this->cartService->selectedItems($request->user(), $selectedIds);
-        if ($items->isEmpty()) {
+        $sessionIds = array_values(array_unique(array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []))));
+        sort($selectedIds);
+        sort($sessionIds);
+        if ($sessionIds !== [] && $selectedIds !== $sessionIds) {
             throw ValidationException::withMessages([
-                'cart' => 'The selected product is no longer available in your cart. Choose the product again.',
+                'cart' => 'Your checkout selection changed. Return to your cart and choose your items again.',
             ]);
         }
-        $sellerNotes = $this->checkoutService->normalizeSellerNotes($items, (array) ($data['seller_notes'] ?? []));
-        $address = Address::query()->where('user_id', $request->user()->id)->findOrFail((int) $data['address_id']);
-        AddressCoordinateValidator::assertValid([
-            'latitude' => $address->latitude,
-            'longitude' => $address->longitude,
-        ]);
         $legacyVoucherCodes = collect((array) $request->input('voucher_codes', []))
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
@@ -293,13 +307,14 @@ class CheckoutController extends Controller
         try {
             $order = $this->checkoutService->placeOrder(
                 $request->user(),
-                $address,
-                $items,
+                (int) $data['address_id'],
+                $selectedIds,
                 $data['payment_method'],
                 $voucherCode,
                 isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null,
                 array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
-                $sellerNotes,
+                (array) ($data['seller_notes'] ?? []),
+                $data['checkout_attempt_key'],
             );
         } catch (ValidationException $exception) {
             if (array_key_exists('voucher_code', $exception->errors())) {
@@ -314,5 +329,10 @@ class CheckoutController extends Controller
         return redirect()
             ->route('buyer.orders.success', ['order' => $order->order_number])
             ->with('buyer_notice', 'Order placed successfully.');
+    }
+
+    private function containsVacationSeller(\Illuminate\Support\Collection $items): bool
+    {
+        return $items->contains(fn ($item): bool => (bool) $item->productVariant?->product?->sellerProfile?->vacation_mode);
     }
 }

@@ -63,7 +63,10 @@ Route::prefix('seller')
         Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');
         Route::get('/orders/refunds/evidence/{evidence}', [SellerReturnRefundController::class, 'evidence'])->name('orders.refunds.evidence');
         Route::patch('/orders/{sellerOrder}/status', [SellerOrderController::class, 'transition'])->name('orders.status');
+        Route::patch('/orders/{sellerOrder}/items/{orderItem}/measurements', [SellerOrderController::class, 'recordParcelMeasurements'])->name('orders.parcels.measurements');
+        Route::post('/orders/{sellerOrder}/parcels', [SellerOrderController::class, 'ensureParcels'])->name('orders.parcels.ensure');
         Route::get('/orders/{sellerOrder}/waybill', [SellerOperationsController::class, 'waybill'])->name('orders.waybill');
+        Route::get('/orders/{sellerOrder}/items/{orderItem}/waybill', [SellerOperationsController::class, 'waybillItem'])->name('orders.waybill.item');
         Route::get('/orders-export', [SellerOperationsController::class, 'exportOrders'])->name('orders.export');
 
         Route::get('/logistics', [SellerOperationsController::class, 'logistics'])->name('logistics');
@@ -71,10 +74,13 @@ Route::prefix('seller')
 
         Route::get('/messages', [SellerEngagementController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [SellerEngagementController::class, 'stream'])->name('messages.stream');
+        Route::get('/messages/{message}/attachment', [SellerEngagementController::class, 'messageAttachment'])->name('messages.attachments.show');
         Route::post('/messages', [SellerEngagementController::class, 'sendMessage'])->name('messages.send');
 
         Route::get('/reviews', [SellerEngagementController::class, 'reviews'])->name('reviews');
         Route::post('/reviews/{review}/reply', [SellerEngagementController::class, 'replyReview'])->name('reviews.reply');
+        Route::delete('/reviews/{review}', [SellerEngagementController::class, 'denyReviewModeration'])->name('reviews.destroy');
+        Route::patch('/reviews/{review}/hide', [SellerEngagementController::class, 'denyReviewModeration'])->name('reviews.hide');
         Route::get('/reviews-export', [SellerEngagementController::class, 'exportReviews'])->name('reviews.export');
 
         Route::get('/marketing', [SellerEngagementController::class, 'marketing'])->name('marketing');

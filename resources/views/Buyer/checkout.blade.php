@@ -64,6 +64,10 @@
 
         <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
             @csrf
+            <input type="hidden" name="checkout_attempt_key" value="{{ $checkoutAttemptKey }}">
+            @foreach($cartItems as $cartItem)
+                <input type="hidden" name="cart_item_ids[]" value="{{ $cartItem->id }}">
+            @endforeach
             <div class="space-y-5">
                 <section class="rounded-2xl border border-stone-200 bg-white shadow-sm">
                     <div class="flex items-center justify-between gap-4 border-b border-stone-100 px-5 py-4"><div><h2 class="text-base font-bold text-stone-900">Delivery Address</h2><p class="mt-1 text-xs text-stone-500">Your order will be delivered to this address.</p></div><a href="{{ route('buyer.account', ['tab' => 'addresses']) }}" class="shrink-0 text-xs font-semibold text-red-800">Change</a></div>
@@ -81,7 +85,7 @@
                         @if($automaticRouting)
                             <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
                                 <strong class="block">Automatic PSGC routing enabled</strong>
-                                <span class="mt-1 block text-xs leading-5">Each seller receives its own shipment route. {{ config('likhae.allow_ambiguous_routing', false) ? 'A temporary demo fallback selects a covered active hub when more than one hub matches the municipality.' : 'A missing, invalid, or ambiguous hub or barangay coverage will safely stop checkout.' }}</span>
+                                <span class="mt-1 block text-xs leading-5">Each seller receives its own parcel route. A valid address with missing or ambiguous hub coverage can still be ordered and will enter manual routing review. Pickup stays blocked until an authorized hub is confirmed.</span>
                             </div>
                         @else
                         @forelse($logisticsProviders as $provider)
@@ -107,8 +111,8 @@
 
                 <section class="rounded-2xl border border-stone-200 bg-white shadow-sm" aria-labelledby="checkout-voucher-heading">
                     <div class="border-b border-stone-100 px-5 py-4">
-                        <h2 id="checkout-voucher-heading" class="text-base font-bold text-stone-900">Shop voucher</h2>
-                        <p class="mt-1 text-xs text-stone-500">Enter one code. We'll identify the shop and apply it only to eligible items.</p>
+                        <h2 id="checkout-voucher-heading" class="text-base font-bold text-stone-900">Voucher</h2>
+                        <p class="mt-1 text-xs text-stone-500">Enter one seller voucher or one LIKHAE platform voucher.</p>
                     </div>
                     <div class="grid gap-3 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                         <label for="checkout-voucher-code" class="block text-xs font-semibold text-stone-700">
@@ -122,14 +126,14 @@
                             @endif
                         </div>
                     </div>
-                    <p id="checkout-voucher-help" class="px-5 pb-4 text-[11px] text-stone-500">A seller voucher discounts only that shop’s eligible items. Your order totals update after you apply it.</p>
+                    <p id="checkout-voucher-help" class="px-5 pb-4 text-[11px] text-stone-500">Seller vouchers apply to that shop. Platform vouchers are shared across eligible items in your order. Your totals update after applying the code.</p>
                     @error('voucher_code')<p class="mx-5 mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800" role="alert">{{ $message }}</p>@enderror
                     @if(collect($availableVouchers ?? [])->isNotEmpty())
                         <div class="space-y-2 border-t border-stone-100 px-5 py-4">
                             <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available for this checkout</p>
                             @foreach($availableVouchers as $sellerId => $vouchers)
                                 @php
-                                    $voucherShop = data_get($groups->get($sellerId), 'seller.business_name', 'Shop');
+                                    $voucherShop = (string) $sellerId === 'platform' ? 'LIKHAE Platform' : data_get($groups->get($sellerId), 'seller.business_name', 'Shop');
                                 @endphp
                                 <div class="flex flex-wrap items-center gap-2">
                                     <span class="text-[10px] text-stone-500">{{ $voucherShop }}:</span>
@@ -159,6 +163,12 @@
                                 <span class="rounded-full bg-white px-3 py-1 text-[10px] font-semibold text-stone-600">{{ collect(data_get($group, 'items', []))->count() }} {{ collect(data_get($group, 'items', []))->count() === 1 ? 'product' : 'products' }} · one seller shipment</span>
                             </div>
                         </header>
+                        @if(data_get($group, 'routing_review_required'))
+                            <div class="border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs leading-5 text-amber-900" role="status">
+                                <strong class="block">Manual logistics routing required</strong>
+                                <span>{{ data_get($group, 'routing_review_reason', 'This address needs an authorized hub selection.') }} The order can be placed; the parcel will not be released for pickup until Logistics resolves the route.</span>
+                            </div>
+                        @endif
                         <div class="space-y-3 p-4 sm:p-5" aria-label="{{ data_get($group, 'seller.business_name', 'Seller') }} products">
                             @foreach(collect(data_get($group, 'items', [])) as $item)
                                 @php

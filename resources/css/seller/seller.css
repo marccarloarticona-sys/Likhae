@@ -591,6 +591,11 @@ a.sl-stat-card:hover {
 .sl-order-detail-main, .sl-order-detail-side { display: grid; gap: 16px; }
 .sl-order-detail-side .sl-card { padding: 17px; }
 .sl-order-detail-side .sl-card h3 { padding: 0 0 12px; border-bottom: 1px solid var(--sl-border); }
+.sl-order-provider-detail > p { margin: 0; color: var(--sl-muted); font-size: 12px; font-weight: 600; }
+.sl-order-provider-detail .sl-detail-list { gap: 8px; margin: 10px 0 0; }
+.sl-order-provider-detail .sl-detail-list > div { align-items: flex-start; flex-direction: column; gap: 2px; padding: 9px 10px; border: 1px solid var(--sl-border); border-radius: 10px; background: var(--sl-bg-soft); }
+.sl-order-provider-detail .sl-detail-list dt { font-size: 10px; }
+.sl-order-provider-detail .sl-detail-list dd { max-width: none; margin-top: 1px; font-size: 12px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .sl-package-summary { padding: 17px; }
 .sl-package-summary > strong:last-child { margin-left: auto; }
 .sl-detail-list, .sl-price-list { margin: 12px 0; display: grid; gap: 10px; }

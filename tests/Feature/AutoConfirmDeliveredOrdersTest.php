@@ -189,6 +189,73 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
         $this->assertSame(1, $shipments[0]->events()->where('status', 'COMPLETED')->count());
     }
 
+    public function test_api_receipt_uses_the_shared_completion_workflow_and_web_api_retries_are_idempotent(): void
+    {
+        [$order, $sellerOrders, $shipments, $buyer] = $this->createOrder([
+            ['status' => 'DELIVERED', 'delivered_at' => now()->subDay()],
+            ['status' => 'DELIVERED', 'delivered_at' => now()->subHours(12)],
+        ]);
+        $plainToken = Str::random(40);
+        $buyer->forceFill([
+            'api_token_hash' => hash('sha256', $plainToken),
+            'api_token_expires_at' => now()->addHour(),
+        ])->save();
+        $api = $this->withHeaders([
+            'Accept' => 'application/json',
+            'Authorization' => 'Bearer '.$plainToken,
+        ]);
+
+        $api->postJson(route('api.v1.buyer.orders.received', $order), ['confirm_receipt' => '1'])
+            ->assertOk()
+            ->assertJson(['success' => true, 'order_number' => $order->order_number, 'status' => 'COMPLETED']);
+
+        $this->assertSame('COMPLETED', $order->fresh()->status);
+        $this->assertSame(['COMPLETED', 'COMPLETED'], $sellerOrders->map(fn ($sellerOrder) => $sellerOrder->fresh()->status)->all());
+        $this->assertSame(['COMPLETED', 'COMPLETED'], $shipments->map(fn ($shipment) => $shipment->fresh()->current_status)->all());
+        foreach ($shipments as $shipment) {
+            $this->assertSame(1, $shipment->events()->where('status', 'COMPLETED')->count());
+        }
+
+        $api->postJson(route('api.v1.buyer.orders.received', $order), ['confirm_receipt' => '1'])->assertOk();
+        $this->flushHeaders();
+        $this->actingAs($buyer)
+            ->post(route('buyer.orders.received', $order), ['confirm_receipt' => '1'])
+            ->assertRedirect();
+        foreach ($shipments as $shipment) {
+            $this->assertSame(1, $shipment->events()->where('status', 'COMPLETED')->count());
+        }
+    }
+
+    public function test_api_receipt_rejects_undelivered_parcels_and_other_buyers(): void
+    {
+        [$order, , , $buyer] = $this->createOrder([
+            ['status' => 'DELIVERY_FAILED', 'delivered_at' => null],
+        ]);
+        $plainToken = Str::random(40);
+        $buyer->forceFill([
+            'api_token_hash' => hash('sha256', $plainToken),
+            'api_token_expires_at' => now()->addHour(),
+        ])->save();
+        $api = $this->withHeaders([
+            'Accept' => 'application/json',
+            'Authorization' => 'Bearer '.$plainToken,
+        ]);
+
+        $api->postJson(route('api.v1.buyer.orders.received', $order), ['confirm_receipt' => '1'])->assertStatus(409);
+        $this->assertSame('PROCESSING', $order->fresh()->status);
+
+        $otherBuyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        $otherToken = Str::random(40);
+        $otherBuyer->forceFill([
+            'api_token_hash' => hash('sha256', $otherToken),
+            'api_token_expires_at' => now()->addHour(),
+        ])->save();
+        $this->withHeaders([
+            'Accept' => 'application/json',
+            'Authorization' => 'Bearer '.$otherToken,
+        ])->postJson(route('api.v1.buyer.orders.received', $order), ['confirm_receipt' => '1'])->assertForbidden();
+    }
+
     public function test_auto_receipt_does_not_shorten_the_existing_five_day_return_window(): void
     {
         $this->at('2026-10-16 20:30:00');

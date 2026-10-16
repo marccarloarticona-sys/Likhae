@@ -14,6 +14,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Throwable;
@@ -35,9 +36,16 @@ class SellerAccountController extends Controller
     {
         $shop = $this->shop($request);
 
+        $name = $request->input('business_name');
+        if (is_string($name)) {
+            $name = $this->trimWhitespace($name);
+            $request->merge(['business_name' => $name]);
+        }
+
         $data = $request->validate([
+            'business_name' => ['required', 'string', 'max:200'],
             'tagline' => ['nullable', 'string', 'max:180'],
-            'description' => ['nullable', 'string', 'max:2000'],
+            'description' => ['nullable', 'string', 'max:500'],
             'location' => ['nullable', 'string', 'max:255'],
             'business_days' => ['nullable', 'string', 'max:80'],
             'business_hours' => ['nullable', 'string', 'max:80'],
@@ -46,30 +54,44 @@ class SellerAccountController extends Controller
             'vacation_mode' => ['nullable', 'boolean'],
             'auto_accept_orders' => ['nullable', 'boolean'],
             'store_visibility' => ['nullable', 'boolean'],
-            'banner' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
+            'avatar' => $this->brandingImageRules('avatar_original'),
+            'banner' => $this->brandingImageRules('banner_original'),
+            'avatar_original' => $this->brandingImageRules('avatar'),
+            'banner_original' => $this->brandingImageRules('banner'),
         ]);
 
+        $normalizedName = mb_strtolower((string) $data['business_name']);
+        $duplicateName = SellerProfile::query()
+            ->where('id', '<>', $shop->id)
+            ->get(['id', 'business_name'])
+            ->contains(fn (SellerProfile $profile): bool => mb_strtolower($this->trimWhitespace((string) $profile->business_name)) === $normalizedName);
+        if ($duplicateName) {
+            throw ValidationException::withMessages([
+                'business_name' => 'This store name is already in use. Choose a different name.',
+            ]);
+        }
+
         $shop->fill(collect($data)->only([
-            'tagline', 'description', 'location', 'business_days', 'business_hours',
+            'business_name', 'tagline', 'description', 'location', 'business_days', 'business_hours',
             'processing_days', 'order_cutoff', 'vacation_mode', 'auto_accept_orders', 'store_visibility',
         ])->all());
 
         $newPaths = [];
         $oldPaths = [];
-        foreach (['banner' => 'banner_path'] as $input => $column) {
-            if (! $request->hasFile($input)) {
-                continue;
-            }
-
-            $oldPath = $shop->{$column};
-            $shop->{$column} = $images->store($request->file($input), 'seller-branding');
-            $newPaths[] = $shop->{$column};
-            if ($oldPath && $oldPath !== $shop->{$column} && ! Str::startsWith($oldPath, ['http://', 'https://'])) {
-                $oldPaths[] = $oldPath;
-            }
-        }
-
         try {
+            foreach (['avatar' => 'avatar_path', 'banner' => 'banner_path'] as $input => $column) {
+                if (! $request->hasFile($input)) {
+                    continue;
+                }
+
+                $oldPath = $shop->{$column};
+                $shop->{$column} = $images->store($request->file($input), 'seller-branding');
+                $newPaths[] = $shop->{$column};
+                if ($oldPath && $oldPath !== $shop->{$column} && ! $this->isRemoteImagePath($oldPath)) {
+                    $oldPaths[] = $oldPath;
+                }
+            }
+
             $shop->save();
         } catch (Throwable $exception) {
             // The file is written before the database row is saved. Remove it
@@ -212,6 +234,46 @@ class SellerAccountController extends Controller
             ->with(['user', 'businessAddress', 'primaryCategory'])
             ->where('status', 'ACTIVE')
             ->firstOrFail();
+    }
+
+    /** @return array<int, mixed> */
+    private function brandingImageRules(?string $originalField = null): array
+    {
+        $rules = ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'mimetypes:image/jpeg,image/png,image/webp', 'extensions:jpg,jpeg,png,webp', 'max:5120'];
+        if ($originalField !== null) {
+            $rules[] = 'required_with:'.$originalField;
+        }
+
+        $rules[] = static function (string $attribute, mixed $value, \Closure $fail): void {
+            if (! $value instanceof \Illuminate\Http\UploadedFile || ! $value->isValid()) {
+                return;
+            }
+
+            $image = @getimagesize($value->getRealPath());
+            $mime = $image['mime'] ?? null;
+            $extension = strtolower($value->getClientOriginalExtension());
+            $extensionsByMime = [
+                'image/jpeg' => ['jpg', 'jpeg'],
+                'image/png' => ['png'],
+                'image/webp' => ['webp'],
+            ];
+
+            if (! isset($extensionsByMime[$mime]) || ! in_array($extension, $extensionsByMime[$mime], true)) {
+                $fail('Upload a valid JPEG, PNG, or WebP image whose file extension matches its contents.');
+            }
+        };
+
+        return $rules;
+    }
+
+    private function trimWhitespace(string $value): string
+    {
+        return preg_replace('/^[\\s\\p{Z}]+|[\\s\\p{Z}]+$/u', '', $value) ?? trim($value);
+    }
+
+    private function isRemoteImagePath(string $path): bool
+    {
+        return Str::startsWith($path, '//') || filled(parse_url($path, PHP_URL_SCHEME));
     }
 
     private function profile(SellerProfile $shop): object

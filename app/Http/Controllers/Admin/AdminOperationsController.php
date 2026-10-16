@@ -536,7 +536,6 @@ class AdminOperationsController extends Controller
         return view('Admin.messages.index', [
             'conversations' => $conversations,
             'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
-            'announcements' => Announcement::query()->latest()->paginate(10),
         ]);
     }
 

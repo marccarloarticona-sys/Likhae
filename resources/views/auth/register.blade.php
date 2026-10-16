@@ -561,6 +561,19 @@
             {{-- =================================================
                 REGISTRATION FORM
             ================================================== --}}
+            @php
+                $phpSizeInBytes = static function (string $setting): int {
+                    $unit = strtolower(substr(trim($setting), -1));
+                    $multiplier = match ($unit) {
+                        'g' => 1024 ** 3,
+                        'm' => 1024 ** 2,
+                        'k' => 1024,
+                        default => 1,
+                    };
+
+                    return (int) ((float) $setting * $multiplier);
+                };
+            @endphp
             <form
                 method="POST"
                 action="{{ route('register.store') }}"
@@ -568,6 +581,8 @@
                 class="register-form"
                 id="registrationForm"
                 novalidate
+                data-php-upload-max-bytes="{{ $phpSizeInBytes((string) ini_get('upload_max_filesize')) }}"
+                data-php-post-max-bytes="{{ $phpSizeInBytes((string) ini_get('post_max_size')) }}"
                 data-address-base="{{ \Illuminate\Support\Str::beforeLast(route('address.philippines.regions', [], false), '/regions') }}"
             >
 
@@ -832,6 +847,11 @@
                         <div class="register-grid">
 
                             {{-- EMAIL --}}
+                            @php
+                                $registrationEmail = old('email', data_get($googleBuyerRegistration ?? null, 'email'));
+                                $sessionEmailVerified = filled($registrationEmail)
+                                    && mb_strtolower(trim((string) $registrationEmail)) === request()->session()->get('registration_email_verified');
+                            @endphp
                             <div
                                 class="register-field"
                                 data-registration-email-verification
@@ -849,14 +869,14 @@
                                     name="email"
                                     type="email"
                                     maxlength="255"
-                                    value="{{ old('email', data_get($googleBuyerRegistration ?? null, 'email')) }}"
-                                    @if(!empty($googleBuyerRegistration)) readonly @endif
+                                    value="{{ $registrationEmail }}"
+                                    @if(!empty($googleBuyerRegistration) || $sessionEmailVerified) readonly @endif
                                     placeholder="juan@email.com"
                                     autocomplete="email"
                                     required
                                 >
 
-                                @if (empty($googleBuyerRegistration))
+                                @if (empty($googleBuyerRegistration) && ! $sessionEmailVerified)
                                     <div class="register-email-verification">
                                         <button type="button" class="register-email-verification__button" data-send-email-code>
                                             Send verification code
@@ -883,7 +903,7 @@
                                     </div>
                                 @else
                                     <small class="register-email-verification__status is-success">
-                                        This Google email address is already verified.
+                                        {{ !empty($googleBuyerRegistration) ? 'This Google email address is already verified.' : 'Email verified. You can continue your registration.' }}
                                     </small>
                                 @endif
 
@@ -1311,7 +1331,7 @@
                                     id="valid_id"
                                     name="valid_id"
                                     type="file"
-                                    accept=".jpg,.jpeg,.png,.pdf"
+                                    accept=".jpg,.jpeg,.png,.webp,.pdf"
                                     required
                                     data-file-input
                                 >
@@ -1331,7 +1351,7 @@
                                     </strong>
 
                                     <span>
-                                        JPG, JPEG, PNG or PDF
+                                        JPG, JPEG, PNG, WEBP or PDF, up to 5 MB
                                     </span>
 
                                     <small data-file-name>
@@ -1354,7 +1374,7 @@
                                     id="business_permit"
                                     name="business_permit"
                                     type="file"
-                                    accept=".jpg,.jpeg,.png,.pdf"
+                                    accept=".jpg,.jpeg,.png,.webp,.pdf"
                                     data-file-input
                                     data-logistics-required
                                 >
@@ -1374,7 +1394,7 @@
                                     </strong>
 
                                     <span>
-                                        JPG, JPEG, PNG or PDF
+                                        JPG, JPEG, PNG, WEBP or PDF, up to 5 MB
                                     </span>
 
                                     <small data-file-name>
@@ -1390,8 +1410,8 @@
                         <div class="register-grid" data-seller-documents hidden>
                             @foreach(['dti_certificate' => 'DTI Certificate', 'sec_certificate' => 'SEC Certificate', 'bir_form_2303' => 'BIR Form 2303'] as $field => $label)
                                 <div class="upload-box" data-seller-document="{{ $field }}">
-                                    <input id="{{ $field }}" name="{{ $field }}" type="file" accept=".jpg,.jpeg,.png,.pdf" data-file-input>
-                                    <label for="{{ $field }}" class="upload-box__label"><strong>Upload {{ $label }}</strong><span>JPG, PNG or PDF, up to 5 MB</span><small data-file-name>No file selected</small></label>
+                                    <input id="{{ $field }}" name="{{ $field }}" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" data-file-input>
+                                    <label for="{{ $field }}" class="upload-box__label"><strong>Upload {{ $label }}</strong><span>JPG, PNG, WEBP or PDF, up to 5 MB</span><small data-file-name>No file selected</small></label>
                                 </div>
                             @endforeach
                         </div>
@@ -1399,10 +1419,10 @@
                         <div class="register-grid" id="riderVehicleSection" hidden>
                             @foreach(['or_cr' => 'Vehicle OR / CR', 'drivers_license' => "Driver's License"] as $field => $label)
                                 <div class="upload-box">
-                                    <input id="{{ $field }}" name="{{ $field }}" type="file" accept=".jpg,.jpeg,.png,.pdf" data-file-input data-rider-required>
+                                    <input id="{{ $field }}" name="{{ $field }}" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" data-file-input data-rider-required>
                                     <label for="{{ $field }}" class="upload-box__label">
                                         <strong>Upload {{ $label }}</strong>
-                                        <span>JPG, JPEG, PNG or PDF, up to 5 MB</span>
+                                        <span>JPG, JPEG, PNG, WEBP or PDF, up to 5 MB</span>
                                         <small data-file-name>No file selected</small>
                                     </label>
                                 </div>

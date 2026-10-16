@@ -40,7 +40,7 @@ class RiderPickupBatchController extends Controller
     public function show(Request $request, int $trip): View
     {
         $pickup = $this->ownedBatch($request, $trip)
-            ->load(['seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
+            ->load(['seller.user', 'seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
 
         $items = $pickup->items;
         $total = $items->count();
@@ -58,7 +58,9 @@ class RiderPickupBatchController extends Controller
             : collect([
                 app(MapDataService::class)->addressMarker($address, 'pickup-seller-'.$pickup->id, 'Seller pickup address'),
                 app(MapDataService::class)->centerMarker($pickup->logisticsCenter),
-            ])->filter()->values()->all();
+            ])->filter()->map(fn (array $marker): array => array_merge($marker, [
+                'target_kind' => $marker['kind'] === 'center' ? 'logistics' : 'seller',
+            ]))->values()->all();
 
         return view('Rider.pickups.show', [
             'pickup' => $pickup,
@@ -106,7 +108,7 @@ class RiderPickupBatchController extends Controller
             return back()->withErrors(['scanned_code' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', $result['already_verified'] ? 'Parcel already verified.' : 'Parcel verified and collected.');
+        return back()->with('status', $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.');
     }
 
     public function notCollected(Request $request, int $trip, SellerPickupBatchService $batches): RedirectResponse

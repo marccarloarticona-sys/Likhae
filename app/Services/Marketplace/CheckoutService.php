@@ -6,6 +6,7 @@ use App\Models\Buyer\Address;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
@@ -27,6 +28,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
 
 class CheckoutService
@@ -45,7 +47,7 @@ class CheckoutService
 
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
     {
-        return $items
+        $sellerVoucherGroups = $items
             ->filter(function (CartItem $item): bool {
                 $item->loadMissing('productVariant.product');
 
@@ -59,10 +61,12 @@ class CheckoutService
                     ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
                     ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
                     ->withCount([
-                        'sellerOrders',
-                        'sellerOrders as buyer_uses_count' => fn ($query) => $buyer
-                            ? $query->whereHas('order', fn ($order) => $order->where('buyer_user_id', $buyer->id))
-                            : $query->whereRaw('1 = 0'),
+                        'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
+                        'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
+                            $buyer,
+                            fn ($uses) => $uses->whereHas('order', fn ($order) => $order->where('buyer_user_id', $buyer->id)),
+                            fn ($uses) => $uses->whereRaw('1 = 0'),
+                        ),
                     ])
                     ->get()
                     ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null || $voucher->seller_orders_count < $voucher->usage_limit)
@@ -71,6 +75,30 @@ class CheckoutService
                     ->values();
             })
             ->filter(fn (Collection $vouchers): bool => $vouchers->isNotEmpty());
+
+        if (Schema::hasColumn('vouchers', 'platform_code_key')) {
+            $platformVouchers = Voucher::query()
+                ->whereNull('seller_profile_id')
+                ->where('is_active', true)
+                ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+                ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+                ->orderBy('name')
+                ->get();
+            $redemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers);
+            $buyerRedemptionCounts = $buyer
+                ? VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id)
+                : collect();
+            $platformVouchers = $platformVouchers->filter(fn (Voucher $voucher): bool =>
+                ($voucher->usage_limit === null || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
+                && (! $buyer || $voucher->per_user_limit === null || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
+            )->values();
+
+            if ($platformVouchers->isNotEmpty()) {
+                $sellerVoucherGroups->put('platform', $platformVouchers);
+            }
+        }
+
+        return $sellerVoucherGroups;
     }
 
     public function availableLogisticsProviders(): Collection
@@ -148,9 +176,25 @@ class CheckoutService
             $protectionTotal += $itemProtectionFee;
 
             $groupShippingFee = $shippingFee;
+            $groupNeedsRoutingReview = false;
+            $groupRoutingReviewReason = null;
             if ($this->automaticRoutingReady() && $logisticsProvider === null && $automaticDestination) {
-                $route = $this->routing->resolve($seller, $automaticDestination);
-                $this->assertCrossHubCustodyReady($route);
+                try {
+                    $route = $this->routing->resolve($seller, $automaticDestination);
+                } catch (ValidationException $exception) {
+                    // Keep checkout available while preserving an explicit
+                    // unrouted parcel for administrator review after purchase.
+                    $reviewReason = $this->routingReviewReason($exception);
+                    if (! $reviewReason) {
+                        throw $exception;
+                    }
+                    $groupNeedsRoutingReview = true;
+                    $groupRoutingReviewReason = $reviewReason;
+                    $route = null;
+                }
+                if ($route) {
+                    $this->assertCrossHubCustodyReady($route);
+                }
                 $groupShippingFee = (float) config('likhae.standard_shipping_fee', 50);
             }
 
@@ -161,9 +205,16 @@ class CheckoutService
                 'voucher' => null,
                 'voucher_discount' => 0.0,
                 'shipping_fee' => $groupShippingFee,
+                'routing_review_required' => $groupNeedsRoutingReview,
+                'routing_review_reason' => $groupRoutingReviewReason,
                 'protection_total' => 0.0,
                 'grand_total' => 0.0,
             ];
+
+            if ($groupNeedsRoutingReview) {
+                $groups[$sellerId]['routing_review_required'] = true;
+                $groups[$sellerId]['routing_review_reason'] ??= $groupRoutingReviewReason;
+            }
 
             $groups[$sellerId]['items']->push($item);
             $groups[$sellerId]['item_subtotal'] += $lineTotal;
@@ -227,13 +278,14 @@ class CheckoutService
 
     public function placeOrder(
         User $buyer,
-        Address $address,
-        Collection $items,
+        Address|int $address,
+        Collection|array $items,
         string $paymentMethod,
         array|string $voucherCodes = [],
         ?int $logisticsCenterId = null,
         array $protectionItemIds = [],
         array $sellerNotes = [],
+        ?string $checkoutAttemptKey = null,
     ): Order
     {
         if (strtoupper($paymentMethod) !== 'COD') {
@@ -242,73 +294,148 @@ class CheckoutService
             ]);
         }
 
-        AddressCoordinateValidator::assertValid([
-            'latitude' => $address->latitude,
-            'longitude' => $address->longitude,
-        ]);
-
-        if ($items->isEmpty()) {
+        $cartItemIds = $items instanceof Collection
+            ? $items->pluck('id')->map(fn ($id): int => (int) $id)->all()
+            : array_map('intval', $items);
+        if ($cartItemIds === []) {
             throw ValidationException::withMessages([
                 'cart' => 'Select at least one cart item before checkout.',
             ]);
         }
-
-        $sellerNotes = $this->normalizeSellerNotes($items, $sellerNotes);
-
-        $logisticsProvider = $logisticsCenterId === null
-            ? null
-            : LogisticsCenter::query()
-                ->whereKey($logisticsCenterId)
-                ->approvedActive()
-                ->first();
-
-        if ($logisticsCenterId !== null && ! $logisticsProvider) {
+        $cartItemIds = array_values(array_unique($cartItemIds));
+        sort($cartItemIds);
+        $checkoutAttemptKey ??= (string) Str::uuid();
+        if (! Str::isUuid($checkoutAttemptKey)) {
             throw ValidationException::withMessages([
-                'logistics_center_id' => 'Select an active logistics provider.',
+                'checkout_attempt_key' => 'Refresh checkout to generate a valid checkout attempt.',
             ]);
         }
-        if ($this->automaticRoutingReady() && $logisticsCenterId !== null) {
+        if (! Schema::hasTable('checkout_attempts')) {
             throw ValidationException::withMessages([
-                'logistics_center_id' => 'Manual logistics provider selection is disabled while automatic PSGC routing is active.',
+                'checkout_attempt_key' => 'Checkout is temporarily unavailable until idempotency storage is installed.',
             ]);
         }
 
-        $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
-        if ($automaticRouting) {
-            // This validates every seller's origin and the buyer's destination
-            // before any order rows are created. The transaction repeats it
-            // after locked seller records are loaded.
-            $this->preview($items, $voucherCodes, $buyer, null, $address, $protectionItemIds);
-        } else {
-            $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
-            if (! $areaLocation) {
+        $keyHash = hash('sha256', strtolower($checkoutAttemptKey));
+        $addressId = $address instanceof Address ? (int) $address->id : $address;
+        $requestHash = $this->checkoutRequestHash(
+            (int) $buyer->id,
+            $cartItemIds,
+            (int) $addressId,
+            $paymentMethod,
+            $voucherCodes,
+            $logisticsCenterId,
+            $protectionItemIds,
+            $sellerNotes,
+        );
+        $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash);
+        if ($existing) {
+            return $existing;
+        }
+
+        try {
+            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash): Order {
+            $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash, true);
+            if ($existing) {
+                return $existing;
+            }
+
+            // Lock the owning active cart before its selected lines. A second
+            // submission then observes the committed deletion/conversion.
+            $cartIds = CartItem::query()->whereIn('id', $cartItemIds)->orderBy('cart_id')->pluck('cart_id')->unique()->values();
+            $lockedCarts = Cart::query()
+                ->whereIn('id', $cartIds)
+                ->where('buyer_user_id', $buyer->id)
+                ->where('status', Cart::STATUS_ACTIVE)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $items = CartItem::query()
+                ->whereIn('id', $cartItemIds)
+                ->whereIn('cart_id', $lockedCarts->pluck('id'))
+                ->whereHas('cart', fn ($query) => $query
+                    ->where('buyer_user_id', $buyer->id)
+                    ->where('status', Cart::STATUS_ACTIVE))
+                ->with(['productVariant.optionValues.option'])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+
+            if ($items->count() !== count($cartItemIds)) {
+                $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash);
+                if ($existing) {
+                    return $existing;
+                }
                 throw ValidationException::withMessages([
-                    $logisticsProvider ? 'logistics_center_id' : 'address_id' => $logisticsProvider
-                        ? 'The selected logistics provider does not serve this delivery address.'
-                        : 'Delivery is not currently available to this address.',
+                    'cart' => 'One or more selected cart items are no longer in your active cart. Return to your cart and try again.',
                 ]);
             }
-        }
 
-        return DB::transaction(function () use ($buyer, $address, $items, $paymentMethod, $voucherCodes, $logisticsProvider, $automaticRouting, $protectionItemIds, $sellerNotes): Order {
-            $variantIds = $items->pluck('product_variant_id')->unique()->values();
+            $address = Address::query()
+                ->whereKey($addressId)
+                ->where('user_id', $buyer->id)
+                ->lockForUpdate()
+                ->first();
+            if (! $address) {
+                throw ValidationException::withMessages([
+                    'address_id' => 'The selected delivery address is no longer available to this buyer.',
+                ]);
+            }
+            AddressCoordinateValidator::assertValid([
+                'latitude' => $address->latitude,
+                'longitude' => $address->longitude,
+            ]);
+
+            $logisticsProvider = $logisticsCenterId === null
+                ? null
+                : LogisticsCenter::query()
+                    ->whereKey($logisticsCenterId)
+                    ->approvedActive()
+                    ->lockForUpdate()
+                    ->first();
+            if ($logisticsCenterId !== null && ! $logisticsProvider) {
+                throw ValidationException::withMessages([
+                    'logistics_center_id' => 'Select an active logistics provider.',
+                ]);
+            }
+            if ($this->automaticRoutingReady() && $logisticsCenterId !== null) {
+                throw ValidationException::withMessages([
+                    'logistics_center_id' => 'Manual logistics provider selection is disabled while automatic PSGC routing is active.',
+                ]);
+            }
+            $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
+
+            $requestedProtectionIds = collect($protectionItemIds)->map(fn ($id): int => (int) $id)->unique()->values();
+            if ($requestedProtectionIds->diff($items->pluck('id')->map(fn ($id): int => (int) $id))->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'protection_item_ids' => 'Additional Care can only be selected for cart lines in this checkout.',
+                ]);
+            }
+            $sellerNotes = $this->normalizeSellerNotes($items, $sellerNotes);
+
+            $variantIds = $items->pluck('product_variant_id')->unique()->sort()->values();
             $lockedVariants = ProductVariant::query()
                 ->whereIn('id', $variantIds)
+                ->with('optionValues.option')
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
             $lockedProducts = Product::query()
                 ->whereIn('id', $lockedVariants->pluck('product_id')->filter()->unique()->values())
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
             $lockedSellers = SellerProfile::query()
                 ->whereIn('id', $lockedProducts->pluck('seller_profile_id')->filter()->unique()->values())
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
             $lockedSellerUsers = User::query()
                 ->whereIn('id', $lockedSellers->pluck('user_id')->filter()->unique()->values())
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
@@ -330,7 +457,7 @@ class CheckoutService
                     ]);
                 }
 
-                if (! $variant->is_active || $variant->stock < $item->quantity) {
+                if (! $variant || ! $variant->is_active || (int) $variant->stock < (int) $item->quantity) {
                     throw ValidationException::withMessages([
                         'cart' => 'One or more products no longer have enough stock.',
                     ]);
@@ -345,6 +472,8 @@ class CheckoutService
                 $item->setRelation('productVariant', $variant);
             }
 
+            $this->lockVoucherRows($voucherCodes);
+
             $preview = $this->preview(
                 $items,
                 $voucherCodes,
@@ -353,6 +482,15 @@ class CheckoutService
                 $automaticRouting ? $address : null,
                 $protectionItemIds,
             );
+
+            $checkoutAttemptId = DB::table('checkout_attempts')->insertGetId([
+                'key_hash' => $keyHash,
+                'buyer_user_id' => $buyer->id,
+                'request_hash' => $requestHash,
+                'order_id' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
 
             $orderAttributes = [
                 'order_number' => $this->uniqueNumber('orders', 'order_number', 'LK'),
@@ -371,6 +509,10 @@ class CheckoutService
                 $orderAttributes['protection_total'] = $preview['protection_total'];
             }
             $order = Order::query()->create($orderAttributes);
+            DB::table('checkout_attempts')->where('id', $checkoutAttemptId)->update([
+                'order_id' => $order->id,
+                'updated_at' => now(),
+            ]);
 
             $order->address()->create([
                 'recipient_name' => $address->recipient_name,
@@ -453,6 +595,9 @@ class CheckoutService
                     }
                     $orderItem = $sellerOrder->items()->create($itemAttributes);
 
+                    $shipment = $this->createShipmentForOrderItem($sellerOrder, $orderItem, $address, $logisticsProvider);
+                    app(CodCollectionService::class)->initializeForShipment($shipment);
+
                     if (Schema::hasTable('protection_selection_audits')) {
                         $quote = (array) $item->getAttribute('protection_quote');
                         DB::table('protection_selection_audits')->insert([
@@ -473,24 +618,139 @@ class CheckoutService
                     $variant->decrement('stock', (int) $item->quantity);
                 }
 
-                $shipment = $this->createShipmentForSellerOrder($sellerOrder, $address, $logisticsProvider);
-                app(CodCollectionService::class)->initializeForShipment($shipment);
+                // Recalculate every parcel after all seller-order lines exist
+                // so voucher, shipping, and protection shares reconcile to
+                // the final seller-order total in cents.
+                $sellerOrder->load('items.shipment');
+                foreach ($sellerOrder->items as $orderItem) {
+                    if ($orderItem->shipment) {
+                        app(CodCollectionService::class)->initializeForShipment($orderItem->shipment);
+                    }
+                }
+
             }
 
-            $cartId = $items->first()?->cart_id;
-            CartItem::query()->whereIn('id', $items->pluck('id'))->delete();
+            $deletedCount = CartItem::query()->whereIn('id', $cartItemIds)->delete();
+            if ($deletedCount !== count($cartItemIds)) {
+                throw ValidationException::withMessages([
+                    'cart' => 'The selected cart changed during checkout. Review your cart and try again.',
+                ]);
+            }
 
-            if ($cartId && ! CartItem::query()->where('cart_id', $cartId)->exists()) {
-                Cart::query()
-                    ->whereKey($cartId)
-                    ->update([
+            foreach ($lockedCarts as $cart) {
+                if (! CartItem::query()->where('cart_id', $cart->id)->exists()) {
+                    $cart->update([
                         'status' => Cart::STATUS_CONVERTED,
                         'converted_at' => now(),
                     ]);
+                }
             }
 
-            return $order->load(['sellerOrders.items', 'address', 'payments']);
-        });
+                return $order->load(['sellerOrders.items.shipment', 'sellerOrders.shipments', 'address', 'payments']);
+            }, 3);
+        } catch (QueryException $exception) {
+            // A concurrent request with the same key can win the unique insert.
+            // Its transaction owns the result; any rows from this transaction
+            // have already rolled back before this lookup runs.
+            $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash);
+            if ($existing) {
+                return $existing;
+            }
+
+            if ($this->isTransientCheckoutLockError($exception)) {
+                throw ValidationException::withMessages([
+                    'cart' => 'Inventory is being updated by another checkout. Refresh your cart and try again.',
+                ]);
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function isTransientCheckoutLockError(QueryException $exception): bool
+    {
+        $errorInfo = $exception->errorInfo ?? [];
+        $sqlState = (string) ($errorInfo[0] ?? $exception->getCode());
+        $driverCode = (int) ($errorInfo[1] ?? 0);
+
+        return $sqlState === '40001' || in_array($driverCode, [1205, 1213], true);
+    }
+
+    /** @param array<int> $cartItemIds */
+    private function checkoutRequestHash(
+        int $buyerId,
+        array $cartItemIds,
+        int $addressId,
+        string $paymentMethod,
+        array|string $voucherCodes,
+        ?int $logisticsCenterId,
+        array $protectionItemIds,
+        array $sellerNotes,
+    ): string {
+        sort($cartItemIds);
+        $voucherPayload = is_array($voucherCodes)
+            ? array_map(fn ($code): string => mb_strtoupper(trim((string) $code)), $voucherCodes)
+            : mb_strtoupper(trim($voucherCodes));
+        if (is_array($voucherPayload)) {
+            ksort($voucherPayload);
+        }
+        $protectionPayload = array_values(array_unique(array_map('intval', $protectionItemIds)));
+        sort($protectionPayload);
+        $notePayload = [];
+        foreach ($sellerNotes as $sellerId => $note) {
+            $notePayload[(string) $sellerId] = trim((string) ($note ?? ''));
+        }
+        ksort($notePayload);
+
+        return hash('sha256', json_encode([
+            'buyer_id' => $buyerId,
+            'cart_item_ids' => $cartItemIds,
+            'address_id' => $addressId,
+            'payment_method' => strtoupper(trim($paymentMethod)),
+            'voucher_codes' => $voucherPayload,
+            'logistics_center_id' => $logisticsCenterId,
+            'protection_item_ids' => $protectionPayload,
+            'seller_notes' => $notePayload,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function resolveCheckoutAttempt(User $buyer, string $keyHash, string $requestHash, bool $lock = false): ?Order
+    {
+        $query = DB::table('checkout_attempts')->where('key_hash', $keyHash);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+        $attempt = $query->first();
+        if (! $attempt) {
+            return null;
+        }
+        if ((int) $attempt->buyer_user_id !== (int) $buyer->id) {
+            throw ValidationException::withMessages([
+                'checkout_attempt_key' => 'This checkout attempt key belongs to another buyer and cannot be reused.',
+            ]);
+        }
+        if (! hash_equals((string) $attempt->request_hash, $requestHash)) {
+            throw ValidationException::withMessages([
+                'checkout_attempt_key' => 'This checkout attempt was already used with different order details. Refresh checkout to start a new attempt.',
+            ]);
+        }
+        if (! $attempt->order_id) {
+            throw ValidationException::withMessages([
+                'checkout_attempt_key' => 'This checkout attempt is still being finalized. Retry the same request shortly.',
+            ]);
+        }
+
+        $order = Order::query()
+            ->where('buyer_user_id', $buyer->id)
+            ->with(['sellerOrders.items.shipment', 'sellerOrders.shipments', 'address', 'payments'])
+            ->find($attempt->order_id);
+        if (! $order) {
+            throw ValidationException::withMessages([
+                'checkout_attempt_key' => 'The order for this checkout attempt is unavailable. Contact marketplace support.',
+            ]);
+        }
+
+        return $order;
     }
 
     /**
@@ -529,8 +789,9 @@ class CheckoutService
         return $normalized;
     }
 
-    private function createShipmentForSellerOrder(
+    private function createShipmentForOrderItem(
         SellerOrder $sellerOrder,
+        OrderItem $orderItem,
         Address $address,
         ?LogisticsCenter $logisticsProvider = null,
     ): Shipment
@@ -538,16 +799,26 @@ class CheckoutService
         $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
         $route = null;
         $areaLocation = null;
+        $routingReviewReason = null;
         if ($automaticRouting) {
             $sellerOrder->loadMissing('sellerProfile.businessAddress');
-            $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
-            $this->assertCrossHubCustodyReady($route);
-            $areaLocation = $route['destination_area'];
+            try {
+                $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
+            } catch (ValidationException $exception) {
+                $routingReviewReason = $this->routingReviewReason($exception);
+                if (! $routingReviewReason) {
+                    throw $exception;
+                }
+            }
+            if ($route) {
+                $this->assertCrossHubCustodyReady($route);
+                $areaLocation = $route['destination_area'];
+            }
         } else {
             $areaLocation = $this->serviceAreaLocationForAddress($address, $logisticsProvider);
         }
 
-        if (! $areaLocation) {
+        if (! $areaLocation && ! $routingReviewReason) {
             throw ValidationException::withMessages([
                 $logisticsProvider ? 'logistics_center_id' : 'address_id' => $logisticsProvider
                     ? 'The selected logistics provider does not serve this delivery address.'
@@ -557,9 +828,10 @@ class CheckoutService
 
         $shipmentAttributes = [
             'seller_order_id' => $sellerOrder->id,
+            'order_item_id' => $orderItem->id,
             'tracking_number' => $this->uniqueNumber('shipments', 'tracking_number', 'TRK'),
-            'logistics_center_id' => $route['origin']->id ?? ($logisticsProvider?->id ?? $areaLocation->serviceArea?->logistics_center_id),
-            'service_area_id' => $areaLocation->service_area_id,
+            'logistics_center_id' => $route['origin']->id ?? ($logisticsProvider?->id ?? $areaLocation?->serviceArea?->logistics_center_id),
+            'service_area_id' => $areaLocation?->service_area_id,
             'destination_province_code' => $address->province_code,
             'destination_province_name' => $address->province_name,
             'destination_municipality_code' => $address->municipality_code,
@@ -590,7 +862,9 @@ class CheckoutService
             'actor_user_id' => $sellerOrder->order?->buyer_user_id,
             'logistics_center_id' => $shipment->logistics_center_id,
             'rider_assignment_id' => null,
-            'notes' => 'Order placed by buyer.',
+            'notes' => $routingReviewReason
+                ? 'Parcel placed. ROUTING_REVIEW_REQUIRED: '.$routingReviewReason
+                : 'Parcel for order item '.$orderItem->id.' placed by buyer.',
             'occurred_at' => now(),
         ]);
 
@@ -610,6 +884,18 @@ class CheckoutService
                 'address_id' => 'Cross-hub fulfillment is temporarily disabled until transfer manifests, custody scans, and approved vehicle capacities are installed.',
             ]);
         }
+    }
+
+    private function routingReviewReason(ValidationException $exception): ?string
+    {
+        $reason = (string) ($exception->errors()['address_id'][0] ?? '');
+        $message = mb_strtolower($reason);
+
+        return str_contains($message, 'ambiguous')
+            || str_contains($message, 'no active logistics hub')
+            || str_contains($message, 'barangay psgc is not covered')
+            ? $reason
+            : null;
     }
 
     private function serviceAreaLocationForAddress(Address $address, ?LogisticsCenter $logisticsProvider = null): ?ServiceAreaLocation
@@ -648,10 +934,12 @@ class CheckoutService
                 $query->whereNull('ends_at')->orWhere('ends_at', '>=', now());
             })
             ->withCount([
-                'sellerOrders',
-                'sellerOrders as buyer_uses_count' => fn ($query) => $buyer
-                    ? $query->whereHas('order', fn ($order) => $order->where('buyer_user_id', $buyer->id))
-                    : $query->whereRaw('1 = 0'),
+                'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
+                'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
+                    $buyer,
+                    fn ($uses) => $uses->whereHas('order', fn ($order) => $order->where('buyer_user_id', $buyer->id)),
+                    fn ($uses) => $uses->whereRaw('1 = 0'),
+                ),
             ])
             ->first();
         if (! $voucher
@@ -666,16 +954,22 @@ class CheckoutService
     /** @param array<int, array<string, mixed>> $groups */
     private function applySingleVoucherCode(array &$groups, string $code, ?User $buyer): void
     {
-        $candidates = Voucher::query()
+        $query = Voucher::query()
             ->whereRaw('UPPER(code) = ?', [mb_strtoupper($code)])
-            ->with('sellerProfile')
-            ->withCount([
-                'sellerOrders',
-                'sellerOrders as buyer_uses_count' => fn ($query) => $buyer
-                    ? $query->whereHas('order', fn ($order) => $order->where('buyer_user_id', $buyer->id))
-                    : $query->whereRaw('1 = 0'),
-            ])
-            ->get();
+            ->with('sellerProfile');
+        if (Schema::hasColumn('vouchers', 'platform_code_key')) {
+            $query->withCount([
+                'sellerOrders' => fn ($orderQuery) => $orderQuery->where('status', '<>', 'CANCELLED'),
+                'sellerOrders as buyer_uses_count' => fn ($orderQuery) => $orderQuery->where('status', '<>', 'CANCELLED')->when(
+                    $buyer,
+                    fn ($uses) => $uses->whereHas('order', fn ($query) => $query->where('buyer_user_id', $buyer->id)),
+                    fn ($uses) => $uses->whereRaw('1 = 0'),
+                ),
+            ]);
+        } else {
+            $query->withCount(['sellerOrders' => fn ($orderQuery) => $orderQuery->where('status', '<>', 'CANCELLED')]);
+        }
+        $candidates = $query->get();
 
         if ($candidates->isEmpty()) {
             throw ValidationException::withMessages([
@@ -684,7 +978,9 @@ class CheckoutService
         }
 
         $cartCandidates = $candidates
-            ->filter(fn (Voucher $voucher): bool => array_key_exists((int) $voucher->seller_profile_id, $groups))
+            ->filter(fn (Voucher $voucher): bool => $voucher->seller_profile_id === null
+                ? Schema::hasColumn('vouchers', 'platform_code_key')
+                : array_key_exists((int) $voucher->seller_profile_id, $groups))
             ->values();
 
         if ($cartCandidates->isEmpty()) {
@@ -697,12 +993,47 @@ class CheckoutService
         }
 
         if ($cartCandidates->count() > 1) {
+            $message = $cartCandidates->contains(fn (Voucher $candidate): bool => $candidate->seller_profile_id === null)
+                ? 'This code matches both a LIKHAE platform campaign and a seller voucher. Use a unique code.'
+                : 'This code matches more than one shop in your cart. Ask the sellers for a unique code.';
             throw ValidationException::withMessages([
-                'voucher_code' => 'This code matches more than one shop in your cart. Ask the sellers for a unique code.',
+                'voucher_code' => $message,
             ]);
         }
 
         $voucher = $cartCandidates->first();
+        if ($voucher->seller_profile_id === null) {
+            $subtotal = array_sum(array_map(fn (array $group): float => (float) $group['item_subtotal'], $groups));
+            $redemptions = VoucherRedemptionCounter::count((int) $voucher->id);
+            $buyerRedemptions = $buyer
+                ? VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id)
+                : 0;
+
+            if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher is not active yet.']);
+            }
+            if ($voucher->ends_at && $voucher->ends_at->isPast()) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has expired.']);
+            }
+            if ($voucher->usage_limit !== null && $redemptions >= $voucher->usage_limit) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has reached its redemption limit.']);
+            }
+            if ($buyer && $voucher->per_user_limit !== null && $buyerRedemptions >= $voucher->per_user_limit) {
+                throw ValidationException::withMessages(['voucher_code' => 'You have already used this platform voucher the maximum number of times.']);
+            }
+            if ($subtotal < (float) $voucher->minimum_order_amount) {
+                $remaining = (float) $voucher->minimum_order_amount - $subtotal;
+                throw ValidationException::withMessages([
+                    'voucher_code' => 'Add PHP '.number_format($remaining, 2).' more to use this platform voucher.',
+                ]);
+            }
+
+            $discount = $this->discountAmount($voucher, $subtotal);
+            $this->allocatePlatformDiscount($groups, $voucher, $discount, $subtotal);
+
+            return;
+        }
+
         $sellerId = (int) $voucher->seller_profile_id;
         $group = &$groups[$sellerId];
 
@@ -741,6 +1072,42 @@ class CheckoutService
         $discount = $this->discountAmount($voucher, (float) $group['item_subtotal']);
         $group['voucher'] = $voucher;
         $group['voucher_discount'] = $discount;
+    }
+
+    /** @param array<int, array<string, mixed>> $groups */
+    private function allocatePlatformDiscount(array &$groups, Voucher $voucher, float $discount, float $subtotal): void
+    {
+        $allocated = 0.0;
+        $lastSellerId = array_key_last($groups);
+
+        foreach ($groups as $sellerId => &$group) {
+            $share = (int) $sellerId === (int) $lastSellerId
+                ? round($discount - $allocated, 2)
+                : round($discount * ((float) $group['item_subtotal'] / $subtotal), 2);
+            $share = min((float) $group['item_subtotal'], max(0.0, $share));
+            $group['voucher'] = $voucher;
+            $group['voucher_discount'] = $share;
+            $allocated += $share;
+        }
+        unset($group);
+    }
+
+    private function lockVoucherRows(array|string $voucherCodes): void
+    {
+        $codes = collect(is_array($voucherCodes) ? $voucherCodes : [$voucherCodes])
+            ->map(fn ($code): string => mb_strtoupper(trim((string) $code)))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
+
+        foreach ($codes as $code) {
+            Voucher::query()
+                ->whereRaw('UPPER(code) = ?', [$code])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id']);
+        }
     }
 
     private function discountAmount(Voucher $voucher, float $subtotal): float
