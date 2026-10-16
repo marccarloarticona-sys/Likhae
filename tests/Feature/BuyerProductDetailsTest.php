@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductImage;
+use App\Models\Seller\ProductVariant;
 use App\Models\User;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,7 +29,12 @@ class BuyerProductDetailsTest extends TestCase
             ->assertSee('data-test-add-cart', escape: false)
             ->assertSee('data-test-buy-now', escape: false)
             ->assertSee('data-variation-id="'.$product->variants()->firstOrFail()->id.'"', escape: false)
-            ->assertSee(route('buyer.cart.add', $product), escape: false);
+            ->assertSee(route('buyer.cart.add', $product), escape: false)
+            ->assertSee('data-wishlist', escape: false)
+            ->assertSee(route('buyer.shop', ['seller' => $product->sellerProfile->business_name]), escape: false)
+            ->assertSee('Message Seller')
+            ->assertSee('Product Description')
+            ->assertSee('Reviews');
     }
 
     public function test_product_details_show_primary_image_first_and_all_product_images(): void
@@ -58,5 +64,64 @@ class BuyerProductDetailsTest extends TestCase
         $response->assertSee('src="'.$primaryUrl.'" alt="'.$product->name.'" data-gallery-main', escape: false);
         $response->assertDontSee('127.0.0.1:8000');
         $this->assertSame(10, substr_count($response->getContent(), 'data-gallery-thumb'));
+    }
+
+    public function test_buy_now_does_not_preselect_a_variant_when_the_product_has_multiple_variants(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        $product = Product::query()->with('variants')->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $firstVariant = $product->variants->firstOrFail();
+        $product->variants()->create([
+            'sku' => 'PDP-MULTI-VARIANT-TEST',
+            'price' => (float) $firstVariant->price + 40,
+            'stock' => 4,
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.product-details', $product->slug))
+            ->assertOk()
+            ->assertSee('name="product_variant_id" value=""', escape: false)
+            ->assertSee('Please select a variation.');
+    }
+
+    public function test_discounted_variant_uses_stored_sale_price_and_rewards_route_without_fake_countdown(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        $product = Product::query()->with('variants')->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $variant = $product->variants->firstOrFail();
+        $variant->update([
+            'price' => 350,
+            'discount_type' => 'percentage',
+            'discount_value' => 20,
+        ]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.product-details', $product->slug))
+            ->assertOk()
+            ->assertSee('₱280.00')
+            ->assertSee('₱350.00')
+            ->assertSee('data-variation-price="280.00"', escape: false)
+            ->assertSee('20.00% OFF')
+            ->assertSee(route('buyer.rewards'), escape: false)
+            ->assertDontSee('data-flash-countdown');
+    }
+
+    public function test_vacation_mode_is_explained_and_disables_product_detail_purchase_buttons(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $product->sellerProfile->update(['vacation_mode' => true]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.product-details', $product->slug))
+            ->assertOk()
+            ->assertSee('data-seller-vacation="1"', escape: false)
+            ->assertSee('This seller is currently on vacation and is not accepting purchases.')
+            ->assertSee('data-product-purchase disabled', escape: false);
     }
 }
