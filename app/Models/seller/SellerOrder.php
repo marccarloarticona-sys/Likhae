@@ -8,6 +8,7 @@ use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Communication\Conversation;
 use App\Models\Finance\SellerSettlement;
+use App\Models\Finance\ShippingRateVersion;
 use App\Models\Logistics\Shipment;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -30,6 +31,7 @@ class SellerOrder extends Model
         'item_subtotal',
         'voucher_discount',
         'shipping_fee',
+        'shipping_rate_version_id',
         'grand_total',
         'protection_total',
     ];
@@ -53,6 +55,11 @@ class SellerOrder extends Model
     public function sellerProfile(): BelongsTo
     {
         return $this->belongsTo(SellerProfile::class);
+    }
+
+    public function shippingRateVersion(): BelongsTo
+    {
+        return $this->belongsTo(ShippingRateVersion::class, 'shipping_rate_version_id');
     }
 
     /** Transitional alias. */

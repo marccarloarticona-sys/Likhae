@@ -7,6 +7,8 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\PickupRequest;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\TransferManifest;
+use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerPickupRequest;
@@ -16,8 +18,10 @@ use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
 use App\Support\RiderVehicleType;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -198,7 +202,8 @@ class DispatchController extends Controller
     public function receive(Request $request): View
     {
         $center = $this->center($request);
-        $pickupBatchesReady = app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady();
+        $schema = app(LogisticsSchemaReadiness::class);
+        $pickupBatchesReady = $schema->sellerPickupBatchesReady();
         $tracking = trim((string) $request->query('tracking', ''));
 
         $shipments = Shipment::query()
@@ -234,19 +239,36 @@ class DispatchController extends Controller
             ->latest()
             ->get();
 
-        return view('Logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches'));
+        $incomingTransferItems = $schema->transferReady()
+            ? TransferManifestItem::query()
+                ->where('status', TransferManifestItem::EXPECTED)
+                ->whereHas('manifest', fn ($query) => $query
+                    ->where('destination_logistics_center_id', $center?->id)
+                    ->whereIn('status', [TransferManifest::IN_TRANSIT, TransferManifest::ARRIVED, TransferManifest::PARTIAL, TransferManifest::EXCEPTION]))
+                ->with(['manifest.originLogisticsCenter', 'transferLeg.shipment.sellerOrder.order.address'])
+                ->latest('id')
+                ->get()
+            : collect();
+
+        return view('Logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches', 'incomingTransferItems'));
     }
 
     public function sorting(Request $request): View
     {
         $center = $this->center($request);
         $tracking = trim((string) $request->query('tracking', ''));
+        $automaticRoutingReady = app(LogisticsSchemaReadiness::class)->automaticRoutingReady();
 
         $shipments = Shipment::query()
             ->whereIn('current_status', ['AT_SORTING_CENTER', 'SORTED'])
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
             ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
-            ->with(['sellerOrder.order.address', 'serviceArea'])
+            ->with([
+                'sellerOrder.order.address',
+                'serviceArea.locations',
+                'serviceArea.logisticsCenter',
+                ...($automaticRoutingReady ? ['destinationLogisticsCenter'] : []),
+            ])
             ->latest()
             ->paginate(15)
             ->withQueryString();
@@ -254,8 +276,84 @@ class DispatchController extends Controller
         $areas = ServiceArea::query()
             ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
             ->where('is_active', true)
+            ->with('locations')
             ->orderBy('name')
             ->get();
+
+        $destinationCenters = $automaticRoutingReady
+            ? LogisticsCenter::query()
+                ->approvedActive()
+                ->with([
+                    'address',
+                    'serviceAreas' => fn ($query) => $query->where('is_active', true)->with('locations'),
+                ])
+                ->orderBy('business_name')
+                ->get()
+            : collect();
+
+        $shipments->getCollection()->each(function (Shipment $shipment) use ($areas, $automaticRoutingReady, $center, $destinationCenters): void {
+            $destinationCodes = [
+                trim((string) $shipment->destination_province_code),
+                trim((string) $shipment->destination_municipality_code),
+                trim((string) $shipment->destination_barangay_code),
+            ];
+            $matchingAreas = collect($destinationCodes)->contains('') ? collect() : $areas->filter(
+                fn (ServiceArea $area): bool => $area->locations->contains(fn ($location): bool =>
+                    trim((string) $location->province_code) === $destinationCodes[0]
+                    && trim((string) $location->municipality_code) === $destinationCodes[1]
+                    && trim((string) $location->barangay_code) === $destinationCodes[2]),
+            );
+            $matchedArea = $matchingAreas->count() === 1 ? $matchingAreas->first() : null;
+
+            $isCrossHubRoute = $automaticRoutingReady
+                && filled($shipment->origin_logistics_center_id)
+                && filled($shipment->destination_logistics_center_id)
+                && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id
+                && (int) $shipment->logistics_center_id === (int) $center?->id
+                && (int) $shipment->origin_logistics_center_id === (int) $center?->id;
+
+            $shipment->setAttribute('sorting_is_cross_hub_route', $isCrossHubRoute);
+            $shipment->setAttribute('sorting_match_is_ambiguous', $matchingAreas->count() > 1);
+            $shipment->setRelation('sorting_auto_matched_area', $matchedArea);
+            $shipment->setRelation('sorting_matching_areas', $matchingAreas);
+
+            $matchingDestinationCenters = collect();
+            if ($isCrossHubRoute && ! collect($destinationCodes)->contains('')) {
+                $matchingDestinationCenters = $destinationCenters
+                    ->map(fn (LogisticsCenter $destinationCenter): LogisticsCenter => clone $destinationCenter)
+                    ->filter(function (LogisticsCenter $destinationCenter) use ($destinationCodes, $shipment): bool {
+                        if ((int) $destinationCenter->id === (int) $shipment->origin_logistics_center_id) {
+                            return false;
+                        }
+
+                        $hubAddress = $destinationCenter->address;
+                        if (! $hubAddress
+                            || trim((string) $hubAddress->province_code) !== $destinationCodes[0]
+                            || trim((string) $hubAddress->municipality_code) !== $destinationCodes[1]) {
+                            return false;
+                        }
+
+                        $matchingLocations = $destinationCenter->serviceAreas
+                            ->flatMap(fn (ServiceArea $area) => $area->locations
+                                ->filter(fn ($location): bool =>
+                                    trim((string) $location->province_code) === $destinationCodes[0]
+                                    && trim((string) $location->municipality_code) === $destinationCodes[1]
+                                    && trim((string) $location->barangay_code) === $destinationCodes[2])
+                                ->map(fn ($location) => ['area' => $area, 'location' => $location]))
+                            ->values();
+
+                        if ($matchingLocations->count() !== 1) {
+                            return false;
+                        }
+
+                        $destinationCenter->setRelation('sorting_destination_area', $matchingLocations->first()['area']);
+
+                        return true;
+                    })
+                    ->values();
+            }
+            $shipment->setRelation('sorting_destination_hubs', $matchingDestinationCenters);
+        });
 
         return view('Logistics.sorting.index', compact('shipments', 'areas', 'center'));
     }
@@ -267,6 +365,11 @@ class DispatchController extends Controller
 
         $shipments = Shipment::query()
             ->whereIn('current_status', ['SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'])
+            ->when($schema->automaticRoutingReady(), fn ($query) => $query->where(fn ($route) => $route
+                ->whereNull('origin_logistics_center_id')
+                ->orWhereNull('destination_logistics_center_id')
+                ->orWhereColumn('origin_logistics_center_id', 'destination_logistics_center_id')
+                ->orWhereColumn('logistics_center_id', 'destination_logistics_center_id')))
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
             ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
             ->with(['sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
@@ -368,10 +471,10 @@ class DispatchController extends Controller
 
         if ($createdNewTrip) {
             return redirect()->route('logistics.local-trips.show', $trip->id)
-                ->with('status', 'A compatible loading trip was created and the parcel was added. Scan every parcel before loading it.');
+                ->with('status', 'A compatible loading trip was created and the parcel was added. The rider can accept and start the trip.');
         }
 
-        return back()->with('status', 'Parcel added to local trip #'.$trip->id.'. Add other same-barangay parcels, then scan and load the trip.');
+        return back()->with('status', 'Parcel added to local trip #'.$trip->id.'. Add other parcels from the same barangay to group their deliveries.');
     }
 
     public function assignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches): RedirectResponse
@@ -520,16 +623,100 @@ class DispatchController extends Controller
         return back()->with('status', 'Pickup request rejected.');
     }
 
-    public function confirmReceive(Request $request, Shipment $shipment, ShipmentWorkflowService $workflow): RedirectResponse
+    public function receiveScanned(
+        Request $request,
+        ShipmentWorkflowService $workflow,
+        LogisticsSchemaReadiness $schema,
+        TransferManifestService $manifests,
+    ): JsonResponse|RedirectResponse
+    {
+        $data = $request->validate([
+            'tracking' => ['required', 'string', 'max:150'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+        ]);
+        $shipment = Shipment::query()->where('tracking_number', trim($data['tracking']))->first();
+
+        if (! $shipment) {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'No incoming parcel matches that tracking number.'], 404);
+            }
+
+            return back()
+                ->withErrors(['tracking' => 'No incoming parcel matches that tracking number.'])
+                ->withInput();
+        }
+
+        $request->merge(['scanned_code' => $data['tracking']]);
+
+        return $this->confirmReceive($request, $shipment, $workflow, $schema, $manifests);
+    }
+
+    public function confirmReceive(
+        Request $request,
+        Shipment $shipment,
+        ShipmentWorkflowService $workflow,
+        LogisticsSchemaReadiness $schema,
+        TransferManifestService $manifests,
+    ): JsonResponse|RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
-        $this->ensureShipmentBelongsToCenter($shipment, $center);
 
         $data = $request->validate([
             'scanned_code' => ['required', 'string', 'max:150'],
             'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
         ]);
+
+        if ($schema->transferReady()) {
+            $incomingTransferItem = TransferManifestItem::query()
+                ->where('status', TransferManifestItem::EXPECTED)
+                ->whereHas('transferLeg', fn ($query) => $query
+                    ->where('shipment_id', $shipment->id)
+                    ->where('destination_logistics_center_id', $center->id))
+                ->whereHas('manifest', fn ($query) => $query
+                    ->where('destination_logistics_center_id', $center->id)
+                    ->whereIn('status', [TransferManifest::IN_TRANSIT, TransferManifest::ARRIVED, TransferManifest::PARTIAL, TransferManifest::EXCEPTION]))
+                ->with('manifest')
+                ->latest('id')
+                ->first();
+
+            if ($incomingTransferItem) {
+                try {
+                    $manifests->receiveItem(
+                        $request->user(),
+                        $incomingTransferItem,
+                        TransferManifestItem::RECEIVED,
+                        $data['scanned_code'],
+                        null,
+                        $data['scan_method'] ?? 'MANUAL',
+                    );
+                } catch (\RuntimeException $exception) {
+                    if ($request->expectsJson()) {
+                        return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+                    }
+
+                    return back()->withErrors(['scanned_code' => $exception->getMessage()])->withInput();
+                }
+
+                $message = 'Incoming transfer parcel received and moved to sorting for local delivery assignment.';
+                if ($request->expectsJson()) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => $message,
+                        'tracking' => $shipment->tracking_number,
+                        'open_url' => route('logistics.sorting', ['tracking' => $shipment->tracking_number]),
+                        'already_received' => false,
+                        'clear_input' => true,
+                    ]);
+                }
+
+                return redirect()
+                    ->route('logistics.sorting', ['tracking' => $shipment->tracking_number])
+                    ->with('status', $message);
+            }
+        }
+
+        $this->ensureShipmentBelongsToCenter($shipment, $center);
 
         $pickupItem = $shipment->riderAssignments()
             ->where('assignment_type', 'PICKUP')
@@ -540,19 +727,66 @@ class DispatchController extends Controller
             ->first(fn ($item) => $item->trip?->trip_type === RiderLocalTrip::TYPE_PICKUP);
 
         $alreadyReceived = $shipment->current_status === 'AT_SORTING_CENTER';
-        $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
+        try {
+            $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
+        } catch (\RuntimeException $exception) {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+            }
+
+            return back()
+                ->withErrors(['scanned_code' => $exception->getMessage()])
+                ->withInput();
+        }
 
         if ($alreadyReceived) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Parcel was already received. No duplicate intake scan was created.',
+                    'tracking' => $shipment->tracking_number,
+                    'already_received' => true,
+                    'clear_input' => true,
+                ]);
+            }
+
             return redirect()->route('logistics.parcels.receive')->with('status', 'Parcel was already received. No duplicate intake scan was created.');
         }
 
         if ($pickupItem?->trip) {
             $trip = $pickupItem->trip->fresh();
+            $trip->load('items.riderAssignment.shipment');
+            $receivedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER')->count();
+            $expectedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED')->count();
             $message = $trip?->status === RiderLocalTrip::COMPLETED
                 ? 'Parcel received. All collected parcels in pickup batch #P-'.$trip->id.' have reached the sorting center.'
                 : 'Parcel received. Scan each remaining parcel in the pickup batch separately.';
 
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $message,
+                    'tracking' => $shipment->tracking_number,
+                    'batch_id' => $trip->id,
+                    'received_count' => $receivedCount,
+                    'expected_count' => $expectedCount,
+                    'already_received' => false,
+                    'clear_input' => true,
+                ]);
+            }
+
             return redirect()->route('logistics.parcels.receive')->with('status', $message);
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Parcel received. Read the delivery address and confirm its destination area.',
+                'tracking' => $shipment->tracking_number,
+                'open_url' => route('logistics.sorting', ['tracking' => $shipment->tracking_number]),
+                'already_received' => false,
+                'clear_input' => true,
+            ]);
         }
 
         return redirect()
@@ -568,17 +802,36 @@ class DispatchController extends Controller
 
         $data = $request->validate([
             'service_area_id' => ['nullable', 'integer', 'exists:service_areas,id'],
+            'destination_logistics_center_id' => ['nullable', 'integer', 'exists:logistics_centers,id'],
         ]);
 
         $area = isset($data['service_area_id'])
             ? ServiceArea::query()->where('logistics_center_id', $center->id)->where('is_active', true)->findOrFail($data['service_area_id'])
             : null;
+        $destinationCenter = isset($data['destination_logistics_center_id'])
+            ? LogisticsCenter::query()->approvedActive()->findOrFail($data['destination_logistics_center_id'])
+            : null;
         try {
-            $workflow->sortShipment($shipment, $center, $request->user(), $area);
-        } catch (\RuntimeException $exception) {
+            $sortedShipment = $workflow->sortShipment($shipment, $center, $request->user(), $area, $destinationCenter);
+        } catch (\Illuminate\Validation\ValidationException $exception) {
             return back()
-                ->withErrors(['service_area_id' => $exception->getMessage()])
+                ->withErrors($exception->errors())
                 ->withInput();
+        } catch (\RuntimeException $exception) {
+            $errorField = isset($data['destination_logistics_center_id'])
+                ? 'destination_logistics_center_id'
+                : 'service_area_id';
+
+            return back()
+                ->withErrors([$errorField => $exception->getMessage()])
+                ->withInput();
+        }
+
+        if (filled($sortedShipment->destination_logistics_center_id)
+            && (int) $sortedShipment->destination_logistics_center_id !== (int) $center->id) {
+            return redirect()
+                ->route('logistics.transfers')
+                ->with('status', 'Parcel sorted for hub-to-hub transfer. Add it to a transfer manifest when ready.');
         }
 
         return redirect()

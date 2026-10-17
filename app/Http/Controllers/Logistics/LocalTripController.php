@@ -120,16 +120,12 @@ class LocalTripController extends Controller
     public function load(Request $request, int $trip): RedirectResponse
     {
         $this->assertReady();
-        $data = $request->validate([
-            'scanned_codes' => ['required', 'array'],
-            'scanned_codes.*' => ['required', 'string', 'max:120', 'distinct'],
-        ]);
         try {
-            $this->trips->loadTrip($request->user(), RiderLocalTrip::query()->findOrFail($trip), $data['scanned_codes']);
+            $this->trips->loadTrip($request->user(), RiderLocalTrip::query()->findOrFail($trip));
         } catch (RuntimeException $exception) {
             return back()->withErrors(['trip' => $exception->getMessage()]);
         }
-        return back()->with('status', 'Local trip parcels scanned and load verified.');
+        return back()->with('status', 'Local trip load verified.');
     }
 
     public function close(Request $request, int $trip): RedirectResponse

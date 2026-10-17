@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
 use App\Http\Controllers\Logistics\LogisticsRemittanceController;
+use App\Http\Controllers\Logistics\LogisticsShippingRateController;
 use App\Http\Controllers\Logistics\RiderApplicationController;
 use App\Http\Controllers\Logistics\LocalTripController;
 use App\Http\Controllers\Logistics\TransferController;
@@ -38,9 +39,14 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/dashboard', [LogisticsPortalController::class, 'dashboard'])->name('dashboard');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'logistics')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'logistics')->name('settings.update');
+        Route::get('/shipping-rate', [LogisticsShippingRateController::class, 'index'])->name('shipping-rate');
+        Route::post('/shipping-rate-requests', [LogisticsShippingRateController::class, 'store'])->name('shipping-rate-requests.store');
+        Route::post('/shipping-rate-requests/{shippingRateRequest}/cancel', [LogisticsShippingRateController::class, 'cancel'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.cancel');
 
         Route::get('/parcels', [DispatchController::class, 'parcels'])->name('parcels');
         Route::get('/parcels/receive', [DispatchController::class, 'receive'])->name('parcels.receive');
+        Route::post('/parcels/receive/scan', [DispatchController::class, 'receiveScanned'])->name('parcels.receive.scan');
         Route::post('/parcels/receive/{shipment}/confirm', [DispatchController::class, 'confirmReceive'])->name('parcels.receive.confirm');
         Route::get('/parcels/tracking', [DispatchController::class, 'tracking'])->name('parcels.tracking');
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
@@ -71,6 +77,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::patch('/transfers/{manifest}/items/{item}/measurements', [TransferController::class, 'recordItemMeasurements'])->name('transfers.items.measurements');
         Route::patch('/transfers/{manifest}/driver', [TransferController::class, 'assignDriver'])->name('transfers.driver.update');
         Route::post('/transfers/{manifest}/seal', [TransferController::class, 'seal'])->name('transfers.seal');
+        Route::post('/transfers/{manifest}/items/{item}/release', [TransferController::class, 'releaseItem'])->name('transfers.items.release');
         Route::post('/transfers/{manifest}/release', [TransferController::class, 'release'])->name('transfers.release');
         Route::post('/transfers/{manifest}/depart', [TransferController::class, 'depart'])->name('transfers.depart');
         Route::post('/transfers/{manifest}/arrive', [TransferController::class, 'arrive'])->name('transfers.arrive');

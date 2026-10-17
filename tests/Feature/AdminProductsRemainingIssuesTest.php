@@ -38,7 +38,7 @@ class AdminProductsRemainingIssuesTest extends TestCase
             );
             $this->fail('A suspended product must not be ordered.');
         } catch (ValidationException $exception) {
-            $this->assertStringContainsString('no longer available', (string) $exception->errors()['cart'][0]);
+            $this->assertStringContainsString('temporarily unavailable', (string) $exception->errors()['cart'][0]);
         }
 
         $this->assertDatabaseCount('orders', 0);

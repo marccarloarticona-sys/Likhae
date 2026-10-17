@@ -303,5 +303,15 @@
             form.requestSubmit();
         });
     })();
+
+    document.addEventListener('parcel-scanner:success', (event) => {
+        const result = event.detail || {};
+        if (!result.verified || !result.tracking) return;
+        const proofForm = document.querySelector('[data-delivery-proof-form]');
+        const scannedCode = proofForm?.querySelector('[name="scanned_code"]');
+        const scanMethod = proofForm?.querySelector('[name="scan_method"]');
+        if (scannedCode) scannedCode.value = result.tracking;
+        if (scanMethod) scanMethod.value = result.scan_method || 'MANUAL';
+    });
 </script>
 @endsection

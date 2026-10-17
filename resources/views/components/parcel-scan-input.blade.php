@@ -6,7 +6,7 @@
     'required' => true,
 ])
 
-<div class="grid min-w-56 gap-2" data-parcel-scanner data-scanner-autosubmit="false">
+<div class="grid min-w-56 gap-2" data-parcel-scanner data-scanner-autosubmit="true">
     <div class="overflow-hidden rounded-lg border border-line bg-black">
         <video data-scanner-video class="hidden aspect-video w-full object-cover" playsinline muted></video>
         <div data-scanner-placeholder class="flex aspect-video items-center justify-center px-4 text-center text-[10px] text-white">Camera is off.</div>

@@ -52,6 +52,9 @@
                 @elseif($pickup->status === 'IN_PROGRESS' && $pickupFinished)
                     <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">All assigned parcels are resolved. Continue with {{ $collected }} collected parcel(s).</div>
                     <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}">@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup Â· Start Route to Logistics</button></form>
+                @elseif($pickup->status === 'IN_PROGRESS')
+                    <div class="hidden border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800" data-pickup-finished-message>All assigned parcels are resolved. Continue with the collected parcels.</div>
+                    <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}" class="hidden" data-finish-pickup-form>@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup · Start Route to Logistics</button></form>
                 @elseif($pickup->status === 'EN_ROUTE_TO_HUB')
                     <div class="border border-primary/20 bg-primary-soft p-4 text-sm font-semibold text-primary">Seller pickup complete. Deliver {{ $collected }} collected parcel(s) to the assigned logistics center for individual intake scans.</div>
                 @elseif($pickup->status === 'COMPLETED')
@@ -65,7 +68,7 @@
     <section class="rounded-3xl border border-line bg-surface p-8">
         <div class="flex flex-wrap items-end justify-between gap-3">
             <div><h2 class="text-lg font-bold text-ink">Parcel Checklist</h2><p class="mt-1 text-sm text-muted">Scan each tracking waybill separately at the seller.</p></div>
-            <span class="text-sm font-bold text-ink">{{ $collected }} / {{ $total }} verified</span>
+            <span class="text-sm font-bold text-ink" data-pickup-count data-total="{{ $total }}">{{ $collected }} / {{ $total }} verified</span>
         </div>
 
         @if($pickup->status === 'IN_PROGRESS' && ! $pickupFinished)
@@ -89,7 +92,7 @@
             @foreach($items as $item)
                 @php($assignment = $item->riderAssignment)
                 @php($shipment = $assignment?->shipment)
-                <article class="rounded-2xl border border-line p-4">
+                <article class="rounded-2xl border border-line p-4" data-pickup-item data-tracking="{{ $shipment?->tracking_number }}" data-pickup-resolved="{{ in_array($assignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true) ? 'true' : 'false' }}">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ ($shipment?->orderItem?->product_name ?? $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</p></div>
                         @if($collectedAssignmentIds->contains($assignment?->id))
@@ -121,4 +124,35 @@
         </div>
     </section>
 </div>
+<script>
+document.addEventListener('parcel-scanner:success', (event) => {
+    const result = event.detail || {};
+    if (!result.tracking) return;
+
+    const item = [...document.querySelectorAll('[data-pickup-item]')]
+        .find((candidate) => candidate.dataset.tracking === result.tracking);
+    if (item) {
+        item.dataset.pickupResolved = 'true';
+        const status = item.querySelector('span');
+        if (status) {
+            status.className = 'text-sm font-semibold text-green-700';
+            status.textContent = result.already_verified
+                ? 'Already collected by rider · waiting for logistics intake'
+                : 'Collected by rider · waiting for logistics intake';
+        }
+    }
+
+    const count = document.querySelector('[data-pickup-count]');
+    if (count && Number.isFinite(Number(result.collected_count))) {
+        count.textContent = `${result.collected_count} / ${result.total_count ?? count.dataset.total} verified`;
+    }
+
+    const allResolved = [...document.querySelectorAll('[data-pickup-item]')]
+        .every((candidate) => candidate.dataset.pickupResolved === 'true');
+    if (allResolved) {
+        document.querySelector('[data-pickup-finished-message]')?.classList.remove('hidden');
+        document.querySelector('[data-finish-pickup-form]')?.classList.remove('hidden');
+    }
+});
+</script>
 @endsection

@@ -39,16 +39,6 @@
             </form>
         @endif
         <div class="flex flex-wrap gap-2">
-            @if($trip->status === 'LOADING')
-                <form method="POST" action="{{ route('logistics.local-trips.load', $trip->id) }}" class="grid w-full gap-3 border border-line bg-surface p-4">
-                    @csrf
-                    <strong>Scan each parcel to verify this trip load</strong>
-                    @foreach($trip->items->whereIn('status', ['QUEUED', 'LOADED']) as $item)
-                        <label class="grid gap-2 text-sm sm:grid-cols-[1fr_1fr] sm:items-center"><span>{{ $item->riderAssignment?->shipment?->tracking_number }}</span><input name="scanned_codes[{{ $item->id }}]" required autocomplete="off" placeholder="Scan parcel barcode" class="border border-line px-3 py-2"></label>
-                    @endforeach
-                    <button class="justify-self-start bg-primary px-4 py-2 font-semibold text-white">Verify and load trip</button>
-                </form>
-            @endif
             @if(in_array($trip->status, ['READY','IN_PROGRESS']))<form method="POST" action="{{ route('logistics.local-trips.close', $trip->id) }}">@csrf<button class="border border-line px-4 py-2 font-semibold">Close trip</button></form>@endif
         </div>
     @endif

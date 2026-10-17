@@ -1196,7 +1196,7 @@
                                         <option value="{{ $value }}" @selected(old('vehicle_type') === $value)>{{ $label }}</option>
                                     @endforeach
                                 </select>
-                                <small class="register-field__help">Motorcycle and Tricycle are for local barangay pickup and delivery. Van, Closed Van, and Truck are for future inter-logistics transfers; capacity depends on the approved vehicle. Car is retained for legacy records.</small>
+                                <small class="register-field__help">Motorcycle and Tricycle are for local barangay pickup and delivery. Car, Van, Closed Van, and Truck are for hub-to-hub transfers; transfer capacity must be approved by the logistics hub.</small>
                             </div>
                             <div class="register-field">
                                 <label for="plate_number">Plate Number <span>*</span></label>

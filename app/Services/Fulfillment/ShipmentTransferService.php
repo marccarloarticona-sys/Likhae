@@ -89,16 +89,31 @@ final class ShipmentTransferService
         });
     }
 
-    public function release(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
+    public function release(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         return $this->transitionWithScan($leg, $actor, $scannedCode, ShipmentTransferLeg::READY, ShipmentTransferLeg::RELEASED, 'TRANSFER_RELEASE', function (ShipmentTransferLeg $locked, User $user): void {
             $locked->update(['released_by_user_id' => $user->id, 'released_at' => now()]);
-        });
+        }, $scanMethod);
     }
 
-    public function depart(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
+    public function depart(ShipmentTransferLeg $leg, User $actor): ShipmentTransferLeg
     {
-        return $this->transitionWithScan($leg, $actor, $scannedCode, ShipmentTransferLeg::RELEASED, ShipmentTransferLeg::IN_TRANSIT, 'TRANSFER_DEPARTURE', null, true);
+        $this->assertReady();
+
+        return DB::transaction(function () use ($leg, $actor): ShipmentTransferLeg {
+            $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
+            $this->assertOriginTransporter($actor, (int) $locked->origin_logistics_center_id);
+            if ($locked->status === ShipmentTransferLeg::IN_TRANSIT) {
+                return $locked;
+            }
+            if ($locked->status !== ShipmentTransferLeg::RELEASED) {
+                throw new RuntimeException('Only a released transfer leg can depart.');
+            }
+
+            $locked->update(['status' => ShipmentTransferLeg::IN_TRANSIT]);
+
+            return $locked->refresh();
+        });
     }
 
     public function recordArrival(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
@@ -117,11 +132,11 @@ final class ShipmentTransferService
         });
     }
 
-    public function receive(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
+    public function receive(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($leg, $actor, $scannedCode): ShipmentTransferLeg {
+        return DB::transaction(function () use ($leg, $actor, $scannedCode, $scanMethod): ShipmentTransferLeg {
             $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
             $shipment = Shipment::query()->whereKey($locked->shipment_id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $locked->destination_logistics_center_id);
@@ -132,7 +147,7 @@ final class ShipmentTransferService
             if ($locked->status !== ShipmentTransferLeg::IN_TRANSIT) {
                 throw new RuntimeException('Only an in-transit transfer leg can be received.');
             }
-            $this->recordScan($locked, $actor, $scannedCode, 'TRANSFER_RECEIVE');
+            $this->recordScan($locked, $actor, $scannedCode, 'TRANSFER_RECEIVE', $scanMethod);
 
             $locked->update([
                 'status' => ShipmentTransferLeg::RECEIVED,
@@ -157,24 +172,20 @@ final class ShipmentTransferService
         });
     }
 
-    private function transitionWithScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $from, string $to, string $scanType, ?callable $beforeReturn = null, bool $allowInterDriver = false): ShipmentTransferLeg
+    private function transitionWithScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $from, string $to, string $scanType, ?callable $beforeReturn = null, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($leg, $actor, $scannedCode, $from, $to, $scanType, $beforeReturn, $allowInterDriver): ShipmentTransferLeg {
+        return DB::transaction(function () use ($leg, $actor, $scannedCode, $from, $to, $scanType, $beforeReturn, $scanMethod): ShipmentTransferLeg {
             $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
-            if ($allowInterDriver) {
-                $this->assertOriginTransporter($actor, (int) $locked->origin_logistics_center_id);
-            } else {
-                $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
-            }
+            $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
             if ($locked->status === $to) {
                 return $locked;
             }
             if ($locked->status !== $from) {
                 throw new RuntimeException("Transfer leg must be {$from} before it can become {$to}.");
             }
-            $this->recordScan($locked, $actor, $scannedCode, $scanType);
+            $this->recordScan($locked, $actor, $scannedCode, $scanType, $scanMethod);
             $locked->update(['status' => $to]);
             if ($beforeReturn) {
                 $beforeReturn($locked, $actor);
@@ -184,7 +195,7 @@ final class ShipmentTransferService
         });
     }
 
-    private function recordScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanType): ParcelScan
+    private function recordScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanType, string $scanMethod = 'MANUAL'): ParcelScan
     {
         $code = trim($scannedCode);
         if ($code === '') {
@@ -215,7 +226,7 @@ final class ShipmentTransferService
             'rider_assignment_id' => null,
             'transfer_leg_id' => $leg->id,
             'scan_type' => $scanType,
-            'scan_method' => 'MANUAL',
+            'scan_method' => in_array(strtoupper($scanMethod), ['QR', 'BARCODE'], true) ? strtoupper($scanMethod) : 'MANUAL',
             'scanned_code' => $code,
             'result' => 'SUCCESS',
             'notes' => 'Transfer custody scan.',

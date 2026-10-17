@@ -639,9 +639,15 @@ class ShipmentWorkflowService
         });
     }
 
-    public function sortShipment(Shipment $shipment, LogisticsCenter $center, User $actor, ?ServiceArea $serviceArea = null): Shipment
+    public function sortShipment(
+        Shipment $shipment,
+        LogisticsCenter $center,
+        User $actor,
+        ?ServiceArea $serviceArea = null,
+        ?LogisticsCenter $destinationCenter = null,
+    ): Shipment
     {
-        return DB::transaction(function () use ($shipment, $center, $actor, $serviceArea): Shipment {
+        return DB::transaction(function () use ($shipment, $center, $actor, $serviceArea, $destinationCenter): Shipment {
             $shipment = Shipment::query()
                 ->whereKey($shipment->id)
                 ->with('serviceArea')
@@ -650,6 +656,69 @@ class ShipmentWorkflowService
             $this->requireShipmentStatus($shipment, ['AT_SORTING_CENTER'], 'sort the parcel');
             if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This parcel belongs to another logistics center.');
+            }
+
+            $manualDestinationSelected = false;
+            if ($destinationCenter) {
+                if (! $this->isCrossHubShipmentAtOrigin($shipment, $center)) {
+                    throw new RuntimeException('A destination hub can only be selected for an inter-hub parcel at its origin hub.');
+                }
+                if ((int) $destinationCenter->id === (int) $center->id) {
+                    throw new RuntimeException('An inter-hub parcel must be assigned to a destination hub other than its origin hub.');
+                }
+
+                $sellerOrder = $shipment->sellerOrder()
+                    ->with(['sellerProfile.businessAddress', 'order.address'])
+                    ->first();
+                $buyerAddress = $sellerOrder?->order?->address;
+                if (! $sellerOrder?->sellerProfile || ! $buyerAddress) {
+                    throw new RuntimeException('The parcel is missing its saved seller or buyer address, so the hub route cannot be changed.');
+                }
+
+                $destinationAddressMatchesSnapshot = trim((string) $buyerAddress->province_code) === trim((string) $shipment->destination_province_code)
+                    && trim((string) $buyerAddress->municipality_code) === trim((string) $shipment->destination_municipality_code)
+                    && trim((string) $buyerAddress->barangay_code) === trim((string) $shipment->destination_barangay_code);
+                if (! $destinationAddressMatchesSnapshot) {
+                    throw new RuntimeException('The saved buyer address differs from this parcel’s destination snapshot. Review the parcel route before sorting.');
+                }
+
+                $route = app(PsgcLogisticsRoutingService::class)->resolveWithCenters(
+                    $sellerOrder->sellerProfile,
+                    $buyerAddress,
+                    (int) $center->id,
+                    (int) $destinationCenter->id,
+                );
+                $leg = ShipmentTransferLeg::query()
+                    ->where('shipment_id', $shipment->id)
+                    ->where('sequence_no', 1)
+                    ->lockForUpdate()
+                    ->first();
+                if (! $leg || $leg->status !== ShipmentTransferLeg::PLANNED) {
+                    throw new RuntimeException('The transfer route is already in progress and can no longer be reassigned.');
+                }
+                if ((int) $leg->origin_logistics_center_id !== (int) $center->id
+                    || (int) $leg->destination_logistics_center_id !== (int) $shipment->destination_logistics_center_id
+                    || $leg->manifestItems()->exists()
+                    || ShipmentTransferLeg::query()
+                        ->where('shipment_id', $shipment->id)
+                        ->where('sequence_no', '>', 1)
+                        ->exists()) {
+                    throw new RuntimeException('The planned transfer leg is no longer available for manual reassignment.');
+                }
+
+                $resolvedDestination = $route['destination'];
+                $destinationArea = $route['destination_area']->serviceArea;
+                $resolvedAddress = $resolvedDestination->address;
+                $shipment->update([
+                    'destination_logistics_center_id' => $resolvedDestination->id,
+                    'service_area_id' => $destinationArea->id,
+                ]);
+                $leg->update([
+                    'destination_logistics_center_id' => $resolvedDestination->id,
+                    'destination_province_code' => $resolvedAddress->province_code,
+                    'destination_municipality_code' => $resolvedAddress->municipality_code,
+                ]);
+                $manualDestinationSelected = true;
             }
 
             if ($this->isCrossHubShipmentAtOrigin($shipment, $center)) {
@@ -668,7 +737,10 @@ class ShipmentWorkflowService
                 if ($leg->status === ShipmentTransferLeg::PLANNED) {
                     $this->transfers->markReady($leg, $actor);
                 }
-                $this->recordEvent($shipment, 'SORTED', $actor, 'Parcel sorted for an inter-hub transfer; final-mile assignment is locked until destination receipt.', null, $center);
+                $eventNote = $manualDestinationSelected
+                    ? 'Destination hub manually assigned to '.$route['destination']->business_name.'; buyer PSGC address is covered by '.$destinationArea->name.'. Parcel sorted for inter-hub transfer.'
+                    : 'Parcel sorted for an inter-hub transfer; final-mile assignment is locked until destination receipt.';
+                $this->recordEvent($shipment, 'SORTED', $actor, $eventNote, null, $center);
 
                 return $shipment->refresh();
             }
@@ -891,6 +963,10 @@ class ShipmentWorkflowService
     /** Match final-mile coverage using the order snapshot PSGC codes only. */
     public function riderCoversShipmentDestinationArea(Shipment $shipment, RiderProfile $rider): bool
     {
+        if ($this->isUnreceivedCrossHubShipment($shipment)) {
+            return false;
+        }
+
         $rider->loadMissing('areaAssignments.serviceArea.locations');
 
         $activeAssignments = $rider->areaAssignments->where('is_active', true);

@@ -63,14 +63,19 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'approved, active, and authorized',
         );
 
-        foreach (['motorcycle', 'tricycle', 'car'] as $vehicleType) {
+        foreach (['motorcycle', 'tricycle'] as $vehicleType) {
             $localUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
-            $localOrLegacy = $this->driverProfile($fixture, $localUser, $vehicleType, true);
+            $localDriver = $this->driverProfile($fixture, $localUser, $vehicleType, true);
             $this->assertRuntimeFailure(
-                fn () => $service->assignDriver($fixture['originUser'], $manifest, $localOrLegacy),
-                'Only an approved van, closed van, or truck',
+                fn () => $service->assignDriver($fixture['originUser'], $manifest, $localDriver),
+                'Only an approved four-wheel inter-hub vehicle',
             );
         }
+
+        $carUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
+        $carDriver = $this->driverProfile($fixture, $carUser, 'car', true);
+        $manifest = $service->assignDriver($fixture['originUser'], $manifest, $carDriver);
+        $this->assertSame($carDriver->id, (int) $manifest->assigned_driver_rider_profile_id);
     }
 
     public function test_a_driver_with_another_active_manifest_is_not_available_for_assignment(): void
@@ -208,6 +213,47 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'exceeds the driver',
         );
         $this->assertSame('1.000', $shipment->fresh()->parcel_weight_kg);
+    }
+
+    public function test_handoff_scans_release_one_parcel_at_a_time(): void
+    {
+        $fixture = $this->fixture();
+        $shipments = [$this->preparedShipment($fixture), $this->preparedShipment($fixture)];
+        $workflow = app(ShipmentWorkflowService::class);
+        foreach ($shipments as $shipment) {
+            $workflow->recordPackedMeasurements($shipment, $fixture['sellerUser'], '1.000', '2.000');
+        }
+
+        $service = app(TransferManifestService::class);
+        $manifest = $this->manifestWithLegs($fixture, $shipments);
+        $service->assignDriver($fixture['originUser'], $manifest, $fixture['driver']);
+        $service->seal($fixture['originUser'], $manifest);
+        $service->driverAccept($fixture['driverUser'], $manifest);
+        $items = $manifest->items()->with('transferLeg.shipment')->orderBy('id')->get();
+
+        $this->actingAs($fixture['originUser'])->postJson(route('logistics.transfers.items.release', [$manifest, $items[0]]), [
+            'scanned_code' => $items[0]->transferLeg->shipment->tracking_number,
+            'scan_method' => 'BARCODE',
+        ])->assertOk()->assertJsonPath('released_count', 1)->assertJsonPath('manifest_status', TransferManifest::SEALED);
+        $this->assertSame(ShipmentTransferLeg::RELEASED, $items[0]->transferLeg->fresh()->status);
+        $this->assertSame(ShipmentTransferLeg::READY, $items[1]->transferLeg->fresh()->status);
+        $this->assertDatabaseHas('parcel_scans', [
+            'transfer_leg_id' => $items[0]->transfer_leg_id,
+            'scan_type' => 'TRANSFER_RELEASE',
+            'scan_method' => 'BARCODE',
+        ]);
+
+        $this->postJson(route('logistics.transfers.items.release', [$manifest, $items[1]]), [
+            'scanned_code' => $items[0]->transferLeg->shipment->tracking_number,
+        ])->assertUnprocessable();
+        $this->assertSame(TransferManifest::SEALED, $manifest->fresh()->status);
+
+        $this->postJson(route('logistics.transfers.items.release', [$manifest, $items[1]]), [
+            'scanned_code' => $items[1]->transferLeg->shipment->tracking_number,
+            'scan_method' => 'QR',
+        ])->assertOk()->assertJsonPath('released_count', 2)->assertJsonPath('manifest_status', TransferManifest::RELEASED);
+        $this->assertSame(ShipmentTransferLeg::RELEASED, $items[1]->transferLeg->fresh()->status);
+        $this->assertSame(TransferManifest::RELEASED, $manifest->fresh()->status);
     }
 
     public function test_pagsanjan_to_pila_transfer_enforces_acceptance_scans_custody_and_partial_arrival(): void

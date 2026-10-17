@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\AdminOnboardingController;
 use App\Http\Controllers\Admin\AdminOperationsController;
 use App\Http\Controllers\Admin\AdminProductModerationController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
+use App\Http\Controllers\Admin\AdminShippingRateController;
 use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
@@ -69,6 +70,14 @@ Route::prefix('admin')
         Route::patch('/compliance/{case}', [AdminOperationsController::class, 'updateComplianceCase'])->name('compliance.update');
         Route::get('/complaints', [AdminOperationsController::class, 'complaints'])->name('complaints');
         Route::get('/finance', [AdminOperationsController::class, 'finance'])->name('finance');
+        Route::get('/shipping-rate-requests', [AdminShippingRateController::class, 'index'])->name('shipping-rate-requests');
+        Route::post('/shipping-rate-requests/initialize-global-rate', [AdminShippingRateController::class, 'initializeGlobalRate'])->name('shipping-rate-requests.initialize');
+        Route::get('/shipping-rate-requests/{shippingRateRequest}', [AdminShippingRateController::class, 'show'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.show');
+        Route::post('/shipping-rate-requests/{shippingRateRequest}/approve', [AdminShippingRateController::class, 'approve'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.approve');
+        Route::post('/shipping-rate-requests/{shippingRateRequest}/reject', [AdminShippingRateController::class, 'reject'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.reject');
         Route::get('/protection-rules', [AdminProtectionRuleController::class, 'index'])->name('protection-rules');
         Route::post('/protection-rules', [AdminProtectionRuleController::class, 'store'])->name('protection-rules.store');
         Route::patch('/protection-rules/{protectionRule}', [AdminProtectionRuleController::class, 'update'])->name('protection-rules.update');

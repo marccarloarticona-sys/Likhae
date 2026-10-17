@@ -7,6 +7,7 @@ use App\Models\Rider\RiderLocalTrip;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Maps\MapDataService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -97,7 +98,7 @@ class RiderPickupBatchController extends Controller
         return $this->run($request, $trip, fn (RiderLocalTrip $batch) => $batches->start($request->user(), $batch), 'Pickup started. Scan each seller waybill separately.');
     }
 
-    public function scan(Request $request, int $trip, SellerPickupBatchService $batches): RedirectResponse
+    public function scan(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse|RedirectResponse
     {
         $data = $request->validate([
             'scanned_code' => ['required', 'string', 'max:150'],
@@ -107,7 +108,27 @@ class RiderPickupBatchController extends Controller
         try {
             $result = $batches->scan($request->user(), $batch, $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
         } catch (RuntimeException $exception) {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+            }
+
             return back()->withErrors(['scanned_code' => $exception->getMessage()])->withInput();
+        }
+
+        if ($request->expectsJson()) {
+            $batch = $batch->fresh()->load('items.riderAssignment.shipment');
+            $collectedCount = $batches->collectedAssignmentIds($batch)->count();
+
+            return response()->json([
+                'success' => true,
+                'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
+                'tracking' => $result['assignment']->shipment?->tracking_number,
+                'assignment_id' => $result['assignment']->id,
+                'already_verified' => $result['already_verified'],
+                'collected_count' => $collectedCount,
+                'total_count' => $batch->items->count(),
+                'clear_input' => true,
+            ]);
         }
 
         return back()->with('status', $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.');

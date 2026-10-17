@@ -23,6 +23,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\AccountNotificationService;
 use App\Services\Buyer\BuyerStoreNotificationService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Moderation\CloudflareProductModerationProvider;
 use App\Services\Moderation\FallbackProductModerationProvider;
 use App\Services\Moderation\GeminiProductModerationProvider;
@@ -376,8 +377,15 @@ class AppServiceProvider extends ServiceProvider
 
                     $counts['incoming'] = (clone $centerShipments)->where('current_status', 'PICKED_UP')->count();
                     $counts['sorting'] = (clone $centerShipments)->where('current_status', 'AT_SORTING_CENTER')->count();
-                    $counts['assignments'] = (clone $centerShipments)
-                        ->where('current_status', 'SORTED')
+                    $assignmentShipments = (clone $centerShipments)->where('current_status', 'SORTED');
+                    if (app(LogisticsSchemaReadiness::class)->automaticRoutingReady()) {
+                        $assignmentShipments->where(fn ($route) => $route
+                            ->whereNull('origin_logistics_center_id')
+                            ->orWhereNull('destination_logistics_center_id')
+                            ->orWhereColumn('origin_logistics_center_id', 'destination_logistics_center_id')
+                            ->orWhereColumn('logistics_center_id', 'destination_logistics_center_id'));
+                    }
+                    $counts['assignments'] = $assignmentShipments
                         ->whereDoesntHave('riderAssignments', fn ($query) => $query
                             ->where('assignment_type', 'DELIVERY')
                             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))

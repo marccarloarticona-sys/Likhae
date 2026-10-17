@@ -4,7 +4,6 @@ namespace App\Services\Fulfillment;
 
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Logistics\LogisticsCenter;
-use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Rider\RiderAssignment;
@@ -109,6 +108,11 @@ final class LocalRiderTripService
                 throw new RuntimeException('The assignment type does not match this trip.');
             }
 
+            if ($trip->trip_type === RiderLocalTrip::TYPE_DELIVERY
+                && $this->shipmentRequiresHubTransfer($assignment->shipment)) {
+                throw new RuntimeException('This parcel is assigned to a destination hub transfer and cannot be added to a local delivery trip.');
+            }
+
             if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP
                 && ((int) $trip->seller_profile_id < 1
                     || (int) $trip->seller_profile_id !== (int) $assignment->shipment?->sellerOrder?->seller_profile_id)) {
@@ -182,16 +186,27 @@ final class LocalRiderTripService
         });
     }
 
-    /** @param array<int|string, string> $scannedCodes keyed by local trip item ID */
+    /**
+     * Local delivery trip loads are verified by confirming physical custody.
+     * The optional scan map remains accepted for compatibility with older callers.
+     *
+     * @param array<int|string, string> $scannedCodes ignored for local trip load verification
+     */
     public function loadTrip(User $actor, RiderLocalTrip $trip, array $scannedCodes = []): RiderLocalTrip
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $trip, $scannedCodes): RiderLocalTrip {
+        return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment.shipment')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, true);
             if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
                 throw new RuntimeException('Seller pickup batches are verified one parcel at a time at the seller.');
+            }
+            $activeItems = $trip->items->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED]);
+            if ($trip->trip_type === RiderLocalTrip::TYPE_DELIVERY
+                && $activeItems->contains(fn (RiderLocalTripItem $item): bool =>
+                    $this->shipmentRequiresHubTransfer($item->riderAssignment?->shipment))) {
+                throw new RuntimeException('This local trip contains a parcel that must be sent through Hub Transfers.');
             }
             if ($trip->status === RiderLocalTrip::READY
                 && $trip->items->every(fn (RiderLocalTripItem $item): bool => $item->status === RiderLocalTripItem::LOADED)) {
@@ -201,38 +216,12 @@ final class LocalRiderTripService
             if ($trip->items->isEmpty()) {
                 throw new RuntimeException('A local trip must contain at least one assignment before loading.');
             }
-            $activeItems = $trip->items->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED]);
             if ($activeItems->count() > (int) $trip->approved_parcel_capacity) {
                 throw new RuntimeException('The local trip exceeds its approved parcel capacity.');
             }
             if ($activeItems->contains(fn (RiderLocalTripItem $item): bool => ! in_array($item->riderAssignment?->status, self::OPEN_ASSIGNMENT_STATUSES, true))) {
                 throw new RuntimeException('Every trip item must have an active rider assignment before loading.');
             }
-            if (count($scannedCodes) !== $activeItems->count()) {
-                throw new RuntimeException('Scan every parcel in this trip before verifying the load.');
-            }
-
-            foreach ($activeItems as $item) {
-                $code = trim((string) ($scannedCodes[$item->id] ?? ''));
-                $tracking = trim((string) $item->riderAssignment?->shipment?->tracking_number);
-                if ($code === '' || $tracking === '' || strtoupper($code) !== strtoupper($tracking)) {
-                    throw new RuntimeException('The scanned barcode does not match local trip parcel '.$tracking.'.');
-                }
-                ParcelScan::query()->create([
-                    'shipment_id' => $item->riderAssignment->shipment_id,
-                    'scanned_by_user_id' => $actor->id,
-                    'logistics_center_id' => $trip->logistics_center_id,
-                    'rider_assignment_id' => $item->rider_assignment_id,
-                    'transfer_leg_id' => null,
-                    'scan_type' => 'DELIVERY_TRIP_LOAD',
-                    'scan_method' => 'MANUAL',
-                    'scanned_code' => $code,
-                    'result' => 'SUCCESS',
-                    'notes' => 'Parcel barcode scanned during final-mile trip load verification.',
-                    'scanned_at' => now(),
-                ]);
-            }
-
             $now = now();
             $trip->items()->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED])->update([
                 'status' => RiderLocalTripItem::LOADED,
@@ -250,20 +239,40 @@ final class LocalRiderTripService
         $this->assertReady();
 
         return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
-            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment')->lockForUpdate()->firstOrFail();
+            $trip = RiderLocalTrip::query()->whereKey($trip->id)->with('items.riderAssignment.shipment')->lockForUpdate()->firstOrFail();
             $this->assertTripActor($actor, $trip, false);
             if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
                 throw new RuntimeException('Use the Seller Pickup page to accept and start a pickup batch.');
             }
+            if ($trip->trip_type === RiderLocalTrip::TYPE_DELIVERY
+                && $trip->items->contains(fn (RiderLocalTripItem $item): bool =>
+                    in_array($item->status, [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED], true)
+                    && $this->shipmentRequiresHubTransfer($item->riderAssignment?->shipment))) {
+                throw new RuntimeException('This local trip contains a parcel that must be sent through Hub Transfers.');
+            }
             if ($trip->status === RiderLocalTrip::IN_PROGRESS) {
                 return $trip;
             }
-            if ($trip->status !== RiderLocalTrip::READY
-                || $trip->items->isEmpty()
-                || $trip->items->contains(fn (RiderLocalTripItem $item): bool => $item->status !== RiderLocalTripItem::LOADED)) {
-                throw new RuntimeException('A local trip must be fully scanned and ready before departure.');
+            if (! in_array($trip->status, [RiderLocalTrip::LOADING, RiderLocalTrip::READY], true)) {
+                throw new RuntimeException('Only an active loading trip can depart.');
             }
-            $trip->update(['status' => RiderLocalTrip::IN_PROGRESS, 'started_at' => now()]);
+            $activeItems = $trip->items->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED]);
+            if ($activeItems->isEmpty()) {
+                throw new RuntimeException('Add at least one delivery parcel to this trip before departure.');
+            }
+            if ($activeItems->count() > (int) $trip->approved_parcel_capacity) {
+                throw new RuntimeException('The local trip exceeds its approved parcel capacity.');
+            }
+            if ($activeItems->contains(fn (RiderLocalTripItem $item): bool => ! in_array($item->riderAssignment?->status, self::OPEN_ASSIGNMENT_STATUSES, true))) {
+                throw new RuntimeException('Every parcel on the trip must have an active rider assignment before departure.');
+            }
+
+            $now = now();
+            $trip->items()->where('status', RiderLocalTripItem::QUEUED)->update([
+                'status' => RiderLocalTripItem::LOADED,
+                'loaded_at' => $now,
+            ]);
+            $trip->update(['status' => RiderLocalTrip::IN_PROGRESS, 'started_at' => $now]);
 
             return $trip->refresh();
         });
@@ -415,17 +424,17 @@ final class LocalRiderTripService
     public function assertAssignmentMayStart(RiderAssignment $assignment): void
     {
         // Pickup assignments are route stops on the way to the seller. The parcel
-        // is not in the rider's custody yet, so it cannot be scanned onto a
-        // physical load before departure. Delivery assignments still require a
-        // verified trip load.
-        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP || ! $this->schema->localTripsReady()) {
-            return;
+        // is not in the rider's custody yet, so it is not part of the delivery
+        // load before departure. Delivery assignments still require a verified trip load.
+        if ($assignment->assignment_type === RiderAssignment::TYPE_DELIVERY) {
+            $assignment->loadMissing('shipment');
+            if ($this->shipmentRequiresHubTransfer($assignment->shipment)) {
+                throw new RuntimeException('This parcel must reach its destination hub before local delivery can start.');
+            }
         }
-        $item = RiderLocalTripItem::query()->with('trip')->where('rider_assignment_id', $assignment->id)->latest()->first();
-        if (! $item || $item->status !== RiderLocalTripItem::LOADED
-            || ! in_array($item->trip?->status, [RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS], true)) {
-            throw new RuntimeException('This local assignment must be scanned onto an active rider trip before departure.');
-        }
+        // Local delivery assignments may start directly. Trip grouping is used
+        // to start multiple assigned parcels together, but departure does not
+        // require a separate trip load verification.
     }
 
     private function assignmentCodes(RiderAssignment $assignment): array
@@ -475,6 +484,16 @@ final class LocalRiderTripService
                 && trim((string) $location->municipality_code) === $municipalityCode
                 && trim((string) $location->barangay_code) === $barangayCode);
         });
+    }
+
+    private function shipmentRequiresHubTransfer(?Shipment $shipment): bool
+    {
+        return $shipment !== null
+            && $this->schema->automaticRoutingReady()
+            && filled($shipment->origin_logistics_center_id)
+            && filled($shipment->destination_logistics_center_id)
+            && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id
+            && (int) $shipment->logistics_center_id !== (int) $shipment->destination_logistics_center_id;
     }
 
     private function assertTripOpenForLoading(RiderLocalTrip $trip): void

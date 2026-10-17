@@ -262,7 +262,8 @@ class LogisticsPortalController extends Controller
         $rider->setAttribute('rating_average', $ratingSummary['average']);
         $rider->setAttribute('rating_count', $ratingSummary['count']);
 
-        $serviceAreas = $center->address
+        $isLocalRider = RiderVehicleType::isLocalBarangay($rider->vehicle_type);
+        $serviceAreas = $isLocalRider && $center->address
             ? ServiceArea::query()
                 ->where('logistics_center_id', $center->id)
                 ->where('is_active', true)
@@ -280,12 +281,15 @@ class LogisticsPortalController extends Controller
         if ($centerMarker = $maps->centerMarker($center->loadMissing('address'))) {
             $mapMarkers[] = $centerMarker;
         }
+        $schema = app(LogisticsSchemaReadiness::class);
         return view('Logistics.riders.show', [
             'rider' => $rider,
             'center' => $center,
             'mapMarkers' => $mapMarkers,
             'serviceAreas' => $serviceAreas,
-            'manifestSchemaReady' => app(LogisticsSchemaReadiness::class)->manifestReady(),
+            'isLocalRider' => $isLocalRider,
+            'manifestSchemaReady' => $schema->manifestReady(),
+            'localTripsSchemaReady' => $schema->localTripsReady(),
         ]);
     }
 
@@ -326,13 +330,20 @@ class LogisticsPortalController extends Controller
             ]);
         });
 
-        return back()->with('status', 'Rider transfer capacity saved as an approved hub setting.');
+        $message = RiderVehicleType::isLocalBarangay($rider->vehicle_type)
+            ? 'Rider local-trip parcel capacity saved.'
+            : 'Rider transfer capacity saved as an approved hub setting.';
+
+        return back()->with('status', $message);
     }
 
     public function reassignRiderArea(Request $request, RiderProfile $rider): RedirectResponse
     {
         $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
+        if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {
+            return back()->withErrors(['service_area_id' => 'Four-wheel inter-hub drivers cannot be assigned a local delivery area.']);
+        }
 
         $data = $request->validate([
             'service_area_id' => ['nullable', 'integer'],

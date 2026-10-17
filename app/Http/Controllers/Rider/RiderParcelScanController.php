@@ -7,13 +7,14 @@ use App\Models\Logistics\TransferManifest;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 class RiderParcelScanController extends Controller
 {
-    public function resolve(Request $request, LogisticsSchemaReadiness $schema): RedirectResponse
+    public function resolve(Request $request, LogisticsSchemaReadiness $schema): JsonResponse|RedirectResponse
     {
         $data = $request->validate([
             'tracking' => ['required', 'string', 'max:150'],
@@ -34,8 +35,7 @@ class RiderParcelScanController extends Controller
                 ->first()
             : null;
         if ($manifest) {
-            return redirect()->route('rider.transfers.show', $manifest)
-                ->with('status', 'Parcel matched your assigned inter-hub manifest. Continue with the required custody scan.');
+            return $this->matchedScan($request, route('rider.transfers.show', $manifest), 'Parcel matched your assigned inter-hub manifest. Continue with the required custody scan.');
         }
 
         // Search only jobs already assigned to this rider. A tracking number
@@ -58,8 +58,7 @@ class RiderParcelScanController extends Controller
                             && (int) $item->trip->rider_profile_id === (int) $rider->id) : null;
 
                     if ($trip?->trip) {
-                        return redirect()->route('rider.pickups.batches.show', $trip->trip)
-                            ->with('status', 'Parcel matched an assigned pickup batch. Scan it there after physical handover.');
+                        return $this->matchedScan($request, route('rider.pickups.batches.show', $trip->trip), 'Parcel matched an assigned pickup batch. Scan it there after physical handover.');
                     }
                 }
 
@@ -72,8 +71,7 @@ class RiderParcelScanController extends Controller
                             && (int) $item->trip->rider_profile_id === (int) $rider->id) : null;
 
                     if ($trip?->trip) {
-                        return redirect()->route('rider.pickups.batches.show', $trip->trip)
-                            ->with('status', 'Pickup is recorded. Continue with the sorting-center handover workflow.');
+                        return $this->matchedScan($request, route('rider.pickups.batches.show', $trip->trip), 'Pickup is recorded. Continue with the sorting-center handover workflow.');
                     }
                 }
 
@@ -92,8 +90,7 @@ class RiderParcelScanController extends Controller
                     return $this->notAvailable($request, 'This delivery offer has expired. Refresh the dispatch queue for a new assignment.');
                 }
                 if (in_array($assignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true)) {
-                    return redirect()->route('rider.deliveries.show', $assignment)
-                        ->with('status', 'Parcel matched an active delivery assigned to you. Scanning does not mark it delivered.');
+                    return $this->matchedScan($request, route('rider.deliveries.show', $assignment), 'Parcel matched an active delivery assigned to you. Scanning does not mark it delivered.');
                 }
             }
         }
@@ -101,13 +98,17 @@ class RiderParcelScanController extends Controller
         return $this->notAvailable($request, 'Tracking number does not match an active job assigned to your account.');
     }
 
-    public function verifyDelivery(Request $request, RiderAssignment $assignment): RedirectResponse
+    public function verifyDelivery(Request $request, RiderAssignment $assignment): JsonResponse|RedirectResponse
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider && $assignment->assignment_type === RiderAssignment::TYPE_DELIVERY
             && (int) $assignment->rider_profile_id === (int) $rider->id, 403);
 
         if ($assignment->status === 'COMPLETED') {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'Parcel already processed.'], 422);
+            }
+
             return redirect()->route('rider.deliveries.show', $assignment)->withErrors([
                 'tracking' => 'Parcel already processed.',
             ]);
@@ -128,14 +129,38 @@ class RiderParcelScanController extends Controller
             abort(409, 'This parcel is not in a state that can be verified for delivery.');
         }
 
+        $message = 'Waybill verified for this assigned delivery. Complete the proof and COD steps to finish.';
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'tracking' => trim($data['tracking']),
+                'scan_method' => strtoupper((string) ($data['scan_method'] ?? 'MANUAL')),
+                'verified' => true,
+            ]);
+        }
+
         return redirect()->route('rider.deliveries.show', $assignment)
             ->with('verified_tracking', trim($data['tracking']))
             ->with('verified_scan_method', strtoupper((string) ($data['scan_method'] ?? 'MANUAL')))
-            ->with('status', 'Waybill verified for this assigned delivery. Complete the proof and COD steps to finish.');
+            ->with('status', $message);
     }
 
-    private function notAvailable(Request $request, string $message): RedirectResponse
+    private function matchedScan(Request $request, string $url, string $message): JsonResponse|RedirectResponse
     {
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'message' => $message, 'open_url' => $url]);
+        }
+
+        return redirect()->to($url)->with('status', $message);
+    }
+
+    private function notAvailable(Request $request, string $message): JsonResponse|RedirectResponse
+    {
+        if ($request->expectsJson()) {
+            return response()->json(['success' => false, 'message' => $message], 422);
+        }
+
         $destination = match ($request->input('return_to')) {
             'deliveries' => 'rider.deliveries',
             'transfers' => 'rider.transfers',

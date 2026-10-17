@@ -42,6 +42,7 @@ Route::prefix('rider')
             Route::get('/shipments', [RiderShipmentController::class, 'index'])->name('shipments');
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');
+            Route::post('/trips/{trip}/accept', [RiderTripController::class, 'accept'])->name('trips.accept');
             Route::post('/trips/{trip}/load', [RiderTripController::class, 'load'])->name('trips.load');
             Route::post('/trips/{trip}/start', [RiderTripController::class, 'start'])->name('trips.start');
             Route::post('/assignments/{assignment}/location', [RiderShipmentController::class, 'updateLocation'])->name('assignments.location');

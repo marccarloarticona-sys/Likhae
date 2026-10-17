@@ -6,6 +6,7 @@
     'height' => '220px',
     'allowUserLocation' => true,
     'riderGps' => false,
+    'liveDeviceGps' => false,
     'userLocationTarget' => null,
     'navigation' => false,
     'liveTracking' => true,
@@ -23,6 +24,7 @@
     data-map-zoom="{{ $zoom ?: config('mapbox.default_zoom') }}"
     data-map-user-target="{{ $userLocationTarget }}"
     data-map-rider-gps="{{ $riderGps ? 'true' : 'false' }}"
+    data-map-live-device-gps="{{ $liveDeviceGps ? 'true' : 'false' }}"
     data-map-live="{{ auth()->check() && $liveTracking ? 'true' : 'false' }}"
     data-map-navigation="{{ $navigation ? 'true' : 'false' }}"
     data-map-pin-form="{{ $pinFormId }}"
@@ -34,8 +36,8 @@
             <h2>{{ $title }}</h2>
         </div>
         <div class="lk-map-actions">
-            @if($allowUserLocation)
-                <button type="button" class="lk-map-button lk-map-location" data-map-location>{{ $riderGps ? 'Refresh rider GPS current device' : 'Use my location' }}</button>
+            @if($allowUserLocation || $liveDeviceGps)
+                <button type="button" class="lk-map-button lk-map-location" data-map-location>{{ $liveDeviceGps ? 'Start live GPS' : ($riderGps ? 'Refresh rider GPS current device' : 'Use my location') }}</button>
             @endif
             <button type="button" class="lk-map-button" data-map-rider-sharing hidden>Start rider GPS sharing</button>
             <button type="button" class="lk-map-button lk-map-fullscreen" data-map-fullscreen aria-pressed="false">Open full map</button>

@@ -2,7 +2,7 @@
 @section('title', 'Delivery Rider Assignment - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">
-    <header><p class="text-xs font-bold uppercase text-primary">Final-mile dispatch</p><h1 class="mt-2 text-2xl font-bold text-ink">Assign Sorted Parcels</h1><p class="mt-2 text-sm text-muted">Select an eligible area rider and add this parcel to a same-barangay loading trip.</p></header>
+    <header><p class="text-xs font-bold uppercase text-primary">Final-mile dispatch</p><h1 class="mt-2 text-2xl font-bold text-ink">Assign Sorted Parcels</h1><p class="mt-2 text-sm text-muted">Select an eligible area rider and add this parcel to a same-barangay loading trip.</p><p class="mt-1 text-xs text-muted">Parcels routed to another hub belong in Hub Transfers. They appear here only after the destination hub receives and sorts them.</p></header>
     <x-logistics.parcel-flow current="assign" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -31,7 +31,7 @@
                         @endforeach
                     </select>
                     <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->isEmpty())>Add parcel to trip</button>
-                    <p class="text-xs text-muted sm:col-span-3">Use one loading trip for parcels with the same exact barangay. The center must scan every waybill when loading the trip.</p>
+                    <p class="text-xs text-muted sm:col-span-3">Use one trip for parcels with the same exact barangay so the rider can accept and start them together.</p>
                 </form>
             @elseif($shipment->current_status === 'SORTED')
                 <span class="text-sm text-amber-800">Final-mile dispatch is disabled until local trip support is installed.</span>

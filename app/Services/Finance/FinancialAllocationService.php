@@ -61,12 +61,7 @@ class FinancialAllocationService
 
         $pool = $allocation->riderPool()->with('participants')->first();
         if ($pool) {
-            foreach ($sellerOrder->shipments->flatMap->riderAssignments->whereIn('assignment_type', ['PICKUP', 'DELIVERY']) as $assignment) {
-                $pool->participants()->firstOrCreate(
-                    ['rider_profile_id' => $assignment->rider_profile_id, 'participant_role' => $assignment->assignment_type],
-                    ['rider_assignment_id' => $assignment->id, 'status' => 'PENDING'],
-                );
-            }
+            $this->allocateCompletedRiderLegs($pool, $sellerOrder);
         }
 
         return $allocation;
@@ -90,6 +85,12 @@ class FinancialAllocationService
     /** @return array<string, string|null> */
     private function attributes(Shipment $shipment, $sellerOrder, $items): array
     {
+        $rateVersion = null;
+        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
+            $sellerOrder->loadMissing('shippingRateVersion');
+            $rateVersion = $sellerOrder->shippingRateVersion;
+        }
+        $riderPoolPercentage = $rateVersion?->rider_pool_percentage ?? ShippingRatePolicyService::DEFAULT_RIDER_PERCENTAGE;
         $calculation = FinancialRules::allocation(
             $items->map(fn ($item): array => [
                 'original_unit_price' => $item->original_unit_price,
@@ -98,6 +99,7 @@ class FinancialAllocationService
             ])->all(),
             $sellerOrder->voucher_discount,
             $sellerOrder->shipping_fee,
+            (string) $riderPoolPercentage,
         );
 
         $attributes = [
@@ -123,6 +125,69 @@ class FinancialAllocationService
         }
 
         return $attributes;
+    }
+
+    private function allocateCompletedRiderLegs(RiderEarningPool $pool, $sellerOrder): void
+    {
+        $rateVersion = null;
+        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
+            $sellerOrder->loadMissing('shippingRateVersion');
+            $rateVersion = $sellerOrder->shippingRateVersion;
+        }
+
+        $completedRidersByRole = ['PICKUP' => [], 'HUB_TO_HUB' => [], 'DELIVERY' => []];
+        $representativeAssignments = [];
+        foreach ($sellerOrder->shipments->flatMap->riderAssignments as $assignment) {
+            if ($assignment->status !== 'COMPLETED' || ! $assignment->rider_profile_id) {
+                continue;
+            }
+
+            // The current assignment model has PICKUP and DELIVERY only.
+            // Its configured future Hub weight is excluded from the active
+            // denominator until an authoritative completed Hub leg exists.
+            $role = match ($assignment->assignment_type) {
+                'PICKUP' => 'PICKUP',
+                'DELIVERY' => 'DELIVERY',
+                default => null,
+            };
+            if ($role === null) {
+                continue;
+            }
+
+            $riderId = (int) $assignment->rider_profile_id;
+            $completedRidersByRole[$role][] = $riderId;
+            $representativeAssignments[$role][$riderId] ??= (int) $assignment->id;
+        }
+
+        $distribution = FinancialRules::riderLegDistribution(
+            FinancialRules::cents((string) $pool->total_amount),
+            $completedRidersByRole,
+            [
+                'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
+                'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
+                'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
+            ],
+        );
+
+        foreach ($distribution['participants'] as $participantData) {
+            $assignmentId = $representativeAssignments[$participantData['participant_role']][$participantData['rider_profile_id']] ?? null;
+            $participant = $pool->participants()->firstOrNew([
+                'rider_profile_id' => $participantData['rider_profile_id'],
+                'participant_role' => $participantData['participant_role'],
+            ]);
+            if (! $participant->exists
+                || ($participant->share_amount === null && $participant->status === 'PENDING')) {
+                $participant->forceFill([
+                    'rider_assignment_id' => $assignmentId,
+                    'share_amount' => FinancialRules::amount($participantData['share_cents']),
+                    'status' => 'PENDING',
+                ])->save();
+            }
+        }
+
+        $pool->forceFill([
+            'unresolved_share_amount' => FinancialRules::amount($distribution['unresolved_cents']),
+        ])->save();
     }
 
     private function provisionSettlementRows(ShipmentFinancialAllocation $allocation, Shipment $shipment, $sellerOrder): void

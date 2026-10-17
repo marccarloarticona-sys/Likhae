@@ -242,7 +242,9 @@ function updateNavigationPanel(shell, { rider = null, target = null, route = nul
     panel.hidden = false;
     const destination = navigationDestination(target);
     const buyerPinMissing = rider?.active_destination_kind === 'buyer' && !markerCoordinates(target);
-    const assignmentLabel = rider?.assignment_type === 'PICKUP' ? 'Pickup navigation' : 'Delivery navigation';
+    const assignmentLabel = rider?.assignment_type === 'INTER_LOGISTICS'
+        ? 'Inter-hub navigation'
+        : rider?.assignment_type === 'PICKUP' ? 'Pickup navigation' : 'Delivery navigation';
     const setText = (selector, value) => {
         const element = panel.querySelector(selector);
         if (element) element.textContent = value;
@@ -488,6 +490,7 @@ async function drawUserRoute(shell, map, mapboxgl, markers, from) {
 }
 
 function addUserLocation(shell, map, mapboxgl, markers) {
+    if (shell.dataset.mapLiveDeviceGps === 'true') return;
     const button = shell.querySelector('[data-map-location]');
     if (!button) return;
 
@@ -542,6 +545,143 @@ function addUserLocation(shell, map, mapboxgl, markers) {
             button.disabled = false;
         }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
     });
+}
+
+function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
+    if (shell.dataset.mapLiveDeviceGps !== 'true') return;
+
+    const button = shell.querySelector('[data-map-location]');
+    const target = markers.find((marker) => marker.target_kind === shell.dataset.mapUserTarget);
+    const destination = markerCoordinates(target);
+    const token = shell.dataset.mapToken?.trim() || '';
+    const rider = { assignment_type: 'INTER_LOGISTICS', active_destination_kind: 'destination', location_fresh: true };
+    let watchId;
+    let lastRouteFrom = null;
+    let lastRouteAt = 0;
+    let routeRequest = 0;
+    let activeRoute = null;
+    let followDriver = true;
+
+    const setButton = (active) => {
+        if (!button) return;
+        button.textContent = active ? 'Pause live GPS' : 'Resume live GPS';
+        button.setAttribute('aria-pressed', String(active));
+    };
+
+    const updateFromPosition = (position) => {
+        const latitude = Number(position.coords?.latitude);
+        const longitude = Number(position.coords?.longitude);
+        const accuracy = Number(position.coords?.accuracy);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+            || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+            updateStatus(shell, 'Device GPS returned an invalid location. Waiting for a fresh reading.', true);
+            return;
+        }
+        if (Number.isFinite(accuracy) && accuracy > 250) {
+            updateStatus(shell, `GPS accuracy is low (${Math.round(accuracy)} m). Waiting for a clearer location fix.`, true);
+            return;
+        }
+
+        const from = [longitude, latitude];
+        if (!shell._likhaeUserMarker) {
+            const element = document.createElement('div');
+            element.className = 'lk-map-marker';
+            element.dataset.kind = 'rider';
+            element.setAttribute('aria-label', 'Driver live location');
+            shell._likhaeUserMarker = new mapboxgl.Marker({ element, anchor: 'bottom' })
+                .setPopup(new mapboxgl.Popup({ offset: 16 }).setHTML('<div class="lk-map-popup"><strong>Driver live location</strong><span>Updated from this device GPS</span></div>'))
+                .setLngLat(from)
+                .addTo(map);
+        } else {
+            shell._likhaeUserMarker.setLngLat(from);
+        }
+
+        if (followDriver) {
+            const bounds = new mapboxgl.LngLatBounds();
+            bounds.extend(from);
+            if (destination) bounds.extend(destination);
+            map.fitBounds(bounds, { padding: 64, maxZoom: 13, duration: 350 });
+        }
+        const locationState = shell.querySelector('[data-map-location-state]');
+        if (locationState) locationState.textContent = 'LIVE DRIVER GPS';
+        if (!destination) {
+            updateNavigationPanel(shell, { rider, target, status: 'Destination hub map coordinates are missing.' });
+            updateStatus(shell, 'Your live location is shown. The destination hub needs a saved map pin.', true);
+            return;
+        }
+
+        if (!token) {
+            updateNavigationPanel(shell, { rider, target, status: 'Live GPS is active. Add a Mapbox public token to show the driving route and ETA.' });
+            updateStatus(shell, 'Live driver location and destination are shown. Driving route preview needs a Mapbox public token.');
+            return;
+        }
+
+        const now = Date.now();
+        const movedEnough = !lastRouteFrom || distanceMeters(lastRouteFrom, from) >= 500;
+        const routeIsOld = now - lastRouteAt >= 90000;
+        if (movedEnough || routeIsOld) {
+            lastRouteFrom = from;
+            lastRouteAt = now;
+            const requestId = ++routeRequest;
+            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: 'Live GPS active. Updating the road route…' });
+            fetchRoadGeometry(token, from, destination)
+                .then((route) => {
+                    if (requestId !== routeRequest) return;
+                    activeRoute = { ...route, arrivalAt: Date.now() + (route.duration * 1000) };
+                    drawRouteGeometry(map, 'inter-hub-live', route.geometry, '#800000');
+                    updateNavigationPanel(shell, { rider, target, route: activeRoute, status: 'Live driver GPS · road route updated' });
+                    updateStatus(shell, 'Live driver location and destination are shown. Keep this page open while traveling.');
+                })
+                .catch((error) => {
+                    if (requestId !== routeRequest) return;
+                    updateNavigationPanel(shell, { rider, target, route: activeRoute, status: error?.message || 'Driving route is temporarily unavailable.' });
+                    updateStatus(shell, 'Live driver location is shown; the driving route could not be refreshed.', true);
+                });
+        } else {
+            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: 'Live driver GPS · route refreshes as you travel' });
+            updateStatus(shell, 'Live driver location and destination are shown. Keep this page open while traveling.');
+        }
+    };
+
+    const stop = (message = 'Live GPS paused. The destination hub remains visible.') => {
+        if (watchId !== undefined && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+        watchId = undefined;
+        setButton(false);
+        const locationState = shell.querySelector('[data-map-location-state]');
+        if (locationState) locationState.textContent = 'GPS PAUSED';
+        if (message) {
+            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: 'Live GPS paused' });
+            updateStatus(shell, message);
+        }
+    };
+
+    const start = () => {
+        if (watchId !== undefined) return;
+        if (!navigator.geolocation) {
+            updateNavigationPanel(shell, { rider, target, status: 'This browser does not support live device GPS.' });
+            updateStatus(shell, 'This browser does not support live device GPS.', true);
+            return;
+        }
+        if (!destination) {
+            updateNavigationPanel(shell, { rider, target, status: 'Destination hub map coordinates are missing.' });
+        }
+        followDriver = true;
+        updateStatus(shell, 'Requesting device location permission for live inter-hub navigation.');
+        setButton(true);
+        watchId = navigator.geolocation.watchPosition(updateFromPosition, (error) => {
+            const message = error.code === 1
+                ? 'Location access was denied. Enable browser location permission to show your live position.'
+                : 'Device location is temporarily unavailable. Waiting for another GPS reading.';
+            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
+            updateStatus(shell, message, true);
+            if (error.code === 1) stop(null);
+        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+    };
+
+    map.on('dragstart', () => { followDriver = false; });
+    button?.addEventListener('click', () => watchId === undefined ? start() : stop());
+    window.addEventListener('pagehide', () => stop(null), { once: true });
+    start();
 }
 
 function distanceMeters(first, second) {
@@ -1005,6 +1145,7 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
                 }
             }, 1000);
         }
+        startLiveDeviceNavigation(shell, map, mapboxgl, markers);
     });
 }
 
