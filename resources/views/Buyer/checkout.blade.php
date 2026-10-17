@@ -52,6 +52,10 @@
             <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900 shadow-sm" role="alert" aria-live="assertive">
                 <h2 class="text-sm font-bold">Checkout needs attention</h2>
                 <p class="mt-1 text-xs leading-5">{{ $previewError }}</p>
+                @if($checkoutBlocked ?? false)
+                    <p class="mt-2 text-xs font-semibold">Remove the unavailable item from your cart, then return to checkout.</p>
+                    <a class="mt-2 inline-flex text-xs font-semibold underline" href="{{ route('buyer.cart') }}">Review cart</a>
+                @endif
             </section>
         @endif
 

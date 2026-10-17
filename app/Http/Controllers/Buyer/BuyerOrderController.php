@@ -77,10 +77,22 @@ class BuyerOrderController extends Controller
         $buyerOrders = $request->user()->orders();
         $orderStatusCounts = collect($tabs->counts(clone $buyerOrders->getQuery(), $returnRefundReady));
 
+        $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
         $orderQuery = $request->user()
             ->orders()
             ->getQuery()
-            ->with(['sellerOrders.sellerProfile', 'sellerOrders.items.shipment.transferLegs.originLogisticsCenter', 'sellerOrders.items.shipment.transferLegs.destinationLogisticsCenter', 'sellerOrders.items.product.images', 'sellerOrders.items.review', 'sellerOrders.shipments.orderItem', 'sellerOrders.shipments.events', 'sellerOrders.shipments.logisticsCenter', 'sellerOrders.shipments.transferLegs.originLogisticsCenter', 'sellerOrders.shipments.transferLegs.destinationLogisticsCenter', 'payments', 'disputes']);
+            ->with([
+                'sellerOrders.sellerProfile',
+                'sellerOrders.items.shipment.transferLegs' => $transferLegsWithArrival,
+                'sellerOrders.items.product.images',
+                'sellerOrders.items.review',
+                'sellerOrders.shipments.orderItem',
+                'sellerOrders.shipments.events',
+                'sellerOrders.shipments.logisticsCenter',
+                'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
+                'payments',
+                'disputes',
+            ]);
 
         if ($returnRefundReady) {
             $orderQuery->with([
@@ -106,6 +118,11 @@ class BuyerOrderController extends Controller
         $orderTabKeys = $orders->getCollection()->mapWithKeys(
             fn (Order $order): array => [$order->id => $tabs->forOrder($order, $returnRefundReady)]
         );
+        $sellerOrderTabKeys = $orders->getCollection()->flatMap(function (Order $order) use ($tabs): array {
+            return $order->sellerOrders->mapWithKeys(fn (SellerOrder $sellerOrder): array => [
+                (int) $sellerOrder->id => $tabs->forSellerOrder($order, $sellerOrder),
+            ])->all();
+        });
 
         return view('Buyer.orders', [
             'mode' => 'index',
@@ -116,6 +133,7 @@ class BuyerOrderController extends Controller
             'orderStatusCounts' => $orderStatusCounts,
             'orderActionStates' => $orderActionStates,
             'orderTabKeys' => $orderTabKeys,
+            'sellerOrderTabKeys' => $sellerOrderTabKeys,
         ]);
     }
 
@@ -137,8 +155,10 @@ class BuyerOrderController extends Controller
                 'sellerOrders' => fn ($query) => $query->select(['id', 'order_id', 'status']),
                 'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at', 'logistics_center_id']),
                 'sellerOrders.shipments.logisticsCenter:id,business_name',
-                'sellerOrders.shipments.transferLegs' => fn ($query) => $query->select(['id', 'shipment_id', 'origin_logistics_center_id', 'status', 'updated_at']),
-                'sellerOrders.shipments.transferLegs.originLogisticsCenter:id,business_name',
+                'sellerOrders.shipments.transferLegs' => function ($query): void {
+                    $query->select(['id', 'shipment_id', 'origin_logistics_center_id', 'destination_logistics_center_id', 'status', 'updated_at']);
+                    $this->withTransferArrivalScan($query);
+                },
                 ...($detailOrderId > 0 ? ['sellerOrders.shipments.events'] : []),
             ])
             ->get()
@@ -172,7 +192,17 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
-        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.voucher', 'sellerOrders.items.shipment.transferLegs.originLogisticsCenter', 'sellerOrders.items.shipment.transferLegs.destinationLogisticsCenter', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipments.orderItem', 'sellerOrders.shipments.events', 'sellerOrders.shipments.transferLegs.originLogisticsCenter', 'sellerOrders.shipments.transferLegs.destinationLogisticsCenter', 'sellerOrders.shipments.deliveryAttempts', 'sellerOrders.shipments.riderAssignments.riderProfile.user', 'sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.logisticsCenter.address', 'address', 'payments', 'disputes'];
+        $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
+        $orderRelations = [
+            'sellerOrders.sellerProfile.user', 'sellerOrders.voucher',
+            'sellerOrders.items.shipment.transferLegs' => $transferLegsWithArrival,
+            'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipments.orderItem',
+            'sellerOrders.shipments.events',
+            'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
+            'sellerOrders.shipments.deliveryAttempts', 'sellerOrders.shipments.riderAssignments.riderProfile.user',
+            'sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.logisticsCenter.address',
+            'address', 'payments', 'disputes',
+        ];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
             $orderRelations[] = 'returnRefundRequests';
@@ -1158,6 +1188,8 @@ class BuyerOrderController extends Controller
                             'status' => (string) $leg->status,
                             'updated_at' => $leg->updated_at?->toIso8601String(),
                             'origin_center_name' => $leg->originLogisticsCenter?->business_name,
+                            'destination_center_name' => $leg->destinationLogisticsCenter?->business_name,
+                            'arrival_scanned_at' => $leg->arrival_scanned_at,
                         ])->values()->all(),
                     ]))
                     ->sortBy('id')
@@ -1165,5 +1197,19 @@ class BuyerOrderController extends Controller
                     ->all(),
             ])
             ->values();
+    }
+
+    private function withTransferArrivalScan($query)
+    {
+        return $query
+            ->withMax([
+                'scans as arrival_scanned_at' => fn ($scans) => $scans
+                    ->where('scan_type', 'TRANSFER_ARRIVAL')
+                    ->where('result', 'SUCCESS'),
+            ], 'scanned_at')
+            ->with([
+                'originLogisticsCenter:id,business_name',
+                'destinationLogisticsCenter:id,business_name',
+            ]);
     }
 }

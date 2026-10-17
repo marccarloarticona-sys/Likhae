@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Admin\Dispute;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
 use App\Models\Buyer\ReturnRefundRequest;
@@ -60,6 +61,9 @@ class BuyerOrderPage8WorkflowTest extends TestCase
             'submitted_at' => now(),
         ]);
 
+        $otherBuyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        [$foreignOrder] = $this->makeOrder($otherBuyer, $variant, 'PROCESSING', 'PREPARING', 'PREPARING', 'COD');
+
         $toShipResponse = $this->actingAs($buyer)
             ->get(route('buyer.orders', ['status' => 'to-ship']))
             ->assertOk();
@@ -96,6 +100,134 @@ class BuyerOrderPage8WorkflowTest extends TestCase
             $cancelled->order_number,
             $returnOrder->order_number,
         ], $this->orderNumbersOnCards($allResponse));
+        $this->assertNotContains($foreignOrder->order_number, $this->orderNumbersOnCards($allResponse));
+        $this->assertCount(7, $this->orderNumbersOnCards($allResponse));
+    }
+
+    public function test_ready_for_pickup_parent_order_is_in_to_ship(): void
+    {
+        [$buyer, $variant] = $this->buyerAndVariant();
+        [$readyForPickup] = $this->makeOrder($buyer, $variant, 'PROCESSING', 'READY_FOR_PICKUP', 'READY_FOR_PICKUP', 'COD');
+
+        $response = $this->actingAs($buyer)
+            ->get(route('buyer.orders', ['status' => 'to-ship']))
+            ->assertOk();
+
+        $this->assertSame([$readyForPickup->order_number], $this->orderNumbersOnCards($response));
+    }
+
+    public function test_mixed_seller_statuses_and_multiple_parcels_render_once_per_parent_order(): void
+    {
+        [$buyer, $variant] = $this->buyerAndVariant();
+        [$order, $sellerAOrder, $firstShipment, $firstItem] = $this->makeOrder(
+            $buyer,
+            $variant,
+            'PROCESSING',
+            'COMPLETED',
+            'DELIVERED',
+            'COD',
+        );
+
+        $secondItem = OrderItem::query()->create([
+            'seller_order_id' => $sellerAOrder->id,
+            'product_id' => $variant->product_id,
+            'product_variant_id' => $variant->id,
+            'product_name' => 'Second parcel item',
+            'sku' => 'P8-SKU-'.Str::upper(Str::random(8)),
+            'variant_description' => 'Test variant',
+            'unit_price' => 12.34,
+            'quantity' => 1,
+            'discount_amount' => 0,
+            'line_total' => 12.34,
+        ]);
+        $secondShipment = Shipment::query()->create([
+            'seller_order_id' => $sellerAOrder->id,
+            'order_item_id' => $secondItem->id,
+            'tracking_number' => 'P8-TRACK-'.Str::upper(Str::random(10)),
+            'destination_province_code' => 'P8-PROVINCE',
+            'destination_province_name' => 'Test Province',
+            'destination_municipality_code' => 'P8-MUNICIPALITY',
+            'destination_municipality_name' => 'Test Municipality',
+            'destination_barangay_code' => 'P8-BARANGAY',
+            'destination_barangay_name' => 'Test Barangay',
+            'current_status' => 'DELIVERED',
+        ]);
+
+        $sellerBVariant = ProductVariant::query()
+            ->with('product')
+            ->whereHas('product', fn ($query) => $query->where('slug', 'test-amihan-home-goods-handwoven-abaca-storage-basket'))
+            ->firstOrFail();
+        $sellerBOrder = SellerOrder::query()->create([
+            'seller_order_number' => 'P8-SELLER-'.Str::upper(Str::random(10)),
+            'order_id' => $order->id,
+            'seller_profile_id' => $sellerBVariant->product->seller_profile_id,
+            'status' => 'PREPARING',
+            'item_subtotal' => 20,
+            'grand_total' => 20,
+        ]);
+        $sellerBItem = OrderItem::query()->create([
+            'seller_order_id' => $sellerBOrder->id,
+            'product_id' => $sellerBVariant->product_id,
+            'product_variant_id' => $sellerBVariant->id,
+            'product_name' => 'Seller B mixed-status item',
+            'sku' => 'P8-SKU-'.Str::upper(Str::random(8)),
+            'variant_description' => 'Test variant',
+            'unit_price' => 20,
+            'quantity' => 1,
+            'discount_amount' => 0,
+            'line_total' => 20,
+        ]);
+        $sellerBShipment = Shipment::query()->create([
+            'seller_order_id' => $sellerBOrder->id,
+            'order_item_id' => $sellerBItem->id,
+            'tracking_number' => 'P8-TRACK-'.Str::upper(Str::random(10)),
+            'destination_province_code' => 'P8-PROVINCE',
+            'destination_province_name' => 'Test Province',
+            'destination_municipality_code' => 'P8-MUNICIPALITY',
+            'destination_municipality_name' => 'Test Municipality',
+            'destination_barangay_code' => 'P8-BARANGAY',
+            'destination_barangay_name' => 'Test Barangay',
+            'current_status' => 'READY_FOR_PICKUP',
+        ]);
+
+        $response = $this->actingAs($buyer)
+            ->get(route('buyer.orders', ['status' => 'to-receive']))
+            ->assertOk()
+            ->assertSee($firstShipment->tracking_number)
+            ->assertSee($secondShipment->tracking_number)
+            ->assertSee($sellerBShipment->tracking_number)
+            ->assertSee('To Receive')
+            ->assertSee('To Ship');
+
+        $document = new \DOMDocument;
+        @$document->loadHTML($response->getContent());
+        $xpath = new \DOMXPath($document);
+        $parentCards = $xpath->query('//article[@data-order-id="'.$order->id.'"]');
+        $this->assertSame(1, $parentCards->length, 'Mixed seller states must still render one parent-order card.');
+        $this->assertSame(1, (int) $response->viewData('orders')->total());
+        $this->assertSame(2, $xpath->query('//article[@data-order-id="'.$order->id.'"]//*[@data-seller-order-status-id]')->length);
+    }
+
+    public function test_all_orders_pagination_keeps_parent_order_totals_and_card_counts(): void
+    {
+        [$buyer, $variant] = $this->buyerAndVariant();
+        for ($index = 0; $index < 12; $index++) {
+            $this->makeOrder($buyer, $variant, 'PROCESSING', 'PREPARING', 'PREPARING', 'COD');
+        }
+
+        $firstPage = $this->actingAs($buyer)
+            ->get(route('buyer.orders', ['status' => 'all', 'page' => 1]))
+            ->assertOk();
+        $secondPage = $this->get(route('buyer.orders', ['status' => 'all', 'page' => 2]))
+            ->assertOk();
+
+        $this->assertSame(12, (int) $firstPage->viewData('orders')->total());
+        $this->assertCount(10, $this->orderNumbersOnCards($firstPage));
+        $this->assertCount(2, $this->orderNumbersOnCards($secondPage));
+        $this->assertSame(1, (int) $firstPage->viewData('orders')->currentPage());
+        $this->assertSame(2, (int) $secondPage->viewData('orders')->currentPage());
+        $firstPageNumbers = $this->orderNumbersOnCards($firstPage);
+        $this->assertCount(10, array_unique($firstPageNumbers), 'A shipment relationship must not multiply a parent-order card.');
     }
 
     public function test_cancellation_requires_reason_restores_stock_once_and_releases_voucher_usage(): void
@@ -111,6 +243,7 @@ class BuyerOrderPage8WorkflowTest extends TestCase
             'minimum_order_amount' => 0,
             'is_active' => true,
         ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
         [$order, $sellerOrder, $shipment] = $this->makeOrder($buyer, $variant, 'PROCESSING', 'PREPARING', 'PREPARING', 'COD', 2, $voucher);
         $this->assertSame(1, VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id));
 
@@ -132,6 +265,7 @@ class BuyerOrderPage8WorkflowTest extends TestCase
         $this->assertSame('Ordered by mistake', $order->fresh()->cancellation_reason);
         $this->assertSame('PENDING', $order->payments()->firstOrFail()->status);
         $this->assertSame(0, VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id));
+        $this->assertDatabaseHas('buyer_voucher_claims', ['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
         $this->assertSame(1, $shipment->events()->where('notes', 'like', 'BUYER_ORDER_CANCELLED:%')->count());
 
         $this->postJson(route('buyer.orders.cancel', $order), $request)
@@ -271,6 +405,12 @@ class BuyerOrderPage8WorkflowTest extends TestCase
         $cards = $xpath->query('//article[@data-order-id]');
         $numbers = [];
         foreach ($cards as $card) {
+            $orderNumber = trim($card->getAttribute('data-order-number'));
+            if ($orderNumber !== '') {
+                $numbers[] = $orderNumber;
+
+                continue;
+            }
             if (preg_match('/P8-ORD-[A-Z0-9_-]+/', $card->textContent, $matches)) {
                 $numbers[] = $matches[0];
             }

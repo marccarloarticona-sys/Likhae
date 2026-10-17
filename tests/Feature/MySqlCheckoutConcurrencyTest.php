@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
@@ -21,6 +22,8 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Marketplace\BuyerVoucherClaimService;
+use App\Services\Marketplace\VoucherRedemptionCounter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Process;
@@ -212,6 +215,30 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertSame(1, Order::query()->whereIn('buyer_user_id', [$buyerA->id, $buyerB->id])->count());
     }
 
+    public function test_mysql_concurrent_duplicate_voucher_claim_is_idempotent(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller] = $this->sellerRoutingFixture('voucher-claim-race');
+        $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER, 'status' => User::STATUS_ACTIVE]);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $seller->id,
+            'code' => 'CLAIMRACE'.str()->upper(str()->random(10)),
+            'name' => 'Concurrent claim voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => '10.00',
+            'minimum_order_amount' => '0.00',
+            'is_active' => true,
+        ]);
+
+        $results = $this->runClaimWorkers($buyer, $voucher);
+
+        $this->assertSame(['success', 'success'], collect($results)->pluck('status')->sort()->values()->all(), json_encode($results));
+        $this->assertCount(1, collect($results)->pluck('claim_id')->unique());
+        $this->assertSame(1, BuyerVoucherClaim::query()->where('buyer_user_id', $buyer->id)->where('voucher_id', $voucher->id)->count());
+        $this->assertSame(0, VoucherRedemptionCounter::count((int) $voucher->id));
+    }
+
     private function assertDisposableMySql(): void
     {
         $expectedDatabase = trim((string) env('LIKHAE_DISPOSABLE_DB'));
@@ -223,6 +250,96 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertSame($expectedDatabase, $actualDatabase);
         $this->assertStringContainsString('disposable', strtolower($actualDatabase));
         $this->assertNotSame('likhae', strtolower($actualDatabase));
+    }
+
+    /** @return list<array{status: string, claim_id: int}> */
+    private function runClaimWorkers(User $buyer, Voucher $voucher): array
+    {
+        $barrierDirectory = storage_path('framework/testing/voucher-claim-'.str()->uuid());
+        if (! mkdir($barrierDirectory, 0777, true) && ! is_dir($barrierDirectory)) {
+            $this->fail('Could not create the local voucher claim worker barrier directory.');
+        }
+
+        $workerCode = <<<'PHP'
+require 'vendor/autoload.php';
+$app = require 'bootstrap/app.php';
+$app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$barrier = getenv('CLAIM_BARRIER');
+$worker = getenv('CLAIM_WORKER');
+file_put_contents($barrier.DIRECTORY_SEPARATOR.$worker.'.ready', 'ready');
+$deadline = microtime(true) + 30;
+while (! is_file($barrier.DIRECTORY_SEPARATOR.'start') && microtime(true) < $deadline) { usleep(10000); }
+if (! is_file($barrier.DIRECTORY_SEPARATOR.'start')) { fwrite(STDERR, 'worker barrier timed out'); exit(2); }
+try {
+    $buyer = \App\Models\User::query()->findOrFail((int) getenv('CLAIM_BUYER'));
+    $claim = app(\App\Services\Marketplace\BuyerVoucherClaimService::class)->claim($buyer, (int) getenv('CLAIM_VOUCHER'));
+    echo json_encode(['status' => 'success', 'claim_id' => $claim->id], JSON_THROW_ON_ERROR);
+} catch (\Throwable $exception) {
+    fwrite(STDERR, get_class($exception).': '.$exception->getMessage());
+    exit(1);
+}
+PHP;
+
+        $processes = [];
+        try {
+            foreach ([0, 1] as $index) {
+                $workerName = 'worker-'.$index;
+                $process = new Process(
+                    [PHP_BINARY, '-r', $workerCode],
+                    base_path(),
+                    [
+                        'APP_ENV' => 'testing',
+                        'DB_CONNECTION' => 'mysql',
+                        'DB_HOST' => '127.0.0.1',
+                        'DB_PORT' => '3306',
+                        'DB_DATABASE' => DB::connection()->getDatabaseName(),
+                        'DB_URL' => '',
+                        'LIKHAE_DISPOSABLE_DB' => DB::connection()->getDatabaseName(),
+                        'CLAIM_BARRIER' => $barrierDirectory,
+                        'CLAIM_WORKER' => $workerName,
+                        'CLAIM_BUYER' => (string) $buyer->id,
+                        'CLAIM_VOUCHER' => (string) $voucher->id,
+                    ],
+                );
+                $process->setTimeout(90);
+                $process->start();
+                $processes[$workerName] = $process;
+            }
+
+            $readyDeadline = microtime(true) + 45;
+            while (microtime(true) < $readyDeadline) {
+                $allReady = collect(array_keys($processes))->every(fn (string $workerName): bool => is_file($barrierDirectory.DIRECTORY_SEPARATOR.$workerName.'.ready'));
+                if ($allReady) {
+                    break;
+                }
+                foreach ($processes as $workerName => $process) {
+                    if (! $process->isRunning() && ! is_file($barrierDirectory.DIRECTORY_SEPARATOR.$workerName.'.ready')) {
+                        $this->fail('Voucher claim worker failed before the start barrier: '.$process->getErrorOutput().$process->getOutput());
+                    }
+                }
+                usleep(20000);
+            }
+
+            $allReady = collect(array_keys($processes))->every(fn (string $workerName): bool => is_file($barrierDirectory.DIRECTORY_SEPARATOR.$workerName.'.ready'));
+            $this->assertTrue($allReady, 'Voucher claim workers did not reach the shared start barrier.');
+            file_put_contents($barrierDirectory.DIRECTORY_SEPARATOR.'start', 'go');
+
+            $results = [];
+            foreach ($processes as $workerName => $process) {
+                $process->wait();
+                $this->assertSame(0, $process->getExitCode(), $workerName.' failed: '.$process->getErrorOutput().$process->getOutput());
+                $results[] = json_decode(trim($process->getOutput()), true, flags: JSON_THROW_ON_ERROR);
+            }
+
+            return $results;
+        } finally {
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop(1);
+                }
+            }
+            \Illuminate\Support\Facades\File::deleteDirectory($barrierDirectory);
+        }
     }
 
     /** @param list<array{buyer: User, address: Address, item: CartItem, key: string}> $workers

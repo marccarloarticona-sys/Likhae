@@ -23,6 +23,7 @@
     $returnRefundReady = $returnRefundReady ?? false;
     $orderActionStates = $orderActionStates ?? collect();
     $orderTabKeys = $orderTabKeys ?? collect();
+    $sellerOrderTabKeys = $sellerOrderTabKeys ?? collect();
     $selectedOrderActionState = $selectedOrderActionState ?? [];
     $visibleOrders = $orderCollection;
     $liveOrders = $mode === 'show' && isset($selectedOrder) ? collect([$selectedOrder]) : $orderCollection;
@@ -434,6 +435,12 @@
                     $displayStatus = $order->status === 'PARTIALLY_CANCELLED' ? 'Partially cancelled' : (\App\Services\Marketplace\BuyerOrderTabService::LABELS[$displayTab] ?? str($order->status)->headline());
                 @endphp
                 @if($displayTab === 'RETURNS' && $returnSellerRequests->isNotEmpty())
+                    <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
+                        <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
+                            <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
+                            <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
+                        </header>
+                        <div class="divide-y divide-stone-100">
                     @foreach($returnSellerRequests as $sellerRequest)
                         @php
                             $refundSellerOrder = $sellerRequest->sellerOrder;
@@ -453,8 +460,8 @@
                             };
                         @endphp
                         @if($refundSellerOrder)
-                            <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-                                <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
+                            <section class="px-5 py-4">
+                                <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-4">
                                     <div class="min-w-0">
                                         <div class="flex flex-wrap items-center gap-2">
                                             <h2 class="font-semibold text-stone-900">{{ $refundSellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h2>
@@ -484,21 +491,27 @@
                                     <div><span class="text-xs text-stone-500">Total Refund</span><strong class="ml-3 text-lg font-bold text-stone-900">&#8369;{{ number_format($refundTotal, 2) }}</strong></div>
                                     <div class="lk-order-card-actions"><a class="lk-btn lk-btn-light" href="{{ route('buyer.returns.show', $sellerRequest) }}">View Refund Details</a><form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $refundSellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light">Contact Seller</button></form></div>
                                 </footer>
-                            </article>
+                            </section>
                         @endif
                     @endforeach
+                        </div>
+                    </article>
                 @elseif(in_array($displayTab, ['COMPLETED', 'CANCELLED'], true))
+                    <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
+                        <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
+                            <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
+                            <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
+                        </header>
+                        <div class="divide-y divide-stone-100">
                     @foreach($order->sellerOrders as $sellerOrder)
                         @php
-                            $sellerCancelled = $sellerOrder->status === 'CANCELLED';
                             $sellerShipments = $sellerOrder->shipments;
-                            $sellerActiveShipment = $sellerShipments->first(fn ($shipment) => !in_array($shipment->current_status, ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'], true)) ?: $sellerShipments->first();
-                            $sellerDelivered = $sellerShipments->isNotEmpty() && $sellerShipments->every(fn ($shipment) => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true));
-                            $sellerDisplayStatus = $sellerCancelled ? 'Cancelled' : ($sellerDelivered ? ($order->status === 'COMPLETED' ? 'Completed' : 'To Receive') : str($sellerOrder->status)->replace('_', ' ')->title());
+                            $sellerDisplayStatusKey = $sellerOrderTabKeys->get($sellerOrder->id, $sellerOrder->status);
+                            $sellerDisplayStatus = \App\Services\Marketplace\BuyerOrderTabService::LABELS[$sellerDisplayStatusKey] ?? str($sellerDisplayStatusKey)->replace('_', ' ')->title();
                             $sellerUnitCount = $sellerOrder->items->sum('quantity');
                         @endphp
-                        <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}">
-                            <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
+                        <section class="px-5 py-4">
+                            <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-4">
                                 <div class="min-w-0">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <h2 class="font-semibold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h2>
@@ -507,8 +520,18 @@
                                     </div>
                                     <p class="mt-1 text-xs text-stone-500">Order {{ $order->order_number }} &#183; {{ optional($order->placed_at)->format('M j, Y') }}</p>
                                 </div>
-                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $sellerActiveShipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id])
+                                <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
                             </header>
+                            @if($sellerShipments->isNotEmpty())
+                                <div class="my-3 grid gap-2">
+                                    @foreach($sellerShipments as $shipment)
+                                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
+                                            <span class="text-[11px] text-stone-600">Parcel {{ $loop->iteration }} · Tracking {{ $shipment->tracking_number }}</span>
+                                            @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false])
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
                             <ul class="divide-y divide-stone-100 px-5">
                                 @foreach($sellerOrder->items as $item)
                                     <li class="flex items-start gap-3 py-4">
@@ -539,22 +562,26 @@
                                     @endif
                                 </div>
                             </footer>
-                        </article>
+                        </section>
                     @endforeach
+                        </div>
+                    </article>
                 @else
-                <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}">
+                <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
                     <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
                         <div class="min-w-0">
                             <h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2>
                             <p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p>
                         </div>
+                        <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
                     </header>
                     <div class="divide-y divide-stone-100">
                         @foreach($order->sellerOrders as $sellerOrder)
                             <section class="px-5 py-4" aria-label="Items from {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}">
                                 @php
                                     $sellerShipments = $sellerOrder->shipments;
-                                    $sellerActiveShipment = $sellerShipments->first(fn ($shipment) => !in_array($shipment->current_status, ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'], true)) ?: $sellerShipments->first();
+                                    $sellerDisplayStatusKey = $sellerOrderTabKeys->get($sellerOrder->id, $sellerOrder->status);
+                                    $sellerDisplayStatus = \App\Services\Marketplace\BuyerOrderTabService::LABELS[$sellerDisplayStatusKey] ?? str($sellerDisplayStatusKey)->replace('_', ' ')->title();
                                 @endphp
                                 <header class="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-3">
                                     <div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -562,8 +589,18 @@
                                         <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light px-3 py-1.5 text-xs">Chat</button></form>
                                         @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
                                     </div>
-                                    @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $sellerActiveShipment, 'status' => $displayStatus, 'orderId' => $order->id])
+                                    <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
                                 </header>
+                                @if($sellerShipments->isNotEmpty())
+                                    <div class="mb-3 grid gap-2">
+                                        @foreach($sellerShipments as $shipment)
+                                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
+                                                <span class="text-[11px] text-stone-600">Parcel {{ $loop->iteration }} · Tracking {{ $shipment->tracking_number }}</span>
+                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false])
+                                            </div>
+                                        @endforeach
+                                    </div>
+                                @endif
                                 <ul class="divide-y divide-stone-100">
                                     @foreach($sellerOrder->items as $item)
                                         <li class="flex items-start gap-3 py-3 first:pt-0 last:pb-0">

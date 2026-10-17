@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Buyer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\Address;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Review;
 use App\Models\Buyer\SellerFollower;
@@ -24,6 +25,8 @@ use App\Services\Communication\ConversationMessageSender;
 use App\Services\Communication\MessageAttachmentService;
 use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Marketplace\CartService;
+use App\Services\Marketplace\BuyerProductAvailabilityService;
+use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\PurchaseLimitService;
@@ -41,6 +44,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ViewErrorBag;
 use Illuminate\Validation\Rule;
@@ -786,16 +790,11 @@ class BuyerController extends Controller
             ]);
         }
 
-        $unavailableItem = $items->first(function (CartItem $item): bool {
-            $availability = $this->cartItemAvailability($item);
-
-            return ! $availability['available']
-                || (int) ($item->productVariant?->stock ?? 0) < (int) $item->quantity;
-        });
+        $unavailableItem = $items->first(fn (CartItem $item): bool => ! $this->cartItemAvailability($item)['available']);
         if ($unavailableItem || $purchaseLimitExceededProducts !== []) {
             $message = $purchaseLimitExceededProducts !== []
                 ? 'One or more selected products exceed the purchase limit. Reduce the cart quantity before checkout.'
-                : 'One or more selected items are unavailable or exceed current stock. Refresh your cart and review the item status.';
+                : $this->cartItemAvailability($unavailableItem)['message'];
 
             return response()->json([
                 'success' => false,
@@ -926,32 +925,22 @@ class BuyerController extends Controller
             ->all();
     }
 
-    /** @return array{available: bool, restricted: bool, message: string} */
+    /** @return array{available: bool, restricted: bool, code: string, message: string} */
     private function cartItemAvailability(CartItem $item): array
     {
+        $item->loadMissing(['productVariant.product.sellerProfile.user']);
         $variant = $item->productVariant;
         $product = $variant?->product;
         $seller = $product?->sellerProfile;
         $sellerUser = $seller?->user;
 
-        if (! $variant || ! $product || $product->trashed()
-            || $product->status !== 'ACTIVE'
-            || ($product->published_at && $product->published_at->isFuture())
-            || ! $seller
-            || $seller->status !== 'ACTIVE'
-            || $sellerUser?->status !== User::STATUS_ACTIVE) {
-            return ['available' => false, 'restricted' => true, 'message' => 'This product is temporarily unavailable.'];
-        }
-
-        if (! $variant->is_active || (bool) $seller->vacation_mode || (int) $variant->stock < 1) {
-            return [
-                'available' => false,
-                'restricted' => false,
-                'message' => (bool) $seller->vacation_mode ? 'Temporarily unavailable' : 'Unavailable',
-            ];
-        }
-
-        return ['available' => true, 'restricted' => false, 'message' => 'Available'];
+        return app(BuyerProductAvailabilityService::class)->inspect(
+            $variant,
+            $product,
+            $seller,
+            $sellerUser,
+            (int) $item->quantity,
+        );
     }
 
     /** @return array<int, array{id: int, price: float, original_price: float, stock: int}> */
@@ -1413,22 +1402,21 @@ class BuyerController extends Controller
             ->latest('placed_at')
             ->get();
 
-        $activeVouchers = Voucher::query()
-            ->with('sellerProfile')
-            ->where('is_active', true)
-            ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
-            ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
-            ->get();
-        $redemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers);
-        $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers, (int) $buyer->id);
-        $activeVouchers = $activeVouchers
-            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
-                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
-                && ($voucher->per_user_limit === null
-                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit))
-            ->map(fn (Voucher $voucher): array => [
+        $claimService = app(BuyerVoucherClaimService::class);
+        $claimableSellerVouchers = $claimService->claimableSellerVouchers($buyer);
+        $collectedSellerClaims = $claimService->collectedSellerClaims($buyer);
+        $collectedSellerVouchers = $collectedSellerClaims
+            ->pluck('voucher')
+            ->filter()
+            ->values();
+        $collectedGlobalUses = VoucherRedemptionCounter::countsFor($collectedSellerVouchers);
+        $collectedBuyerUses = VoucherRedemptionCounter::countsFor($collectedSellerVouchers, (int) $buyer->id);
+
+        $sellerVoucherCard = function (Voucher $voucher, bool $collected, ?string $unavailableReason = null): array {
+            return [
+                'id' => (int) $voucher->id,
                 'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
-                'status' => $voucher->sellerProfile?->business_name ?? 'LIKHAE Platform',
+                'status' => $voucher->sellerProfile?->business_name ?? 'Seller',
                 'value' => $voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
                     : '₱'.number_format((float) $voucher->discount_value, 2).' off',
@@ -1437,6 +1425,55 @@ class BuyerController extends Controller
                     : 'No minimum spend',
                 'code' => $voucher->code,
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
+                'collected' => $collected,
+                'unavailable_reason' => $unavailableReason,
+            ];
+        };
+
+        $collectedSellerCards = $collectedSellerClaims
+            ->map(function (BuyerVoucherClaim $claim) use ($buyer, $claimService, $collectedGlobalUses, $collectedBuyerUses, $sellerVoucherCard): array {
+                $voucher = $claim->voucher;
+                $reason = $claimService->unavailableReason(
+                    $voucher,
+                    $buyer,
+                    $collectedGlobalUses->get($voucher->id, 0),
+                    $collectedBuyerUses->get($voucher->id, 0),
+                );
+
+                return $sellerVoucherCard($voucher, true, $reason);
+            });
+
+        $claimableSellerCards = $claimableSellerVouchers
+            ->map(fn (Voucher $voucher): array => $sellerVoucherCard($voucher, false));
+
+        $platformVouchers = Voucher::query()
+            ->with('sellerProfile')
+            ->whereNull('seller_profile_id')
+            ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNotNull('platform_code_key'))
+            ->where('is_active', true)
+            ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+            ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+            ->get();
+        $redemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers);
+        $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id);
+        $platformVoucherCards = $platformVouchers
+            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
+                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
+                && ($voucher->per_user_limit === null
+                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit))
+            ->map(fn (Voucher $voucher): array => [
+                'id' => (int) $voucher->id,
+                'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
+                'status' => 'LIKHAE Platform Campaign',
+                'value' => $voucher->discount_type === 'PERCENT'
+                    ? number_format((float) $voucher->discount_value, 0).'% off'
+                    : '₱'.number_format((float) $voucher->discount_value, 2).' off',
+                'condition' => (float) $voucher->minimum_order_amount > 0
+                    ? 'Minimum spend ₱'.number_format((float) $voucher->minimum_order_amount, 2)
+                    : 'No minimum spend',
+                'code' => $voucher->code,
+                'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
+                'collected' => false,
             ])
             ->values();
 
@@ -1465,7 +1502,8 @@ class BuyerController extends Controller
         ]))->values();
 
         return view('Buyer.rewards', [
-            'activeVouchers' => $activeVouchers,
+            'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
+            'platformVoucherCards' => $platformVoucherCards,
             'voucherHistory' => $voucherHistory,
             'pointsBalance' => ($completedOrders->count() * 50) + ($reviews->count() * 20),
             'pointActivities' => $pointActivities,

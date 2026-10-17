@@ -3,6 +3,7 @@
 namespace App\Services\Marketplace;
 
 use App\Models\Buyer\Order;
+use App\Models\Seller\SellerOrder;
 use Illuminate\Database\Eloquent\Builder;
 
 class BuyerOrderTabService
@@ -18,6 +19,8 @@ class BuyerOrderTabService
     ];
 
     private const SELLER_ACCEPTED_STATES = ['CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'];
+
+    private const SHIPPED_SELLER_STATES = ['PICKED_UP', 'COMPLETED'];
 
     private const RECEIVING_SHIPMENT_STATES = [
         'PICKED_UP',
@@ -89,32 +92,53 @@ class BuyerOrderTabService
             return 'COMPLETED';
         }
 
-        $awaitingOnlinePayment = $order->status === 'PLACED'
-            && $order->payment_status === 'PENDING'
-            && $payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PENDING')
-            && ! $payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID');
-        if ($awaitingOnlinePayment) {
+        if ($this->awaitingOnlinePayment($order, $payments)) {
             return 'TO_PAY';
         }
 
-        $sellerHasShipped = $sellerOrders->contains(fn ($sellerOrder): bool => in_array($sellerOrder->status, ['PICKED_UP', 'COMPLETED'], true));
+        $sellerHasShipped = $sellerOrders->contains(fn (SellerOrder $sellerOrder): bool => in_array($sellerOrder->status, self::SHIPPED_SELLER_STATES, true));
         $shipmentHasShipped = $shipments->contains(fn ($shipment): bool => in_array($shipment->current_status, self::RECEIVING_SHIPMENT_STATES, true));
         if ($sellerHasShipped || $shipmentHasShipped) {
             return 'TO_RECEIVE';
         }
 
         if (in_array($order->status, ['PLACED', 'PROCESSING'], true)
-            && $sellerOrders->contains(fn ($sellerOrder): bool => in_array($sellerOrder->status, self::SELLER_ACCEPTED_STATES, true))) {
-            return 'TO_SHIP';
-        }
-
-        if (in_array($order->status, ['PLACED', 'PROCESSING'], true)
             && $sellerOrders->isNotEmpty()
-            && $sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->status === 'PLACED')) {
+            && $sellerOrders->every(fn (SellerOrder $sellerOrder): bool => $sellerOrder->status === 'PLACED')) {
             return 'TO_PAY';
         }
 
+        if (in_array($order->status, ['PLACED', 'PROCESSING'], true)
+            && $sellerOrders->contains(fn (SellerOrder $sellerOrder): bool => in_array($sellerOrder->status, self::SELLER_ACCEPTED_STATES, true))) {
+            return 'TO_SHIP';
+        }
+
         return $order->status;
+    }
+
+    public function forSellerOrder(Order $order, SellerOrder $sellerOrder): string
+    {
+        if ($sellerOrder->status === 'CANCELLED' || $order->status === 'CANCELLED') {
+            return 'CANCELLED';
+        }
+        if ($order->status === 'COMPLETED' && $sellerOrder->status === 'COMPLETED') {
+            return 'COMPLETED';
+        }
+
+        $sellerShipments = $sellerOrder->shipments;
+        $hasShippedParcel = $sellerShipments->contains(
+            fn ($shipment): bool => in_array($shipment->current_status, self::RECEIVING_SHIPMENT_STATES, true),
+        );
+
+        if (in_array($sellerOrder->status, self::SHIPPED_SELLER_STATES, true) || $hasShippedParcel) {
+            return 'TO_RECEIVE';
+        }
+
+        if (in_array($sellerOrder->status, self::SELLER_ACCEPTED_STATES, true)) {
+            return 'TO_SHIP';
+        }
+
+        return $sellerOrder->status;
     }
 
     private function toPay(Builder $query, bool $returnRefundReady): Builder
@@ -141,7 +165,7 @@ class BuyerOrderTabService
     {
         return $this->activeFulfillmentOrders($query, $returnRefundReady)
             ->whereHas('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder->whereIn('status', self::SELLER_ACCEPTED_STATES))
-            ->whereDoesntHave('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder->whereIn('status', ['PICKED_UP', 'COMPLETED']))
+            ->whereDoesntHave('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder->whereIn('status', self::SHIPPED_SELLER_STATES))
             ->whereDoesntHave('sellerOrders.shipments', fn (Builder $shipment): Builder => $shipment->whereIn('current_status', self::RECEIVING_SHIPMENT_STATES));
     }
 
@@ -150,9 +174,17 @@ class BuyerOrderTabService
         return $this->activeFulfillmentOrders($query, $returnRefundReady)
             ->where(function (Builder $query): void {
                 $query
-                    ->whereHas('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder->whereIn('status', ['PICKED_UP', 'COMPLETED']))
+                    ->whereHas('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder->whereIn('status', self::SHIPPED_SELLER_STATES))
                     ->orWhereHas('sellerOrders.shipments', fn (Builder $shipment): Builder => $shipment->whereIn('current_status', self::RECEIVING_SHIPMENT_STATES));
             });
+    }
+
+    private function awaitingOnlinePayment(Order $order, $payments): bool
+    {
+        return $order->status === 'PLACED'
+            && $order->payment_status === 'PENDING'
+            && $payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PENDING')
+            && ! $payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID');
     }
 
     private function activeFulfillmentOrders(Builder $query, bool $returnRefundReady): Builder

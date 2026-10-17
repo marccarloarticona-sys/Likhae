@@ -19,6 +19,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Finance\CodCollectionService;
+use App\Services\Finance\ShippingRatePolicyService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\PsgcLogisticsRoutingService;
 use App\Services\Fulfillment\ShipmentTransferService;
@@ -39,11 +40,18 @@ class CheckoutService
         private readonly ShipmentTransferService $transfers,
         private readonly FragileProtectionRuleService $protection,
         private readonly PurchaseLimitService $purchaseLimits,
+        private readonly ShippingRatePolicyService $shippingRates,
+        private readonly BuyerProductAvailabilityService $productAvailability,
     ) {}
 
     public function automaticRoutingReady(): bool
     {
         return $this->schema->automaticRoutingReady();
+    }
+
+    public function currentShippingFee(): string
+    {
+        return $this->shippingRates->currentPolicy()['shipping_fee'];
     }
 
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
@@ -58,9 +66,16 @@ class CheckoutService
             ->map(function (Collection $sellerItems, int $sellerId) use ($buyer): Collection {
                 return Voucher::query()
                     ->where('seller_profile_id', $sellerId)
+                    ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
                     ->where('is_active', true)
                     ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
                     ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+                    ->whereHas('buyerClaims', fn ($query) => $query->where('buyer_user_id', $buyer?->id ?? 0))
+                    ->whereHas('sellerProfile', fn ($query) => $query
+                        ->where('status', 'ACTIVE')
+                        ->whereHas('user', fn ($user) => $user
+                            ->where('account_type', User::TYPE_SELLER)
+                            ->where('status', User::STATUS_ACTIVE)))
                     ->withCount([
                         'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
                         'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
@@ -104,14 +119,16 @@ class CheckoutService
 
     public function availableLogisticsProviders(): Collection
     {
+        $globalShippingFee = $this->currentShippingFee();
+
         return LogisticsCenter::query()
             ->approvedActive()
             ->whereHas('serviceAreas', fn ($query) => $query
                 ->where('is_active', true)
                 ->whereHas('locations'))
             ->orderBy('business_name')
-            ->get(['id', 'code', 'business_name', 'shipping_fee'])
-            ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', number_format((float) config('likhae.standard_shipping_fee', 50), 2, '.', '')));
+            ->get(['id', 'code', 'business_name'])
+            ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', $globalShippingFee));
     }
 
     /** @return array{available: bool, requires_review: bool, message: string|null} */
@@ -249,21 +266,25 @@ class CheckoutService
         // Step 7: one fixed charge per seller-order/shipment, never per item unit.
         // The provider is selected separately from the charge; API checkout may
         // resolve the provider from the destination service area.
-        $shippingFee = (float) config('likhae.standard_shipping_fee', 50);
+        $ratePolicy = $this->shippingRates->currentPolicy(lockForUpdate: $lockVoucherUsage);
+        $shippingFee = (float) $ratePolicy['shipping_fee'];
 
         foreach ($items as $item) {
             /** @var CartItem $item */
-            $item->loadMissing(['productVariant.product.sellerProfile', 'productVariant.optionValues.option']);
+            $item->loadMissing(['productVariant.product.sellerProfile.user', 'productVariant.optionValues.option']);
             $variant = $item->productVariant;
             $product = $variant?->product;
             $seller = $product?->sellerProfile;
-            if (! $variant
-                || ! $product
-                || $product->status !== 'ACTIVE'
-                || ! $seller
-                || $seller->status !== 'ACTIVE') {
+            $availability = $this->productAvailability->inspect(
+                $variant,
+                $product,
+                $seller,
+                $seller?->user,
+                (int) $item->quantity,
+            );
+            if (! $availability['available']) {
                 throw ValidationException::withMessages([
-                    'cart' => 'One or more products are temporarily unavailable. Remove the unavailable item from your cart and try again.',
+                    'cart' => $availability['message'],
                 ]);
             }
 
@@ -311,7 +332,7 @@ class CheckoutService
                 if ($route) {
                     $this->assertCrossHubCustodyReady($route);
                 }
-                $groupShippingFee = (float) config('likhae.standard_shipping_fee', 50);
+                $groupShippingFee = $shippingFee;
             }
 
             $groups[$sellerId] ??= [
@@ -321,6 +342,7 @@ class CheckoutService
                 'voucher' => null,
                 'voucher_discount' => 0.0,
                 'shipping_fee' => $groupShippingFee,
+                'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'routing_review_required' => $groupNeedsRoutingReview,
                 'routing_review_reason' => $groupRoutingReviewReason,
                 'protection_total' => 0.0,
@@ -563,26 +585,16 @@ class CheckoutService
                 $seller = $product ? $lockedSellers->get($product->seller_profile_id) : null;
                 $sellerUser = $seller ? $lockedSellerUsers->get($seller->user_id) : null;
 
-                if (! $product
-                    || $product->status !== 'ACTIVE'
-                    || ! $seller
-                    || $seller->status !== 'ACTIVE'
-                    || ! $sellerUser
-                    || $sellerUser->status !== User::STATUS_ACTIVE) {
+                $availability = $this->productAvailability->inspect(
+                    $variant,
+                    $product,
+                    $seller,
+                    $sellerUser,
+                    (int) $item->quantity,
+                );
+                if (! $availability['available']) {
                     throw ValidationException::withMessages([
-                        'cart' => 'One or more products are temporarily unavailable. Remove the unavailable item and try again.',
-                    ]);
-                }
-
-                if ($seller->vacation_mode) {
-                    throw ValidationException::withMessages([
-                        'cart_item_ids' => 'One or more sellers are currently on vacation and are not accepting purchases. Refresh your cart and try again later.',
-                    ]);
-                }
-
-                if (! $variant || ! $variant->is_active || (int) $variant->stock < (int) $item->quantity) {
-                    throw ValidationException::withMessages([
-                        'cart' => 'One or more products no longer have enough stock.',
+                        'cart' => $availability['message'],
                     ]);
                 }
 
@@ -725,6 +737,10 @@ class CheckoutService
                     'shipping_fee' => $group['shipping_fee'],
                     'grand_total' => $group['grand_total'],
                 ];
+                if ($group['shipping_rate_version_id'] !== null
+                    && Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
+                    $sellerOrderAttributes['shipping_rate_version_id'] = $group['shipping_rate_version_id'];
+                }
                 if (Schema::hasColumn('seller_orders', 'protection_total')) {
                     $sellerOrderAttributes['protection_total'] = $group['protection_total'];
                 }
@@ -1102,6 +1118,7 @@ class CheckoutService
         $voucher = Voucher::query()
             ->where('seller_profile_id', $sellerId)
             ->where('code', mb_strtoupper($code))
+            ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
             ->where('is_active', true)
             ->where('minimum_order_amount', '<=', $subtotal)
             ->where(function ($query): void {
@@ -1110,6 +1127,12 @@ class CheckoutService
             ->where(function ($query): void {
                 $query->whereNull('ends_at')->orWhere('ends_at', '>=', now());
             })
+            ->whereHas('buyerClaims', fn ($query) => $query->where('buyer_user_id', $buyer?->id ?? 0))
+            ->whereHas('sellerProfile', fn ($query) => $query
+                ->where('status', 'ACTIVE')
+                ->whereHas('user', fn ($user) => $user
+                    ->where('account_type', User::TYPE_SELLER)
+                    ->where('status', User::STATUS_ACTIVE)))
             ->withCount([
                 'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
                 'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
@@ -1139,7 +1162,7 @@ class CheckoutService
     {
         $query = Voucher::query()
             ->whereRaw('UPPER(code) = ?', [mb_strtoupper($code)])
-            ->with('sellerProfile');
+            ->with('sellerProfile.user');
         if ($lockVoucherUsage) {
             $query->lockForUpdate();
         }
@@ -1221,6 +1244,24 @@ class CheckoutService
             $this->allocatePlatformDiscount($groups, $voucher, $discount, $subtotal);
 
             return;
+        }
+
+        if ($voucher->platform_code_key !== null
+            || ! $buyer
+            || ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists()) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'Collect this Seller voucher in Rewards before using it.',
+            ]);
+        }
+
+        if (! $voucher->sellerProfile
+            || $voucher->sellerProfile->status !== 'ACTIVE'
+            || ! $voucher->sellerProfile->user
+            || ! $voucher->sellerProfile->user->isActive()
+            || ! $voucher->sellerProfile->user->isAccountType(User::TYPE_SELLER)) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'This Seller is not currently eligible for orders.',
+            ]);
         }
 
         $sellerId = (int) $voucher->seller_profile_id;

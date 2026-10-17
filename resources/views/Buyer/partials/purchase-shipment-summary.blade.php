@@ -6,11 +6,13 @@
     $centerLabel = $centerName === ''
         ? 'the sorting centre'
         : $centerName.(preg_match('/(sorting\s+(centre|center)|hub)/i', $centerName) ? '' : ' sorting centre');
+    $transferDestination = trim((string) ($inTransitTransfer?->destinationLogisticsCenter?->business_name ?: 'the next hub'));
     $trackingUpdate = match (true) {
         ! $shipment => null,
         in_array($shipment->current_status, ['CANCELLED', 'RETURNED'], true) => null,
         in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true) => 'Parcel has been delivered',
-        (bool) $inTransitTransfer => 'Parcel has departed from '.$centerLabel,
+        (bool) $inTransitTransfer && filled($inTransitTransfer->arrival_scanned_at) => 'Parcel has arrived at '.$transferDestination.'. Hub receipt is being verified.',
+        (bool) $inTransitTransfer => 'Parcel has departed from '.$centerLabel.' and is on the way to '.$transferDestination,
         in_array($shipment->current_status, ['AT_SORTING_CENTER', 'SORTED'], true) => 'Parcel has arrived at '.$centerLabel,
         in_array($shipment->current_status, ['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'], true) => 'Parcel is out for delivery',
         $shipment->current_status === 'PICKED_UP' => 'Parcel has been picked up from seller',
@@ -32,5 +34,7 @@
             <span class="ml-0.5 h-4 w-px bg-stone-300" aria-hidden="true"></span>
         </span>
     @endif
-    <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-order-status-id="{{ $orderId }}">{{ $status }}</span>
+    @if($showOrderStatus ?? true)
+        <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-order-status-id="{{ $orderId }}">{{ $status }}</span>
+    @endif
 </div>

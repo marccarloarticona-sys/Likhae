@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\Voucher;
@@ -71,7 +72,7 @@ class BuyerCartPreviewTest extends TestCase
     {
         [$buyer, $product, $variant] = $this->cartFixture();
         $item = app(CartService::class)->add($buyer, $product, (int) $variant->id, 1);
-        Voucher::query()->create([
+        $voucher = Voucher::query()->create([
             'seller_profile_id' => $product->seller_profile_id,
             'code' => 'CARTMIN500',
             'name' => 'Cart minimum voucher',
@@ -80,6 +81,7 @@ class BuyerCartPreviewTest extends TestCase
             'minimum_order_amount' => 500,
             'is_active' => true,
         ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
 
         $response = $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
             'cart_item_ids' => [$item->id],
@@ -105,7 +107,7 @@ class BuyerCartPreviewTest extends TestCase
             ['USED-CART-CODE', ['usage_limit' => 0], 'This voucher has reached its usage limit.'],
         ] as [$code, $overrides, $expectedMessage]) {
             if ($code !== 'INVALID-CART-CODE') {
-                Voucher::query()->create(array_merge([
+                $voucher = Voucher::query()->create(array_merge([
                     'seller_profile_id' => $product->seller_profile_id,
                     'code' => $code,
                     'name' => 'Cart validation voucher',
@@ -114,6 +116,7 @@ class BuyerCartPreviewTest extends TestCase
                     'minimum_order_amount' => 0,
                     'is_active' => true,
                 ], $overrides));
+                BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
             }
 
             $response = $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
@@ -130,7 +133,7 @@ class BuyerCartPreviewTest extends TestCase
     {
         [$buyer, $product, $variant] = $this->cartFixture();
         $item = app(CartService::class)->add($buyer, $product, (int) $variant->id, 1);
-        Voucher::query()->create([
+        $voucher = Voucher::query()->create([
             'seller_profile_id' => $product->seller_profile_id,
             'code' => 'CARTLARGEFIXED',
             'name' => 'Large fixed voucher',
@@ -139,6 +142,7 @@ class BuyerCartPreviewTest extends TestCase
             'minimum_order_amount' => 0,
             'is_active' => true,
         ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
 
         $response = $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
             'cart_item_ids' => [$item->id],

@@ -13,7 +13,10 @@ use Illuminate\Validation\ValidationException;
 
 class CartService
 {
-    public function __construct(private readonly PurchaseLimitService $purchaseLimits) {}
+    public function __construct(
+        private readonly PurchaseLimitService $purchaseLimits,
+        private readonly BuyerProductAvailabilityService $productAvailability,
+    ) {}
 
     public function activeCart(User $buyer): Cart
     {
@@ -62,23 +65,16 @@ class CartService
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($lockedProduct->status !== 'ACTIVE'
-                || $lockedProduct->sellerProfile?->status !== 'ACTIVE'
-                || $lockedProduct->sellerProfile?->user?->status !== User::STATUS_ACTIVE) {
+            $availability = $this->productAvailability->inspect(
+                $variant,
+                $lockedProduct,
+                $lockedProduct->sellerProfile,
+                $lockedProduct->sellerProfile?->user,
+                $quantity,
+            );
+            if (! $availability['available']) {
                 throw ValidationException::withMessages([
-                    'product_variant_id' => 'This product is temporarily unavailable.',
-                ]);
-            }
-
-            if ((bool) $lockedProduct->sellerProfile?->vacation_mode) {
-                throw ValidationException::withMessages([
-                    'product_variant_id' => 'This seller is currently on vacation and is not accepting purchases.',
-                ]);
-            }
-
-            if ($variant->stock < $quantity) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Requested quantity exceeds available stock.',
+                    'product_variant_id' => $availability['message'],
                 ]);
             }
 
@@ -148,22 +144,16 @@ class CartService
                 ->whereKey($variant->product_id)
                 ->lockForUpdate()
                 ->firstOrFail();
-            if ($product->status !== 'ACTIVE'
-                || $product->sellerProfile?->status !== 'ACTIVE'
-                || $product->sellerProfile?->user?->status !== User::STATUS_ACTIVE) {
+            $availability = $this->productAvailability->inspect(
+                $variant,
+                $product,
+                $product->sellerProfile,
+                $product->sellerProfile?->user,
+                $quantity,
+            );
+            if (! $availability['available']) {
                 throw ValidationException::withMessages([
-                    'quantity' => 'This product is temporarily unavailable.',
-                ]);
-            }
-            if ((bool) $product->sellerProfile?->vacation_mode) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'This seller is currently on vacation and is not accepting purchases.',
-                ]);
-            }
-
-            if ($quantity > (int) $variant->stock) {
-                throw ValidationException::withMessages([
-                    'quantity' => 'Requested quantity exceeds available stock.',
+                    'quantity' => $availability['message'],
                 ]);
             }
 

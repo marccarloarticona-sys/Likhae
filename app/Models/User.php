@@ -6,6 +6,7 @@ use App\Models\Admin\AuditLog;
 use App\Models\Admin\Notification;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Buyer\Address;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\WishlistItem;
@@ -214,6 +215,11 @@ class User extends Authenticatable implements MustVerifyEmailContract
     public function orders(): HasMany
     {
         return $this->hasMany(Order::class, 'buyer_user_id');
+    }
+
+    public function buyerVoucherClaims(): HasMany
+    {
+        return $this->hasMany(BuyerVoucherClaim::class, 'buyer_user_id');
     }
 
     public function conversations(): BelongsToMany

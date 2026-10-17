@@ -559,8 +559,9 @@
     </nav>
 
     @if($tab === 'vouchers')
+        <h2 class="text-lg font-black text-stone-900 dark:text-stone-100">Seller vouchers</h2>
         <section class="lk-reward-voucher-grid">
-            @forelse($activeVouchers as $voucher)
+            @forelse($sellerVoucherCards as $voucher)
                 <article class="lk-voucher-card">
                     <div class="lk-voucher-top">
                         <div class="lk-voucher-icon">
@@ -570,6 +571,9 @@
                         <div>
                             <span class="lk-voucher-status">
                                 {{ $voucher['status'] }}
+                            </span>
+                            <span class="lk-voucher-status">
+                                {{ $voucher['collected'] ? 'Collected' : 'Seller voucher' }}
                             </span>
 
 
@@ -592,14 +596,25 @@
                             <small class="lk-voucher-expiry">
                                 Expires {{ $voucher['expires'] }}
                             </small>
+                            @if($voucher['collected'])
+                                <small class="lk-voucher-expiry">
+                                    @if($voucher['unavailable_reason'])
+                                        Unavailable: {{ $voucher['unavailable_reason'] }}
+                                    @else
+                                        Collected. Checkout will recheck order eligibility.
+                                    @endif
+                                </small>
+                            @endif
                         </div>
 
-                        <a
-                            href="{{ route('buyer.products') }}"
-                            class="lk-btn lk-btn-red"
-                        >
-                            Use Now
-                        </a>
+                        @if($voucher['collected'])
+                            <a href="{{ route('buyer.products') }}" class="lk-btn lk-btn-red">Use Now</a>
+                        @else
+                            <form method="POST" action="{{ route('buyer.vouchers.claim', $voucher['id']) }}">
+                                @csrf
+                                <button type="submit" class="lk-btn lk-btn-red">Claim</button>
+                            </form>
+                        @endif
                     </div>
                 </article>
             @empty
@@ -615,11 +630,11 @@
                             </span>
 
                             <h2>
-                                No seller vouchers yet
+                                No Seller vouchers to collect
                             </h2>
 
                             <p>
-                                Active seller vouchers from the database will appear here.
+                                Eligible Seller vouchers will appear here. Platform Campaigns stay in their separate section.
                             </p>
                         </div>
                     </div>
@@ -639,12 +654,40 @@
                             href="{{ route('buyer.products') }}"
                             class="lk-btn lk-btn-red"
                         >
-                            Browse Products
+                            Browse Sellers
                         </a>
                     </div>
                 </article>
             @endforelse
         </section>
+
+        @if($platformVoucherCards->isNotEmpty())
+            <section class="lk-reward-panel">
+                <h2>Admin Platform Campaigns</h2>
+                <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">These campaigns are managed by LIKHAE and are separate from Seller voucher claims.</p>
+                <div class="lk-reward-voucher-grid mt-4">
+                    @foreach($platformVoucherCards as $voucher)
+                        <article class="lk-voucher-card">
+                            <div class="lk-voucher-top">
+                                <div class="lk-voucher-icon">{{ $voucher['icon'] }}</div>
+                                <div>
+                                    <span class="lk-voucher-status">{{ $voucher['status'] }}</span>
+                                    <h2>{{ $voucher['value'] }}</h2>
+                                    <p>{{ $voucher['condition'] }}</p>
+                                </div>
+                            </div>
+                            <div class="lk-voucher-bottom">
+                                <div>
+                                    <code class="lk-voucher-code">{{ $voucher['code'] }}</code>
+                                    <small class="lk-voucher-expiry">Expires {{ $voucher['expires'] }}</small>
+                                </div>
+                                <a href="{{ route('buyer.products') }}" class="lk-btn lk-btn-red">Use Now</a>
+                            </div>
+                        </article>
+                    @endforeach
+                </div>
+            </section>
+        @endif
 
         <section class="lk-reward-panel">
             <h2>

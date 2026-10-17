@@ -916,11 +916,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (['CANCELLED', 'RETURNED'].includes(shipment.status)) return '';
                     if (['DELIVERED', 'COMPLETED'].includes(shipment.status)) return 'Parcel has been delivered';
                     const inTransitLeg = (shipment.transfer_legs || []).find((leg) => leg.status === 'IN_TRANSIT');
-                    const centerName = inTransitLeg?.origin_center_name || shipment.current_center_name || '';
+                    const originName = inTransitLeg?.origin_center_name || shipment.current_center_name || 'the origin hub';
+                    const destinationName = inTransitLeg?.destination_center_name || 'the next hub';
+                    if (inTransitLeg?.arrival_scanned_at) return `Parcel has arrived at ${destinationName}. Hub receipt is being verified.`;
+                    if (inTransitLeg) return `Parcel has departed from ${originName} and is on the way to ${destinationName}`;
+                    const centerName = shipment.current_center_name || '';
                     const centerLabel = centerName
                         ? `${centerName}${/(sorting\s+(centre|center)|hub)/i.test(centerName) ? '' : ' sorting centre'}`
                         : 'the sorting centre';
-                    if (inTransitLeg) return `Parcel has departed from ${centerLabel}`;
                     if (['AT_SORTING_CENTER', 'SORTED'].includes(shipment.status)) return `Parcel has arrived at ${centerLabel}`;
                     if (['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'].includes(shipment.status)) return 'Parcel is out for delivery';
                     if (shipment.status === 'PICKED_UP') return 'Parcel has been picked up from seller';

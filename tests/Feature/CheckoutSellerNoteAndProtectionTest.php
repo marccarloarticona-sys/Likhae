@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
@@ -111,7 +112,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
     public function test_preview_keeps_voucher_and_one_shipping_fee_scoped_to_each_seller_group(): void
     {
         $fixture = $this->checkoutFixture();
-        Voucher::query()->create([
+        $voucher = Voucher::query()->create([
             'seller_profile_id' => $fixture['sellerA']->id,
             'code' => 'SELLERA10',
             'name' => 'Seller A ten percent off',
@@ -119,6 +120,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_value' => 10,
             'minimum_order_amount' => 0,
             'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
         ]);
 
         $preview = app(CheckoutService::class)->preview(
@@ -138,6 +143,84 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $sellerAGroup['shipping_fee']);
         $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
         $this->assertEquals(100.00, $preview['shipping_total']);
+    }
+
+    public function test_collected_seller_voucher_redeems_once_on_order_and_claim_survives_cancellation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'SELLERCLAIMONCE',
+            'name' => 'Collected seller voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'usage_limit' => 1,
+            'per_user_limit' => 1,
+            'is_active' => true,
+        ]);
+        $checkoutKey = 'c62bb9fa-7850-4f1d-a740-863a6cf14988';
+        $checkout = app(CheckoutService::class);
+        try {
+            $checkout->placeOrder(
+                $fixture['buyer'],
+                $fixture['address'],
+                [$fixture['itemA']->id],
+                'COD',
+                $voucher->code,
+                null,
+                [],
+                [],
+                $checkoutKey,
+            );
+            $this->fail('Checkout must reject an uncollected Seller voucher.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('Collect this Seller voucher', (string) $exception->errors()['voucher_code'][0]);
+        }
+        $this->assertDatabaseCount('orders', 0);
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id));
+
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
+        ]);
+
+        $order = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            $voucher->code,
+            null,
+            [],
+            [],
+            $checkoutKey,
+        );
+        $replay = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            $voucher->code,
+            null,
+            [],
+            [],
+            $checkoutKey,
+        );
+
+        $this->assertSame($order->id, $replay->id);
+        $this->assertSame(1, SellerOrder::query()->where('voucher_id', $voucher->id)->count());
+        $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id, (int) $fixture['buyer']->id));
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id, (int) $fixture['buyer']->id));
+        $this->assertDatabaseHas('buyer_voucher_claims', [
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
+        ]);
     }
 
     public function test_checkout_renders_a_blocked_notice_when_a_cart_product_has_no_seller(): void

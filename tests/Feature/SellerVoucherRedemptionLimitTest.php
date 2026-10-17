@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
@@ -39,6 +40,10 @@ class SellerVoucherRedemptionLimitTest extends TestCase
             'usage_limit' => 3,
             'per_user_limit' => 1,
             'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $otherBuyer->id,
+            'voucher_id' => $voucher->id,
         ]);
 
         $this->recordUse($buyer, $seller->id, $voucher, 'PLACED');

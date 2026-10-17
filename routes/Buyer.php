@@ -5,6 +5,7 @@ use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
 use App\Http\Controllers\Buyer\BuyerPlatformEventController;
 use App\Http\Controllers\Buyer\BuyerReturnRefundController;
+use App\Http\Controllers\Buyer\BuyerVoucherClaimController;
 use App\Http\Controllers\Buyer\CheckoutController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
@@ -79,6 +80,7 @@ Route::prefix('buyer')
         Route::get('/notifications/stream', [BuyerController::class, 'notificationStream'])->name('notifications.stream');
         Route::post('/notifications/read-all', [BuyerController::class, 'markNotificationsRead'])->name('notifications.read-all');
         Route::get('/rewards', [BuyerController::class, 'rewards'])->name('rewards');
+        Route::post('/vouchers/{voucher}/claim', [BuyerVoucherClaimController::class, 'store'])->name('vouchers.claim');
 
         Route::get('/account', [BuyerController::class, 'account'])->name('account');
         Route::get('/settings', [BuyerController::class, 'settings'])->name('settings');

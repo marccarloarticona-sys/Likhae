@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\Voucher;
@@ -247,6 +248,7 @@ class BuyerPurchaseActionsTest extends TestCase
             'minimum_order_amount' => 0,
             'is_active' => true,
         ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
 
         $this->actingAs($buyer)
             ->get(route('buyer.cart'))
