@@ -17,7 +17,7 @@
         'updated_at' => $notification->updated_at?->toIso8601String(),
     ])->values()->toJson());
     $notifications = $notificationRows->map(function ($notification) {
-        $kind = in_array($notification->type, ['orders','messages','rewards','account','stores'], true) ? $notification->type : (str_starts_with((string) $notification->type, 'STORE_') ? 'stores' : (str_contains((string) $notification->type, 'message') ? 'messages' : 'orders'));
+        $kind = in_array($notification->type, ['orders','messages','rewards','account','stores','announcements'], true) ? $notification->type : (strtoupper((string) $notification->type) === 'ANNOUNCEMENT' ? 'announcements' : (str_starts_with((string) $notification->type, 'STORE_') ? 'stores' : (str_contains((string) $notification->type, 'message') ? 'messages' : 'orders')));
         return [
             'id' => $notification->id,
             'type' => $kind,
@@ -29,8 +29,9 @@
         ];
     });
     $visible = $type === 'all' ? $notifications : $notifications->where('type', $type);
-    $types = ['all'=>'All','orders'=>'Orders','messages'=>'Messages','stores'=>'Stores','rewards'=>'Rewards','account'=>'Account'];
+    $types = ['all'=>'All','orders'=>'Orders','messages'=>'Messages','stores'=>'Stores','rewards'=>'Rewards','account'=>'Account','announcements'=>'Announcements'];
     $icons = ['orders'=>'□','messages'=>'✉','stores'=>'◈','rewards'=>'%','account'=>'○'];
+    $icons['announcements'] = '!';
 @endphp
 
 <div class="lk-page-narrow" data-buyer-notifications-live data-notification-stream-url="{{ route('buyer.notifications.stream') }}" data-notification-version="{{ $notificationVersion }}">

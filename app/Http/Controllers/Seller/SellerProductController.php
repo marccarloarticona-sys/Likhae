@@ -552,6 +552,7 @@ class SellerProductController extends Controller
                 'discount_value' => $variant->discount_value,
                 'payment_method' => $variant->payment_method ?: 'cod_online',
                 'stock' => $variant->stock,
+                'weight_kg' => $variant->weight_kg,
                 'values' => $variant->optionValues->sortBy(fn ($value) => $value->option?->sort_order ?? 0)->pluck('value')->join(', '),
                 'option_value_ids' => $variant->optionValues->pluck('id')->values()->all(),
                 'product_image_id' => $variant->product_image_id,

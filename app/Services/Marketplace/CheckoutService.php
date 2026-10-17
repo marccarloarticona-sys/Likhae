@@ -235,6 +235,7 @@ class CheckoutService
         ?LogisticsCenter $logisticsProvider = null,
         ?Address $automaticDestination = null,
         array $protectionItemIds = [],
+        bool $lockVoucherUsage = false,
     ): array
     {
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
@@ -262,7 +263,7 @@ class CheckoutService
                 || ! $seller
                 || $seller->status !== 'ACTIVE') {
                 throw ValidationException::withMessages([
-                    'cart' => 'One or more selected products or shops are no longer available. Remove the unavailable item from your cart and try again.',
+                    'cart' => 'One or more products are temporarily unavailable. Remove the unavailable item from your cart and try again.',
                 ]);
             }
 
@@ -344,12 +345,12 @@ class CheckoutService
         }
 
         if ($singleVoucherCode !== '') {
-            $this->applySingleVoucherCode($groups, $singleVoucherCode, $buyer);
+            $this->applySingleVoucherCode($groups, $singleVoucherCode, $buyer, $lockVoucherUsage);
         } else {
             foreach ($groups as $sellerId => &$group) {
                 $code = trim((string) ($legacyVoucherCodes[$sellerId] ?? ''));
                 $voucher = $code !== ''
-                    ? $this->usableVoucher((int) $sellerId, $code, (float) $group['item_subtotal'], $buyer)
+                    ? $this->usableVoucher((int) $sellerId, $code, (float) $group['item_subtotal'], $buyer, $lockVoucherUsage)
                     : null;
                 if ($code !== '' && $voucher === null) {
                     throw ValidationException::withMessages([
@@ -569,7 +570,7 @@ class CheckoutService
                     || ! $sellerUser
                     || $sellerUser->status !== User::STATUS_ACTIVE) {
                     throw ValidationException::withMessages([
-                        'cart' => 'One or more selected products are no longer available for checkout. Remove the unavailable item and try again.',
+                        'cart' => 'One or more products are temporarily unavailable. Remove the unavailable item and try again.',
                     ]);
                 }
 
@@ -650,6 +651,7 @@ class CheckoutService
                 $logisticsProvider,
                 $automaticRouting ? $address : null,
                 $protectionItemIds,
+                lockVoucherUsage: true,
             );
 
             $checkoutAttemptId = DB::table('checkout_attempts')->insertGetId([
@@ -1095,7 +1097,7 @@ class CheckoutService
         return $locations->first();
     }
 
-    private function usableVoucher(int $sellerId, string $code, float $subtotal, ?User $buyer = null): ?Voucher
+    private function usableVoucher(int $sellerId, string $code, float $subtotal, ?User $buyer = null, bool $lockVoucherUsage = false): ?Voucher
     {
         $voucher = Voucher::query()
             ->where('seller_profile_id', $sellerId)
@@ -1116,7 +1118,13 @@ class CheckoutService
                     fn ($uses) => $uses->whereRaw('1 = 0'),
                 ),
             ])
+            ->when($lockVoucherUsage, fn ($query) => $query->lockForUpdate())
             ->first();
+        if ($voucher && $lockVoucherUsage) {
+            $usage = VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id);
+            $voucher->setAttribute('seller_orders_count', $usage['redemptions']);
+            $voucher->setAttribute('buyer_uses_count', $usage['buyer_redemptions']);
+        }
         if (! $voucher
             || ($voucher->usage_limit !== null && $voucher->seller_orders_count >= $voucher->usage_limit)
             || ($buyer && $voucher->per_user_limit !== null && $voucher->buyer_uses_count >= $voucher->per_user_limit)) {
@@ -1127,11 +1135,14 @@ class CheckoutService
     }
 
     /** @param array<int, array<string, mixed>> $groups */
-    private function applySingleVoucherCode(array &$groups, string $code, ?User $buyer): void
+    private function applySingleVoucherCode(array &$groups, string $code, ?User $buyer, bool $lockVoucherUsage = false): void
     {
         $query = Voucher::query()
             ->whereRaw('UPPER(code) = ?', [mb_strtoupper($code)])
             ->with('sellerProfile');
+        if ($lockVoucherUsage) {
+            $query->lockForUpdate();
+        }
         if (Schema::hasColumn('vouchers', 'platform_code_key')) {
             $query->withCount([
                 'sellerOrders' => fn ($orderQuery) => $orderQuery->where('status', '<>', 'CANCELLED'),
@@ -1179,10 +1190,13 @@ class CheckoutService
         $voucher = $cartCandidates->first();
         if ($voucher->seller_profile_id === null) {
             $subtotal = array_sum(array_map(fn (array $group): float => (float) $group['item_subtotal'], $groups));
-            $redemptions = VoucherRedemptionCounter::count((int) $voucher->id);
-            $buyerRedemptions = $buyer
+            $usage = $lockVoucherUsage
+                ? VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id)
+                : null;
+            $redemptions = $usage['redemptions'] ?? VoucherRedemptionCounter::count((int) $voucher->id);
+            $buyerRedemptions = $usage['buyer_redemptions'] ?? ($buyer
                 ? VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id)
-                : 0;
+                : 0);
 
             if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
                 throw ValidationException::withMessages(['voucher_code' => 'This platform voucher is not active yet.']);
@@ -1211,6 +1225,12 @@ class CheckoutService
 
         $sellerId = (int) $voucher->seller_profile_id;
         $group = &$groups[$sellerId];
+
+        if ($lockVoucherUsage) {
+            $usage = VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id);
+            $voucher->setAttribute('seller_orders_count', $usage['redemptions']);
+            $voucher->setAttribute('buyer_uses_count', $usage['buyer_redemptions']);
+        }
 
         if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
             throw ValidationException::withMessages([

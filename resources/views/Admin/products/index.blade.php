@@ -11,7 +11,7 @@
                 <h2>Products</h2>
                 <p>{{ number_format($products->total()) }} canonical product records{{ $search ? ' matching "'.$search.'"' : '' }} in this view.</p>
             </div>
-            <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products.export', array_filter(['status' => $status, 'search' => $search])) }}">
+            <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products.export', array_filter(['status' => $status, 'search' => $search, 'ai_filter' => $aiFilter])) }}">
                 Export PDF
             </a>
         </div>
@@ -48,21 +48,39 @@
                     @endforeach
                 </select>
             </label>
+            <label class="ad-field">
+                <span>AI moderation</span>
+                <select name="ai_filter" @disabled(! $moderationAvailable)>
+                    <option value="">All moderation states</option>
+                    <option value="ai_flagged" @selected($aiFilter === 'ai_flagged')>AI flagged</option>
+                    <option value="needs_review" @selected($aiFilter === 'needs_review')>Needs review</option>
+                    <option value="high_risk" @selected($aiFilter === 'high_risk')>High risk</option>
+                    <option value="critical" @selected($aiFilter === 'critical')>Critical</option>
+                    <option value="scan_failed" @selected($aiFilter === 'scan_failed')>Scan failed / deferred</option>
+                    <option value="seller_appealed" @selected($aiFilter === 'seller_appealed')>Seller appealed</option>
+                    <option value="suspended" @selected($aiFilter === 'suspended')>Suspended listings</option>
+                    <option value="false_positive" @selected($aiFilter === 'false_positive')>False positive / cleared</option>
+                </select>
+            </label>
             <button class="ad-btn ad-btn-primary" type="submit">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
                 Search
             </button>
             @if($search)
-                <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products', array_filter(['status' => $status])) }}">Clear search</a>
-            @elseif($status)
+            <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products', array_filter(['status' => $status, 'ai_filter' => $aiFilter])) }}">Clear search</a>
+            @elseif($status || $aiFilter)
                 <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products') }}">Clear filters</a>
             @endif
         </form>
 
+        @if(! $moderationAvailable)
+            <div class="ad-note is-warning" role="status">AI moderation filters and scan history will appear after scan storage is installed.</div>
+        @endif
+
         <section class="ad-card">
             <div class="ad-table-wrap">
                 @php
-                    $productListQuery = request()->only(['status', 'search', 'page']);
+                    $productListQuery = request()->only(['status', 'search', 'ai_filter', 'page']);
                 @endphp
                 <table class="ad-table">
                     <thead>
@@ -92,6 +110,14 @@
                                     <small>Product #{{ $product->id }}</small>
                                     @if($product->complianceCases->isNotEmpty())
                                         <span class="ad-product-flag">Compliance review</span>
+                                    @endif
+                                    @if($moderationAvailable && $product->latestModerationScan)
+                                        <span class="ad-product-flag">AI {{ str($product->latestModerationScan->overall_risk ?: $product->latestModerationScan->scan_status)->replace('_', ' ')->headline() }}</span>
+                                        @if($product->latestModerationScan->detected_categories)
+                                            <small>{{ collect($product->latestModerationScan->detected_categories)->map(fn ($category) => str($category)->replace('_', ' ')->headline()->toString())->take(2)->implode(', ') }}</small>
+                                        @endif
+                                    @elseif($moderationAvailable)
+                                        <span class="ad-product-flag">AI Not scanned</span>
                                     @endif
                                 </td>
                                 <td>{{ $product->sellerProfile?->business_name ?: 'Seller unavailable' }}</td>

@@ -50,6 +50,12 @@ Route::prefix('seller')
         Route::get('/compliance', [SellerComplianceController::class, 'index'])->name('compliance');
         Route::get('/compliance/{case}', [SellerComplianceController::class, 'show'])->name('compliance.show');
         Route::post('/compliance/{case}/responses', [SellerComplianceController::class, 'storeResponse'])->name('compliance.responses.store');
+        Route::post('/compliance/{case}/moderation-scans/{scan}/appeal', [SellerComplianceController::class, 'submitModerationAppeal'])
+            ->middleware('throttle:5,60')->name('compliance.moderation-scans.appeal');
+        Route::post('/compliance/{case}/moderation-scans/{scan}/appeal-clarification', [SellerComplianceController::class, 'submitModerationClarification'])
+            ->middleware('throttle:5,60')->name('compliance.moderation-scans.appeal-clarification');
+        Route::get('/compliance/{case}/moderation-scans/{scan}/appeal-evidence', [SellerComplianceController::class, 'downloadModerationAppealEvidence'])
+            ->middleware('throttle:20,1')->name('compliance.moderation-scans.appeal-evidence');
         Route::get('/compliance/{case}/responses/{response}/evidence', [SellerComplianceController::class, 'downloadResponseEvidence'])
             ->name('compliance.responses.evidence');
 

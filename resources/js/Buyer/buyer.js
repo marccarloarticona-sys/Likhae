@@ -757,6 +757,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const icon = document.createElement('span');
                 icon.className = `flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${item.read_at ? 'bg-stone-100 text-stone-500' : 'bg-red-900 text-white'} text-sm font-bold`;
                 icon.textContent = item.category === 'messages' ? '✉' : item.category === 'stores' ? '◈' : item.category === 'rewards' ? '%' : item.category === 'account' ? '○' : '□';
+                if (item.category === 'announcements') icon.textContent = '!';
                 const copy = document.createElement('span');
                 copy.className = 'min-w-0 flex-1';
                 const top = document.createElement('span');
@@ -923,7 +924,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (['AT_SORTING_CENTER', 'SORTED'].includes(shipment.status)) return `Parcel has arrived at ${centerLabel}`;
                     if (['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'].includes(shipment.status)) return 'Parcel is out for delivery';
                     if (shipment.status === 'PICKED_UP') return 'Parcel has been picked up from seller';
+                    if (shipment.status === 'READY_FOR_PICKUP') return 'Ready to ship';
                     if (shipment.status === 'DELIVERY_FAILED') return 'Delivery attempt was unsuccessful';
+                    if (shipment.status === 'PLACED') return 'Waiting for seller to accept your order';
                     return 'Seller is preparing your parcel';
                 };
                 (payload.orders || []).forEach((order) => {

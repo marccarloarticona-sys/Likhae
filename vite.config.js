@@ -47,6 +47,7 @@ export default defineConfig(({ mode }) => {
                     'resources/css/shared/mapbox.css',
                     'resources/css/shared/workspace-sidebar.css',
                     'resources/css/shared/workspace-settings.css',
+                    'resources/css/admin/system-settings.css',
                     'resources/js/app.js',
                     'resources/js/shared/messages.js',
                     'resources/js/Buyer/buyer.js',

@@ -47,6 +47,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Collection;
 use Illuminate\View\View;
 
 class BuyerController extends Controller
@@ -706,12 +707,17 @@ class BuyerController extends Controller
             ->latest()
             ->get();
 
-        $cartItems->each(function (CartItem $item): void {
+        $purchaseLimitExceededProducts = $this->purchaseLimitExceededProducts($cartItems, $buyer);
+
+        $cartItems->each(function (CartItem $item) use ($purchaseLimitExceededProducts): void {
             $item->setAttribute('cart_availability', $this->cartItemAvailability($item));
+            $productId = (int) ($item->productVariant?->product?->id ?? 0);
+            $item->setAttribute('purchase_limit_exceeded', isset($purchaseLimitExceededProducts[$productId]));
         });
 
         $availableItems = $cartItems->filter(
             fn (CartItem $item): bool => (bool) data_get($item, 'cart_availability.available')
+                && ! (bool) data_get($item, 'purchase_limit_exceeded')
         );
         $checkoutService = app(CheckoutService::class);
         $availableVouchers = $checkoutService->availableVouchers($availableItems, $buyer)
@@ -763,6 +769,8 @@ class BuyerController extends Controller
         $items = $this->cartService->selectedItems($request->user(), $ids);
         abort_unless($items->count() === count($ids), 403);
 
+        $purchaseLimitExceededProducts = $this->purchaseLimitExceededProducts($items, $request->user());
+
         if ($items->isEmpty()) {
             return response()->json([
                 'success' => true,
@@ -784,10 +792,14 @@ class BuyerController extends Controller
             return ! $availability['available']
                 || (int) ($item->productVariant?->stock ?? 0) < (int) $item->quantity;
         });
-        if ($unavailableItem) {
+        if ($unavailableItem || $purchaseLimitExceededProducts !== []) {
+            $message = $purchaseLimitExceededProducts !== []
+                ? 'One or more selected products exceed the purchase limit. Reduce the cart quantity before checkout.'
+                : 'One or more selected items are unavailable or exceed current stock. Refresh your cart and review the item status.';
+
             return response()->json([
                 'success' => false,
-                'message' => 'One or more selected items are unavailable or exceed current stock. Refresh your cart and review the item status.',
+                'message' => $message,
                 'subtotal' => 0,
                 'discount_total' => 0,
                 'shipping_total' => null,
@@ -895,6 +907,25 @@ class BuyerController extends Controller
         ]);
     }
 
+    /** @return array<int, true> */
+    private function purchaseLimitExceededProducts(Collection $items, User $buyer): array
+    {
+        return $items
+            ->filter(fn (CartItem $item): bool => $item->productVariant?->product !== null
+                && $item->productVariant->product->purchase_limit_per_buyer !== null)
+            ->groupBy(fn (CartItem $item): int => (int) $item->productVariant->product->id)
+            ->filter(function (Collection $productItems) use ($buyer): bool {
+                /** @var Product $product */
+                $product = $productItems->first()->productVariant->product;
+                $cartQuantity = (int) $productItems->sum(fn (CartItem $item): int => (int) $item->quantity);
+
+                return ! $this->purchaseLimits->cartWithinLimit($buyer, $product, $cartQuantity);
+            })
+            ->keys()
+            ->mapWithKeys(fn ($productId): array => [(int) $productId => true])
+            ->all();
+    }
+
     /** @return array{available: bool, restricted: bool, message: string} */
     private function cartItemAvailability(CartItem $item): array
     {
@@ -909,7 +940,7 @@ class BuyerController extends Controller
             || ! $seller
             || $seller->status !== 'ACTIVE'
             || $sellerUser?->status !== User::STATUS_ACTIVE) {
-            return ['available' => false, 'restricted' => true, 'message' => 'Unavailable'];
+            return ['available' => false, 'restricted' => true, 'message' => 'This product is temporarily unavailable.'];
         }
 
         if (! $variant->is_active || (bool) $seller->vacation_mode || (int) $variant->stock < 1) {
@@ -1457,10 +1488,14 @@ class BuyerController extends Controller
 
         $rows = $notifications->map(fn ($notification): array => [
             'id' => (int) $notification->id,
-            'category' => str_starts_with(strtoupper((string) $notification->type), 'STORE_') ? 'stores'
-                : (str_contains(strtolower((string) $notification->type), 'message') ? 'messages'
-                    : (str_contains(strtolower((string) $notification->type), 'reward') ? 'rewards'
-                        : (str_contains(strtolower((string) $notification->type), 'account') ? 'account' : 'orders'))),
+            'category' => match (true) {
+                strtoupper((string) $notification->type) === 'ANNOUNCEMENT' => 'announcements',
+                str_starts_with(strtoupper((string) $notification->type), 'STORE_') => 'stores',
+                str_contains(strtolower((string) $notification->type), 'message') => 'messages',
+                str_contains(strtolower((string) $notification->type), 'reward') => 'rewards',
+                str_contains(strtolower((string) $notification->type), 'account') => 'account',
+                default => 'orders',
+            },
             'title' => $notification->title,
             'message' => $notification->message,
             'open_url' => route('buyer.notifications.open', $notification),

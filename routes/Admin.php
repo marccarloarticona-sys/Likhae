@@ -1,16 +1,18 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminCashRefundController;
 use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\AdminFinanceController;
+use App\Http\Controllers\Admin\AdminMarketingController;
 use App\Http\Controllers\Admin\AdminOnboardingController;
 use App\Http\Controllers\Admin\AdminOperationsController;
-use App\Http\Controllers\Admin\AdminFinanceController;
+use App\Http\Controllers\Admin\AdminProductModerationController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
-use App\Http\Controllers\Admin\AdminCashRefundController;
-use App\Http\Controllers\Admin\AdminMarketingController;
-use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\AdminRoutingReviewController;
-use App\Http\Middleware\EnsureWorkspaceRole;
+use App\Http\Controllers\Admin\AdminUserController;
+use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
 use App\Http\Controllers\WorkspaceSettingsController;
+use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('admin')
@@ -78,13 +80,32 @@ Route::prefix('admin')
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [AdminOperationsController::class, 'messageStream'])->name('messages.stream');
         Route::get('/settings', [AdminOperationsController::class, 'settings'])->name('settings');
-        Route::get('/system-settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'admin')->name('system-settings');
+        Route::get('/system-settings', [SystemSettingsMonitoringController::class, 'show'])
+            ->defaults('workspace', 'admin')->middleware('throttle:20,1')->name('system-settings');
+        Route::get('/system-settings/errors', [SystemSettingsMonitoringController::class, 'errors'])
+            ->middleware('throttle:20,1')->name('system-settings.errors');
+        Route::get('/system-settings/logs', [SystemSettingsMonitoringController::class, 'logs'])
+            ->middleware('throttle:20,1')->name('system-settings.logs');
+        Route::get('/system-settings/audit-logs', [SystemSettingsMonitoringController::class, 'auditLogs'])
+            ->middleware('throttle:20,1')->name('system-settings.audit-logs');
+        Route::post('/system-settings/storage/refresh', [SystemSettingsMonitoringController::class, 'refreshStorage'])
+            ->middleware('throttle:1,1')->name('system-settings.storage.refresh');
+        Route::patch('/system-settings/product-moderation', [SystemSettingsMonitoringController::class, 'updateProductModeration'])
+            ->middleware('throttle:10,1')->name('system-settings.product-moderation.update');
         Route::put('/system-settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'admin')->name('system-settings.update');
         Route::get('/account', [AdminOperationsController::class, 'account'])->name('account');
         Route::get('/notifications', [AdminOperationsController::class, 'notifications'])->name('notifications');
         Route::post('/notifications/read-all', [AdminOperationsController::class, 'markNotificationsRead'])->name('notifications.read-all');
 
         Route::post('/products/{product}/moderate', [AdminOperationsController::class, 'moderateProduct'])->name('products.moderate');
+        Route::post('/products/{product}/ai/rescan', [AdminProductModerationController::class, 'rescan'])
+            ->middleware('throttle:5,1')->name('products.ai.rescan');
+        Route::post('/products/{product}/ai/scans/{scan}/review', [AdminProductModerationController::class, 'review'])
+            ->middleware('throttle:10,1')->name('products.ai.review');
+        Route::post('/products/{product}/ai/scans/{scan}/appeal-review', [AdminProductModerationController::class, 'reviewAppeal'])
+            ->middleware('throttle:10,1')->name('products.ai.appeals.review');
+        Route::get('/products/{product}/ai/scans/{scan}/appeal-evidence', [AdminProductModerationController::class, 'appealEvidence'])
+            ->middleware('throttle:20,1')->name('products.ai.appeals.evidence');
         Route::post('/products/{product}/warn', [AdminOperationsController::class, 'warnProduct'])->name('products.warn');
         Route::post('/categories', [AdminOperationsController::class, 'storeCategory'])->name('categories.store');
         Route::patch('/categories/{category}/status', [AdminOperationsController::class, 'updateCategoryStatus'])->name('categories.status');

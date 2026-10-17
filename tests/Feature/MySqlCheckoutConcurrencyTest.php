@@ -18,6 +18,7 @@ use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Marketplace\CheckoutService;
 use Illuminate\Support\Facades\DB;
@@ -179,6 +180,38 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertSame(1, (int) $variant->fresh()->stock);
     }
 
+    public function test_mysql_voucher_lock_prevents_concurrent_checkout_from_exceeding_last_global_use(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller, $category] = $this->sellerRoutingFixture('voucher-race');
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $seller->id,
+            'code' => 'RACE'.str()->upper(str()->random(12)),
+            'name' => 'Concurrency voucher cap',
+            'discount_type' => 'PERCENT',
+            'discount_value' => '10.00',
+            'minimum_order_amount' => '0.00',
+            'usage_limit' => 1,
+            'per_user_limit' => null,
+            'is_active' => true,
+        ]);
+        $variantA = $this->variant($seller, $category, 'voucher-race-a', 2);
+        $variantB = $this->variant($seller, $category, 'voucher-race-b', 2);
+        [$buyerA, $addressA, $itemA] = $this->buyerCart($variantA, 'voucher-race-a');
+        [$buyerB, $addressB, $itemB] = $this->buyerCart($variantB, 'voucher-race-b');
+
+        $results = $this->runWorkers([
+            ['buyer' => $buyerA, 'address' => $addressA, 'item' => $itemA, 'key' => (string) str()->uuid(), 'voucher' => $voucher->code],
+            ['buyer' => $buyerB, 'address' => $addressB, 'item' => $itemB, 'key' => (string) str()->uuid(), 'voucher' => $voucher->code],
+        ]);
+
+        $this->assertSame(1, collect($results)->where('status', 'success')->count(), json_encode($results));
+        $this->assertSame(1, collect($results)->where('status', 'business_failure')->count(), json_encode($results));
+        $this->assertSame(1, DB::table('seller_orders')->where('voucher_id', $voucher->id)->where('status', '<>', 'CANCELLED')->distinct()->count('order_id'));
+        $this->assertSame(1, Order::query()->whereIn('buyer_user_id', [$buyerA->id, $buyerB->id])->count());
+    }
+
     private function assertDisposableMySql(): void
     {
         $expectedDatabase = trim((string) env('LIKHAE_DISPOSABLE_DB'));
@@ -208,6 +241,7 @@ $app = require 'bootstrap/app.php';
 $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 $barrier = getenv('CHECKOUT_BARRIER');
 $worker = getenv('CHECKOUT_WORKER');
+$voucher = getenv('CHECKOUT_VOUCHER');
 file_put_contents($barrier.DIRECTORY_SEPARATOR.$worker.'.ready', 'ready');
 $deadline = microtime(true) + 30;
 while (! is_file($barrier.DIRECTORY_SEPARATOR.'start') && microtime(true) < $deadline) { usleep(10000); }
@@ -220,7 +254,7 @@ try {
         $address,
         [(int) getenv('CHECKOUT_ITEM')],
         'COD',
-        [],
+        $voucher !== '' ? $voucher : [],
         null,
         [],
         [],
@@ -256,6 +290,7 @@ PHP;
                         'CHECKOUT_ADDRESS' => (string) $worker['address']->id,
                         'CHECKOUT_ITEM' => (string) $worker['item']->id,
                         'CHECKOUT_KEY' => $worker['key'],
+                        'CHECKOUT_VOUCHER' => $worker['voucher'] ?? '',
                     ],
                 );
                 $process->setTimeout(90);

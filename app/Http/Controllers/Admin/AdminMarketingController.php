@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Admin\Announcement;
 use App\Models\Seller\Voucher;
+use App\Services\Notifications\AnnouncementNotificationPublisher;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -118,7 +119,7 @@ class AdminMarketingController extends Controller
         return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign status updated. Existing redemptions and orders are unchanged.');
     }
 
-    public function storeAnnouncement(Request $request): RedirectResponse
+    public function storeAnnouncement(Request $request, AnnouncementNotificationPublisher $publisher): RedirectResponse
     {
         $audienceTargetingReady = Schema::hasColumn('announcements', 'target_audience');
         $data = $request->validate([
@@ -153,9 +154,13 @@ class AdminMarketingController extends Controller
             $attributes['target_audience'] = $audience;
         }
 
-        Announcement::query()->create($attributes);
+        $announcement = Announcement::query()->create($attributes);
+        $deliveredCount = $publisher->publish($announcement);
+        $status = $publishedAt->isFuture()
+            ? 'Announcement saved and scheduled for notification delivery.'
+            : "Announcement published to {$deliveredCount} active users.";
 
-        return redirect()->route('admin.marketing', ['section' => 'announcements'])->with('status', 'Announcement saved and scheduled for notification delivery.');
+        return redirect()->route('admin.marketing', ['section' => 'announcements'])->with('status', $status);
     }
 
     public function toggleAnnouncement(Announcement $announcement): RedirectResponse

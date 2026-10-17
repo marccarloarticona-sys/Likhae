@@ -36,4 +36,29 @@ class VoucherRedemptionCounter
     {
         return (int) self::countsFor(collect([(object) ['id' => $voucherId]]), $buyerUserId)->get($voucherId, 0);
     }
+
+    /**
+     * Read redemption rows as a current read after the caller has locked the
+     * voucher row. Ordinary aggregate reads can retain an older repeatable-read
+     * snapshot while waiting for that lock and allow an extra use.
+     *
+     * @return array{redemptions: int, buyer_redemptions: int}
+     */
+    public static function lockedUsageFor(int $voucherId, ?int $buyerUserId = null): array
+    {
+        $rows = DB::table('seller_orders')
+            ->join('orders', 'orders.id', '=', 'seller_orders.order_id')
+            ->where('seller_orders.voucher_id', $voucherId)
+            ->where('seller_orders.status', '<>', 'CANCELLED')
+            ->orderBy('seller_orders.id')
+            ->lockForUpdate()
+            ->get(['seller_orders.order_id', 'orders.buyer_user_id']);
+
+        return [
+            'redemptions' => $rows->pluck('order_id')->unique()->count(),
+            'buyer_redemptions' => $buyerUserId === null
+                ? 0
+                : $rows->where('buyer_user_id', $buyerUserId)->pluck('order_id')->unique()->count(),
+        ];
+    }
 }

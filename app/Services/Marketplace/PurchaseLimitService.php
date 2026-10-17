@@ -62,6 +62,17 @@ class PurchaseLimitService
             - $this->cartQuantity($buyer, (int) $product->id));
     }
 
+    public function cartWithinLimit(User $buyer, Product $product, int $cartQuantity): bool
+    {
+        $limit = $product->purchase_limit_per_buyer;
+        if ($limit === null) {
+            return true;
+        }
+
+        return $this->purchasedQuantity((int) $buyer->id, (int) $product->id)
+            + max(0, $cartQuantity) <= (int) $limit;
+    }
+
     public function assertWithinLimit(
         User $buyer,
         Product $product,

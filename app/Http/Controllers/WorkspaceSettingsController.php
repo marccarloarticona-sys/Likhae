@@ -86,17 +86,12 @@ class WorkspaceSettingsController extends Controller
                 ],
             ],
             'admin' => [
-            'view' => 'Admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
+                'view' => 'Admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
                 'update_route' => 'admin.system-settings.update',
                 'show_ai' => false,
-                'description' => 'Control operational alerts and your personal Admin workspace experience.',
-                'notifications' => [
-                    ['admin_registration_updates', 'Registration Queue', 'New Seller, Logistics, and account applications.'],
-                    ['admin_compliance_updates', 'Compliance Alerts', 'Product moderation, seller risk, and policy events.'],
-                    ['admin_dispute_updates', 'Complaints & Disputes', 'Escalations and cases that require administrator review.'],
-                    ['admin_finance_updates', 'Finance Alerts', 'Commission, payout, and financial reporting exceptions.'],
-                    ['admin_security_updates', 'Security & Audit', 'Sensitive account actions and audit events.'],
-                ],
+                'description' => 'Adjust your Admin Center appearance and notification sound preference.',
+                'notifications' => [],
+                'show_language' => false,
             ],
             'logistics' => [
                 'view' => 'Logistics.settings', 'center' => 'Logistics Center', 'account_route' => 'logistics.profile',
@@ -126,6 +121,7 @@ class WorkspaceSettingsController extends Controller
         } + [
             'workspace' => $workspace,
             'show_ai' => true,
+            'show_language' => true,
             'ai_key' => $workspace.'_ai_assistant_enabled',
             'ai_sound_key' => $workspace.'_ai_response_sound',
             'sound_key' => $workspace.'_notification_sounds',
@@ -136,10 +132,13 @@ class WorkspaceSettingsController extends Controller
     private function defaults(array $config): array
     {
         $defaults = ['theme' => 'system', 'language' => 'en', $config['sound_key'] => true];
-        if ($config['show_ai']) $defaults += [$config['ai_key'] => true, $config['ai_sound_key'] => false];
+        if ($config['show_ai']) {
+            $defaults += [$config['ai_key'] => true, $config['ai_sound_key'] => false];
+        }
         foreach ($config['notifications'] as $notification) {
             $defaults[$notification[0]] = ($notification[3] ?? true) === true;
         }
+
         return $defaults;
     }
 
@@ -153,6 +152,7 @@ class WorkspaceSettingsController extends Controller
             }
         }
         $keys = array_merge($notificationKeys, [$config['sound_key']]);
+
         return $config['show_ai'] ? array_merge($keys, [$config['ai_key'], $config['ai_sound_key']]) : $keys;
     }
 }

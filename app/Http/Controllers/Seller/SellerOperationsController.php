@@ -16,6 +16,7 @@ use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Reports\SellerSalesSummaryService;
+use App\Services\Reports\SellerOrderValueChartService;
 use App\Services\Reports\SellerReportPdfService;
 use App\Services\Reports\WorkspaceExportPdfService;
 use App\Services\Seller\SellerDashboardOrderStatus;
@@ -32,6 +33,7 @@ class SellerOperationsController extends Controller
     public function dashboard(
         Request $request,
         SellerSalesSummaryService $salesSummary,
+        SellerOrderValueChartService $orderValueChartService,
         SellerDashboardOrderStatus $orderStatus,
     ): View
     {
@@ -44,6 +46,7 @@ class SellerOperationsController extends Controller
         ]);
         [$financialFrom, $financialTo] = $salesSummary->reportingRange($rangeData['from'] ?? null, $rangeData['to'] ?? null);
         $financials = $salesSummary->summarize($seller->id, $financialFrom, $financialTo);
+        $orderValueChart = $orderValueChartService->build($seller->id, $request->query('period'));
 
         $orders = SellerOrder::query()->where('seller_profile_id', $seller->id);
         $dashboardOrders = (clone $orders)
@@ -86,13 +89,6 @@ class SellerOperationsController extends Controller
             ];
         }
 
-        $recentOrders = (clone $orders)
-            ->with(['order.buyer', 'items'])
-            ->withCount($orderStatus->shipmentCountRelations())
-            ->latest()
-            ->limit(8)
-            ->get();
-
         $chartFrom = today()->subDays(6)->startOfDay();
         $chartTo = today()->endOfDay();
         $dailyFinancials = $salesSummary->daily($seller->id, $chartFrom, $chartTo);
@@ -107,6 +103,13 @@ class SellerOperationsController extends Controller
             'value' => $value,
             'height' => $value > 0 ? max(8, (int) round(($value / $maximumDailySales) * 100)) : 2,
         ])->values();
+
+        $recentOrders = (clone $orders)
+            ->with(['order.buyer', 'items'])
+            ->withCount($orderStatus->shipmentCountRelations())
+            ->latest()
+            ->limit(8)
+            ->get();
 
         $sellerOrders = $recentOrders->map(function (SellerOrder $order) use ($orderStatus): array {
             return [
@@ -188,6 +191,7 @@ class SellerOperationsController extends Controller
                 'out_of_stock_variants' => $outOfStockVariants,
             ],
             'salesChart' => $salesChart,
+            'orderValueChart' => $orderValueChart,
             'sellerOrders' => $sellerOrders,
             'inventoryAlerts' => $inventoryAlerts,
             'settlementSummary' => $settlementSummary,

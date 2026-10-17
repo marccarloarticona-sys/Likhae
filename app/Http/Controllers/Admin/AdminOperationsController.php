@@ -47,6 +47,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Response;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -75,7 +76,15 @@ class AdminOperationsController extends Controller
     {
         $status = $this->productStatus($request->query('status'));
         $search = $this->productSearch($request->query('search'));
-        $products = $this->productQuery($status, $search)
+        $aiFilter = $this->productModerationFilter($request->query('ai_filter'));
+        $moderationAvailable = Schema::hasTable('product_moderation_scans');
+        if (! $moderationAvailable && $aiFilter !== 'suspended') {
+            $aiFilter = null;
+        }
+        if ($aiFilter === 'suspended') {
+            $status = 'SUSPENDED';
+        }
+        $products = $this->productQuery($status, $search, $aiFilter)
             ->paginate(20)
             ->withQueryString();
         $products->getCollection()->transform(function (Product $product): Product {
@@ -89,6 +98,8 @@ class AdminOperationsController extends Controller
             'productStats' => $this->productStats(),
             'status' => $status,
             'search' => $search,
+            'moderationAvailable' => $moderationAvailable,
+            'aiFilter' => $aiFilter,
         ]);
     }
 
@@ -104,8 +115,13 @@ class AdminOperationsController extends Controller
             'variants.productImage',
             'complianceCases.openedByAdmin',
             'complianceCases.actions.performedBy',
+            'complianceCases.responses',
         ]);
         $product->setAttribute('admin_category_mismatch', $this->productCategoryMismatch($product));
+        $moderationScans = Schema::hasTable('product_moderation_scans')
+            ? $product->moderationScans()->latest('id')->limit(10)->get()
+            : collect();
+        $moderationHealth = app(\App\Services\Moderation\ProductModerationService::class)->healthSnapshot();
 
         $imageGallery = $product->images
             ->map(function ($image) use ($catalog, $product): array {
@@ -122,6 +138,8 @@ class AdminOperationsController extends Controller
             'imageGallery' => $imageGallery,
             'backQuery' => $request->only(['status', 'search', 'page']),
             'warningCategories' => self::PRODUCT_WARNING_CATEGORIES,
+            'moderationScans' => $moderationScans,
+            'moderationHealth' => $moderationHealth,
         ]);
     }
 
@@ -1441,7 +1459,11 @@ class AdminOperationsController extends Controller
     {
         $status = $this->productStatus($request->query('status'));
         $search = $this->productSearch($request->query('search'));
-        $products = $this->productQuery($status, $search)->get();
+        $aiFilter = $this->productModerationFilter($request->query('ai_filter'));
+        if ($aiFilter === 'suspended') {
+            $status = 'SUSPENDED';
+        }
+        $products = $this->productQuery($status, $search, $aiFilter)->get();
         $rows = $products->map(fn (Product $product): array => $this->productExportRow($product))->all();
         $exportStats = [
             'total' => $products->count(),
@@ -1459,6 +1481,7 @@ class AdminOperationsController extends Controller
                 'filters' => [
                     ['label' => 'Search', 'value' => $search ?: 'All products'],
                     ['label' => 'Status', 'value' => $status ?: 'All statuses'],
+                    ['label' => 'AI moderation', 'value' => $aiFilter ?: 'All moderation states'],
                 ],
                 'summary' => $this->productSummaryCards($exportStats),
                 'table_title' => 'Product detail',
@@ -1722,16 +1745,51 @@ class AdminOperationsController extends Controller
         return $normalized !== '' ? $normalized : null;
     }
 
-    private function productQuery(?string $status = null, ?string $search = null)
+    private function productModerationFilter(mixed $filter): ?string
     {
-        return Product::query()
+        if (! is_string($filter)) {
+            return null;
+        }
+
+        $filter = strtolower(trim($filter));
+
+        return in_array($filter, [
+            'ai_flagged', 'needs_review', 'high_risk', 'critical', 'scan_failed',
+            'seller_appealed', 'suspended', 'false_positive',
+        ], true) ? $filter : null;
+    }
+
+    private function productQuery(?string $status = null, ?string $search = null, ?string $aiFilter = null)
+    {
+        $query = Product::query()
             ->with([
                 'sellerProfile.primaryCategory.parent',
                 'sellerProfile.primaryCategory.children',
                 'category.parent',
                 'variants',
                 'complianceCases' => fn ($query) => $query->whereIn('status', self::UNRESOLVED_COMPLIANCE_STATUSES),
-            ])
+            ]);
+        if (Schema::hasTable('product_moderation_scans')) {
+            $query->with('latestModerationScan');
+            $query->when($aiFilter && $aiFilter !== 'suspended', function ($query) use ($aiFilter): void {
+                $query->whereHas('latestModerationScan', function ($scan) use ($aiFilter): void {
+                    match ($aiFilter) {
+                        'ai_flagged' => $scan->where('scan_status', 'COMPLETE')->whereIn('overall_risk', ['MEDIUM', 'HIGH', 'CRITICAL', 'UNKNOWN']),
+                        'needs_review' => $scan->where('scan_status', 'COMPLETE')->where('decision_status', 'PENDING'),
+                        'high_risk' => $scan->where('scan_status', 'COMPLETE')->where('overall_risk', 'HIGH'),
+                        'critical' => $scan->where('scan_status', 'COMPLETE')->where('overall_risk', 'CRITICAL'),
+                        'scan_failed' => $scan->whereIn('scan_status', ['SCAN_FAILED', 'AI_SCAN_DEFERRED']),
+                        'seller_appealed' => $scan->whereIn('appeal_status', ['APPEAL_SUBMITTED', 'APPEAL_UNDER_REVIEW']),
+                        'false_positive' => $scan->where(function ($decision): void {
+                            $decision->where('decision_status', 'FALSE_POSITIVE')->orWhere('appeal_status', 'APPEAL_APPROVED');
+                        }),
+                        default => null,
+                    };
+                });
+            });
+        }
+
+        return $query
             ->whereIn('products.status', self::PRODUCT_STATUSES)
             ->when($status, fn ($query) => $query->where('status', $status))
             ->when($search, function ($query) use ($search): void {

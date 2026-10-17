@@ -24,6 +24,7 @@ class ProductVariant extends Model
         'discount_value',
         'payment_method',
         'stock',
+        'weight_kg',
         'is_default',
         'is_active',
     ];
@@ -34,6 +35,7 @@ class ProductVariant extends Model
             'price' => 'decimal:2',
             'discount_value' => 'decimal:2',
             'stock' => 'integer',
+            'weight_kg' => 'decimal:3',
             'is_default' => 'boolean',
             'is_active' => 'boolean',
         ];

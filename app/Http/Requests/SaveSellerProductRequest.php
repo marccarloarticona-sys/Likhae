@@ -46,6 +46,7 @@ class SaveSellerProductRequest extends FormRequest
 
             'price' => ['required_if:product_type,single', 'nullable', 'numeric', 'min:0', 'max:999999.99'],
             'stock' => ['required_if:product_type,single', 'nullable', 'integer', 'min:0', 'max:999999'],
+            'weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
             'sku' => ['nullable', 'string', 'max:100'],
             'single_variant_id' => ['nullable', 'integer'],
             'discount_type' => ['nullable', Rule::in(['none', 'percentage', 'fixed'])],
@@ -68,6 +69,7 @@ class SaveSellerProductRequest extends FormRequest
             'variants.*.sku' => ['nullable', 'string', 'max:100', 'distinct'],
             'variants.*.price' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],
             'variants.*.stock' => ['nullable', 'integer', 'min:0', 'max:999999'],
+            'variants.*.weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
             'variants.*.values' => ['nullable', 'string', 'max:500'],
             'variants.*.discount_type' => ['nullable', Rule::in(['none', 'percentage', 'fixed'])],
             'variants.*.discount_value' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],

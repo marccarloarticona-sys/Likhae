@@ -14,7 +14,9 @@
         in_array($shipment->current_status, ['AT_SORTING_CENTER', 'SORTED'], true) => 'Parcel has arrived at '.$centerLabel,
         in_array($shipment->current_status, ['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'], true) => 'Parcel is out for delivery',
         $shipment->current_status === 'PICKED_UP' => 'Parcel has been picked up from seller',
+        $shipment->current_status === 'READY_FOR_PICKUP' => 'Ready to ship',
         $shipment->current_status === 'DELIVERY_FAILED' => 'Delivery attempt was unsuccessful',
+        $shipment->current_status === 'PLACED' => 'Waiting for seller to accept your order',
         default => 'Seller is preparing your parcel',
     };
 @endphp

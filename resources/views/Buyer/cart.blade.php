@@ -69,6 +69,7 @@
             'seller_shop_url' => $sellerShopUrl,
             'available' => (bool) data_get($availability, 'available', false),
             'restricted' => $restricted,
+            'purchase_limit_exceeded' => (bool) data_get($item, 'purchase_limit_exceeded', false),
             'availability_message' => (string) data_get($availability, 'message', 'Unavailable'),
 
             'price' => max(
@@ -111,7 +112,7 @@
     $hasItems = $normalizedCartItems->isNotEmpty();
     $defaultSelectedItems = $normalizedCartItems->filter(fn ($item) => $item['available']);
     $hasUnavailableSelection = $defaultSelectedItems->contains(
-        fn ($item) => $item['stock'] < $item['quantity']
+        fn ($item) => $item['stock'] < $item['quantity'] || $item['purchase_limit_exceeded']
     );
     $availableVouchers = collect($availableVouchers ?? []);
     $sellerAvailableVouchers = $availableVouchers->except('platform');
@@ -418,8 +419,15 @@
                                                 @endif
                                             </div>
 
-                                            <p class="mt-1 text-[10px] {{ !$item['available'] || $item['stock'] < $item['quantity'] ? 'font-semibold text-red-700' : 'text-stone-400' }}" data-stock-availability>
-                                                {{ !$item['available'] ? $item['availability_message'] : ($item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available') }}
+                                            <p class="mt-1 text-[10px] {{ !$item['available'] || $item['stock'] < $item['quantity'] || $item['purchase_limit_exceeded'] ? 'font-semibold text-red-700' : 'text-stone-400' }}" data-stock-availability>
+                                                @if (!$item['available'])
+                                                    {{ $item['availability_message'] }}
+                                                @else
+                                                    {{ $item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available' }}
+                                                    @if ($item['purchase_limit_exceeded'])
+                                                        Cart quantity exceeds this product's purchase limit.
+                                                    @endif
+                                                @endif
                                             </p>
                                         </div>
 
@@ -630,7 +638,7 @@
                         data-stock-warning
                         role="alert"
                     >
-                        Remove unavailable items or reduce their quantity before checkout.
+                        Remove unavailable items or reduce quantities to fit stock and purchase limits before checkout.
                     </p>
 
                     <p class="mt-3 text-center text-[10px] leading-4 text-stone-400">

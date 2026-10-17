@@ -23,6 +23,10 @@ use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\AccountNotificationService;
 use App\Services\Buyer\BuyerStoreNotificationService;
+use App\Services\Moderation\CloudflareProductModerationProvider;
+use App\Services\Moderation\FallbackProductModerationProvider;
+use App\Services\Moderation\GeminiProductModerationProvider;
+use App\Services\Moderation\ProductModerationProvider;
 use App\Policies\LogisticsCenterPolicy;
 use App\Policies\RiderProfilePolicy;
 use App\Policies\SellerProfilePolicy;
@@ -39,6 +43,18 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->bind(ProductModerationProvider::class, function ($app): ProductModerationProvider {
+            $primary = strtolower((string) config('product_moderation.provider')) === 'gemini'
+                ? $app->make(GeminiProductModerationProvider::class)
+                : $app->make(CloudflareProductModerationProvider::class);
+            $fallback = strtolower((string) config('product_moderation.fallback.provider')) === 'cloudflare'
+                ? $app->make(CloudflareProductModerationProvider::class)
+                : $app->make(GeminiProductModerationProvider::class);
+
+            return $fallback::class === $primary::class
+                ? $primary
+                : new FallbackProductModerationProvider($primary, $fallback);
+        });
     }
 
     public function boot(): void

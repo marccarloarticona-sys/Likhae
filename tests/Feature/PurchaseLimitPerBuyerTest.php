@@ -160,6 +160,36 @@ class PurchaseLimitPerBuyerTest extends TestCase
         }
     }
 
+    public function test_cart_load_flags_stale_stock_and_purchase_limit_overages(): void
+    {
+        $this->withoutVite();
+        [$buyer, $product, $variant] = $this->purchaseFixture();
+        $item = app(CartService::class)->add($buyer, $product, (int) $variant->id, 2);
+        $variant->update(['stock' => 1]);
+        $product->update(['purchase_limit_per_buyer' => 1]);
+
+        $response = $this->actingAs($buyer)->get(route('buyer.cart'));
+
+        $response->assertOk()
+            ->assertSee('Only 1 available.')
+            ->assertSee("Cart quantity exceeds this product's purchase limit.", escape: false)
+            ->assertSee('reduce quantities to fit stock and purchase limits before checkout.');
+        $this->assertSame(2, (int) $item->fresh()->quantity);
+    }
+
+    public function test_cart_preview_rejects_selected_quantities_over_purchase_limit(): void
+    {
+        [$buyer, $product, $variant] = $this->purchaseFixture();
+        $item = app(CartService::class)->add($buyer, $product, (int) $variant->id, 2);
+        $product->update(['purchase_limit_per_buyer' => 1]);
+
+        $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
+            'cart_item_ids' => [$item->id],
+        ])->assertUnprocessable()
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', 'One or more selected products exceed the purchase limit. Reduce the cart quantity before checkout.');
+    }
+
     public function test_historical_count_excludes_cancelled_orders_and_counts_returns_once(): void
     {
         [$buyer, $product] = $this->buyerProductFixture();

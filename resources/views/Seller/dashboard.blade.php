@@ -9,6 +9,7 @@
     $firstName = data_get($seller, 'first_name') ?: str($seller->name)->before(' ');
     $stats = $dashboardStats;
     $allOrders = $stats['orders'];
+    $peso = html_entity_decode('&#8369;');
 @endphp
 <div class="sl-page sl-seller-dashboard">
     <section class="sl-welcome-panel">
@@ -37,6 +38,7 @@
     <section class="sl-card" style="margin-top:16px">
         <header class="sl-card-head"><div><span class="sl-eyebrow">Recognized financials</span><h2>Gross Sales, Commission &amp; Net Sales</h2><p>Original merchandise value recognized on delivered order records, less assessed commission. Shipping and Additional Care are excluded. Reporting period: {{ $financialFrom->format('M d, Y') }} – {{ $financialTo->format('M d, Y') }}.</p></div><a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Open matching report</a></header>
         <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-dashboard-period sl-form-grid sl-form-grid-4" aria-label="Financial reporting period">
+            <input type="hidden" name="period" value="{{ $orderValueChart['period'] }}">
             <label class="sl-field"><span>From</span><input name="from" type="date" value="{{ $financialFrom->toDateString() }}" required></label>
             <label class="sl-field"><span>To</span><input name="to" type="date" value="{{ $financialTo->toDateString() }}" required></label>
             <button class="sl-btn sl-btn-soft sl-btn-sm" type="submit">Apply period</button>
@@ -67,10 +69,55 @@
         @endif
     </section>
 
+    <section class="sl-card sl-order-value-panel" aria-labelledby="seller-order-value-title">
+        <header class="sl-card-head">
+            <div><span class="sl-eyebrow">Performance</span><h2 id="seller-order-value-title">Order value</h2><p>Non-cancelled order value for {{ $orderValueChart['period_label'] }}.</p></div>
+            <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-order-value-filter">
+                <input type="hidden" name="from" value="{{ $financialFrom->toDateString() }}">
+                <input type="hidden" name="to" value="{{ $financialTo->toDateString() }}">
+                <select class="sl-select sl-select-sm" name="period" aria-label="Order value period" onchange="this.form.submit()">
+                    <option value="7" @selected($orderValueChart['period'] === '7')>Last 7 days</option>
+                    <option value="30" @selected($orderValueChart['period'] === '30')>Last 30 days</option>
+                    <option value="quarter" @selected($orderValueChart['period'] === 'quarter')>This quarter</option>
+                </select>
+            </form>
+        </header>
+        <div class="sl-chart-summary sl-order-value-summary">
+            <div><span>Gross order value</span><strong>{{ $peso }}{{ number_format($orderValueChart['gross'], 2) }}</strong><small>Non-cancelled seller orders placed during {{ $orderValueChart['period_label'] }} · {{ $orderValueChart['grouping_label'] }}</small></div>
+            <span class="sl-order-value-legend"><i></i>Order value</span>
+        </div>
+        @if ($orderValueChart['has_orders'])
+            <div class="sl-order-value-chart">
+                <div class="sl-order-value-y-axis" aria-hidden="true">
+                    @foreach ($orderValueChart['scale']['ticks'] as $tick)
+                        <span>{{ $peso }}{{ $tick >= 1000 ? number_format($tick / 1000, 1).'k' : number_format($tick, 0) }}</span>
+                    @endforeach
+                </div>
+                <div class="sl-order-value-chart-area">
+                    <div class="sl-order-value-bars" style="--chart-points: {{ $orderValueChart['chart']->count() }}" role="group" aria-label="Seller order value chart for {{ $orderValueChart['period_label'] }} grouped as {{ $orderValueChart['grouping_label'] }}">
+                        @foreach ($orderValueChart['chart'] as $point)
+                            <div class="sl-order-value-bar" style="--bar-height: {{ $point['height'] }}%" role="img" tabindex="0" title="{{ $point['date'] }}: {{ $point['exact'] }}" aria-label="{{ $point['date'] }}: {{ $point['exact'] }}">
+                                <i aria-hidden="true"></i>
+                                <strong>{{ $point['compact'] }}</strong>
+                            </div>
+                        @endforeach
+                    </div>
+                    <div class="sl-order-value-x-axis" style="--chart-points: {{ $orderValueChart['chart']->count() }}">
+                        @foreach ($orderValueChart['chart'] as $point)
+                            <span title="{{ $point['date'] }}">{{ $point['label'] }}</span>
+                        @endforeach
+                    </div>
+                </div>
+            </div>
+        @else
+            <div class="sl-order-value-empty" role="status">No non-cancelled order value in this period.</div>
+        @endif
+    </section>
+
     <div class="sl-dashboard-grid">
         <section class="sl-card sl-sales-panel">
             <header class="sl-card-head">
-                <div><span class="sl-eyebrow">Performance</span><h2>Sales Overview</h2><p>Gross merchandise sales recognized over the last 7 days.</p></div>
+                <div><span class="sl-eyebrow">Recognized sales</span><h2>Delivered sales overview</h2><p>Gross merchandise sales recognized over the last 7 days.</p></div>
                 <a href="{{ route('seller.reports', ['from' => now()->subDays(6)->toDateString(), 'to' => now()->toDateString()]) }}" class="sl-text-link">View reports</a>
             </header>
             <div class="sl-chart-summary">

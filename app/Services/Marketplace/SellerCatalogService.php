@@ -9,6 +9,7 @@ use App\Models\Seller\ProductOptionValue;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
 use App\Services\Media\ImageOptimizationService;
+use App\Services\Moderation\ProductModerationService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -20,19 +21,27 @@ use Throwable;
 
 class SellerCatalogService
 {
-    public function __construct(private readonly ImageOptimizationService $images) {}
+    public function __construct(
+        private readonly ImageOptimizationService $images,
+        private readonly ProductModerationService $moderation,
+    ) {}
 
     public function save(SellerProfile $seller, SaveSellerProductRequest $request, ?Product $product = null): Product
     {
         $storedPaths = [];
         $deletedPaths = [];
+        $previousModerationFingerprint = null;
 
         try {
-            $savedProduct = DB::transaction(function () use ($seller, $request, $product, &$storedPaths, &$deletedPaths): Product {
+            $savedProduct = DB::transaction(function () use ($seller, $request, $product, &$storedPaths, &$deletedPaths, &$previousModerationFingerprint): Product {
                 $product ??= new Product(['seller_profile_id' => $seller->id]);
 
                 if ((int) $product->seller_profile_id !== (int) $seller->id) {
                     abort(403);
+                }
+
+                if ($product->exists) {
+                    $previousModerationFingerprint = $this->moderation->revisionFingerprint($product);
                 }
 
                 $status = strtoupper((string) $request->input('status', 'DRAFT'));
@@ -88,6 +97,11 @@ class SellerCatalogService
             } catch (Throwable $exception) {
                 report($exception);
             }
+        }
+
+        $newModerationFingerprint = $this->moderation->revisionFingerprint($savedProduct);
+        if ($previousModerationFingerprint === null || ! hash_equals($previousModerationFingerprint, $newModerationFingerprint)) {
+            $this->moderation->queueAutomatic($savedProduct);
         }
 
         return $savedProduct;
@@ -239,7 +253,7 @@ class SellerCatalogService
     {
         $options = $product->options()->with('values')->orderBy('sort_order')->get();
         $variantRows = collect((array) $request->input('variants', []))
-            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')))
+            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')))
             ->values();
 
         if ($variantRows->isEmpty() && $options->isNotEmpty()) {
@@ -258,6 +272,7 @@ class SellerCatalogService
                 'sku' => $request->input('sku') ?: 'LK-'.$product->id.'-DEFAULT',
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
+                'weight_kg' => $request->input('weight_kg'),
                 'values' => '',
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
@@ -362,6 +377,7 @@ class SellerCatalogService
                 'discount_value' => $discountValue,
                 'payment_method' => $paymentMethod ?: 'cod_online',
                 'stock' => (int) $stock,
+                'weight_kg' => Arr::get($row, 'weight_kg', $request->input('weight_kg')),
                 'is_default' => $index === 0,
                 'is_active' => filter_var(Arr::get($row, 'is_active', $request->input('is_active', true)), FILTER_VALIDATE_BOOLEAN),
             ]);
@@ -429,6 +445,7 @@ class SellerCatalogService
                 'sku' => ($request->input('sku') ?: 'LK-'.$product->id).'-'.Str::upper($suffix ?: Str::random(5)),
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
+                'weight_kg' => $request->input('weight_kg'),
                 'values' => implode(',', $values),
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
