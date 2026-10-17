@@ -27,6 +27,9 @@ class BuyerHomeDealsTest extends TestCase
             ->assertOk()
             ->assertSee('Deals For You')
             ->assertSee('Current Deals')
+            ->assertSee('Platform Events')
+            ->assertSee('No scheduled events right now')
+            ->assertDontSee('11.11 MEGA SALE')
             ->assertSee($discounted->name)
             ->assertSee('₱170.00')
             ->assertSee('₱200.00')
@@ -92,7 +95,11 @@ class BuyerHomeDealsTest extends TestCase
             ->get(route('buyer.home'))
             ->assertOk()
             ->assertDontSee('data-flash-countdown')
-            ->assertSee('Current Discounts');
+            ->assertSee('Platform Events')
+            ->assertSee('Platform voucher campaign')
+            ->assertSee('10%')
+            ->assertSee('No minimum spend')
+            ->assertSee('No discount cap');
     }
 
     public function test_flash_deals_listing_paginates(): void

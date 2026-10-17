@@ -10,6 +10,17 @@
     $slug = data_get($product, 'slug', data_get($product, 'id', 'product'));
 
     $name = (string) data_get($product, 'name', 'Product');
+    $isWishlistSaved = false;
+    if (! $guest && auth()->check() && $productId !== null) {
+        $wishlistUserId = request()->attributes->get('buyer_wishlist_user_id');
+        $wishlistProductIds = request()->attributes->get('buyer_wishlist_product_ids');
+        if ((int) $wishlistUserId !== (int) auth()->id() || ! is_array($wishlistProductIds)) {
+            $wishlistProductIds = auth()->user()->wishlistItems()->pluck('product_id')->map(fn ($savedProductId) => (string) $savedProductId)->all();
+            request()->attributes->set('buyer_wishlist_user_id', auth()->id());
+            request()->attributes->set('buyer_wishlist_product_ids', $wishlistProductIds);
+        }
+        $isWishlistSaved = in_array((string) $productId, $wishlistProductIds, true);
+    }
 
     $categoryValue = data_get($product, 'category.name') ?? 'Local Find';
 
@@ -1528,6 +1539,7 @@
                         data-test-add-cart
                         data-cart-url="{{ route('buyer.cart.add', ['product' => $productId]) }}"
                         data-product-purchase
+                        @disabled($sellerOnVacation || $stock < 1)
                     >
                         Add to Cart
                     </button>
@@ -1543,6 +1555,7 @@
                             data-cart-url="{{ route('buyer.buy-now', ['product' => $productId]) }}"
                             data-checkout="1"
                             data-product-purchase
+                            @disabled($sellerOnVacation || $stock < 1)
                         >
                             Buy Now
                         </button>
@@ -1550,11 +1563,16 @@
 
                     <button
                         type="button"
-                        class="lk-btn lk-btn-light lk-btn-full lk-detail-wide"
+                        class="lk-btn lk-btn-light lk-btn-full lk-detail-wide {{ $isWishlistSaved ? 'is-active' : '' }}"
                         data-wishlist
-                        data-product-id="{{ $productId ?? $slug }}"
+                        data-product-id="{{ $productId }}"
+                        data-product-name="{{ $name }}"
+                        data-wishlist-url="{{ route('buyer.wishlist.toggle', ['product' => $productId]) }}"
+                        aria-pressed="{{ $isWishlistSaved ? 'true' : 'false' }}"
+                        aria-label="{{ $isWishlistSaved ? 'Remove' : 'Save' }} {{ $name }} {{ $isWishlistSaved ? 'from' : 'to' }} wishlist"
                     >
-                        ♡ Save to Wishlist
+                        <span aria-hidden="true" data-wishlist-icon>@if($isWishlistSaved)&#9829;@else&#9825;@endif</span>
+                        <span data-wishlist-label>{{ $isWishlistSaved ? 'Remove from Wishlist' : 'Save to Wishlist' }}</span>
                     </button>
                 @endif
             </div>
@@ -1714,6 +1732,10 @@
                 @php
                     $reviewRating = (int) data_get($review, 'rating', 5);
                     $reviewVariant = (string) data_get($review, 'variant', 'Standard');
+                    $reviewPhotos = collect(data_get($review, 'image_urls', []))->filter()->values();
+                    if ($reviewPhotos->isEmpty() && data_get($review, 'image_url')) {
+                        $reviewPhotos = collect([data_get($review, 'image_url')]);
+                    }
                 @endphp
                 <article
                     class="lk-detail-review-item"
@@ -1753,14 +1775,33 @@
                                 {{ data_get($review, 'comment') }}
                             </p>
 
-                            @if(data_get($review, 'image_url'))
-                                <img class="mt-3 max-h-64 max-w-full rounded-lg object-contain" src="{{ data_get($review, 'image_url') }}" alt="Photo shared with buyer review" loading="lazy">
+                            @if($reviewPhotos->isNotEmpty())
+                                <div class="mt-3 flex flex-wrap gap-2">
+                                    @foreach($reviewPhotos as $photoUrl)
+                                        <img class="max-h-64 max-w-full rounded-lg object-contain" src="{{ $photoUrl }}" alt="Photo shared with buyer review" loading="lazy">
+                                    @endforeach
+                                </div>
                             @endif
 
                             @if(data_get($review, 'variant'))
                                 <span class="lk-detail-review-variant">
                                     Variation: {{ data_get($review, 'variant') }}
                                 </span>
+                            @endif
+
+                            @if(filled(data_get($review, 'seller_reply')))
+                                <div class="mt-3 rounded-lg border border-[#eadbce] bg-[#fcf8f4] p-3">
+                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                        <strong>Seller Response</strong>
+                                        @if(data_get($review, 'seller_name'))
+                                            <span class="text-sm text-stone-600">{{ data_get($review, 'seller_name') }}</span>
+                                        @endif
+                                        @if(data_get($review, 'seller_reply_date'))
+                                            <time class="text-sm text-stone-500">{{ data_get($review, 'seller_reply_date') }}</time>
+                                        @endif
+                                    </div>
+                                    <p class="mt-2 whitespace-pre-line">{{ data_get($review, 'seller_reply') }}</p>
+                                </div>
                             @endif
                         </div>
                     </div>

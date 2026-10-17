@@ -6,22 +6,26 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin\Notification;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
-use App\Models\Communication\Conversation;
 use App\Models\Communication\Message;
 use App\Models\Seller\Voucher;
 use App\Models\Seller\Product;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\ConversationMessageSender;
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Services\ReviewImageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Throwable;
 use Illuminate\View\View;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class SellerEngagementController extends Controller
 {
@@ -31,11 +35,23 @@ class SellerEngagementController extends Controller
             $request->user(),
             $request->integer('conversation') ?: null,
         );
+        $contacts = \App\Models\User::query()
+            ->where('status', 'ACTIVE')
+            ->whereKeyNot($request->user()->id)
+            ->orderBy('first_name')
+            ->limit(100)
+            ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
+        $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+            ->filterRecipients($request->user(), $contacts);
 
         return view('Seller.messages', [
             'conversations' => $conversations,
-            'contacts' => \App\Models\User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
-            'messageAttachmentsReady' => Schema::hasColumn('messages', 'attachment_path'),
+            'contacts' => $contacts,
+            'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
+            'messageContext' => app(ConversationContextPresenter::class)->forUser(
+                $request->user(),
+                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+            ),
         ]);
     }
 
@@ -51,65 +67,14 @@ class SellerEngagementController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
+    public function sendMessage(Request $request, ConversationService $conversationService, ConversationMessageSender $sender): JsonResponse|RedirectResponse
     {
-        if (is_string($request->input('body'))) {
-            $request->merge(['body' => $this->trimMessageWhitespace($request->input('body'))]);
-        }
-
         $data = $request->validate([
             'recipient_user_id' => ['required', 'integer', 'exists:users,id'],
-            'conversation_id' => ['nullable', 'integer', 'exists:conversations,id'],
-            'body' => ['required', 'string', 'max:1000'],
-            'attachment' => $this->sellerChatImageRules(),
         ]);
-
-        if ($request->hasFile('attachment') && ! Schema::hasColumn('messages', 'attachment_path')) {
-            $message = 'Image attachments are unavailable until the message attachment schema is deployed.';
-            if ($request->expectsJson()) {
-                return response()->json(['message' => $message], 503);
-            }
-
-            return back()->withErrors(['attachment' => $message])->withInput();
-        }
-
-        $context = [];
-        $conversation = null;
-        if (! empty($data['conversation_id'])) {
-            $conversation = Conversation::query()
-                ->whereKey((int) $data['conversation_id'])
-                ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-                ->whereHas('participants', fn ($query) => $query->where('users.id', (int) $data['recipient_user_id']))
-                ->firstOrFail();
-            $context = $conversationService->contextFor($conversation);
-        }
-
-        $attachmentPath = null;
-        try {
-            if ($request->hasFile('attachment')) {
-                $file = $request->file('attachment');
-                $extension = strtolower($file->getClientOriginalExtension());
-                $attachmentPath = Storage::disk('local')->putFileAs('message-attachments', $file, Str::uuid().'.'.$extension);
-                if (! is_string($attachmentPath)) {
-                    throw new \RuntimeException('The image attachment could not be stored.');
-                }
-            }
-
-            $message = $conversationService->send(
-                $request->user(),
-                (int) $data['recipient_user_id'],
-                $data['body'],
-                $context,
-                $conversation,
-                $attachmentPath,
-            );
-        } catch (Throwable $exception) {
-            if ($attachmentPath) {
-                Storage::disk('local')->delete($attachmentPath);
-            }
-
-            throw $exception;
-        }
+        $data += $sender->validate($request);
+        $recipient = \App\Models\User::query()->whereKey($data['recipient_user_id'])->where('status', \App\Models\User::STATUS_ACTIVE)->firstOrFail();
+        $message = $sender->send($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -121,57 +86,16 @@ class SellerEngagementController extends Controller
         return back()->with('status', 'Message sent.');
     }
 
-    public function messageAttachment(Request $request, Message $message)
+    public function messageAttachment(Request $request, Message $message, MessageAttachmentService $attachments): BinaryFileResponse
     {
-        abort_unless(Schema::hasColumn('messages', 'attachment_path'), 404);
-        abort_unless(Conversation::query()
-            ->whereKey($message->conversation_id)
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-            ->exists(), 403);
+        $file = $attachments->authorizedFile($request->user(), $message);
+        $response = response()->file($file['path']);
+        $response->headers->set('Content-Type', $file['mime']);
+        $response->headers->set('Cache-Control', 'private, no-store');
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
+        $response->headers->set('Content-Security-Policy', "default-src 'none'; sandbox");
 
-        $path = (string) $message->attachment_path;
-        abort_unless(preg_match('#^message-attachments/[A-Fa-f0-9-]+\.(jpg|jpeg|png|webp)$#D', $path) === 1, 404);
-        $disk = Storage::disk('local');
-        $absolutePath = realpath($disk->path($path));
-        $directory = realpath($disk->path('message-attachments'));
-        abort_unless($absolutePath && $directory && str_starts_with($absolutePath, $directory.DIRECTORY_SEPARATOR), 404);
-        $mime = mime_content_type($absolutePath) ?: '';
-        abort_unless(in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true), 404);
-
-        return response()->file($absolutePath, [
-            'Content-Type' => $mime,
-            'Cache-Control' => 'private, no-store',
-            'X-Content-Type-Options' => 'nosniff',
-        ]);
-    }
-
-    /** @return array<int, mixed> */
-    private function sellerChatImageRules(): array
-    {
-        return [
-            'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'mimetypes:image/jpeg,image/png,image/webp', 'extensions:jpg,jpeg,png,webp', 'max:5120',
-            static function (string $attribute, mixed $value, \Closure $fail): void {
-                if (! $value instanceof \Illuminate\Http\UploadedFile || ! $value->isValid()) {
-                    return;
-                }
-                $image = @getimagesize($value->getRealPath());
-                $mime = $image['mime'] ?? null;
-                $extension = strtolower($value->getClientOriginalExtension());
-                $extensionsByMime = [
-                    'image/jpeg' => ['jpg', 'jpeg'],
-                    'image/png' => ['png'],
-                    'image/webp' => ['webp'],
-                ];
-                if (! isset($extensionsByMime[$mime]) || ! in_array($extension, $extensionsByMime[$mime], true)) {
-                    $fail('Upload a valid JPEG, PNG, or WebP image with a matching file extension.');
-                }
-            },
-        ];
-    }
-
-    private function trimMessageWhitespace(string $body): string
-    {
-        return preg_replace('/^[\\s\\p{Z}]+|[\\s\\p{Z}]+$/u', '', $body) ?? trim($body);
+        return $response;
     }
 
     public function reviews(Request $request, ReviewImageService $reviewImages): View
@@ -278,14 +202,27 @@ class SellerEngagementController extends Controller
             'code' => ['required', 'string', 'max:80'],
             'name' => ['required', 'string', 'max:150'],
             'discount_type' => ['required', 'string', 'in:PERCENT,FIXED'],
-            'discount_value' => ['required', 'numeric', 'min:0'],
-            'minimum_order_amount' => ['nullable', 'numeric', 'min:0'],
-            'maximum_discount_amount' => ['nullable', 'numeric', 'min:0'],
-            'usage_limit' => ['nullable', 'integer', 'min:1'],
-            'per_user_limit' => ['nullable', 'integer', 'min:1'],
+            'discount_value' => ['required', 'numeric', 'gt:0', 'max:9999999999.99'],
+            'minimum_order_amount' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
+            'maximum_discount_amount' => ['nullable', 'numeric', 'gt:0', 'max:9999999999.99'],
+            'usage_limit' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
+            'per_user_limit' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'starts_at' => ['nullable', 'date'],
             'ends_at' => ['nullable', 'date'],
         ]);
+
+        if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 100) {
+            throw ValidationException::withMessages([
+                'discount_value' => 'Percentage discounts cannot exceed 100%.',
+            ]);
+        }
+
+        if (! empty($data['starts_at']) && ! empty($data['ends_at'])
+            && Carbon::parse($data['ends_at'])->lessThan(Carbon::parse($data['starts_at']))) {
+            throw ValidationException::withMessages([
+                'ends_at' => 'The voucher end time must be after its start time.',
+            ]);
+        }
 
         $data['code'] = mb_strtoupper(trim($data['code']));
         if (Voucher::query()->where('seller_profile_id', $seller->id)->whereRaw('UPPER(code) = ?', [$data['code']])->exists()) {

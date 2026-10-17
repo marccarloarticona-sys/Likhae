@@ -15,12 +15,15 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 
 class MobileAuthController extends Controller
 {
     private const EMAIL_CODE_TTL_MINUTES = 5;
+
+    private const GOOGLE_EMAIL_TOKEN_TTL_MINUTES = 30;
 
     public function register(
         StoreRegistrationRequest $request,
@@ -173,6 +176,127 @@ class MobileAuthController extends Controller
         ]);
     }
 
+    public function exchangeGoogle(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'size:64'],
+            'code_verifier' => ['required', 'string', 'min:43', 'max:128', 'regex:/^[A-Za-z0-9._~-]+$/'],
+            'device_name' => ['sometimes', 'nullable', 'string', 'max:100'],
+        ]);
+
+        $exchange = Cache::pull('mobile_google_exchange:'.hash('sha256', $data['code']));
+        if (! is_array($exchange) || ! isset($exchange['code_challenge'], $exchange['state'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This Google sign-in code is invalid or has expired.',
+            ], 401);
+        }
+
+        $challenge = rtrim(
+            strtr(base64_encode(hash('sha256', $data['code_verifier'], true)), '+/', '-_'),
+            '=',
+        );
+        if (! hash_equals((string) $exchange['code_challenge'], $challenge)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This Google sign-in code is invalid or has expired.',
+            ], 401);
+        }
+
+        if (is_array($exchange['profile'] ?? null)) {
+            if (! (bool) PlatformSetting::valueOf('registration_enabled', true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'New registrations are temporarily disabled.',
+                ], 403);
+            }
+
+            $email = mb_strtolower(trim((string) ($exchange['profile']['email'] ?? '')));
+            if ($email === '') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The Google account could not be matched to a LIKHAE account.',
+                ], 401);
+            }
+
+            $verificationToken = Str::random(64);
+            $verificationExpiresAt = now()->addMinutes(self::GOOGLE_EMAIL_TOKEN_TTL_MINUTES);
+            Cache::put($this->emailVerificationTokenCacheKey($email), [
+                'hash' => Hash::make($verificationToken),
+                'expires_at' => $verificationExpiresAt->timestamp,
+            ], $verificationExpiresAt);
+
+            return response()->json([
+                'success' => false,
+                'code' => 'google_registration_required',
+                'message' => 'Complete buyer registration to continue.',
+                'profile' => [
+                    'email' => $email,
+                    'first_name' => (string) ($exchange['profile']['first_name'] ?? ''),
+                    'last_name' => (string) ($exchange['profile']['last_name'] ?? ''),
+                    'email_verification_token' => $verificationToken,
+                ],
+            ], 409);
+        }
+
+        $user = User::query()->find($exchange['user_id'] ?? null);
+        if (! $user || ! $user->isActive()) {
+            return response()->json([
+                'success' => false,
+                'message' => $user?->inactiveMessage() ?? 'The Google account could not be matched to a LIKHAE account.',
+            ], 403);
+        }
+
+        $mobileRoles = $this->mobileRoles($user);
+        if ($mobileRoles === []) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This account does not have Buyer or Rider mobile access.',
+            ], 403);
+        }
+
+        $plainTextToken = Str::random(64);
+        $expiresAt = now()->addDays(30);
+        $user->forceFill([
+            'api_token_hash' => hash('sha256', $plainTextToken),
+            'api_token_expires_at' => $expiresAt,
+        ])->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Signed in successfully.',
+            'token_type' => 'Bearer',
+            'token' => $plainTextToken,
+            'access_token' => $plainTextToken,
+            'expires_at' => $expiresAt->toIso8601String(),
+            'device_name' => trim((string) ($data['device_name'] ?? '')) ?: 'likhae-mobile',
+            'user' => $this->userPayload($user, $mobileRoles),
+        ]);
+    }
+
+    public function sendPasswordResetLink(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+        ]);
+        $email = mb_strtolower(trim($data['email']));
+
+        try {
+            Password::sendResetLink(['email' => $email]);
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Password reset email is temporarily unavailable. Please try again later.',
+            ], 503);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'If an account exists with this email, a password reset link will be sent.',
+        ]);
+    }
     public function login(Request $request): JsonResponse
     {
         $credentials = $request->validate([

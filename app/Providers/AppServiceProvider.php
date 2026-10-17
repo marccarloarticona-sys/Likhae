@@ -16,10 +16,13 @@ use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
+use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\AccountNotificationService;
+use App\Services\Buyer\BuyerStoreNotificationService;
 use App\Policies\LogisticsCenterPolicy;
 use App\Policies\RiderProfilePolicy;
 use App\Policies\SellerProfilePolicy;
@@ -89,6 +92,7 @@ class AppServiceProvider extends ServiceProvider
         // Keep notification records in step with every core workflow change,
         // regardless of whether it came from a web page or an API endpoint.
         $accountNotifications = app(AccountNotificationService::class);
+        $buyerStoreNotifications = app(BuyerStoreNotificationService::class);
         Order::created(fn (Order $order) => $accountNotifications->orderPlaced($order));
         Order::updated(function (Order $order) use ($accountNotifications): void {
             if ($order->wasChanged('status')) {
@@ -114,6 +118,13 @@ class AppServiceProvider extends ServiceProvider
         });
         Review::created(fn (Review $review) => $accountNotifications->reviewSubmitted($review));
         RiderEarning::created(fn (RiderEarning $earning) => $accountNotifications->riderEarningCreated($earning));
+        ProductVariant::created(fn (ProductVariant $variant) => $buyerStoreNotifications->variantCreated($variant));
+        ProductVariant::updated(fn (ProductVariant $variant) => $buyerStoreNotifications->variantUpdated($variant));
+        Product::updated(function (Product $product) use ($buyerStoreNotifications): void {
+            if ($product->wasChanged('status') && strtoupper((string) $product->status) === 'ACTIVE') {
+                $buyerStoreNotifications->productActivated($product);
+            }
+        });
 
         // Force HTTPS URLs when behind Cloudflare or other SSL terminator
         if (config('app.env') === 'production') {

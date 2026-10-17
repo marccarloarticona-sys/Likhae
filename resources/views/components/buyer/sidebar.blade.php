@@ -135,7 +135,7 @@
         'to-receive' => 'To Receive',
         'completed' => 'Completed',
         'cancelled' => 'Cancelled',
-        'returns' => 'Returns / Refunds',
+        'returns' => 'Return / Refund',
     ];
 
     $rewardLinks = [
@@ -884,7 +884,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    My Orders
+                    My Purchases
                 </span>
 
                 <span class="lk-nav-arrow">

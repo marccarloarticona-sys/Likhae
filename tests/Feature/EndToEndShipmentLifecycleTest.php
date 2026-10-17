@@ -229,7 +229,7 @@ class EndToEndShipmentLifecycleTest extends TestCase
             ->get(route('buyer.orders', ['status' => 'DELIVERED']))
             ->assertOk()
             ->assertSee($order->order_number)
-            ->assertSee('Delivered');
+            ->assertSee('Parcel has been delivered');
         $processingResponse = $this->actingAs($buyer)
             ->get(route('buyer.orders', ['status' => 'PROCESSING']))
             ->assertOk();

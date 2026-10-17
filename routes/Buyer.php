@@ -3,6 +3,7 @@
 use App\Http\Controllers\Buyer\BuyerController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
+use App\Http\Controllers\Buyer\BuyerPlatformEventController;
 use App\Http\Controllers\Buyer\BuyerReturnRefundController;
 use App\Http\Controllers\Buyer\CheckoutController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -20,6 +21,8 @@ Route::prefix('buyer')
             ->name('ai.chat');
 
         Route::get('/home', [BuyerController::class, 'home'])->name('home');
+        Route::get('/platform-events', [BuyerPlatformEventController::class, 'index'])->name('platform-events.index');
+        Route::get('/platform-events/{voucher}', [BuyerPlatformEventController::class, 'show'])->name('platform-events.show');
         Route::get('/products', [BuyerController::class, 'products'])->name('products');
         Route::get('/products/{slug}', [BuyerController::class, 'product'])->name('product-details');
         Route::get('/wishlist', [BuyerController::class, 'wishlist'])->name('wishlist');
@@ -27,11 +30,14 @@ Route::prefix('buyer')
         Route::delete('/wishlist/clear', [BuyerController::class, 'clearWishlist'])->name('wishlist.clear');
         Route::delete('/wishlist', [BuyerController::class, 'removeWishlistItems'])->name('wishlist.remove');
         Route::get('/shop/{seller}', [BuyerController::class, 'shop'])->name('shop');
+        Route::post('/shop/{seller}/follow', [BuyerController::class, 'followShop'])->name('shop.follow');
+        Route::delete('/shop/{seller}/follow', [BuyerController::class, 'unfollowShop'])->name('shop.unfollow');
 
         Route::get('/flash-deals', [BuyerController::class, 'flashDeals'])->name('flash-deals');
         Route::get('/local-finds', fn () => redirect()->route('buyer.products', ['focus' => 'local']))->name('local-finds');
 
         Route::get('/cart', [BuyerController::class, 'cart'])->name('cart');
+        Route::post('/cart/preview', [BuyerController::class, 'cartPreview'])->middleware('throttle:60,1')->name('cart.preview');
         Route::post('/cart/{product}', [BuyerController::class, 'addCart'])->name('cart.add');
         Route::patch('/cart/items/{item}', [BuyerController::class, 'updateCart'])->name('cart.update');
         Route::delete('/cart/items/{item}', [BuyerController::class, 'removeCart'])->name('cart.remove');
@@ -45,6 +51,7 @@ Route::prefix('buyer')
         Route::get('/orders/success', [BuyerOrderController::class, 'success'])->name('orders.success');
         Route::get('/orders', [BuyerOrderController::class, 'index'])->name('orders');
         Route::get('/orders/stream', [BuyerOrderController::class, 'stream'])->name('orders.stream');
+        Route::post('/orders/{order}/seller-orders/{sellerOrder}/buy-again', [BuyerOrderController::class, 'buyAgain'])->name('orders.seller-orders.buy-again');
         Route::get('/returns', [BuyerReturnRefundController::class, 'index'])->name('returns');
         Route::get('/returns/request/{returnRequest}', [BuyerReturnRefundController::class, 'parentShow'])->name('returns.parent');
         Route::get('/returns/{sellerRequest}', [BuyerReturnRefundController::class, 'show'])->name('returns.show');
@@ -68,6 +75,7 @@ Route::prefix('buyer')
         Route::post('/messages', [BuyerController::class, 'sendMessage'])->name('messages.send');
 
         Route::get('/notifications', [BuyerController::class, 'notifications'])->name('notifications');
+        Route::get('/notifications/{notification}/open', [BuyerController::class, 'openNotification'])->name('notifications.open');
         Route::get('/notifications/stream', [BuyerController::class, 'notificationStream'])->name('notifications.stream');
         Route::post('/notifications/read-all', [BuyerController::class, 'markNotificationsRead'])->name('notifications.read-all');
         Route::get('/rewards', [BuyerController::class, 'rewards'])->name('rewards');
@@ -75,12 +83,16 @@ Route::prefix('buyer')
         Route::get('/account', [BuyerController::class, 'account'])->name('account');
         Route::get('/settings', [BuyerController::class, 'settings'])->name('settings');
         Route::put('/settings', [BuyerController::class, 'updateSettings'])->name('settings.update');
+        Route::patch('/settings/ai-preferences', [BuyerController::class, 'updateAiPreference'])->name('settings.ai.update');
         Route::get('/account/profile', fn () => redirect()->route('buyer.account', ['tab' => 'profile']))->name('account.profile');
         Route::get('/account/addresses', fn () => redirect()->route('buyer.account', ['tab' => 'addresses']))->name('account.addresses');
         Route::get('/account/security', fn () => redirect()->route('buyer.account', ['tab' => 'password']))->name('account.security');
         Route::get('/account/reviews', fn () => redirect()->route('buyer.account', ['tab' => 'reviews']))->name('account.reviews');
-        Route::put('/account/profile', [BuyerController::class, 'saveProfile'])->name('account.profile.update');
-        Route::put('/account/password', [BuyerController::class, 'savePassword'])->name('account.password.update');
+        Route::put('/account/profile', [BuyerController::class, 'saveProfile'])->middleware('throttle:10,1')->name('account.profile.update');
+        Route::post('/account/email/verify', [BuyerController::class, 'verifyEmailChange'])->middleware('throttle:10,1')->name('account.email.verify');
+        Route::post('/account/email/resend', [BuyerController::class, 'resendEmailChangeCode'])->middleware('throttle:3,1')->name('account.email.resend');
+        Route::post('/account/mobile/resend', [BuyerController::class, 'resendMobileChangeCode'])->middleware('throttle:3,1')->name('account.mobile.resend');
+        Route::put('/account/password', [BuyerController::class, 'savePassword'])->middleware('throttle:5,1')->name('account.password.update');
         Route::post('/account/addresses', [BuyerController::class, 'saveAddress'])->name('account.addresses.store');
         Route::put('/account/addresses/{address}', [BuyerController::class, 'updateAddress'])->name('account.addresses.update');
         Route::delete('/account/addresses/{address}', [BuyerController::class, 'deleteAddress'])->name('account.addresses.destroy');

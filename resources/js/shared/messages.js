@@ -55,14 +55,7 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
 
     const currentUserId = String(thread.dataset.currentUserId || '');
     const isMine = String(payload.sender_id || '') === currentUserId;
-    const previousRow = [...thread.querySelectorAll('[data-message-id]')].pop();
-    const previousBody = previousRow?.querySelector('.lk-message-bubble')?.textContent?.trim();
     const isBuyer = Boolean(thread.closest('.lk-messages-page'));
-    const previousIsMine = isBuyer
-        ? previousRow?.classList.contains('is-buyer')
-        : previousRow?.classList.contains('is-mine');
-    if (!pending && previousRow && previousBody === String(payload.body || '').trim()
-        && previousIsMine === isMine) return;
     const otherAvatar = thread.dataset.otherAvatar || thread.dataset.sellerAvatar || '';
     const otherName = thread.dataset.otherName || thread.dataset.sellerName || 'User';
 
@@ -87,6 +80,7 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     const bubble = document.createElement('div');
     bubble.className = 'lk-message-bubble';
     bubble.textContent = payload.body || '';
+    wrapper.appendChild(bubble);
     if (thread.dataset.attachmentsEnabled === 'true' && payload.attachment_url) {
         const image = document.createElement('img');
         image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
@@ -99,7 +93,7 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     const time = document.createElement('span');
     time.className = 'lk-message-time';
     time.textContent = pending ? 'Sending…' : formatMessageTime(payload);
-    wrapper.append(bubble, time);
+    wrapper.appendChild(time);
     row.appendChild(wrapper);
     thread.appendChild(row);
     thread.scrollTop = thread.scrollHeight;

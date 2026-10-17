@@ -34,6 +34,40 @@ class NotificationPrivacyTest extends TestCase
             ->assertSee('class="lk-badge">1</span>', escape: false);
     }
 
+    public function test_opening_one_notification_marks_only_that_owned_notification_read_and_redirects_safely(): void
+    {
+        $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        $otherBuyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        $opened = $buyer->notifications()->create([
+            'type' => 'ORDER_PLACED',
+            'title' => 'Order update',
+            'message' => 'Your order was placed.',
+            'action_url' => '/buyer/orders/42',
+        ]);
+        $untouched = $buyer->notifications()->create([
+            'type' => 'ORDER_PLACED',
+            'title' => 'Another order update',
+            'message' => 'This one is still unread.',
+            'action_url' => 'https://outside.example/path',
+        ]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.notifications.open', $opened))
+            ->assertRedirect('/buyer/orders/42');
+
+        $this->assertNotNull($opened->fresh()->read_at);
+        $this->assertNull($untouched->fresh()->read_at);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.notifications.open', $untouched))
+            ->assertRedirect(route('buyer.notifications'));
+        $this->assertNotNull($untouched->fresh()->read_at);
+
+        $this->actingAs($otherBuyer)
+            ->get(route('buyer.notifications.open', $opened))
+            ->assertNotFound();
+    }
+
     public function test_logistics_and_rider_headers_show_the_signed_in_accounts_unread_count(): void
     {
         foreach ([

@@ -22,7 +22,6 @@ use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
-use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
 use App\Support\PhilippineAddressValidator;
@@ -34,7 +33,6 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class BuyerApiController extends Controller
 {
@@ -57,13 +55,7 @@ class BuyerApiController extends Controller
             'quantity' => ['sometimes', 'integer', 'min:1', 'max:999'],
         ]);
 
-        $product = Product::query()->visible()->with('sellerProfile')->findOrFail($data['product_id']);
-        if ($product->sellerProfile?->vacation_mode) {
-            throw ValidationException::withMessages([
-                'product_id' => 'This seller is currently on vacation and is not accepting purchases.',
-            ]);
-        }
-
+        $product = Product::query()->visible()->findOrFail($data['product_id']);
         $item = $cart->add(
             $request->user(),
             $product,
@@ -100,10 +92,8 @@ class BuyerApiController extends Controller
             ->with([
                 'buyer',
                 'sellerOrders.items.product.images',
-                'sellerOrders.items.shipment',
-                'sellerOrders.shipments.orderItem',
-                'sellerOrders.shipments.events',
-                'sellerOrders.shipments.riderAssignments.liveLocation',
+                'sellerOrders.shipment.events',
+                'sellerOrders.shipment.riderAssignments.liveLocation',
                 'address',
                 'payments',
                 'disputes' => fn ($query) => $query
@@ -134,10 +124,8 @@ class BuyerApiController extends Controller
         $order->load([
             'buyer',
             'sellerOrders.items.product.images',
-            'sellerOrders.items.shipment',
-            'sellerOrders.shipments.orderItem',
-            'sellerOrders.shipments.events',
-            'sellerOrders.shipments.riderAssignments.liveLocation',
+            'sellerOrders.shipment.events',
+            'sellerOrders.shipment.riderAssignments.liveLocation',
             'address',
             'payments',
             'disputes' => fn ($query) => $query
@@ -153,71 +141,37 @@ class BuyerApiController extends Controller
         $this->authorizeBuyer($request);
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
 
-        $order->load('sellerOrders.shipments.riderAssignments.liveLocation');
-        $locations = $order->sellerOrders->flatMap->shipments
-            ->mapWithKeys(fn (Shipment $shipment): array => [(int) $shipment->id => $this->riderLocationPayload($shipment)])
-            ->filter();
+        $order->load('sellerOrders.shipment.riderAssignments.liveLocation');
+        $shipment = $order->sellerOrders->firstWhere('shipment', '!=', null)?->shipment;
 
         return response()->json([
             'success' => true,
             'data' => [
-                'rider_location' => $locations->first(),
-                'rider_locations' => $locations,
+                'rider_location' => $this->riderLocationPayload($shipment),
             ],
         ]);
     }
 
-    public function placeOrder(Request $request, CheckoutService $checkout): JsonResponse
+    public function placeOrder(Request $request, CartService $cart, CheckoutService $checkout): JsonResponse
     {
         $this->authorizeBuyer($request);
         $data = $request->validate([
-            'checkout_attempt_key' => ['required', 'uuid'],
             'cart_item_ids' => ['required', 'array', 'min:1'],
-            'cart_item_ids.*' => ['required', 'integer', 'distinct'],
-            'address_id' => ['required', 'integer'],
-            'payment_method' => ['required', Rule::in(['COD'])],
-            'voucher_code' => ['nullable', 'string', 'max:80', 'prohibited_with:voucher_codes'],
-            'voucher_codes' => ['nullable', 'array', 'prohibited_with:voucher_code'],
+            'cart_item_ids.*' => ['required', 'integer'],
+            'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
+            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
+            'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
-            'protection_item_ids' => ['nullable', 'array'],
-            'protection_item_ids.*' => ['integer'],
-            'seller_notes' => ['nullable', 'array'],
-            'seller_notes.*' => ['nullable', 'string', 'max:500'],
         ]);
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
-        $vacationItem = CartItem::query()
-            ->whereIn('id', $ids)
-            ->whereHas('cart', fn ($cart) => $cart->where('buyer_user_id', $request->user()->id)->where('status', 'ACTIVE'))
-            ->with('productVariant.product.sellerProfile')
-            ->get()
-            ->first(fn (CartItem $item): bool => (bool) $item->productVariant?->product?->sellerProfile?->vacation_mode);
-        if ($vacationItem) {
-            throw ValidationException::withMessages([
-                'cart_item_ids' => 'A seller in your cart is on vacation and is not accepting purchases. Remove those items to continue.',
-            ]);
-        }
-
+        $items = $cart->selectedItems($request->user(), $ids);
+        abort_unless($items->count() === count($ids), 403, 'One or more cart items do not belong to this buyer.');
+        $address = $request->user()->addresses()->findOrFail((int) $data['address_id']);
         $voucherCodes = collect((array) ($data['voucher_codes'] ?? []))
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
             ->all();
-        $singleVoucherCode = mb_strtoupper(trim((string) ($data['voucher_code'] ?? '')));
-        $protectionItemIds = collect((array) ($data['protection_item_ids'] ?? []))
-            ->map(fn ($id): int => (int) $id)
-            ->unique()
-            ->values()
-            ->all();
-        $order = $checkout->placeOrder(
-            $request->user(),
-            (int) $data['address_id'],
-            $ids,
-            $data['payment_method'],
-            $singleVoucherCode !== '' ? $singleVoucherCode : $voucherCodes,
-            null,
-            $protectionItemIds,
-            (array) ($data['seller_notes'] ?? []),
-            $data['checkout_attempt_key'],
-        );
+        $order = $checkout->placeOrder($request->user(), $address, $items, $data['payment_method'], $voucherCodes);
 
         return response()->json([
             'success' => true,
@@ -227,7 +181,7 @@ class BuyerApiController extends Controller
                 'status' => $order->status,
                 'grand_total' => (float) $order->grand_total,
             ],
-        ], $order->wasRecentlyCreated ? 201 : 200);
+        ], 201);
     }
 
     public function profile(Request $request): JsonResponse
@@ -401,20 +355,22 @@ class BuyerApiController extends Controller
             ->get();
         $activeVouchers = Voucher::query()
             ->with('sellerProfile')
+            ->withCount([
+                'sellerOrders',
+                'sellerOrders as buyer_uses_count' => fn ($query) => $query
+                    ->whereHas('order', fn ($order) => $order->where('buyer_user_id', $request->user()->id)),
+            ])
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
-            ->get();
-        $redemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers);
-        $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($activeVouchers, (int) $request->user()->id);
-        $activeVouchers = $activeVouchers
-            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
-                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
-                && ($voucher->per_user_limit === null
-                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit))
+            ->get()
+            ->filter(fn (Voucher $voucher): bool => $voucher->usage_limit === null
+                || $voucher->seller_orders_count < $voucher->usage_limit)
+            ->filter(fn (Voucher $voucher): bool => $voucher->per_user_limit === null
+                || $voucher->buyer_uses_count < $voucher->per_user_limit)
             ->map(fn (Voucher $voucher): array => [
                 'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
-                'status' => $voucher->sellerProfile?->business_name ?? 'LIKHAE Platform',
+                'status' => $voucher->sellerProfile?->business_name ?? 'Platform voucher',
                 'value' => $voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
                     : '₱'.number_format((float) $voucher->discount_value, 2).' off',
@@ -425,16 +381,21 @@ class BuyerApiController extends Controller
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
                 'seller_id' => $voucher->seller_profile_id,
                 'seller_name' => $voucher->sellerProfile?->business_name,
-                'campaign_name' => $voucher->name,
+                'discount_type' => $voucher->discount_type,
+                'discount_value' => (float) $voucher->discount_value,
+                'minimum_order_amount' => (float) $voucher->minimum_order_amount,
+                'maximum_discount_amount' => $voucher->maximum_discount_amount === null
+                    ? null
+                    : (float) $voucher->maximum_discount_amount,
+                'campaign_name' => $voucher->code,
                 'can_use' => true,
             ])
             ->values();
         $voucherHistory = $orders->flatMap(fn ($order) => $order->sellerOrders
             ->whereNotNull('voucher_id')
-            ->groupBy('voucher_id')
-            ->map(fn ($sellerOrders): array => [
-                'voucher' => $sellerOrders->first()->voucher?->code ?? 'Voucher',
-                'benefit' => '-₱'.number_format((float) $sellerOrders->sum('voucher_discount'), 2),
+            ->map(fn ($sellerOrder): array => [
+                'voucher' => $sellerOrder->voucher?->code ?? 'Voucher',
+                'benefit' => '-₱'.number_format((float) $sellerOrder->voucher_discount, 2),
                 'order' => $order->order_number,
                 'status' => Str::headline($order->status),
             ]))->values();
@@ -693,16 +654,13 @@ class BuyerApiController extends Controller
             'image_url' => $item->product?->images?->first()?->file_path,
             'unit_price' => (float) $item->unit_price,
             'quantity' => (int) $item->quantity,
-            'tracking_number' => $item->shipment?->tracking_number,
-            'shipment_status' => $item->shipment?->current_status,
         ]))->values();
-        $shipments = $order->sellerOrders->flatMap->shipments;
-        $shipment = $shipments->first();
+        $shipment = $order->sellerOrders->firstWhere('shipment', '!=', null)?->shipment;
         $activeReturnRequest = $order->disputes->first(
             fn (Dispute $dispute): bool => $dispute->type === 'RETURN_REFUND'
                 && in_array($dispute->status, ['OPEN', 'UNDER_REVIEW'], true),
         );
-        $events = $shipments->flatMap->events
+        $events = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
             ->sortBy('occurred_at')->values();
         return [
             'id' => (string) $order->id,
@@ -729,18 +687,6 @@ class BuyerApiController extends Controller
             'tracking_number' => $shipment?->tracking_number,
             'shipment_id' => $shipment?->id,
             'rider_location' => $this->riderLocationPayload($shipment),
-            'shipments' => $shipments->map(fn (Shipment $shipment): array => [
-                'id' => (int) $shipment->id,
-                'tracking_number' => (string) $shipment->tracking_number,
-                'status' => (string) $shipment->current_status,
-                'item' => $shipment->orderItem ? [
-                    'id' => (int) $shipment->orderItem->id,
-                    'name' => $shipment->orderItem->product_name,
-                    'sku' => $shipment->orderItem->sku,
-                    'quantity' => (int) $shipment->orderItem->quantity,
-                ] : null,
-                'rider_location' => $this->riderLocationPayload($shipment),
-            ])->values(),
             'items' => $items,
             'timeline' => $events->map(fn ($event): array => [
                 'status' => $event->status,

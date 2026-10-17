@@ -87,6 +87,8 @@ class FinalMileDispatchWorkflowTest extends TestCase
         }
 
         $workflow->riderTransition($tripItems[0]->riderAssignment->fresh(), 'delivery_success', $fixture['riderUser'], [
+            'scanned_code' => $tripItems[0]->riderAssignment->shipment->tracking_number,
+            'scan_method' => 'MANUAL',
             'proof_path' => 'proofs/san-miguel-one.jpg',
             'collected_amount' => '100.00',
         ]);
@@ -128,7 +130,7 @@ class FinalMileDispatchWorkflowTest extends TestCase
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
         $this->assertSame(3, $shipment->deliveryAttempts()->count());
         $this->assertSame('FAILED', $shipment->deliveryAttempts()->latest('attempt_number')->value('status'));
-        $this->assertStringContainsString('RETURN_TO_SELLER_INITIATED:', (string) $shipment->events()->latest('id')->value('notes'));
+        $this->assertTrue($shipment->events()->where('notes', 'like', 'RETURN_TO_SELLER_INITIATED:%')->exists());
         $this->assertDatabaseMissing('delivery_attempts', ['shipment_id' => $shipment->id, 'status' => 'RETURNED']);
     }
 
@@ -137,14 +139,15 @@ class FinalMileDispatchWorkflowTest extends TestCase
         $fixture = $this->fixture();
         $shipment = $this->shipment($fixture, self::SAN_MIGUEL, 'Buyer Refusal Road');
         $assignment = $this->startDelivery($fixture, $shipment);
+        app(ShipmentWorkflowService::class)->riderTransition($assignment, 'start', $fixture['riderUser']);
 
-        app(ShipmentWorkflowService::class)->riderTransition($assignment, 'delivery_failed', $fixture['riderUser'], [
+        app(ShipmentWorkflowService::class)->riderTransition($assignment->fresh(), 'delivery_failed', $fixture['riderUser'], [
             'failure_reason' => 'Buyer refused parcel: recipient declined delivery.',
         ]);
 
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
         $this->assertSame('FAILED', $shipment->deliveryAttempts()->sole()->status);
-        $this->assertStringContainsString('RETURN_TO_SELLER_INITIATED:', (string) $shipment->events()->latest('id')->value('notes'));
+        $this->assertTrue($shipment->events()->where('notes', 'like', 'RETURN_TO_SELLER_INITIATED:%')->exists());
     }
 
     private function startDelivery(array $fixture, Shipment $shipment): \App\Models\Rider\RiderAssignment

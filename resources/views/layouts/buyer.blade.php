@@ -36,9 +36,8 @@
     <div id="lkBuyerToast" class="lk-toast" aria-live="polite" aria-atomic="true"></div>
     <x-notification-popover />
     @include('partials.confirm-action-modal')
-    @if(data_get(auth()->user()?->notification_preferences, 'ai_assistant_enabled', true))
-        <x-buyer.ai-assistant :page="$activePage" :page-title="$pageTitle" />
-    @endif
+    @php($aiAssistantVisible = (bool) data_get(auth()->user()?->notification_preferences, 'ai_assistant_enabled', true))
+    <x-buyer.ai-assistant :page="$activePage" :page-title="$pageTitle" :visible="$aiAssistantVisible" />
     <style>
         .lk-global-error-backdrop{position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:18px;background:rgba(35,20,17,.58);backdrop-filter:blur(3px)}.lk-global-error-backdrop[hidden]{display:none}.lk-global-error-card{width:min(100%,460px);border:1px solid #eadbce;border-radius:20px;background:#fffdf9;padding:24px;box-shadow:0 24px 80px rgba(35,20,17,.25);color:#321d17}.lk-global-error-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:#fee2e2;color:#b42318;font-size:23px;font-weight:800}.lk-global-error-card h2{margin:14px 0 6px;font-size:20px;font-weight:800}.lk-global-error-card p{margin:0;color:#705c54;font-size:13px;line-height:1.55}.lk-global-error-actions{display:flex;justify-content:flex-end;margin-top:20px}.lk-global-error-close{border:0;border-radius:10px;background:#943b30;color:#fff;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer}.dark .lk-global-error-card{border-color:#4b3831;background:#241b18;color:#f7eee9}.dark .lk-global-error-card p{color:#c7b5ac}.dark .lk-global-error-icon{background:#4a2923;color:#ffb4a8}
     </style>

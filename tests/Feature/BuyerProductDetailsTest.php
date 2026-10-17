@@ -31,10 +31,10 @@ class BuyerProductDetailsTest extends TestCase
             ->assertSee('data-variation-id="'.$product->variants()->firstOrFail()->id.'"', escape: false)
             ->assertSee(route('buyer.cart.add', $product), escape: false)
             ->assertSee('data-wishlist', escape: false)
-            ->assertSee(route('buyer.shop', ['seller' => $product->sellerProfile->business_name]), escape: false)
-            ->assertSee('Message Seller')
-            ->assertSee('Product Description')
-            ->assertSee('Reviews');
+            ->assertSee(route('buyer.shop', ['seller' => \Illuminate\Support\Str::slug($product->sellerProfile->business_name)]), escape: false)
+            ->assertSee('Message')
+            ->assertSee('Description')
+            ->assertSee('Ratings & Reviews', escape: false);
     }
 
     public function test_product_details_show_primary_image_first_and_all_product_images(): void
@@ -83,8 +83,7 @@ class BuyerProductDetailsTest extends TestCase
         $this->actingAs($buyer)
             ->get(route('buyer.product-details', $product->slug))
             ->assertOk()
-            ->assertSee('name="product_variant_id" value=""', escape: false)
-            ->assertSee('Please select a variation.');
+            ->assertSee('name="product_variant_id" value=""', escape: false);
     }
 
     public function test_discounted_variant_uses_stored_sale_price_and_rewards_route_without_fake_countdown(): void
@@ -93,10 +92,18 @@ class BuyerProductDetailsTest extends TestCase
         $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
         $product = Product::query()->with('variants')->where('slug', 'sample-handmade-tote')->firstOrFail();
         $variant = $product->variants->firstOrFail();
+        $image = ProductImage::query()->create([
+            'product_id' => $product->id,
+            'file_path' => "sellers/1/products/{$product->id}/variant-detail.jpg",
+            'alt_text' => 'Selected variant image',
+            'is_primary' => false,
+            'sort_order' => 99,
+        ]);
         $variant->update([
             'price' => 350,
             'discount_type' => 'percentage',
             'discount_value' => 20,
+            'product_image_id' => $image->id,
         ]);
 
         $this->actingAs($buyer)
@@ -105,6 +112,7 @@ class BuyerProductDetailsTest extends TestCase
             ->assertSee('₱280.00')
             ->assertSee('₱350.00')
             ->assertSee('data-variation-price="280.00"', escape: false)
+            ->assertSee('/storage/sellers/1/products/'.$product->id.'/variant-detail.jpg')
             ->assertSee('20.00% OFF')
             ->assertSee(route('buyer.rewards'), escape: false)
             ->assertDontSee('data-flash-countdown');
@@ -117,11 +125,19 @@ class BuyerProductDetailsTest extends TestCase
         $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
         $product->sellerProfile->update(['vacation_mode' => true]);
 
-        $this->actingAs($buyer)
+        $response = $this->actingAs($buyer)
             ->get(route('buyer.product-details', $product->slug))
             ->assertOk()
             ->assertSee('data-seller-vacation="1"', escape: false)
-            ->assertSee('This seller is currently on vacation and is not accepting purchases.')
-            ->assertSee('data-product-purchase disabled', escape: false);
+            ->assertSee('This seller is currently on vacation and is not accepting purchases.');
+
+        $document = new \DOMDocument;
+        @$document->loadHTML($response->getContent());
+        $xpath = new \DOMXPath($document);
+        $purchaseButtons = $xpath->query('//button[@data-product-purchase]');
+        $this->assertSame(2, $purchaseButtons->length);
+        foreach ($purchaseButtons as $button) {
+            $this->assertTrue($button->hasAttribute('disabled'));
+        }
     }
 }

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Buyer\CartItem;
 use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Marketplace\CartService;
@@ -97,6 +98,129 @@ class BuyerPurchaseActionsTest extends TestCase
         $response
             ->assertRedirect(route('buyer.checkout'))
             ->assertSessionHas('checkout_cart_item_ids', [$item->id]);
+    }
+
+    public function test_product_purchase_requires_a_variation_and_rejects_a_foreign_variant(): void
+    {
+        [$buyer, $product] = $this->purchaseFixture();
+
+        $this->actingAs($buyer)
+            ->postJson(route('buyer.cart.add', $product), ['quantity' => 1])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id')
+            ->assertJsonPath('errors.product_variant_id.0', 'Please select a variation.');
+
+        $this->postJson(route('buyer.buy-now', $product), ['quantity' => 1])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id')
+            ->assertJsonPath('errors.product_variant_id.0', 'Please select a variation.');
+
+        $foreignVariant = ProductVariant::query()
+            ->where('product_id', '<>', $product->id)
+            ->where('is_active', true)
+            ->where('stock', '>', 0)
+            ->firstOrFail();
+
+        $this->postJson(route('buyer.cart.add', $product), [
+            'product_variant_id' => $foreignVariant->id,
+            'quantity' => 1,
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id')
+            ->assertJsonPath('errors.product_variant_id.0', 'The selected variation is invalid or unavailable.');
+    }
+
+    public function test_server_rejects_out_of_stock_variants_and_quantities_above_stock(): void
+    {
+        [$buyer, $product, $variantId] = $this->purchaseFixture();
+        $variant = ProductVariant::query()->findOrFail($variantId);
+        $variant->update(['stock' => 0]);
+
+        $this->actingAs($buyer)
+            ->postJson(route('buyer.cart.add', $product), [
+                'product_variant_id' => $variantId,
+                'quantity' => 1,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id')
+            ->assertJsonPath('errors.product_variant_id.0', 'This variation is out of stock.');
+
+        $variant->update(['stock' => 2]);
+        $this->postJson(route('buyer.buy-now', $product), [
+            'product_variant_id' => $variantId,
+            'quantity' => 3,
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('quantity')
+            ->assertJsonPath('errors.quantity.0', 'Requested quantity exceeds available stock.');
+
+        $this->assertDatabaseMissing('cart_items', ['product_variant_id' => $variantId]);
+    }
+
+    public function test_buy_now_selects_only_the_requested_line_and_preserves_other_cart_items(): void
+    {
+        [$buyer, $product, $variantId] = $this->purchaseFixture();
+        $otherVariant = ProductVariant::query()
+            ->where('product_id', '<>', $product->id)
+            ->where('is_active', true)
+            ->where('stock', '>', 1)
+            ->firstOrFail();
+        $otherProduct = Product::query()->findOrFail($otherVariant->product_id);
+        $unrelatedItem = app(CartService::class)->add($buyer, $otherProduct, (int) $otherVariant->id, 1);
+
+        $response = $this->actingAs($buyer)->post(route('buyer.buy-now', $product), [
+            'product_variant_id' => $variantId,
+            'quantity' => 2,
+        ]);
+        $selectedItem = CartItem::query()->where('product_variant_id', $variantId)->sole();
+
+        $response
+            ->assertRedirect(route('buyer.checkout'))
+            ->assertSessionHas('checkout_cart_item_ids', [$selectedItem->id]);
+        $this->assertSame(2, (int) $selectedItem->quantity);
+        $this->assertDatabaseHas('cart_items', ['id' => $unrelatedItem->id, 'quantity' => 1]);
+        $this->assertNotSame($unrelatedItem->id, $selectedItem->id);
+    }
+
+    public function test_vacation_mode_blocks_direct_add_to_cart_and_buy_now_requests(): void
+    {
+        [$buyer, $product, $variantId] = $this->purchaseFixture();
+        $product->sellerProfile->update(['vacation_mode' => true]);
+
+        $this->actingAs($buyer)
+            ->postJson(route('buyer.cart.add', $product), [
+                'product_variant_id' => $variantId,
+                'quantity' => 1,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id');
+
+        $this->postJson(route('buyer.buy-now', $product), [
+            'product_variant_id' => $variantId,
+            'quantity' => 1,
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('product_variant_id');
+    }
+
+    public function test_inactive_or_deleted_products_cannot_be_purchased(): void
+    {
+        [$buyer, $product, $variantId] = $this->purchaseFixture();
+        $product->update(['status' => 'DRAFT']);
+
+        $this->actingAs($buyer)
+            ->postJson(route('buyer.cart.add', $product), [
+                'product_variant_id' => $variantId,
+                'quantity' => 1,
+            ])
+            ->assertNotFound();
+
+        $product->update(['status' => 'ACTIVE']);
+        $product->delete();
+        $this->postJson(route('buyer.buy-now', $product->id), [
+            'product_variant_id' => $variantId,
+            'quantity' => 1,
+        ])->assertNotFound();
     }
 
     public function test_checkout_uses_the_items_selected_from_the_cart(): void

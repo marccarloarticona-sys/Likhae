@@ -115,7 +115,7 @@ class LegacyDeliveryPinAndRiderPageTest extends TestCase
             ->assertOk()
             ->assertSee('DELIVERY PIN REQUIRED')
             ->assertSee('Navigation will become available once the Buyer confirms the delivery pin.')
-            ->assertSee('Unavailable')
+            ->assertSee('No route, distance, or ETA is available yet.')
             ->assertSee('Message Buyer')
             ->assertDontSee('&quot;target_kind&quot;:&quot;buyer&quot;', false);
 
@@ -171,6 +171,21 @@ class LegacyDeliveryPinAndRiderPageTest extends TestCase
 
         $this->patch(route('rider.shipments.transition', $assignment), [
             'action' => 'delivery_success',
+            'collected_amount' => '95.00',
+            'proof_file' => UploadedFile::fake()->image('delivery-proof.jpg'),
+        ])->assertRedirect()->assertSessionHasErrors('scanned_code');
+        $this->assertSame('OUT_FOR_DELIVERY', $shipment->fresh()->current_status);
+
+        $this->get(route('rider.deliveries.scan', [
+            'assignment' => $assignment,
+            'tracking' => $shipment->tracking_number,
+            'scan_method' => 'MANUAL',
+        ]))->assertRedirect(route('rider.deliveries.show', $assignment));
+
+        $this->patch(route('rider.shipments.transition', $assignment), [
+            'action' => 'delivery_success',
+            'scanned_code' => $shipment->tracking_number,
+            'scan_method' => 'MANUAL',
             'collected_amount' => '95.00',
             'proof_file' => UploadedFile::fake()->image('delivery-proof.jpg'),
         ])->assertRedirect()->assertSessionHas('status', 'Rider assignment updated.');

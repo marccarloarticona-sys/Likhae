@@ -66,7 +66,7 @@ class MessageSent implements ShouldBroadcastNow
             'body' => $message->body,
             'time' => $sentAt?->diffForHumans() ?? 'Just now',
             'sent_at' => $sentAt?->toIso8601String(),
-            'attachment_url' => filled($message->attachment_path) ? route('seller.messages.attachments.show', $message->id) : null,
+            'attachment_url' => filled($message->attachment_path) ? route('messages.attachments.show', $message->id) : null,
         ];
     }
 }

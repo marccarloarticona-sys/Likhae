@@ -8,10 +8,17 @@
     $cartItems = collect($cartItems ?? []);
 
     $normalizedCartItems = $cartItems->map(function ($item) {
+        $availability = data_get($item, 'cart_availability', [
+            'available' => false,
+            'restricted' => true,
+            'message' => 'Unavailable',
+        ]);
+        $restricted = (bool) data_get($availability, 'restricted', false);
         $variant = data_get($item, 'productVariant');
-        $product = data_get($variant, 'product');
+        $relatedProduct = data_get($variant, 'product');
+        $product = $restricted ? null : $relatedProduct;
         $productImages = collect(data_get($product, 'images', []));
-        $imagePath = data_get($variant, 'productImage.file_path')
+        $imagePath = data_get($restricted ? null : $variant, 'productImage.file_path')
             ?? data_get($productImages->firstWhere('is_primary', true), 'file_path')
             ?? data_get($productImages->first(), 'file_path');
         $imageUrl = filled($imagePath)
@@ -20,14 +27,15 @@
                 : \Illuminate\Support\Facades\Storage::disk('public')->url($imagePath))
             : asset('images/product-placeholder.svg');
 
-        $categoryValue = data_get($product, 'category.name')
+        $categoryValue = $restricted ? '' : (data_get($product, 'category.name')
             ?? data_get($item, 'category.name')
             ?? data_get($item, 'category')
-            ?? 'Local Product';
+            ?? 'Local Product');
 
-        $sellerValue = data_get($product, 'sellerProfile.business_name')
-            ?? 'LIKHAE Seller';
-        $sellerId = data_get($product, 'seller_profile_id');
+        $sellerValue = $restricted
+            ? 'Unavailable shop'
+            : (data_get($product, 'sellerProfile.business_name') ?? 'LIKHAE Seller');
+        $sellerId = data_get($relatedProduct, 'seller_profile_id');
         $sellerShopUrl = \Illuminate\Support\Facades\Route::has('buyer.shop')
             && is_numeric($sellerId)
             && filled(data_get($product, 'sellerProfile.business_name'))
@@ -38,19 +46,17 @@
             'id' => data_get($item, 'id')
                 ?? data_get($product, 'id'),
 
-            'slug' => data_get($product, 'slug')
-                ?? data_get($item, 'slug'),
+            'slug' => $restricted ? null : (data_get($product, 'slug') ?? data_get($item, 'slug')),
 
-            'name' => data_get($product, 'name')
+            'name' => $restricted ? 'Unavailable product' : (data_get($product, 'name')
                 ?? data_get($item, 'name')
-                ?? 'Product Name',
+                ?? 'Product Name'),
 
             'category' => is_scalar($categoryValue)
                 ? (string) $categoryValue
                 : 'Local Product',
 
-            'variant' => data_get($variant, 'description')
-                ?? 'Standard',
+            'variant' => $restricted ? 'Unavailable' : (data_get($variant, 'description') ?? 'Standard'),
 
             'seller' => is_scalar($sellerValue)
                 ? (string) $sellerValue
@@ -61,10 +67,13 @@
                 : 'unknown-'.(string) (data_get($item, 'id') ?? data_get($product, 'id')),
 
             'seller_shop_url' => $sellerShopUrl,
+            'available' => (bool) data_get($availability, 'available', false),
+            'restricted' => $restricted,
+            'availability_message' => (string) data_get($availability, 'message', 'Unavailable'),
 
             'price' => max(
                 0,
-                (float) (
+                $restricted ? 0 : (float) (
                     data_get($variant, 'final_price')
                     ?? 0
                 )
@@ -72,8 +81,9 @@
 
             'old_price' => max(
                 0,
-                (float) (
-                    data_get($item, 'old_price')
+                $restricted ? 0 : (float) (
+                    data_get($variant, 'price')
+                    ?? data_get($item, 'old_price')
                     ?? data_get($product, 'old_price')
                     ?? 0
                 )
@@ -86,7 +96,7 @@
 
             'stock' => max(
                 0,
-                (int) (
+                $restricted ? 0 : (int) (
                     data_get($variant, 'stock')
                     ?? 0
                 )
@@ -99,17 +109,21 @@
     $cartGroups = $normalizedCartItems->groupBy('seller_id');
 
     $hasItems = $normalizedCartItems->isNotEmpty();
-    $hasUnavailableSelection = $normalizedCartItems->contains(
+    $defaultSelectedItems = $normalizedCartItems->filter(fn ($item) => $item['available']);
+    $hasUnavailableSelection = $defaultSelectedItems->contains(
         fn ($item) => $item['stock'] < $item['quantity']
     );
     $availableVouchers = collect($availableVouchers ?? []);
+    $sellerAvailableVouchers = $availableVouchers->except('platform');
+    $platformVouchers = collect($availableVouchers->get('platform', []));
 
-    $subtotal = $normalizedCartItems->sum(
+    $subtotal = $defaultSelectedItems->sum(
         fn ($item) => $item['price'] * $item['quantity']
     );
     $shipping = 0;
     $discount = 0;
     $total = $subtotal + $shipping - $discount;
+    $hasAvailableItems = $defaultSelectedItems->isNotEmpty();
 
     $buyer = auth()->user();
 
@@ -150,6 +164,8 @@
     class="mx-auto w-full max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8"
     data-cart-page
     data-shipping="{{ $shipping }}"
+    data-shipping-estimate-available="0"
+    data-preview-url="{{ route('buyer.cart.preview') }}"
     data-applied-discount="{{ $discount }}"
 >
     {{-- Page heading --}}
@@ -271,13 +287,13 @@
                     @foreach ($cartGroups as $sellerId => $sellerItems)
                         @php
                             $sellerName = $sellerItems->first()['seller'] ?? 'LIKHAE Seller';
-                            $storeSubtotal = $sellerItems->sum(fn ($item) => $item['price'] * $item['quantity']);
+                            $storeSubtotal = $sellerItems->filter(fn ($item) => $item['available'])->sum(fn ($item) => $item['price'] * $item['quantity']);
                             $sellerShopUrl = $sellerItems->first()['seller_shop_url'] ?? null;
                         @endphp
                         <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-group data-seller-id="{{ $sellerId }}">
                             <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 bg-stone-50 px-4 py-4 sm:px-5">
                                 <label class="flex min-w-0 cursor-pointer items-center gap-3">
-                                    <input type="checkbox" class="h-4 w-4 shrink-0 rounded border-stone-300 text-red-900 focus:ring-red-800" data-seller-select checked aria-label="Select all items from {{ $sellerName }}">
+                                    <input type="checkbox" class="h-4 w-4 shrink-0 rounded border-stone-300 text-red-900 focus:ring-red-800" data-seller-select @checked($sellerItems->contains(fn ($item) => $item['available'])) aria-label="Select all items from {{ $sellerName }}">
                                     <span class="min-w-0 text-sm font-bold uppercase tracking-wide text-stone-900">{{ $sellerName }}</span>
                                 </label>
                                 <div class="flex flex-wrap items-center gap-3">
@@ -292,7 +308,7 @@
                         @php
                             $lineTotal = $item['price'] * $item['quantity'];
 
-                            $detailsUrl = $hasProductDetailsRoute &&
+                            $detailsUrl = !$item['restricted'] && $hasProductDetailsRoute &&
                                 filled($item['slug'] ?? $item['id'])
                                     ? route('buyer.product-details', [
                                         'slug' => $item['slug'] ?? $item['id'],
@@ -307,6 +323,9 @@
                             data-seller-id="{{ $item['seller_id'] }}"
                             data-item-price="{{ $item['price'] }}"
                             data-item-stock="{{ $item['stock'] }}"
+                            data-item-available="{{ $item['available'] ? '1' : '0' }}"
+                            data-item-restricted="{{ $item['restricted'] ? '1' : '0' }}"
+                            data-availability-message="{{ $item['availability_message'] }}"
                             data-update-url="{{ route('buyer.cart.update', ['item' => $item['id']]) }}"
                             data-remove-url="{{ route('buyer.cart.remove', ['item' => $item['id']]) }}"
                         >
@@ -316,14 +335,15 @@
                                     class="mt-9 h-4 w-4 shrink-0 rounded border-stone-300 text-red-900 focus:ring-red-800"
                                     data-cart-select
                                     aria-label="Select {{ $item['name'] }}"
-                                    checked
+                                    @checked($item['available'])
+                                    @disabled(!$item['available'])
                                 >
 
                                 <a
                                     href="{{ $detailsUrl }}"
                                     class="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-stone-200 bg-stone-50 sm:h-28 sm:w-28"
                                     aria-label="View {{ $item['name'] }}"
-                                    @if (!$hasProductDetailsRoute) onclick="return false;" @endif
+                                    @if (!$hasProductDetailsRoute || $item['restricted']) onclick="return false;" @endif
                                 >
                                     <img
                                         src="{{ $item['image'] }}"
@@ -343,7 +363,7 @@
                                             <a
                                                 href="{{ $detailsUrl }}"
                                                 class="mt-1 block"
-                                                @if (!$hasProductDetailsRoute) onclick="return false;" @endif
+                                                @if (!$hasProductDetailsRoute || $item['restricted']) onclick="return false;" @endif
                                             >
                                                 <h2 class="line-clamp-2 text-sm font-semibold leading-5 text-stone-900 transition hover:text-red-800 sm:text-base">
                                                     {{ $item['name'] }}
@@ -383,19 +403,23 @@
                                     <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                                         <div>
                                             <div class="flex items-center gap-2">
-                                                <strong class="text-base font-semibold text-red-800">
+                                                @if ($item['restricted'])
+                                                    <strong class="text-sm font-semibold text-red-700">Unavailable</strong>
+                                                @else
+                                                <strong class="text-base font-semibold text-red-800" data-current-price>
                                                     ₱{{ number_format($item['price'], 2) }}
                                                 </strong>
 
-                                                @if ($item['old_price'] > $item['price'])
-                                                    <del class="text-xs text-stone-400">
+                                                @if ($item['old_price'] > 0)
+                                                    <del class="text-xs text-stone-400 {{ $item['old_price'] > $item['price'] ? '' : 'hidden' }}" data-original-price>
                                                         ₱{{ number_format($item['old_price'], 2) }}
                                                     </del>
                                                 @endif
+                                                @endif
                                             </div>
 
-                                            <p class="mt-1 text-[10px] {{ $item['stock'] < $item['quantity'] ? 'font-semibold text-red-700' : 'text-stone-400' }}" data-stock-availability>
-                                                {{ $item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available' }}
+                                            <p class="mt-1 text-[10px] {{ !$item['available'] || $item['stock'] < $item['quantity'] ? 'font-semibold text-red-700' : 'text-stone-400' }}" data-stock-availability>
+                                                {{ !$item['available'] ? $item['availability_message'] : ($item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available') }}
                                             </p>
                                         </div>
 
@@ -406,6 +430,7 @@
                                                     class="flex h-full w-9 items-center justify-center text-stone-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-40"
                                                     data-quantity-minus
                                                     aria-label="Decrease quantity"
+                                                    @disabled(!$item['available'])
                                                 >
                                                     <svg
                                                         width="14"
@@ -429,6 +454,7 @@
                                                     class="h-full w-11 border-x border-y-0 border-stone-300 p-0 text-center text-xs font-semibold text-stone-800 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                                                     data-cart-quantity
                                                     aria-label="Quantity for {{ $item['name'] }}"
+                                                    @disabled(!$item['available'])
                                                 >
 
                                                 <button
@@ -436,6 +462,7 @@
                                                     class="flex h-full w-9 items-center justify-center text-stone-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-40"
                                                     data-quantity-plus
                                                     aria-label="Increase quantity"
+                                                    @disabled(!$item['available'])
                                                 >
                                                     <svg
                                                         width="14"
@@ -456,7 +483,7 @@
                                                 class="min-w-24 text-right text-sm font-semibold text-stone-900"
                                                 data-line-total
                                             >
-                                                ₱{{ number_format($lineTotal, 2) }}
+                                                {{ $item['restricted'] ? 'Unavailable' : '₱'.number_format($lineTotal, 2) }}
                                             </strong>
                                         </div>
                                     </div>
@@ -493,18 +520,20 @@
                     <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-4">
                         <div>
                             <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
-                            <p class="mt-1 text-[11px] text-stone-500">Enter one seller voucher or one marketplace voucher code.</p>
+                            <p class="mt-1 text-[11px] text-stone-500">Enter a seller voucher code. Choose a LIKHAE voucher from the picker.</p>
                         </div>
                         <label for="cart-voucher-code" class="block text-[11px] font-semibold text-stone-700">Voucher code</label>
                         <div class="flex gap-2">
                             <input id="cart-voucher-code" data-voucher-code value="{{ old('voucher_code') }}" maxlength="80" autocomplete="off" class="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs uppercase" placeholder="Enter your voucher">
+                            <button type="button" data-apply-voucher class="rounded-lg bg-red-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-950">Apply Voucher</button>
                             <button type="button" data-clear-voucher class="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-stone-600">Clear</button>
                         </div>
+                        <p class="hidden text-xs font-semibold text-stone-600" data-voucher-feedback role="status" aria-live="polite"></p>
                         @error('voucher_code')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
-                        @if($availableVouchers->isNotEmpty())
+                        @if($sellerAvailableVouchers->isNotEmpty())
                             <div class="space-y-2 border-t border-stone-200 pt-3">
-                                <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available for your cart</p>
-                                @foreach($availableVouchers as $sellerId => $vouchers)
+                                <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available seller vouchers</p>
+                                @foreach($sellerAvailableVouchers as $sellerId => $vouchers)
                                     @php
                                         $sellerName = (string) $sellerId === 'platform'
                                             ? 'LIKHAE Platform'
@@ -521,20 +550,31 @@
                                 @endforeach
                             </div>
                         @else
-                            <p class="text-[10px] text-stone-400">No suggested vouchers for these items. You can still enter a code from a shop.</p>
+                            <p class="text-[10px] text-stone-400">No seller vouchers are available for these items. You can still enter a code from a shop.</p>
                         @endif
+                        <button type="button" data-open-platform-vouchers aria-haspopup="dialog" aria-controls="cart-platform-voucher-dialog" @disabled($platformVouchers->isEmpty()) class="flex w-full items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50/60 p-3 text-left transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60">
+                            <span class="flex items-center gap-3">
+                                <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-900 text-[10px] font-black tracking-wide text-white">LK</span>
+                                <span><strong class="block text-xs text-stone-900">LIKHAE Voucher</strong><small class="mt-0.5 block text-[10px] text-stone-500">{{ $platformVouchers->isEmpty() ? 'No platform vouchers available' : 'Choose from '.$platformVouchers->count().' available '.\Illuminate\Support\Str::plural('voucher', $platformVouchers->count()) }}</small></span>
+                            </span>
+                            <span class="rounded-lg bg-red-900 px-3 py-2 text-[10px] font-bold text-white">{{ $platformVouchers->isEmpty() ? 'Unavailable' : 'Browse' }}</span>
+                        </button>
+                        <div data-platform-voucher-applied class="hidden items-center justify-between gap-3 border-t border-stone-200 pt-3 text-[11px]">
+                            <span class="font-semibold text-emerald-800">LIKHAE voucher applied: <span data-platform-voucher-applied-code></span></span>
+                            <button type="button" data-remove-platform-voucher class="font-semibold text-red-800 underline">Remove</button>
+                        </div>
                     </div>
 
                     <div class="mt-5 space-y-3 border-t border-stone-100 pt-5 text-sm">
                         <div class="flex items-center justify-between gap-4">
                             <span class="text-stone-500">Selected items</span>
                             <span class="font-medium text-stone-700" data-selected-count>
-                                {{ $normalizedCartItems->count() }}
+                                {{ $defaultSelectedItems->count() }}
                             </span>
                         </div>
 
                         <div class="flex items-center justify-between gap-4">
-                            <span class="text-stone-500">Subtotal</span>
+                            <span class="text-stone-500">Selected subtotal</span>
                             <span class="font-medium text-stone-700" data-summary-subtotal>
                                 ₱{{ number_format($subtotal, 2) }}
                             </span>
@@ -542,16 +582,21 @@
 
                         <div class="flex items-center justify-between gap-4">
                             <span class="text-stone-500">Shipping</span>
-                            <span class="font-medium text-stone-700" data-summary-shipping>₱{{ number_format($shipping, 2) }}</span>
+                            <span class="font-medium text-stone-700" data-summary-shipping>Shipping calculated at checkout.</span>
                         </div>
 
                         <div class="flex items-center justify-between gap-4">
-                            <span class="text-stone-500">Discount</span>
+                            <span class="text-stone-500">Voucher discount</span>
                             <span class="font-medium text-stone-700" data-summary-discount>−₱{{ number_format($discount, 2) }}</span>
                         </div>
 
+                        <div class="flex items-center justify-between gap-4 hidden" data-summary-saved-row>
+                            <span class="text-stone-500">You save</span>
+                            <span class="font-medium text-stone-700" data-summary-saved>₱{{ number_format($discount, 2) }}</span>
+                        </div>
+
                         <div class="flex items-center justify-between gap-4 border-t border-stone-200 pt-3 font-semibold">
-                            <span class="text-stone-900">Total</span>
+                            <span class="text-stone-900">Estimated total</span>
                             <span class="text-stone-900" data-summary-total>₱{{ number_format($total, 2) }}</span>
                         </div>
 
@@ -561,7 +606,7 @@
                         type="button"
                         class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-950 disabled:cursor-not-allowed disabled:bg-stone-300"
                         data-place-order
-                        @disabled(!$hasItems || $hasUnavailableSelection)
+                        @disabled(!$hasAvailableItems || $hasUnavailableSelection)
                     >
                         Checkout
 
@@ -595,6 +640,53 @@
             </section>
         </aside>
     </div>
+    <dialog id="cart-platform-voucher-dialog" class="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-3xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-0 shadow-2xl backdrop:bg-stone-950/60" aria-labelledby="cart-platform-voucher-title">
+        <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-stone-200 bg-white p-5 sm:p-6">
+            <div>
+                <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-red-800">LIKHAE Platform</span>
+                <h2 id="cart-platform-voucher-title" class="mt-1 text-xl font-bold text-stone-900">Choose a platform voucher</h2>
+                <p class="mt-1 text-xs text-stone-500">Select one LIKHAE voucher to apply across eligible items in your cart.</p>
+            </div>
+            <button type="button" data-close-platform-vouchers class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-stone-200 text-xl leading-none text-stone-600 hover:bg-stone-50" aria-label="Close voucher picker">&times;</button>
+        </div>
+        <div class="p-5 sm:p-6">
+            @if($platformVouchers->isEmpty())
+                <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 p-8 text-center">
+                    <strong class="block text-sm text-stone-800">No LIKHAE vouchers are available for this cart.</strong>
+                    <p class="mt-1 text-xs text-stone-500">You can still enter an eligible seller voucher above.</p>
+                </div>
+            @else
+                <div class="grid gap-4 sm:grid-cols-2">
+                    @foreach($platformVouchers as $voucher)
+                        @php
+                            $voucherDiscountLabel = $voucher->discount_type === 'PERCENT'
+                                ? number_format((float) $voucher->discount_value, 0).'% off'
+                                : 'PHP '.number_format((float) $voucher->discount_value, 2).' off';
+                        @endphp
+                        <article class="relative overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+                            <div class="h-1.5 bg-gradient-to-r from-red-950 via-red-700 to-amber-400"></div>
+                            <div class="p-4 sm:p-5">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div><span class="inline-flex rounded-full bg-red-100 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide text-red-900">LIKHAE Platform</span><h3 class="mt-3 text-base font-bold text-stone-900">{{ $voucher->name ?: 'LIKHAE Voucher' }}</h3></div>
+                                    <span class="rounded-xl bg-red-950 px-3 py-2 text-lg font-black text-white">{{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 0) }}</span>
+                                </div>
+                                <p class="mt-3 text-sm font-semibold text-red-900">{{ $voucherDiscountLabel }}</p>
+                                <div class="mt-3 flex flex-wrap gap-2 text-[10px] text-stone-600">
+                                    <span class="rounded-full bg-stone-100 px-2.5 py-1">Min. spend &#8369;{{ number_format((float) $voucher->minimum_order_amount, 2) }}</span>
+                                    @if($voucher->maximum_discount_amount !== null)<span class="rounded-full bg-stone-100 px-2.5 py-1">Up to &#8369;{{ number_format((float) $voucher->maximum_discount_amount, 2) }} off</span>@endif
+                                    @if($voucher->ends_at)<span class="rounded-full bg-stone-100 px-2.5 py-1">Ends {{ $voucher->ends_at->format('M j, Y') }}</span>@endif
+                                </div>
+                                <div class="mt-4 flex items-center justify-between gap-3 border-t border-dashed border-stone-300 pt-3">
+                                    <span class="font-mono text-xs font-bold tracking-wide text-stone-800">{{ $voucher->code }}</span>
+                                    <button type="button" data-platform-voucher-code="{{ $voucher->code }}" class="rounded-lg bg-red-900 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-red-950">Use voucher</button>
+                                </div>
+                            </div>
+                        </article>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    </dialog>
 </div>
 
 <script>
@@ -621,8 +713,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const shippingElement = page.querySelector('[data-summary-shipping]');
     const discountElement = page.querySelector('[data-summary-discount]');
     const totalElement = page.querySelector('[data-summary-total]');
+    const savedRow = page.querySelector('[data-summary-saved-row]');
+    const savedElement = page.querySelector('[data-summary-saved]');
     const placeOrderButton = page.querySelector('[data-place-order]');
     const stockWarning = page.querySelector('[data-stock-warning]');
+    const voucherInput = page.querySelector('[data-voucher-code]');
+    const voucherFeedback = page.querySelector('[data-voucher-feedback]');
+    const applyVoucherButton = page.querySelector('[data-apply-voucher]');
+    const platformVoucherDialog = document.getElementById('cart-platform-voucher-dialog');
+    const platformVoucherButton = page.querySelector('[data-open-platform-vouchers]');
+    const appliedPlatformVoucher = page.querySelector('[data-platform-voucher-applied]');
+    const appliedPlatformVoucherCode = page.querySelector('[data-platform-voucher-applied-code]');
+    let previewSubtotal = null;
+    let previewDiscount = 0;
+    let previewShipping = null;
+    let previewPending = false;
+    let previewError = false;
+    let previewRequestId = 0;
+    let previewAbortController = null;
+    let validatedVoucherCode = '';
+    let validatedVoucherSource = '';
+    const pendingQuantityItems = new Set();
+    const quantityStates = new WeakMap();
 
     const getItems = () => {
         return Array.from(
@@ -640,7 +752,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const updateSellerGroup = (group) => {
         const items = getSellerItems(group);
-        const selectedItems = items.filter((item) =>
+        const selectableItems = items.filter((item) => item.dataset.itemAvailable === '1');
+        const selectedItems = selectableItems.filter((item) =>
             item.querySelector('[data-cart-select]')?.checked
         );
         const selector = group.querySelector('[data-seller-select]');
@@ -662,8 +775,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (selector) {
-            selector.checked = items.length > 0 && selectedItems.length === items.length;
-            selector.indeterminate = selectedItems.length > 0 && selectedItems.length < items.length;
+            selector.checked = selectableItems.length > 0 && selectedItems.length === selectableItems.length;
+            selector.indeterminate = selectedItems.length > 0 && selectedItems.length < selectableItems.length;
         }
     };
 
@@ -677,7 +790,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const clampQuantity = (input) => {
         const minimum = Number(input.min) || 1;
-        const current = Number(input.value) || minimum;
+        const raw = Number(input.value);
+        const current = Number.isFinite(raw) ? Math.floor(raw) : minimum;
         const quantity = Math.min(999, Math.max(minimum, current));
 
         // Preserve an over-stock quantity so the buyer sees the real cart
@@ -693,6 +807,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const plusButton = item.querySelector('[data-quantity-plus]');
 
         if (!input) {
+            return;
+        }
+
+        if (item.dataset.itemAvailable !== '1') {
+            input.disabled = true;
+            if (minusButton) minusButton.disabled = true;
+            if (plusButton) plusButton.disabled = true;
             return;
         }
 
@@ -724,23 +845,53 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const quantity = clampQuantity(quantityInput);
 
-        lineTotal.textContent = currency.format(
-            price * quantity
-        );
+        lineTotal.textContent = item.dataset.itemRestricted === '1'
+            ? 'Unavailable'
+            : currency.format(price * quantity);
 
         const stock = Math.max(0, Number(item.dataset.itemStock) || 0);
         const availability = item.querySelector('[data-stock-availability]');
         if (availability) {
-            const unavailable = stock < quantity;
+            const unavailable = item.dataset.itemAvailable !== '1' || stock < quantity;
+            if (item.dataset.itemAvailable !== '1') {
+                availability.textContent = item.dataset.availabilityMessage || 'Unavailable';
+            } else {
             availability.textContent = unavailable
                 ? `Only ${stock} available.`
                 : `${stock} pieces available`;
+            }
             availability.classList.toggle('font-semibold', unavailable);
             availability.classList.toggle('text-red-700', unavailable);
             availability.classList.toggle('text-stone-400', !unavailable);
         }
 
         updateQuantityButtons(item);
+    };
+
+    const applyServerItemPrices = (serverItems) => {
+        (Array.isArray(serverItems) ? serverItems : []).forEach((serverItem) => {
+            const item = getItems().find((candidate) => candidate.dataset.itemId === String(serverItem.id));
+            if (!item || item.dataset.itemRestricted === '1') return;
+
+            const price = Math.max(0, Number(serverItem.price) || 0);
+            const originalPrice = Math.max(0, Number(serverItem.original_price) || 0);
+            const stock = Math.max(0, Number(serverItem.stock) || 0);
+            item.dataset.itemPrice = String(price);
+            item.dataset.itemStock = String(stock);
+
+            const currentPriceElement = item.querySelector('[data-current-price]');
+            if (currentPriceElement) currentPriceElement.textContent = currency.format(price);
+
+            const originalPriceElement = item.querySelector('[data-original-price]');
+            if (originalPriceElement) {
+                originalPriceElement.textContent = currency.format(originalPrice);
+                originalPriceElement.classList.toggle('hidden', originalPrice <= price);
+            }
+
+            const quantityInput = item.querySelector('[data-cart-quantity]');
+            if (quantityInput) quantityInput.max = String(stock);
+            updateLineTotal(item);
+        });
     };
 
     const updateSummary = () => {
@@ -751,10 +902,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedItems = items.filter((item) => {
             return item.querySelector(
                 '[data-cart-select]'
-            )?.checked;
+            )?.checked && item.dataset.itemAvailable === '1';
         });
 
-        let subtotal = 0;
+        let localSubtotal = 0;
         let hasUnavailableStock = false;
 
         selectedItems.forEach((item) => {
@@ -771,8 +922,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 hasUnavailableStock = true;
             }
 
-            subtotal += price * quantity;
+            localSubtotal += price * quantity;
         });
+
+        const subtotal = previewSubtotal === null ? localSubtotal : previewSubtotal;
 
         if (cartCount) {
             cartCount.textContent =
@@ -788,13 +941,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 currency.format(subtotal);
         }
 
-        const shipping = selectedItems.length > 0 ? Math.max(0, Number(page.dataset.shipping) || 0) : 0;
-        const appliedDiscount = selectedItems.length > 0 ? Math.max(0, Number(page.dataset.appliedDiscount) || 0) : 0;
-        const discount = Math.min(subtotal, appliedDiscount);
-        const total = Math.max(0, subtotal + shipping - discount);
+        const shipping = selectedItems.length > 0 && previewShipping !== null ? Math.max(0, previewShipping) : null;
+        const discount = selectedItems.length > 0 ? Math.min(subtotal, Math.max(0, previewDiscount)) : 0;
+        const total = Math.max(0, subtotal + (shipping ?? 0) - discount);
 
         if (shippingElement) {
-            shippingElement.textContent = currency.format(shipping);
+            shippingElement.textContent = shipping === null
+                ? 'Shipping calculated at checkout.'
+                : currency.format(shipping);
         }
 
         if (discountElement) {
@@ -805,23 +959,28 @@ document.addEventListener('DOMContentLoaded', () => {
             totalElement.textContent = currency.format(total);
         }
 
+        if (savedRow && savedElement) {
+            savedRow.classList.add('hidden');
+            savedElement.textContent = currency.format(discount);
+        }
+
         if (placeOrderButton) {
             placeOrderButton.disabled =
-                selectedItems.length === 0 || hasUnavailableStock;
+                selectedItems.length === 0 || hasUnavailableStock || previewPending || previewError || pendingQuantityItems.size > 0;
         }
 
         if (stockWarning) {
-            stockWarning.classList.toggle('hidden', !hasUnavailableStock);
+            stockWarning.classList.toggle('hidden', !hasUnavailableStock && !previewError);
         }
 
         if (selectAll) {
             selectAll.checked =
-                items.length > 0 &&
-                selectedItems.length === items.length;
+                items.some((item) => item.dataset.itemAvailable === '1') &&
+                selectedItems.length === items.filter((item) => item.dataset.itemAvailable === '1').length;
 
             selectAll.indeterminate =
                 selectedItems.length > 0 &&
-                selectedItems.length < items.length;
+                selectedItems.length < items.filter((item) => item.dataset.itemAvailable === '1').length;
         }
 
         const cartIsEmpty = items.length === 0;
@@ -838,16 +997,195 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const setVoucherFeedback = (message, kind = 'neutral') => {
+        if (!voucherFeedback) return;
+        voucherFeedback.textContent = message || '';
+        voucherFeedback.classList.toggle('hidden', !message);
+        voucherFeedback.classList.toggle('text-red-700', kind === 'error');
+        voucherFeedback.classList.toggle('text-green-700', kind === 'success');
+        voucherFeedback.classList.toggle('text-stone-600', kind === 'neutral');
+    };
+    const renderAppliedVoucher = () => {
+        const isPlatformVoucher = Boolean(validatedVoucherCode) && validatedVoucherSource === 'platform';
+        appliedPlatformVoucher?.classList.toggle('hidden', !isPlatformVoucher);
+        appliedPlatformVoucher?.classList.toggle('flex', isPlatformVoucher);
+        if (appliedPlatformVoucherCode) appliedPlatformVoucherCode.textContent = isPlatformVoucher ? validatedVoucherCode : '';
+    };
+    const requestCartPreview = async (voucherCode = validatedVoucherCode, applyingVoucher = false, voucherSource = validatedVoucherSource || 'seller') => {
+        const requestId = ++previewRequestId;
+        previewAbortController?.abort();
+        previewAbortController = new AbortController();
+        const code = String(voucherCode || '').trim().toUpperCase();
+        const selectedIds = getItems()
+            .filter((item) => item.dataset.itemAvailable === '1' && item.querySelector('[data-cart-select]')?.checked)
+            .map((item) => item.dataset.itemId)
+            .filter(Boolean);
+
+        previewSubtotal = null;
+        previewDiscount = 0;
+        previewShipping = null;
+        previewPending = true;
+        previewError = false;
+        if (applyVoucherButton) applyVoucherButton.disabled = true;
+        if (code) setVoucherFeedback('Updating voucher preview…');
+        updateSummary();
+
+        if (selectedIds.length === 0) {
+            previewPending = false;
+            previewSubtotal = 0;
+            validatedVoucherCode = '';
+            validatedVoucherSource = '';
+            previewError = false;
+            if (code) setVoucherFeedback('Select eligible cart items before applying a voucher.', 'error');
+            renderAppliedVoucher();
+            updateSummary();
+            if (applyVoucherButton) applyVoucherButton.disabled = false;
+            return;
+        }
+
+        const body = new URLSearchParams({_token: csrfToken});
+        body.set(voucherSource === 'platform' && code ? 'platform_voucher_code' : 'voucher_code', code);
+        selectedIds.forEach((id) => body.append('cart_item_ids[]', id));
+
+        try {
+            const response = await fetch(page.dataset.previewUrl, {
+                method: 'POST',
+                headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                body,
+                signal: previewAbortController.signal,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (requestId !== previewRequestId) return;
+
+            if (!response.ok || !payload.success) {
+                previewError = !response.ok || Boolean(payload.message);
+                if (response.ok) applyServerItemPrices(payload.items);
+                previewSubtotal = response.ok && Number.isFinite(Number(payload.subtotal))
+                    ? Math.max(0, Number(payload.subtotal))
+                    : null;
+                previewDiscount = 0;
+                previewShipping = response.ok && payload.shipping_estimate_available && payload.shipping_total !== null
+                    ? Math.max(0, Number(payload.shipping_total) || 0)
+                    : null;
+                validatedVoucherCode = '';
+                validatedVoucherSource = '';
+                const message = payload.voucher_message || payload.message || 'Cart totals could not be refreshed. Try again.';
+                if (code && !applyingVoucher) {
+                    setVoucherFeedback(`Voucher removed from preview because the selected items no longer qualify. ${message}`, 'error');
+                } else {
+                    setVoucherFeedback(message, 'error');
+                }
+                return;
+            }
+
+            previewSubtotal = Math.max(0, Number(payload.subtotal) || 0);
+            previewError = false;
+            applyServerItemPrices(payload.items);
+            previewDiscount = Math.min(previewSubtotal, Math.max(0, Number(payload.discount_total) || 0));
+            previewShipping = payload.shipping_estimate_available && payload.shipping_total !== null
+                ? Math.max(0, Number(payload.shipping_total) || 0)
+                : null;
+            validatedVoucherCode = code && payload.voucher_applied ? code : '';
+            validatedVoucherSource = validatedVoucherCode ? voucherSource : '';
+            if (code) {
+                setVoucherFeedback(payload.voucher_message || 'Voucher applied to eligible selected items.', 'success');
+            } else if (!applyingVoucher) {
+                setVoucherFeedback('', 'neutral');
+            }
+        } catch (error) {
+            if (error?.name !== 'AbortError' && requestId === previewRequestId) {
+                previewSubtotal = null;
+                previewDiscount = 0;
+                previewShipping = null;
+                previewError = true;
+                validatedVoucherCode = '';
+                validatedVoucherSource = '';
+                setVoucherFeedback('Cart totals could not be refreshed. Check your connection and try again.', 'error');
+            }
+        } finally {
+            if (requestId === previewRequestId) {
+                previewPending = false;
+                if (applyVoucherButton) applyVoucherButton.disabled = false;
+                renderAppliedVoucher();
+                updateSummary();
+            }
+        }
+    };
+    const invalidateCartPreview = () => {
+        previewSubtotal = null;
+        previewDiscount = 0;
+        previewShipping = null;
+        previewError = false;
+        previewAbortController?.abort();
+    };
     const persistQuantity = (item) => {
         const input = item?.querySelector('[data-cart-quantity]');
-        if (!item?.dataset.updateUrl || !input) return;
-        const body = new URLSearchParams({_token: csrfToken, _method: 'PATCH', quantity: input.value});
-        fetch(item.dataset.updateUrl, {method: 'POST', headers: {'Accept': 'text/html'}, body}).catch(() => window.lkBuyerToast?.('Could not save cart quantity.'));
+        if (!item?.dataset.updateUrl || !input) return Promise.resolve(false);
+        let state = quantityStates.get(item);
+        if (!state) {
+            state = {saved: Number(input.value) || 1, desired: Number(input.value) || 1, promise: null};
+            quantityStates.set(item, state);
+        }
+        state.desired = clampQuantity(input);
+        if (state.promise) return state.promise;
+
+        pendingQuantityItems.add(item);
+        updateSummary();
+        state.promise = (async () => {
+            let succeeded = true;
+            while (state.saved !== state.desired) {
+                const requestedQuantity = state.desired;
+                const body = new URLSearchParams({_token: csrfToken, _method: 'PATCH', quantity: String(requestedQuantity)});
+                try {
+                    const response = await fetch(item.dataset.updateUrl, {
+                        method: 'POST',
+                        headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                        body,
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        const errorMessage = payload?.errors ? Object.values(payload.errors).flat()[0] : payload?.message;
+                        window.lkBuyerToast?.(errorMessage || 'Could not save cart quantity.');
+                        if (state.desired === requestedQuantity) {
+                            input.value = String(state.saved);
+                            updateLineTotal(item);
+                            succeeded = false;
+                            break;
+                        }
+                        continue;
+                    }
+                    state.saved = Number(payload.quantity) || requestedQuantity;
+                } catch (error) {
+                    window.lkBuyerToast?.('Could not save cart quantity.');
+                    if (state.desired === requestedQuantity) {
+                        input.value = String(state.saved);
+                        updateLineTotal(item);
+                        succeeded = false;
+                        break;
+                    }
+                }
+            }
+            pendingQuantityItems.delete(item);
+            state.promise = null;
+            updateSummary();
+            return succeeded;
+        })();
+        return state.promise;
     };
-    const persistRemove = (item) => {
-        if (!item?.dataset.removeUrl) return;
+    const persistRemove = async (item) => {
+        if (!item?.dataset.removeUrl) return false;
+        const quantityState = quantityStates.get(item);
+        if (quantityState?.promise) await quantityState.promise;
         const body = new URLSearchParams({_token: csrfToken, _method: 'DELETE'});
-        fetch(item.dataset.removeUrl, {method: 'POST', headers: {'Accept': 'text/html'}, body}).catch(() => window.lkBuyerToast?.('Could not remove cart item.'));
+        try {
+            const response = await fetch(item.dataset.removeUrl, {method: 'POST', headers: {'Accept': 'text/html'}, body});
+            if (!response.ok) throw new Error('Remove request failed.');
+            return true;
+        } catch (error) {
+            window.lkBuyerToast?.('Could not remove cart item. The cart will refresh.');
+            window.location.reload();
+            return false;
+        }
     };
 
     page.addEventListener('click', (event) => {
@@ -883,8 +1221,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 );
 
                 updateLineTotal(item);
+                invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item);
+                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
             }
         }
 
@@ -904,8 +1243,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 );
 
                 updateLineTotal(item);
+                invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item);
+                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
             }
         }
 
@@ -916,7 +1256,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             persistRemove(item);
             item?.remove();
+            invalidateCartPreview();
             updateSummary();
+            requestCartPreview(validatedVoucherCode);
         }
 
         if (removeSelectedButton) {
@@ -931,7 +1273,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
+            invalidateCartPreview();
             updateSummary();
+            requestCartPreview(validatedVoucherCode);
         }
     });
 
@@ -943,22 +1287,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (item) {
                 updateLineTotal(item);
+                invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item);
+                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
             }
         }
 
         if (event.target.matches('[data-seller-select]')) {
             const group = event.target.closest('[data-seller-group]');
             group?.querySelectorAll('[data-cart-select]').forEach((checkbox) => {
-                checkbox.checked = event.target.checked;
+                if (!checkbox.disabled) checkbox.checked = event.target.checked;
             });
             updateSummary();
+            requestCartPreview(validatedVoucherCode);
             return;
         }
 
         if (event.target.matches('[data-cart-select]')) {
             updateSummary();
+            requestCartPreview(validatedVoucherCode);
         }
 
         if (event.target.matches('[data-select-all]')) {
@@ -967,18 +1314,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     '[data-cart-select]'
                 );
 
-                if (checkbox) {
+                if (checkbox && !checkbox.disabled) {
                     checkbox.checked = event.target.checked;
                 }
             });
 
             updateSummary();
+            requestCartPreview(validatedVoucherCode);
         }
     });
 
     placeOrderButton?.addEventListener('click', () => {
         const selectedItems = getItems().filter((item) =>
-            item.querySelector('[data-cart-select]')?.checked
+            item.dataset.itemAvailable === '1' && item.querySelector('[data-cart-select]')?.checked
         );
         if (selectedItems.length === 0) {
             window.lkBuyerToast?.('Select at least one cart item.');
@@ -1012,11 +1360,11 @@ document.addEventListener('DOMContentLoaded', () => {
             form.appendChild(input);
         });
 
-        const voucherCode = page.querySelector('[data-voucher-code]')?.value.trim();
+        const voucherCode = validatedVoucherCode;
         if (voucherCode) {
             const input = document.createElement('input');
             input.type = 'hidden';
-            input.name = 'voucher_code';
+            input.name = validatedVoucherSource === 'platform' ? 'platform_voucher_code' : 'voucher_code';
             input.value = voucherCode;
             form.appendChild(input);
         }
@@ -1027,20 +1375,72 @@ document.addEventListener('DOMContentLoaded', () => {
 
     page.querySelectorAll('[data-use-voucher]').forEach((button) => {
         button.addEventListener('click', () => {
-            const input = page.querySelector('input[data-voucher-code]');
-            if (input) {
-                input.value = button.dataset.voucherCode || '';
-                input.focus();
+            if (voucherInput) {
+                if (validatedVoucherCode) {
+                    validatedVoucherCode = '';
+                    validatedVoucherSource = '';
+                    requestCartPreview('');
+                }
+                voucherInput.value = button.dataset.voucherCode || '';
+                voucherInput.focus();
             }
         });
     });
 
-    page.querySelector('[data-clear-voucher]')?.addEventListener('click', () => {
-        const input = page.querySelector('input[data-voucher-code]');
-        if (input) {
-            input.value = '';
-            input.focus();
+    applyVoucherButton?.addEventListener('click', () => {
+        const code = voucherInput?.value.trim() || '';
+        if (!code) {
+            setVoucherFeedback('Enter a voucher code.', 'error');
+            voucherInput?.focus();
+            return;
         }
+        requestCartPreview(code, true, 'seller');
+    });
+
+    voucherInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            applyVoucherButton?.click();
+        }
+    });
+
+    voucherInput?.addEventListener('input', () => {
+        if (validatedVoucherCode && voucherInput.value.trim().toUpperCase() !== validatedVoucherCode) {
+            validatedVoucherCode = '';
+            validatedVoucherSource = '';
+            setVoucherFeedback('Apply the new code to preview its discount.');
+            requestCartPreview('');
+        }
+    });
+
+    page.querySelector('[data-clear-voucher]')?.addEventListener('click', () => {
+        if (voucherInput) {
+            voucherInput.value = '';
+            voucherInput.focus();
+        }
+        validatedVoucherCode = '';
+        validatedVoucherSource = '';
+        setVoucherFeedback('Voucher removed from preview.');
+        requestCartPreview('');
+    });
+
+    platformVoucherButton?.addEventListener('click', () => platformVoucherDialog?.showModal());
+    platformVoucherDialog?.querySelector('[data-close-platform-vouchers]')?.addEventListener('click', () => platformVoucherDialog.close());
+    platformVoucherDialog?.addEventListener('click', (event) => {
+        if (event.target === platformVoucherDialog) platformVoucherDialog.close();
+    });
+    platformVoucherDialog?.querySelectorAll('[data-platform-voucher-code]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            if (voucherInput) voucherInput.value = '';
+            await requestCartPreview(button.dataset.platformVoucherCode || '', true, 'platform');
+            platformVoucherDialog.close();
+        });
+    });
+    page.querySelector('[data-remove-platform-voucher]')?.addEventListener('click', () => {
+        validatedVoucherCode = '';
+        validatedVoucherSource = '';
+        setVoucherFeedback('Voucher removed from preview.');
+        requestCartPreview('');
     });
 
     getItems().forEach((item) => {
@@ -1048,6 +1448,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     updateSummary();
+    renderAppliedVoucher();
+    requestCartPreview('');
 });
 </script>
 @endsection

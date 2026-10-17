@@ -42,7 +42,7 @@ class RiderDashboardTest extends TestCase
             ->assertOk()
             ->assertSee('Pending pickups')
             ->assertSee('Pending deliveries')
-            ->assertSee('Scan Parcel')
+            ->assertSee('Parcel Scanner')
             ->assertSee('data-parcel-scanner', false)
             ->assertSee('data-scanner-start', false)
             ->assertSee('Earnings')

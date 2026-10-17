@@ -43,8 +43,8 @@ class RiderOperationalPagesTest extends TestCase
         $this->actingAs($riderUser)
             ->get(route('rider.pickups'))
             ->assertOk()
-            ->assertSee('Pickup Assignments')
-            ->assertSee('No pickup requests are available.');
+            ->assertSee('Seller Pickup Assignments')
+            ->assertSee('No seller pickup assignments are waiting.');
 
         $this->get(route('rider.deliveries'))
             ->assertOk()
@@ -63,8 +63,8 @@ class RiderOperationalPagesTest extends TestCase
         $this->get(route('rider.earnings'))
             ->assertOk()
             ->assertSee('My Earnings')
-            ->assertSee("Today's earnings")
-            ->assertSee("This week's earnings")
+            ->assertSee("Today's earnings", false)
+            ->assertSee("This week's earnings", false)
             ->assertSee('No real earnings records are available yet.');
     }
 }

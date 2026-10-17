@@ -357,6 +357,8 @@
 
         font-size: 12px;
         line-height: 1.65;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
     }
 
     .lk-message-row.is-buyer .lk-message-bubble {
@@ -452,6 +454,27 @@
         padding: 14px;
         border-top: 1px solid var(--lk-border);
     }
+
+    .lk-message-attachment {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 0 11px;
+        border: 1px solid var(--lk-border);
+        border-radius: 12px;
+        background: var(--lk-card);
+        color: var(--lk-text);
+        font-size: 11px;
+        font-weight: 800;
+        cursor: pointer;
+    }
+
+    .lk-message-attachment input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+    .lk-message-preview { display: block; max-width: 76px; max-height: 54px; border-radius: 8px; object-fit: cover; }
+    .lk-message-preview[hidden] { display: none; }
+    .lk-product-context { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--lk-border); background: var(--lk-card); color: var(--lk-text); font-size: 11px; }
+    .lk-product-context img { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 10px; object-fit: cover; }
 
     .lk-chat-input {
         min-width: 0;
@@ -681,7 +704,7 @@
                                 {{ $activeSeller['name'] }}
                             </strong>
 
-                            <span class="lk-chat-status">
+                            <span class="lk-chat-status" data-message-connection-status>
                                 <span class="lk-chat-status-dot"></span>
                                 {{ ($activeSeller['is_support'] ?? false) ? 'LIKHAE Support' : 'Verified Seller · Online' }}
                             </span>
@@ -698,15 +721,34 @@
                     @endif
                 </div>
 
+                @if($refProduct)
+                    <div class="lk-product-context" aria-label="Product context">
+                        <img src="{{ data_get($refProduct, 'primary_image') ?: asset('images/product-placeholder.svg') }}" alt="">
+                        <span><strong>Product inquiry:</strong> {{ data_get($refProduct, 'name') }} <a class="underline" href="{{ route('buyer.product-details', data_get($refProduct, 'slug')) }}">View product</a></span>
+                    </div>
+                @elseif(request()->filled('product'))
+                    <div class="lk-product-context" role="status">This product is no longer available for inquiry.</div>
+                @endif
+
+                @if(!empty($messageContext))
+                    <div class="lk-product-context" aria-label="{{ $messageContext['heading'] }}">
+                        <span><strong>{{ $messageContext['heading'] }}:</strong> {{ $messageContext['order_number'] ?? '' }} {{ isset($messageContext['status']) ? '· '.$messageContext['status'] : '' }}
+                            @if(!empty($messageContext['seller'])) · {{ $messageContext['seller'] }} @endif
+                            @if(!empty($messageContext['items']))<br>Items: {{ implode(', ', $messageContext['items']) }}@endif
+                        </span>
+                    </div>
+                @endif
+
                 <div
                     id="chatMessages"
                     class="lk-chat-stream"
                     data-message-thread
                     data-conversation-id="{{ $activeSeller['conversation_id'] ?? '' }}"
-                    data-stream-url="{{ route('buyer.messages.stream', ['seller_id' => $activeSeller['id']]) }}"
+                    data-stream-url="{{ route('buyer.messages.stream', ['conversation' => $activeSeller['conversation_id'] ?? 0]) }}"
                     data-current-user-id="{{ auth()->id() }}"
                     data-seller-avatar="{{ $activeSeller['avatar'] }}"
                     data-seller-name="{{ $activeSeller['name'] }}"
+                    @if($messageAttachmentsReady ?? false) data-attachments-enabled="true" @endif
                 >
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($chatMessages as $message)
@@ -717,22 +759,21 @@
                             @endunless
                             <div>
                                 <div class="lk-message-bubble">{{ $message->body }}</div>
+                                @if(($messageAttachmentsReady ?? false) && filled($message->attachment_path))
+                                    <img data-message-attachment="true" class="mt-2 max-h-64 max-w-full rounded-lg object-contain" src="{{ route('messages.attachments.show', $message->id) }}" alt="Image attachment" loading="lazy">
+                                @endif
                                 <span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span>
                             </div>
                         </div>
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message to {{ $activeSeller['name'] }}.</div>
                     @endforelse
-                    @if($refProduct)
-                        <div class="lk-product-inquiry-card">
-                            <p><strong>Product inquiry:</strong> {{ data_get($refProduct, 'name') }}</p>
-                        </div>
-                    @endif
                 </div>
 
                 <form
                     id="chatForm"
                     class="lk-chat-form"
+                    enctype="multipart/form-data"
                     data-chat-form
                     method="POST"
                     action="{{ route('buyer.messages.send') }}"
@@ -744,11 +785,16 @@
                         type="text"
                         name="body"
                         required
-                        maxlength="2000"
+                        maxlength="1000"
                         placeholder="Type your message to {{ $activeSeller['name'] }}..."
                         class="lk-chat-input"
                         data-chat-input
                     >
+
+                    <span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>
+                    @if($messageAttachmentsReady ?? false)
+                        <label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img class="lk-message-preview" data-attachment-preview hidden alt="Selected attachment preview"></label>
+                    @endif
 
                     <button
                         type="submit"
@@ -806,15 +852,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = form?.querySelector('[data-chat-input]');
     if (!list) return;
 
-    const initialRows = [...list.querySelectorAll('[data-message-id]')];
-    let previousSignature = null;
-    initialRows.forEach((row) => {
-        const side = row.classList.contains('is-buyer') ? 'buyer' : 'other';
-        const body = row.querySelector('.lk-message-bubble')?.textContent?.trim() || '';
-        const signature = `${side}|${body}`;
-        if (body && signature === previousSignature) row.remove();
-        else previousSignature = signature;
-    });
     const seen = new Set([...list.querySelectorAll('[data-message-id]')].map((row) => row.dataset.messageId));
     let lastId = Math.max(0, ...[...seen].map((id) => Number(id) || 0));
 
@@ -832,6 +869,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         pending.dataset.messageId = String(message.id);
         pending.dataset.messagePending = 'false';
+        if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url
+            && !pending.querySelector('[data-message-attachment="true"]')) {
+            const image = document.createElement('img');
+            image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
+            image.dataset.messageAttachment = 'true';
+            image.src = message.attachment_url;
+            image.alt = 'Image attachment';
+            image.loading = 'lazy';
+            pending.querySelector('.lk-message-bubble')?.after(image);
+        }
         pending.querySelector('.lk-message-time').textContent = message.time || 'Just now';
         seen.add(String(message.id));
         lastId = Math.max(lastId, Number(message.id) || 0);
@@ -864,6 +911,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const bubble = document.createElement('div');
         bubble.className = 'lk-message-bubble';
         bubble.textContent = message.body || '';
+        if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url) {
+            const image = document.createElement('img');
+            image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
+            image.dataset.messageAttachment = 'true';
+            image.src = message.attachment_url;
+            image.alt = 'Image attachment';
+            image.loading = 'lazy';
+            wrapper.appendChild(image);
+        }
         const time = document.createElement('span');
         time.className = 'lk-message-time';
         time.textContent = message.pending ? 'Sending…' : (message.time || 'Just now');
@@ -876,10 +932,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     scrollBottom();
 
+    const counter = form?.querySelector('[data-message-count]');
+    const updateCounter = () => { if (counter) counter.textContent = String(Array.from(input?.value || '').length); };
+    input?.addEventListener('input', updateCounter);
+    updateCounter();
+    const attachmentInput = form?.querySelector('[data-message-attachment-input]');
+    const preview = form?.querySelector('[data-attachment-preview]');
+    attachmentInput?.addEventListener('change', () => {
+        const file = attachmentInput.files?.[0];
+        if (!preview) return;
+        if (preview.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+        if (!file) {
+            delete preview.dataset.previewUrl;
+            preview.removeAttribute('src');
+            preview.hidden = true;
+            return;
+        }
+        preview.dataset.previewUrl = URL.createObjectURL(file);
+        preview.src = preview.dataset.previewUrl;
+        preview.hidden = false;
+    });
+
     form?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const body = input?.value.trim();
-        if (!body) return;
+        if (!body || form.dataset.sending === 'true') return;
+        form.dataset.sending = 'true';
+        const sendButton = form.querySelector('button[type="submit"]');
+        if (sendButton) sendButton.disabled = true;
+        const submittedFile = attachmentInput?.files?.[0] || null;
 
         const payload = new FormData(form);
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -890,8 +971,6 @@ document.addEventListener('DOMContentLoaded', () => {
             from_me: true,
             pending: true,
         });
-        input.value = '';
-        input.focus();
         try {
             const controller = new AbortController();
             const timeout = window.setTimeout(() => controller.abort(), 10000);
@@ -907,13 +986,31 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             window.clearTimeout(timeout);
 
-            if (!response.ok) throw new Error('Message failed');
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const validationMessage = data?.errors ? Object.values(data.errors).flat()[0] : null;
+                throw new Error(validationMessage || data?.message || 'Message could not be sent.');
+            }
             appendMessage(data.message);
             window.lkSubscribeMessageThread?.(list, data.message);
+            if (input?.value.trim() === body) {
+                input.value = '';
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+            }
+            const currentFile = attachmentInput?.files?.[0] || null;
+            if (submittedFile && currentFile && submittedFile.name === currentFile.name
+                && submittedFile.size === currentFile.size && submittedFile.lastModified === currentFile.lastModified) {
+                attachmentInput.value = '';
+                if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+                if (preview) { delete preview.dataset.previewUrl; preview.removeAttribute('src'); preview.hidden = true; }
+            }
+            input?.focus();
         } catch (error) {
             removePending(pendingId);
-            window.lkBuyerToast?.('Message could not be sent. Please try again.');
+            window.lkBuyerToast?.(error?.message || 'Message could not be sent. Please try again.');
+        } finally {
+            form.dataset.sending = 'false';
+            if (sendButton) sendButton.disabled = false;
         }
     });
 });

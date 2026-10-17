@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Buyer\Address;
 use App\Models\Logistics\ServiceArea;
+use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
@@ -98,11 +100,12 @@ class LogisticsRidersPageTest extends TestCase
         ]);
 
         foreach ([
-            ['name' => 'Local Delivery Rider', 'vehicle_type' => 'motorcycle', 'plate' => 'CLASS-MOTO-001'],
-            ['name' => 'Inter Logistics Driver', 'vehicle_type' => 'closed_van', 'plate' => 'CLASS-VAN-001'],
+            ['first_name' => 'Local', 'last_name' => 'Delivery Rider', 'vehicle_type' => 'motorcycle', 'plate' => 'CLASS-MOTO-001'],
+            ['first_name' => 'Inter', 'last_name' => 'Logistics Driver', 'vehicle_type' => 'closed_van', 'plate' => 'CLASS-VAN-001'],
         ] as $entry) {
             $user = User::factory()->create([
-                'name' => $entry['name'],
+                'first_name' => $entry['first_name'],
+                'last_name' => $entry['last_name'],
                 'account_type' => User::TYPE_RIDER,
                 'status' => User::STATUS_ACTIVE,
             ]);
@@ -128,8 +131,22 @@ class LogisticsRidersPageTest extends TestCase
     public function test_rider_detail_renders_and_reassigns_delivery_area(): void
     {
         $owner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
+        $centerAddress = Address::create([
+            'user_id' => $owner->id,
+            'label' => 'Logistics Center',
+            'recipient_name' => $owner->name,
+            'contact_number' => $owner->contact_number,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+            'street_address' => 'Rider Detail Center Road',
+        ]);
         $center = LogisticsCenter::create([
             'owner_user_id' => $owner->id,
+            'address_id' => $centerAddress->id,
             'code' => 'RIDER-DETAIL-CENTER',
             'business_name' => 'Rider Detail Center',
             'status' => 'ACTIVE',
@@ -153,6 +170,15 @@ class LogisticsRidersPageTest extends TestCase
             'code' => 'DETAIL-AREA',
             'name' => 'Detail Test Area',
             'is_active' => true,
+        ]);
+        ServiceAreaLocation::create([
+            'service_area_id' => $area->id,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
         ]);
 
         $this->actingAs($owner)

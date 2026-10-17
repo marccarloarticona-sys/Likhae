@@ -64,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!config.enabled && !options.force) return;
         const audio = getContext();
         const start = audio.currentTime + .01;
+        const oscillators = [];
         (SOUND_PATTERNS[toneFor(type)] || SOUND_PATTERNS.general).forEach(([frequency, delay, duration]) => {
             const oscillator = audio.createOscillator();
             const gain = audio.createGain();
@@ -75,6 +76,10 @@ document.addEventListener('DOMContentLoaded', () => {
             oscillator.connect(gain).connect(audio.destination);
             oscillator.start(start + delay);
             oscillator.stop(start + delay + duration + .02);
+            oscillators.push(oscillator);
+        });
+        return () => oscillators.forEach(oscillator => {
+            try { oscillator.stop(); } catch (_) {}
         });
     };
 

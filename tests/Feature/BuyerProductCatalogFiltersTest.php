@@ -36,8 +36,8 @@ class BuyerProductCatalogFiltersTest extends TestCase
             ]))
             ->assertOk()
             ->assertSee($product->name)
-            ->assertSee('name="min_price" type="number" inputmode="decimal" min="0" step="0.01" value="300.00"', escape: false)
-            ->assertSee('name="max_price" type="number" inputmode="decimal" min="0" step="0.01" value="300.00"', escape: false);
+            ->assertSee('type="hidden" name="min_price" value="300.00"', escape: false)
+            ->assertSee('type="hidden" name="max_price" value="300.00"', escape: false);
 
         $this->get(route('buyer.products', [
             'category' => $product->category->slug,
@@ -94,7 +94,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
     {
         [$buyer, $product, $variant] = $this->catalogFixture();
         $variant->update(['price' => 350, 'discount_type' => 'none', 'discount_value' => 0]);
-        $product->sellerProfile->update(['location' => 'Laguna']);
+        $product->sellerProfile->businessAddress->update(['province_name' => 'Laguna']);
         $order = Order::query()->create([
             'order_number' => 'TEST-'.Str::uuid(),
             'buyer_user_id' => $buyer->id,
@@ -136,13 +136,13 @@ class BuyerProductCatalogFiltersTest extends TestCase
                 'min_price' => '350',
                 'max_price' => '350.00',
                 'rating' => '4.5',
-                'location' => 'Laguna',
+                'province' => 'Laguna',
                 'sort' => 'price-low',
             ]))
             ->assertOk()
             ->assertSee($product->name)
-            ->assertSee('name="location" type="text" list="catalogSellerLocations" value="Laguna"', escape: false)
-            ->assertSee('name="max_price" type="number" inputmode="decimal" min="0" step="0.01" value="350.00"', escape: false)
+            ->assertSee('id="catalogProvince" name="province"', escape: false)
+            ->assertSee('type="hidden" name="max_price" value="350.00"', escape: false)
             ->assertSee('value="Laguna"', escape: false);
     }
 
@@ -254,7 +254,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
     public function test_pagination_keeps_the_selected_catalog_filters(): void
     {
         [$buyer, $source] = $this->catalogFixture();
-        $source->sellerProfile->update(['location' => 'Laguna']);
+        $source->sellerProfile->businessAddress->update(['province_name' => 'Laguna']);
         for ($index = 1; $index <= 25; $index++) {
             $this->createCatalogProduct($source, 'Page Filter '.str_pad((string) $index, 2, '0', STR_PAD_LEFT), 150);
         }
@@ -264,7 +264,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
             'category' => $source->category->slug,
             'min_price' => '150',
             'max_price' => '150.00',
-            'location' => 'Laguna',
+            'province' => 'Laguna',
             'sort' => 'price-low',
         ];
         $response = $this->actingAs($buyer)->get(route('buyer.products', $filters))->assertOk();

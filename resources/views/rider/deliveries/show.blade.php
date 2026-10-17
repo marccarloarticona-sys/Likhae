@@ -32,7 +32,7 @@
             @if(filled($parcel['contact']))
                 <a class="mt-3 inline-flex min-h-11 items-center rounded-xl bg-amber-900 px-4 py-2 text-sm font-semibold text-white" href="tel:{{ preg_replace('/[^0-9+]/', '', $parcel['contact']) }}">Contact Buyer Â· {{ $parcel['contact'] }}</a>
             @endif
-            <a class="mt-3 inline-flex min-h-11 items-center rounded-xl border border-amber-900 px-4 py-2 text-sm font-semibold text-amber-950 sm:ml-2" href="{{ route('rider.messages') }}">Message Buyer</a>
+            <a class="mt-3 inline-flex min-h-11 items-center rounded-xl border border-amber-900 px-4 py-2 text-sm font-semibold text-amber-950 sm:ml-2" href="{{ route('rider.messages', ['shipment_id' => $delivery->shipment_id, 'recipient_user_id' => $delivery->shipment?->sellerOrder?->order?->buyer_user_id]) }}">Message Buyer</a>
         </section>
     @endif
 
@@ -49,7 +49,7 @@
                 <div><dt class="text-muted">COD Amount Due</dt><dd class="font-semibold text-ink">â‚±{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div>
             </dl>
             @if(filled($parcel['contact']))<a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink" href="tel:{{ preg_replace('/[^0-9+]/', '', $parcel['contact']) }}">Call Buyer</a>@endif
-            <a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink sm:ml-2" href="{{ route('rider.messages') }}">Message Buyer</a>
+            <a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink sm:ml-2" href="{{ route('rider.messages', ['shipment_id' => $delivery->shipment_id, 'recipient_user_id' => $delivery->shipment?->sellerOrder?->order?->buyer_user_id]) }}">Message Buyer</a>
         </article>
 
         <article class="rounded-3xl border border-line bg-surface p-8">

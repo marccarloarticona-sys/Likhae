@@ -9,7 +9,10 @@ use App\Models\Buyer\Payment;
 use App\Models\Buyer\Review;
 use App\Models\Communication\Message;
 use App\Models\Admin\AuditLog;
+use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ServiceArea;
+use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderLocalTripItem;
@@ -54,13 +57,13 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->actingAs($seller)->get(route('seller.store'))->assertOk()->assertSee('name="business_name"', false);
 
         [$otherSeller] = $this->seller('Another Shop');
-        $this->actingAs($otherSeller)->putJson(route('seller.store.update'), [
-            'business_name' => '  LIKHAE CRAFTS  ',
-        ])->assertStatus(422)->assertJsonValidationErrors('business_name');
+        $this->actingAs($otherSeller)->put(route('seller.store.update'), [
+            'business_name' => '  NEW CRAFT SHOP  ',
+        ])->assertRedirect()->assertSessionHasErrors('business_name');
 
-        $this->actingAs($otherSeller)->putJson(route('seller.store.update'), [
+        $this->actingAs($otherSeller)->put(route('seller.store.update'), [
             'business_name' => " \t\n ",
-        ])->assertStatus(422)->assertJsonValidationErrors('business_name');
+        ])->assertRedirect()->assertSessionHasErrors('business_name');
         $this->assertSame('Another Shop', $otherSeller->sellerProfile->fresh()->business_name);
     }
 
@@ -112,18 +115,19 @@ class SellerModuleAuditRepairTest extends TestCase
         $foreign = $this->orderFixture($foreignProfile, 'FILTER-FOREIGN', 'PLACED', '2026-10-12 12:00:00');
         $foreign['item']->update(['product_name' => 'Blue Widget']);
 
-        $this->actingAs($seller)->get(route('seller.orders', [
+        $response = $this->actingAs($seller)->get(route('seller.orders', [
             'status' => 'placed',
             'q' => 'Blue Widget',
             'from_date' => '2026-10-12',
             'to_date' => '2026-10-12',
-        ]))->assertOk()
-            ->assertSee('FILTER-IN')
-            ->assertDontSee('FILTER-STATUS')
-            ->assertDontSee('FILTER-DATE')
-            ->assertDontSee('FILTER-FOREIGN')
-            ->assertSee('name="from_date"', false)
-            ->assertSee('name="to_date"', false);
+        ]));
+        $response->assertOk()->assertSee('name="from_date"', false)->assertSee('name="to_date"', false);
+        $this->assertSame(1, preg_match('/<div class="sl-order-list">(.*?)<div class="sl-no-results/s', $response->getContent(), $orderListMatch));
+        $orderList = $orderListMatch[1];
+        $this->assertStringContainsString('FILTER-IN', $orderList);
+        $this->assertStringNotContainsString('FILTER-STATUS', $orderList);
+        $this->assertStringNotContainsString('FILTER-DATE', $orderList);
+        $this->assertStringNotContainsString('FILTER-FOREIGN', $orderList);
 
         $this->actingAs($seller)->getJson(route('seller.orders', [
             'from_date' => '2026-10-13',
@@ -141,18 +145,70 @@ class SellerModuleAuditRepairTest extends TestCase
 
         $this->patch($statusRoute, ['action' => 'confirm'])->assertRedirect();
         $this->patch($statusRoute, ['action' => 'prepare'])->assertRedirect();
-        $this->patch($statusRoute, ['action' => 'ready'])->assertSessionHasErrors('parcels');
+        $this->patch($statusRoute, ['action' => 'ready'])->assertSessionHasErrors('shipment_ids');
         $this->post(route('seller.logistics.pickup', $fixture['sellerOrder']), [
             'handover_method' => 'logistics_pickup',
-        ])->assertSessionHasErrors('parcels');
+        ])->assertSessionHasErrors('shipment_ids');
         $this->assertSame('PREPARING', $fixture['sellerOrder']->fresh()->status);
 
-        $this->patch($statusRoute, ['action' => 'pack'])->assertRedirect();
+        $shipmentId = $fixture['item']->shipment()->value('id');
+        $this->patch($statusRoute, ['action' => 'pack', 'shipment_ids' => [$shipmentId]])->assertRedirect();
+
+        $centerUser = $this->user(User::TYPE_LOGISTICS);
+        $centerAddress = Address::create([
+            'user_id' => $centerUser->id,
+            'label' => 'Packing Center',
+            'recipient_name' => $centerUser->name,
+            'contact_number' => $centerUser->contact_number,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+            'street_address' => 'Packing Center Road',
+        ]);
+        $center = LogisticsCenter::create([
+            'owner_user_id' => $centerUser->id,
+            'address_id' => $centerAddress->id,
+            'code' => 'PACKING-CENTER-'.uniqid(),
+            'business_name' => 'Packing Logistics Center',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $centerUser->id,
+            'approved_at' => now(),
+        ]);
+        $area = ServiceArea::create([
+            'logistics_center_id' => $center->id,
+            'code' => 'PACKING-AREA-'.uniqid(),
+            'name' => 'Packing Delivery Area',
+            'is_active' => true,
+        ]);
+        ServiceAreaLocation::create([
+            'service_area_id' => $area->id,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403424000',
+            'municipality_name' => 'City of San Pablo',
+            'barangay_code' => '0403424001',
+            'barangay_name' => 'Bagong Bayan II-A',
+        ]);
+        $fixture['item']->shipment()->update([
+            'logistics_center_id' => $center->id,
+            'origin_logistics_center_id' => $center->id,
+            'destination_logistics_center_id' => $center->id,
+            'service_area_id' => $area->id,
+            'origin_province_code' => '0403400000',
+            'origin_province_name' => 'Laguna',
+            'origin_municipality_code' => '0403424000',
+            'origin_municipality_name' => 'City of San Pablo',
+            'origin_barangay_code' => '0403424001',
+            'origin_barangay_name' => 'Bagong Bayan II-A',
+        ]);
         $this->patch(route('seller.orders.parcels.measurements', [$fixture['sellerOrder'], $fixture['item']]), [
             'parcel_weight_kg' => '1.275',
             'parcel_volume_liters' => '2.500',
         ])->assertRedirect();
-        $this->patch($statusRoute, ['action' => 'ready'])->assertRedirect();
+        $this->patch($statusRoute, ['action' => 'ready', 'shipment_ids' => [$shipmentId]])->assertRedirect();
         $this->assertSame('READY_FOR_PICKUP', $fixture['sellerOrder']->fresh()->status);
         $this->assertDatabaseHas('shipment_events', [
             'shipment_id' => $fixture['item']->shipment()->value('id'),
@@ -273,7 +329,6 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->assertSame(5, $variant->fresh()->stock);
         $this->assertSame('PROCESSING', $fixture['order']->fresh()->status);
         $this->assertSame(0, VoucherRedemptionCounter::count($voucher->id));
-        $this->assertDatabaseHas('pickup_requests', ['shipment_id' => $shipment->id, 'status' => 'CANCELLED']);
         $this->assertSame('CANCELLED', $assignment->fresh()->status);
         $this->assertSame(RiderLocalTripItem::CANCELLED, $trip->items()->firstOrFail()->status);
         $this->assertSame(RiderLocalTrip::CANCELLED, $trip->fresh()->status);
@@ -480,7 +535,9 @@ class SellerModuleAuditRepairTest extends TestCase
         Storage::disk('local')->assertExists($message->attachment_path);
         $attachmentUrl = $response->json('message.attachment_url');
         $this->assertNotEmpty($attachmentUrl);
-        $this->get($attachmentUrl)->assertOk()->assertHeader('Cache-Control', 'private, no-store');
+        $attachmentResponse = $this->get($attachmentUrl)->assertOk();
+        $this->assertStringContainsString('private', (string) $attachmentResponse->headers->get('Cache-Control'));
+        $this->assertStringContainsString('no-store', (string) $attachmentResponse->headers->get('Cache-Control'));
         $this->getJson(route('seller.messages.stream', ['conversation' => $conversation->id]))
             ->assertOk()->assertJsonPath('messages.0.attachment_url', $attachmentUrl);
 

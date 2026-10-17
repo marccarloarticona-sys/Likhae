@@ -1,4 +1,4 @@
-@props(['page' => 'home', 'pageTitle' => 'Buyer'])
+@props(['page' => 'home', 'pageTitle' => 'Buyer', 'visible' => true])
 
 @php
     /* Only non-sensitive, canonical page metadata is put in the browser. */
@@ -19,7 +19,7 @@
 @endphp
 
 <script>window.LIKHAE_BUYER_AI_PAGE_CONTEXT = @json($context);</script>
-<section class="likhae-buyer-ai-widget" data-likhae-buyer-ai data-chat-url="{{ route('buyer.ai.chat') }}" data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}">
+<section class="likhae-buyer-ai-widget" data-likhae-buyer-ai data-chat-url="{{ route('buyer.ai.chat') }}" data-ai-assistant-enabled="{{ $visible ? '1' : '0' }}" data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}" @unless($visible) hidden @endunless>
     <button id="likhaeBuyerAiHead" class="likhae-buyer-ai-head" type="button" aria-label="Open LIKHAE AI Assistant" aria-controls="likhaeBuyerAiWindow" aria-expanded="false" title="LIKHAE AI Assistant">
         <img class="likhae-buyer-ai-head-icon" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt=""><span class="likhae-buyer-ai-online-dot" aria-hidden="true"></span>
     </button>

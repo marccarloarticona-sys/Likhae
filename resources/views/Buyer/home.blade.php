@@ -595,6 +595,54 @@
         background: var(--lk-maroon-dark) !important;
     }
 
+    .lk-platform-events-empty {
+        padding: 28px clamp(20px, 3vw, 38px);
+        border: 1px solid var(--lk-border);
+        border-radius: 22px;
+        background:
+            radial-gradient(circle at 94% 12%, rgba(193, 151, 113, 0.2), transparent 28%),
+            linear-gradient(135deg, #FFFDF9 0%, #F6EFE7 64%, #EFE7DE 100%);
+        box-shadow: 0 12px 32px rgba(86, 28, 23, 0.07);
+    }
+
+    .lk-platform-events-empty h3 {
+        margin: 5px 0 0;
+        color: var(--lk-text);
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(26px, 3vw, 36px);
+        font-weight: 400;
+        line-height: 1.05;
+    }
+
+    .lk-platform-events-empty p {
+        max-width: 620px;
+        margin: 8px 0 0;
+        color: var(--lk-muted);
+        font-size: 12px;
+        line-height: 1.7;
+    }
+
+    .lk-platform-events-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .lk-platform-events-grid.is-single-event { grid-template-columns: minmax(0, 1fr); }
+    .lk-event-card { position: relative; overflow: hidden; display: grid; gap: 20px; padding: clamp(22px, 3vw, 34px); border: 0; border-radius: 24px; background: radial-gradient(circle at 86% 18%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-card__top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .lk-event-card__eyebrow { color: #E9C7A5; font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .lk-event-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 11px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .lk-event-status.is-active { background: #E8F3EA; color: #256F4A; }
+    .lk-event-status.is-upcoming { background: #F8EDD9; color: #8A5A12; }
+    .lk-event-card__hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 "Instrument Serif", Georgia, serif; letter-spacing: -.025em; }
+    .lk-event-card__offer { min-width: 170px; padding: 13px 24px; border: 1px solid rgba(233,199,165,.5); border-radius: 18px; background: rgba(255,248,242,.1); text-align: center; }
+    .lk-event-card__offer strong { display: block; color: #FFF8F2; font-size: clamp(34px, 4vw, 48px); font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+    .lk-event-card__offer span { display: block; margin-top: 5px; color: #E9C7A5; font-size: 10px; font-weight: 900; letter-spacing: .22em; }
+    .lk-event-card__details { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(150px, .8fr) minmax(300px, 1.8fr); gap: 18px; margin: 0; }
+    .lk-event-card__details > div { padding-top: 13px; border-top: 1px solid rgba(255,248,242,.2); }
+    .lk-event-card__details dt { color: #E9C7A5; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .lk-event-card__details dd { margin: 5px 0 0; color: #FFF8F2; font-size: 14px; font-weight: 700; line-height: 1.5; }
+    .lk-event-card__footer { display: flex; justify-content: flex-end; }
+    .lk-event-card__action { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; padding: 0 20px; border-radius: 999px; background: #E9C7A5; color: #3E130F; font-size: 12px; font-weight: 900; text-decoration: none; transition: transform .18s ease, background .18s ease; }
+    .lk-event-card__action:hover { transform: translateY(-1px); background: #F3D9BD; }
+
     /* =====================================================
        DARK MODE SAFE OVERRIDE
     ====================================================== */
@@ -604,6 +652,35 @@
     html.dark .lk-page {
         background: #171210 !important;
         color: #FFF8F2 !important;
+    }
+
+    html.dark .lk-platform-events-empty {
+        border-color: #49342B;
+        background:
+            radial-gradient(circle at 94% 12%, rgba(193, 151, 113, 0.1), transparent 28%),
+            linear-gradient(135deg, #241A17 0%, #211815 64%, #1E1714 100%);
+    }
+
+    html.dark .lk-platform-events-empty h3 {
+        color: #FFF8F2;
+    }
+
+    html.dark .lk-platform-events-empty p {
+        color: #C8B7AD;
+    }
+
+    @media (max-width: 700px) {
+        .lk-platform-events-grid { grid-template-columns: minmax(0, 1fr); }
+        .lk-event-card__details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .lk-event-card__validity { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 520px) {
+        .lk-event-card__hero { align-items: flex-start; flex-direction: column; gap: 16px; }
+        .lk-event-card__offer { min-width: 0; }
+        .lk-event-card__details { grid-template-columns: minmax(0, 1fr); }
+        .lk-event-card__validity { grid-column: 1; }
+        .lk-event-card__footer { justify-content: flex-start; }
     }
 
     html.dark .lk-section-head h2,
@@ -817,7 +894,7 @@
                 </div>
 
                 <div>
-                    <strong>My Orders</strong>
+                    <strong>My Purchases</strong>
                     <small>Track and review</small>
                 </div>
             </a>
@@ -1087,6 +1164,31 @@
                 <p class="mt-1 text-xs text-stone-500">
                     Check back later for current seller discounts.
                 </p>
+            </div>
+        @endif
+    </section>
+
+    <section class="lk-section" aria-labelledby="platform-events-heading">
+        <div class="lk-section-head">
+            <div>
+                <span class="lk-kicker">LIKHAE Marketplace</span>
+                <h2 id="platform-events-heading">Platform Events</h2>
+                <p>Marketplace-wide campaigns and events.</p>
+            </div>
+            <a class="lk-text-link" href="{{ route('buyer.platform-events.index') }}">View Offers <span aria-hidden="true">→</span></a>
+        </div>
+
+        @if ($platformCampaigns->isNotEmpty())
+            <div class="lk-platform-events-grid {{ $platformCampaigns->count() === 1 ? 'is-single-event' : '' }}">
+                @foreach ($platformCampaigns as $campaign)
+                    @include('Buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
+                @endforeach
+            </div>
+        @else
+            <div class="lk-platform-events-empty" role="status">
+                <span class="lk-kicker">Platform Events</span>
+                <h3>No scheduled events right now</h3>
+                <p>When a marketplace-wide event is scheduled, its dates and details will appear here.</p>
             </div>
         @endif
     </section>

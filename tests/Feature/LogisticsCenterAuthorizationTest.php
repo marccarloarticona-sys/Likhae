@@ -31,8 +31,7 @@ class LogisticsCenterAuthorizationTest extends TestCase
 
         $this->actingAs($user)
             ->get(route('logistics.parcels.tracking', ['tracking' => $pickup->shipment->tracking_number]))
-            ->assertOk()
-            ->assertViewHas('shipment', null);
+            ->assertForbidden();
 
         $this->post(route('logistics.pickups.approve', $pickup))
             ->assertForbidden();

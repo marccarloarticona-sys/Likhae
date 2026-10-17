@@ -107,8 +107,8 @@ class AuthenticationAndRoleSecurityTest extends TestCase
         $this->assertStringContainsString('no-cache', $response->headers->get('Cache-Control'));
         $response->assertHeader('Pragma', 'no-cache');
         $response->assertHeader('Expires', '0');
-        $response->assertSee('Confirm Logout');
-        $response->assertSee('Are you sure you want to log out of your LIKHAE account?');
+        $response->assertSee('data-confirm-title="Log out?"', false);
+        $response->assertSee('data-confirm-message="You will be signed out of your LIKHAE account."', false);
     }
 
     public function test_login_regenerates_session_id_and_logout_invalidates_session(): void

@@ -193,16 +193,20 @@ class ProductCatalogService
 
         if ($includeDetails) {
             $product->loadMissing(['reviews.buyer', 'reviews.orderItem']);
-            $reviewImageUrls = $this->reviewImages->urlsFor($product->reviews);
+            $reviewPhotoUrls = $this->reviewImages->photoUrlsFor($product->reviews);
             $payload['customer_reviews'] = $product->reviews
                 ->sortByDesc('created_at')
                 ->map(fn (Review $review): array => [
                     'name' => $this->maskedBuyerName($review->buyer?->name),
                     'rating' => (int) $review->rating,
                     'comment' => $review->comment,
-                    'image_url' => $reviewImageUrls[$review->id] ?? null,
+                    'image_urls' => $reviewPhotoUrls[$review->id] ?? [],
+                    'image_url' => $reviewPhotoUrls[$review->id][0] ?? null,
                     'date' => $review->created_at?->format('M j, Y') ?? 'Recently',
                     'variant' => $review->orderItem?->variant_description ?: 'Standard',
+                    'seller_reply' => filled($review->seller_reply) ? $review->seller_reply : null,
+                    'seller_reply_date' => filled($review->seller_reply) ? $review->seller_replied_at?->format('M j, Y') : null,
+                    'seller_name' => filled($review->seller_reply) ? $product->sellerProfile?->business_name : null,
                 ])
                 ->values()
                 ->all();

@@ -11,9 +11,13 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Communication\Conversation;
+use App\Models\Logistics\Shipment;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\ConversationMessageSender;
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationContextPresenter;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
@@ -415,16 +419,53 @@ class RiderController extends Controller
         return back()->with('status', 'Account password updated.');
     }
 
-    public function messages(Request $request, ConversationService $conversationService): View
+    public function messages(Request $request, ConversationService $conversationService): View|RedirectResponse
     {
+        $shipmentId = $request->integer('shipment_id');
+        if ($shipmentId > 0) {
+            $riderProfile = $request->user()->riderProfile;
+            $shipment = Shipment::query()
+                ->with(['sellerOrder.order'])
+                ->whereKey($shipmentId)
+                ->whereHas('riderAssignments', fn ($assignment) => $assignment
+                    ->where('rider_profile_id', $riderProfile?->id)
+                    ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED']))
+                ->firstOrFail();
+            $buyerId = (int) $shipment->sellerOrder?->order?->buyer_user_id;
+            abort_unless($buyerId > 0, 404);
+            if ($request->integer('recipient_user_id') > 0) {
+                abort_unless($request->integer('recipient_user_id') === $buyerId, 403);
+            }
+
+            $conversation = $conversationService->start($request->user(), $buyerId, [
+                'type' => 'SHIPMENT_DELIVERY',
+                'order_id' => $shipment->sellerOrder?->order_id,
+                'seller_order_id' => $shipment->seller_order_id,
+                'shipment_id' => $shipment->id,
+            ]);
+
+            return redirect()->route('rider.messages', ['conversation' => $conversation->id]);
+        }
+
         $conversations = $conversationService->workspaceThreads(
             $request->user(),
             $request->integer('conversation') ?: null,
         );
+        $contacts = User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)
+            ->orderBy('first_name')->limit(100)
+            ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
+        $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+            ->filterRecipients($request->user(), $contacts);
 
         return view('Rider.messages', [
             'conversations' => $conversations,
-            'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
+            'contacts' => $contacts,
+            'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
+            'messageContext' => app(ConversationContextPresenter::class)->forUser(
+                $request->user(),
+                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+            ),
         ]);
     }
 
@@ -440,26 +481,14 @@ class RiderController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
+    public function sendMessage(Request $request, ConversationService $conversationService, ConversationMessageSender $sender): JsonResponse|RedirectResponse
     {
-        $data = $request->validate([
+        $recipientData = $request->validate([
             'recipient_user_id' => ['required', 'integer', 'exists:users,id'],
-            'conversation_id' => ['nullable', 'integer', 'exists:conversations,id'],
-            'body' => ['required', 'string', 'max:5000'],
         ]);
-
-        $context = [];
-        $conversation = null;
-        if (! empty($data['conversation_id'])) {
-            $conversation = Conversation::query()
-                ->whereKey((int) $data['conversation_id'])
-                ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-                ->whereHas('participants', fn ($query) => $query->where('users.id', (int) $data['recipient_user_id']))
-                ->firstOrFail();
-            $context = $conversationService->contextFor($conversation);
-        }
-
-        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context, $conversation);
+        $data = $recipientData + $sender->validate($request);
+        $recipient = User::query()->whereKey($data['recipient_user_id'])->where('status', User::STATUS_ACTIVE)->firstOrFail();
+        $message = $sender->send($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
             return response()->json([

@@ -16,7 +16,7 @@ class AutoConfirmDeliveredOrders extends Command
 
     public function handle(BuyerOrderActionService $actions): int
     {
-        $cutoff = now()->subHours(72);
+        $cutoff = now()->subDays(3);
         $returnRefundStorageReady = $actions->returnRefundStorageReady();
         $completedCount = 0;
 

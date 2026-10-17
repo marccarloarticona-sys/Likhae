@@ -4,28 +4,31 @@
     'guest' => false,
     'deal' => false,
     'catalogListing' => false,
+    'unavailable' => false,
 ])
 
 @php
     $id = data_get($product, 'id');
+    $availabilityRestricted = (bool) data_get($product, 'availability_restricted', false);
+    $unavailable = (bool) $unavailable || (bool) data_get($product, 'unavailable', false);
 
     $slug = data_get($product, 'slug')
         ?? $id
         ?? 'product';
 
-    $name = (string) data_get($product, 'name', 'Product Name');
+    $name = $availabilityRestricted ? 'Unavailable product' : (string) data_get($product, 'name', 'Product Name');
 
     $categoryValue = data_get($product, 'category.name') ?? 'Local Find';
 
-    $category = is_scalar($categoryValue)
-        ? (string) $categoryValue
-        : 'Local Find';
+    $category = $availabilityRestricted
+        ? 'Saved item'
+        : (is_scalar($categoryValue) ? (string) $categoryValue : 'Local Find');
 
     $sellerValue = data_get($product, 'seller.business_name') ?? 'LIKHAE Seller';
 
-    $seller = is_scalar($sellerValue)
-        ? (string) $sellerValue
-        : 'LIKHAE Seller';
+    $seller = $availabilityRestricted
+        ? 'Unavailable'
+        : (is_scalar($sellerValue) ? (string) $sellerValue : 'LIKHAE Seller');
 
     $sellerSlug = data_get(
         $product,
@@ -60,18 +63,30 @@
         (int) data_get($product, 'sold', 0)
     );
 
-    $image = data_get($product, 'primary_image.url')
-        ?? 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80';
+    $image = $availabilityRestricted
+        ? 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'
+        : (data_get($product, 'primary_image.url') ?? 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80');
 
-    $detailsUrl = $guest
-        ? route('products.show', ['slug' => $slug])
-        : route('buyer.product-details', ['slug' => $slug]);
+    $detailsUrl = $availabilityRestricted
+        ? null
+        : ($guest ? route('products.show', ['slug' => $slug]) : route('buyer.product-details', ['slug' => $slug]));
     $variants = collect(data_get($product, 'variants', []));
     $hasVariations = $variants->count() > 1;
     $singleVariant = $hasVariations ? null : $variants->first();
     $sellerOnVacation = $catalogListing && (bool) data_get($product, 'seller.vacation_mode', false);
     $outOfStock = $catalogListing && (int) data_get($product, 'stock', $variants->sum('stock')) < 1;
-    $canAddToCart = ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
+    $canAddToCart = ! $unavailable && ! $availabilityRestricted && ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
+    $isWishlistSaved = false;
+    if (! $guest && auth()->check() && $id !== null) {
+        $wishlistUserId = request()->attributes->get('buyer_wishlist_user_id');
+        $wishlistProductIds = request()->attributes->get('buyer_wishlist_product_ids');
+        if ((int) $wishlistUserId !== (int) auth()->id() || ! is_array($wishlistProductIds)) {
+            $wishlistProductIds = auth()->user()->wishlistItems()->pluck('product_id')->map(fn ($productId) => (string) $productId)->all();
+            request()->attributes->set('buyer_wishlist_user_id', auth()->id());
+            request()->attributes->set('buyer_wishlist_product_ids', $wishlistProductIds);
+        }
+        $isWishlistSaved = in_array((string) $id, $wishlistProductIds, true);
+    }
     $discountVariant = $deal
         ? $dealVariant
         : $variants
@@ -693,18 +708,15 @@
     data-search="{{ mb_strtolower($name . ' ' . $category . ' ' . $seller) }}"
 >
     <div class="lk-product-media">
-        <a
-            href="{{ $detailsUrl }}"
-            class="lk-product-image-link"
-            aria-label="View {{ $name }}"
-        >
-            <img
-                src="{{ $image }}"
-                alt="{{ $name }}"
-                loading="lazy"
-                decoding="async"
-            >
-        </a>
+        @if($detailsUrl)
+            <a href="{{ $detailsUrl }}" class="lk-product-image-link" aria-label="View {{ $name }}">
+                <img src="{{ $image }}" alt="{{ $name }}" loading="lazy" decoding="async">
+            </a>
+        @else
+            <div class="lk-product-image-link" aria-hidden="true">
+                <img src="{{ $image }}" alt="" loading="lazy" decoding="async">
+            </div>
+        @endif
 
         @if($discount > 0)
             <span class="lk-product-discount">
@@ -716,18 +728,24 @@
             LIKHAE Pick
         </span>
 
+        @if($unavailable || $availabilityRestricted)
+            <span class="lk-product-unavailable-badge">Unavailable</span>
+        @endif
+
         <button
             type="button"
-            class="lk-product-heart"
+            class="lk-product-heart {{ ! $guest && $isWishlistSaved ? 'is-active' : '' }}"
             @if($guest)
                 data-auth-required
                 data-auth-message="Sign in to save {{ $name }} to your wishlist."
             @else
                 data-wishlist
-                data-product-id="{{ $id ?? $slug }}"
-                aria-pressed="false"
+                data-product-id="{{ $id }}"
+                data-product-name="{{ $name }}"
+                data-wishlist-url="{{ route('buyer.wishlist.toggle', ['product' => $id]) }}"
+                aria-pressed="{{ $isWishlistSaved ? 'true' : 'false' }}"
             @endif
-            aria-label="Save {{ $name }} to wishlist"
+            aria-label="{{ $guest || ! $isWishlistSaved ? 'Save' : 'Remove' }} {{ $name }} {{ $guest || ! $isWishlistSaved ? 'to' : 'from' }} wishlist"
         >
             <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z"/>
@@ -740,22 +758,17 @@
             {{ $category }}
         </span>
 
-        <a
-            href="{{ $detailsUrl }}"
-            class="lk-product-title-link"
-        >
+        @if($detailsUrl)<a href="{{ $detailsUrl }}" class="lk-product-title-link">@endif
             <h3 class="lk-product-name">
                 {{ $name }}
             </h3>
-        </a>
+        @if($detailsUrl)</a>@endif
 
-        <a
-            href="{{ $storeUrl }}"
-            class="lk-product-seller"
-        >
-            {{ $seller }}
-        </a>
+        @if(! $availabilityRestricted)
+            <a href="{{ $storeUrl }}" class="lk-product-seller">{{ $seller }}</a>
+        @endif
 
+        @if(! $availabilityRestricted)
         <div class="lk-product-meta">
             <span
                 class="lk-stars"
@@ -778,8 +791,12 @@
                 {{ number_format($sold) }} sold
             </span>
         </div>
+        @endif
 
         <div class="lk-product-price-row">
+            @if($availabilityRestricted)
+                <strong>Unavailable</strong>
+            @else
             <strong>
                 ₱{{ number_format($price, 2) }}
             </strong>
@@ -789,15 +806,15 @@
                     ₱{{ number_format($oldPrice, 2) }}
                 </del>
             @endif
+            @endif
         </div>
 
         <div class="lk-card-actions">
-            <a
-                href="{{ $detailsUrl }}"
-                class="lk-btn-view"
-            >
-                View
-            </a>
+            @if($detailsUrl)
+                <a href="{{ $detailsUrl }}" class="lk-btn-view">View</a>
+            @else
+                <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
+            @endif
 
             @if($guest)
                 <button
@@ -815,6 +832,15 @@
                     <span>
                         Add to Cart
                     </span>
+                </button>
+            @elseif($availabilityRestricted || $unavailable)
+                <button type="button" class="lk-add-cart" disabled aria-disabled="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
+                        <circle cx="9" cy="20" r="1"/>
+                        <circle cx="18" cy="20" r="1"/>
+                    </svg>
+                    <span>Unavailable</span>
                 </button>
             @elseif($catalogListing && ($sellerOnVacation || $outOfStock))
                 <button type="button" class="lk-add-cart" disabled aria-disabled="true">

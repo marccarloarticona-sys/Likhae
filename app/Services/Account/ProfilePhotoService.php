@@ -25,7 +25,13 @@ class ProfilePhotoService
 
         $oldPath = $user->profile_photo_path;
 
-        $user->forceFill(['profile_photo_path' => $newPath])->save();
+        try {
+            $user->forceFill(['profile_photo_path' => $newPath])->save();
+        } catch (\Throwable $exception) {
+            Storage::disk('public')->delete($newPath);
+
+            throw $exception;
+        }
 
         if ($oldPath && $oldPath !== $newPath && ! Str::startsWith($oldPath, ['http://', 'https://'])) {
             Storage::disk('public')->delete($oldPath);

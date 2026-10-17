@@ -7,16 +7,17 @@
 @section('content')
 @php
     $type = request('type', 'all');
-    $notificationRows = collect($dbNotifications ?? $notifications ?? []);
+    $notificationSource = $dbNotifications ?? $notifications ?? [];
+    $notificationRows = $notificationSource instanceof \Illuminate\Pagination\AbstractPaginator
+        ? collect($notificationSource->items())
+        : collect($notificationSource);
     $notificationVersion = sha1($notificationRows->take(20)->map(fn ($notification) => [
         'id' => (int) $notification->id,
         'read_at' => $notification->read_at?->toIso8601String(),
         'updated_at' => $notification->updated_at?->toIso8601String(),
     ])->values()->toJson());
     $notifications = $notificationRows->map(function ($notification) {
-        $kind = in_array($notification->type, ['orders','messages','rewards','account'], true) ? $notification->type : (str_contains((string) $notification->type, 'message') ? 'messages' : 'orders');
-        $url = $notification->action_url ?: route('buyer.notifications');
-        if (str_starts_with($url, '/seller/')) $url = route('buyer.notifications');
+        $kind = in_array($notification->type, ['orders','messages','rewards','account','stores'], true) ? $notification->type : (str_starts_with((string) $notification->type, 'STORE_') ? 'stores' : (str_contains((string) $notification->type, 'message') ? 'messages' : 'orders'));
         return [
             'id' => $notification->id,
             'type' => $kind,
@@ -24,12 +25,12 @@
             'message' => $notification->message ?? $notification->body,
             'time' => $notification->created_at?->diffForHumans() ?: '',
             'unread' => $notification->read_at === null,
-            'url' => $url,
+            'open_url' => route('buyer.notifications.open', $notification),
         ];
     });
     $visible = $type === 'all' ? $notifications : $notifications->where('type', $type);
-    $types = ['all'=>'All','orders'=>'Orders','messages'=>'Messages','rewards'=>'Rewards','account'=>'Account'];
-    $icons = ['orders'=>'□','messages'=>'✉','rewards'=>'%','account'=>'○'];
+    $types = ['all'=>'All','orders'=>'Orders','messages'=>'Messages','stores'=>'Stores','rewards'=>'Rewards','account'=>'Account'];
+    $icons = ['orders'=>'□','messages'=>'✉','stores'=>'◈','rewards'=>'%','account'=>'○'];
 @endphp
 
 <div class="lk-page-narrow" data-buyer-notifications-live data-notification-stream-url="{{ route('buyer.notifications.stream') }}" data-notification-version="{{ $notificationVersion }}">
@@ -39,7 +40,7 @@
 
     <section class="mt-5 overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-notification-list>
         @forelse($visible as $notification)
-            <a href="{{ $notification['url'] }}" class="flex gap-3 border-b border-stone-100 p-4 transition last:border-0 hover:bg-stone-50 sm:p-5 {{ $notification['unread'] ? 'bg-red-50/40' : '' }}" data-notification-item data-notification-type="{{ $notification['type'] }}">
+            <a href="{{ $notification['open_url'] }}" class="flex gap-3 border-b border-stone-100 p-4 transition last:border-0 hover:bg-stone-50 sm:p-5 {{ $notification['unread'] ? 'bg-red-50/40' : '' }}" data-notification-item data-notification-type="{{ $notification['type'] }}">
                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl {{ $notification['unread'] ? 'bg-red-900 text-white' : 'bg-stone-100 text-stone-500' }} text-sm font-bold">{{ $icons[$notification['type']] ?? '•' }}</span>
                 <span class="min-w-0 flex-1"><span class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-stone-900">{{ $notification['title'] }}</strong><time class="text-[10px] text-stone-400">{{ $notification['time'] }}</time></span><span class="mt-1 block text-xs leading-5 text-stone-500">{{ $notification['message'] }}</span></span>
                 @if($notification['unread'])<i class="mt-2 h-2 w-2 shrink-0 rounded-full bg-red-800" aria-label="Unread"></i>@endif

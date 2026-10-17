@@ -22,6 +22,9 @@ use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\AccountNotificationService;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\ConversationMessageSender;
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Fulfillment\LocalRiderEligibilityService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
@@ -755,16 +758,39 @@ class LogisticsPortalController extends Controller
         return back()->with('status', 'Account password updated.');
     }
 
-    public function messages(Request $request, ConversationService $conversationService): View
+    public function messages(Request $request, ConversationService $conversationService): View|RedirectResponse
     {
+        $shipmentId = $request->integer('shipment_id');
+        $recipientId = $request->integer('recipient_user_id');
+        if ($shipmentId > 0 || $recipientId > 0) {
+            abort_unless($shipmentId > 0 && $recipientId > 0, 404);
+            $recipient = User::query()->whereKey($recipientId)->where('status', User::STATUS_ACTIVE)->firstOrFail();
+            $context = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+                ->contextForNew($request->user(), $recipient, $shipmentId);
+            abort_if($context === null || empty($context['shipment_id']), 403);
+            $conversation = $conversationService->start($request->user(), $recipient->id, $context);
+
+            return redirect()->route('logistics.messages', ['conversation' => $conversation->id]);
+        }
+
         $conversations = $conversationService->workspaceThreads(
             $request->user(),
             $request->integer('conversation') ?: null,
         );
+        $contacts = User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)
+            ->orderBy('first_name')->limit(100)
+            ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
+        $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+            ->filterRecipients($request->user(), $contacts);
 
         return view('Logistics.messages.index', [
             'conversations' => $conversations,
-            'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
+            'contacts' => $contacts,
+            'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
+            'messageContext' => app(ConversationContextPresenter::class)->forUser(
+                $request->user(),
+                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+            ),
         ]);
     }
 
@@ -780,26 +806,14 @@ class LogisticsPortalController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
+    public function sendMessage(Request $request, ConversationService $conversationService, ConversationMessageSender $sender): JsonResponse|RedirectResponse
     {
-        $data = $request->validate([
+        $recipientData = $request->validate([
             'recipient_user_id' => ['required', 'integer', 'exists:users,id'],
-            'conversation_id' => ['nullable', 'integer', 'exists:conversations,id'],
-            'body' => ['required', 'string', 'max:5000'],
         ]);
-
-        $context = [];
-        $conversation = null;
-        if (! empty($data['conversation_id'])) {
-            $conversation = Conversation::query()
-                ->whereKey((int) $data['conversation_id'])
-                ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-                ->whereHas('participants', fn ($query) => $query->where('users.id', (int) $data['recipient_user_id']))
-                ->firstOrFail();
-            $context = $conversationService->contextFor($conversation);
-        }
-
-        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context, $conversation);
+        $data = $recipientData + $sender->validate($request);
+        $recipient = User::query()->whereKey($data['recipient_user_id'])->where('status', User::STATUS_ACTIVE)->firstOrFail();
+        $message = $sender->send($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
             return response()->json([

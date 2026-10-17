@@ -344,7 +344,7 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
         $this->actingAs($buyer)
             ->get(route('buyer.orders.show', $order))
             ->assertOk()
-            ->assertSee('Your order has been delivered.')
+            ->assertSee('Check the delivered items before confirming receipt.')
             ->assertSee('Order Received')
             ->assertSee('Oct 18, 2026 8:30 PM');
     }

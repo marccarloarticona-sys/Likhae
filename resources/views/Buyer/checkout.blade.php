@@ -8,9 +8,22 @@
     $addresses = collect($addresses ?? []);
     $logisticsProviders = collect($logisticsProviders ?? []);
     $defaultAddress = $addresses->firstWhere('is_default', true) ?? $addresses->first();
-    $defaultLogisticsProvider = $logisticsProviders->first();
+    $defaultLogisticsProvider = $logisticsProviders->firstWhere('id', $selectedProviderId ?? null) ?? $logisticsProviders->first();
     $automaticRouting = (bool) ($automaticRouting ?? false);
+    $deliveryAvailability = (array) ($deliveryAvailability ?? []);
+    $deliveryAvailabilityKey = $automaticRouting
+        ? (string) ($selectedAddressId ?? $defaultAddress?->id ?? '')
+        : (string) ($selectedAddressId ?? $defaultAddress?->id ?? '').':'.(string) ($selectedProviderId ?? $defaultLogisticsProvider?->id ?? '');
+    $selectedDeliveryAvailability = $deliveryAvailability[$deliveryAvailabilityKey] ?? ['available' => false, 'requires_review' => false, 'message' => 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.'];
     $groups = collect(data_get($preview ?? [], 'groups', []));
+    $availableVouchers = collect($availableVouchers ?? []);
+    $sellerAvailableVouchers = $availableVouchers->except('platform');
+    $platformVouchers = collect($availableVouchers->get('platform', []));
+    $voucherSource = (string) ($voucherSource ?? 'seller');
+    $protectionEligibleItemCount = $groups
+        ->flatMap(fn ($group) => collect(data_get($group, 'items', [])))
+        ->filter(fn ($item) => (bool) data_get($item, 'protection_quote.eligible', false))
+        ->count();
     $hasUnavailableStock = (bool) ($hasUnavailableStock ?? $cartItems->contains(function ($item): bool {
         $variant = data_get($item, 'productVariant');
 
@@ -42,6 +55,13 @@
             </section>
         @endif
 
+        @if(filled($priceChangeNotice ?? null))
+            <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900 shadow-sm" role="status" aria-live="polite">
+                <h2 class="text-sm font-bold">Updated product prices</h2>
+                <p class="mt-1 text-xs leading-5">{{ $priceChangeNotice }}</p>
+            </section>
+        @endif
+
         @if($errors->any() && !$errors->has('voucher_code'))
             <section id="checkout-validation-errors" class="mt-5 rounded-2xl border border-red-300 bg-red-50 p-5 text-red-900 shadow-sm" role="alert" aria-live="assertive" tabindex="-1">
                 <h2 class="text-sm font-bold">Your order could not be placed</h2>
@@ -65,6 +85,7 @@
         <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
             @csrf
             <input type="hidden" name="checkout_attempt_key" value="{{ $checkoutAttemptKey }}">
+            <input type="hidden" name="applied_voucher_code" value="{{ $voucherCode ?? '' }}">
             @foreach($cartItems as $cartItem)
                 <input type="hidden" name="cart_item_ids[]" value="{{ $cartItem->id }}">
             @endforeach
@@ -73,24 +94,25 @@
                     <div class="flex items-center justify-between gap-4 border-b border-stone-100 px-5 py-4"><div><h2 class="text-base font-bold text-stone-900">Delivery Address</h2><p class="mt-1 text-xs text-stone-500">Your order will be delivered to this address.</p></div><a href="{{ route('buyer.account', ['tab' => 'addresses']) }}" class="shrink-0 text-xs font-semibold text-red-800">Change</a></div>
                     @error('address_id')<p class="mx-5 mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-800">{{ $message }} <a class="underline" href="{{ route('buyer.account.addresses') }}">Open Account Addresses</a></p>@enderror
                     @if($errors->has('latitude') || $errors->has('longitude'))<p class="mx-5 mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $errors->first('latitude') ?: $errors->first('longitude') }} <a class="underline" href="{{ route('buyer.account.addresses') }}">Confirm the address pin</a></p>@endif
-                    <div class="grid gap-3 p-5">@foreach($addresses as $address)<label class="cursor-pointer"><input required type="radio" name="address_id" value="{{ $address->id }}" class="peer sr-only" @checked((string) old('address_id', $defaultAddress?->id) === (string) $address->id)><span class="flex gap-3 rounded-xl border border-stone-200 p-4 transition peer-checked:border-red-800 peer-checked:bg-red-50/60"><span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-800">⌖</span><span class="min-w-0"><span class="flex flex-wrap items-center gap-2"><strong class="text-sm text-stone-900">{{ $address->recipient_name }}</strong><span class="text-xs text-stone-500">{{ $address->contact_number }}</span>@if($address->is_default)<span class="rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-semibold uppercase text-red-900">Default</span>@endif</span><span class="mt-2 block text-xs leading-5 text-stone-600">{{ $address->formatted() }}</span><span class="mt-2 block text-[11px] font-semibold {{ filled($address->latitude) && filled($address->longitude) ? 'text-emerald-700' : 'text-amber-700' }}">{{ filled($address->latitude) && filled($address->longitude) ? 'Exact pin confirmed' : 'Confirm exact pin in Account before ordering' }}</span></span></span></label>@endforeach</div>
+                    <div class="grid gap-3 p-5">@foreach($addresses as $address)<label class="cursor-pointer"><input required type="radio" name="address_id" value="{{ $address->id }}" class="peer sr-only" @checked((string) old('address_id', $selectedAddressId ?? $defaultAddress?->id) === (string) $address->id)><span class="flex gap-3 rounded-xl border border-stone-200 p-4 transition peer-checked:border-red-800 peer-checked:bg-red-50/60"><span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-800">⌖</span><span class="min-w-0"><span class="flex flex-wrap items-center gap-2"><strong class="text-sm text-stone-900">{{ $address->recipient_name }}</strong><span class="text-xs text-stone-500">{{ $address->contact_number }}</span>@if($address->is_default)<span class="rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-semibold uppercase text-red-900">Default</span>@endif</span><span class="mt-2 block text-xs leading-5 text-stone-600">{{ $address->formatted() }}</span><span class="mt-2 block text-[11px] font-semibold {{ filled($address->latitude) && filled($address->longitude) ? 'text-emerald-700' : 'text-amber-700' }}">{{ filled($address->latitude) && filled($address->longitude) ? 'Exact pin confirmed' : 'Confirm exact pin in Account before ordering' }}</span></span></span></label>@endforeach
+                    <p data-delivery-availability role="status" aria-live="polite" class="rounded-lg border p-3 text-xs font-semibold {{ !data_get($selectedDeliveryAvailability, 'available') ? 'border-red-200 bg-red-50 text-red-800' : (data_get($selectedDeliveryAvailability, 'requires_review') ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800') }}">{{ data_get($selectedDeliveryAvailability, 'message') ?: (data_get($selectedDeliveryAvailability, 'available') ? 'Delivery is available to this address.' : 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.') }}</p></div>
                 </section>
 
                 <section class="rounded-2xl border border-stone-200 bg-white shadow-sm">
                     <div class="border-b border-stone-100 px-5 py-4">
-                        <h2 class="text-base font-bold text-stone-900">Logistics / Delivery Method</h2>
-                        <p class="mt-1 text-xs text-stone-500">{{ $automaticRouting ? 'LIKHAE will route each seller parcel from its pickup municipality to the buyer municipality using canonical PSGC coverage.' : 'Choose an available delivery provider for your parcel.' }}</p>
+                        <h2 class="text-base font-bold text-stone-900">Delivery</h2>
+                        <p class="mt-1 text-xs text-stone-500">{{ $automaticRouting ? 'Delivery fees are calculated per seller parcel for your selected address.' : 'Choose an available delivery provider.' }}</p>
                     </div>
                     <div class="grid gap-3 p-5">
                         @if($automaticRouting)
                             <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                                <strong class="block">Automatic PSGC routing enabled</strong>
-                                <span class="mt-1 block text-xs leading-5">Each seller receives its own parcel route. A valid address with missing or ambiguous hub coverage can still be ordered and will enter manual routing review. Pickup stays blocked until an authorized hub is confirmed.</span>
+                                <strong class="block">Delivery fee: &#8369;{{ number_format((float) config('likhae.standard_shipping_fee', 50), 2) }} per seller parcel</strong>
+                                <span class="mt-1 block text-xs leading-5">Each shop ships as a separate parcel. Delivery availability is checked against the selected address.</span>
                             </div>
                         @else
                         @forelse($logisticsProviders as $provider)
                             <label class="cursor-pointer">
-                                <input required type="radio" name="logistics_center_id" value="{{ $provider->id }}" data-shipping-fee="{{ number_format((float) $provider->shipping_fee, 2, '.', '') }}" class="peer sr-only" @checked((string) old('logistics_center_id', $defaultLogisticsProvider?->id) === (string) $provider->id)>
+                                <input required type="radio" name="logistics_center_id" value="{{ $provider->id }}" data-shipping-fee="{{ number_format((float) $provider->shipping_fee, 2, '.', '') }}" class="peer sr-only" @checked((string) old('logistics_center_id', $selectedProviderId ?? $defaultLogisticsProvider?->id) === (string) $provider->id)>
                                 <span class="flex items-center gap-3 rounded-xl border border-stone-200 p-4 transition peer-checked:border-red-800 peer-checked:bg-red-50">
                                     <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-800">LP</span>
                                     <span class="min-w-0 flex-1">
@@ -105,47 +127,8 @@
                         @endforelse
                         @endif
                         @error('logistics_center_id')<p class="text-xs font-semibold text-red-700">{{ $message }}</p>@enderror
-                        <p class="text-[11px] leading-5 text-stone-500">{{ $automaticRouting ? 'The displayed fee uses the default address for preview; the submitted canonical address is authoritative.' : 'The final delivery fee is verified from the selected provider when the order is placed.' }}</p>
+                        @if(!$automaticRouting)<p class="text-[11px] leading-5 text-stone-500">The delivery fee is &#8369;{{ number_format((float) config('likhae.standard_shipping_fee', 50), 2) }} for each seller parcel.</p>@endif
                     </div>
-                </section>
-
-                <section class="rounded-2xl border border-stone-200 bg-white shadow-sm" aria-labelledby="checkout-voucher-heading">
-                    <div class="border-b border-stone-100 px-5 py-4">
-                        <h2 id="checkout-voucher-heading" class="text-base font-bold text-stone-900">Voucher</h2>
-                        <p class="mt-1 text-xs text-stone-500">Enter one seller voucher or one LIKHAE platform voucher.</p>
-                    </div>
-                    <div class="grid gap-3 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                        <label for="checkout-voucher-code" class="block text-xs font-semibold text-stone-700">
-                            Enter your voucher
-                            <input id="checkout-voucher-code" name="voucher_code" value="{{ old('voucher_code', $voucherCode ?? '') }}" maxlength="80" autocomplete="off" autocapitalize="characters" class="mt-2 block w-full rounded-xl border border-stone-300 px-3.5 py-2.5 text-sm uppercase outline-none transition focus:border-red-800 focus:ring-4 focus:ring-red-100" placeholder="e.g. SHOP-SAVE10" aria-describedby="checkout-voucher-help">
-                        </label>
-                        <div class="flex gap-2">
-                            <button type="submit" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="lk-btn lk-btn-red">Apply code</button>
-                            @if(filled(old('voucher_code', $voucherCode ?? '')))
-                                <button type="submit" name="clear_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="lk-btn lk-btn-light">Remove</button>
-                            @endif
-                        </div>
-                    </div>
-                    <p id="checkout-voucher-help" class="px-5 pb-4 text-[11px] text-stone-500">Seller vouchers apply to that shop. Platform vouchers are shared across eligible items in your order. Your totals update after applying the code.</p>
-                    @error('voucher_code')<p class="mx-5 mb-5 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800" role="alert">{{ $message }}</p>@enderror
-                    @if(collect($availableVouchers ?? [])->isNotEmpty())
-                        <div class="space-y-2 border-t border-stone-100 px-5 py-4">
-                            <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available for this checkout</p>
-                            @foreach($availableVouchers as $sellerId => $vouchers)
-                                @php
-                                    $voucherShop = (string) $sellerId === 'platform' ? 'LIKHAE Platform' : data_get($groups->get($sellerId), 'seller.business_name', 'Shop');
-                                @endphp
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <span class="text-[10px] text-stone-500">{{ $voucherShop }}:</span>
-                                    @foreach($vouchers as $voucher)
-                                        <button type="button" data-checkout-voucher-suggestion data-voucher-code="{{ $voucher->code }}" class="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-100" aria-label="Use {{ $voucher->code }} at {{ $voucherShop }}">
-                                            {{ $voucher->code }} &middot; {{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off &middot; Min PHP {{ number_format((float) $voucher->minimum_order_amount, 2) }}
-                                        </button>
-                                    @endforeach
-                                </div>
-                            @endforeach
-                        </div>
-                    @endif
                 </section>
 
                 @foreach($groups as $sellerId => $group)
@@ -163,12 +146,6 @@
                                 <span class="rounded-full bg-white px-3 py-1 text-[10px] font-semibold text-stone-600">{{ collect(data_get($group, 'items', []))->count() }} {{ collect(data_get($group, 'items', []))->count() === 1 ? 'product' : 'products' }} · one seller shipment</span>
                             </div>
                         </header>
-                        @if(data_get($group, 'routing_review_required'))
-                            <div class="border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs leading-5 text-amber-900" role="status">
-                                <strong class="block">Manual logistics routing required</strong>
-                                <span>{{ data_get($group, 'routing_review_reason', 'This address needs an authorized hub selection.') }} The order can be placed; the parcel will not be released for pickup until Logistics resolves the route.</span>
-                            </div>
-                        @endif
                         <div class="space-y-3 p-4 sm:p-5" aria-label="{{ data_get($group, 'seller.business_name', 'Seller') }} products">
                             @foreach(collect(data_get($group, 'items', [])) as $item)
                                 @php
@@ -220,19 +197,143 @@
                             <div class="flex justify-between gap-3 text-amber-800"><span>Additional Care</span><strong data-seller-protection-total>&#8369;{{ number_format($sellerProtection, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 border-t border-stone-100 pt-2 font-bold text-stone-900"><span>Seller total</span><strong data-seller-total>&#8369;{{ number_format($sellerTotal, 2) }}</strong></div>
                         </div>
-                        @php($sellerNoteInput = old('seller_notes.'.$sellerId, $sellerNotes[$sellerId] ?? ''))
+                        @php
+                            $sellerNoteInput = old('seller_notes.'.$sellerId, $sellerNotes[$sellerId] ?? '');
+                        @endphp
                         <div class="mt-4 border-t border-stone-100 pt-4">
                             <label for="seller-note-{{ $sellerId }}" class="block text-xs font-semibold text-stone-700">Note for {{ data_get($group, 'seller.business_name', 'Seller') }} <span class="font-normal text-stone-500">(optional)</span></label>
-                            <textarea id="seller-note-{{ $sellerId }}" name="seller_notes[{{ $sellerId }}]" rows="3" maxlength="500" data-seller-note class="mt-2 block w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm text-stone-800 outline-none transition focus:border-red-800 focus:ring-4 focus:ring-red-100" placeholder="Add instructions for this seller...">{{ $sellerNoteInput }}</textarea>
-                            <div class="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-500"><p id="seller-note-help-{{ $sellerId }}">Order instructions only. Do not include passwords, card details, or other sensitive information.</p><span data-seller-note-count>{{ mb_strlen((string) $sellerNoteInput) }} / 500</span></div>
+                            <textarea id="seller-note-{{ $sellerId }}" name="seller_notes[{{ $sellerId }}]" rows="3" maxlength="200" data-seller-note class="mt-2 block w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm text-stone-800 outline-none transition focus:border-red-800 focus:ring-4 focus:ring-red-100" placeholder="Add instructions for this seller...">{{ $sellerNoteInput }}</textarea>
+                            <div class="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-500"><p id="seller-note-help-{{ $sellerId }}">Order instructions only. Do not include passwords, card details, or other sensitive information.</p><span data-seller-note-count>{{ mb_strlen((string) $sellerNoteInput) }} / 200</span></div>
                         </div>
                     </section>
                 @endforeach
 
-                <section class="rounded-2xl border border-stone-200 bg-white shadow-sm"><div class="border-b border-stone-100 px-5 py-4"><h2 class="text-base font-bold text-stone-900">Payment Method</h2><p class="mt-1 text-xs text-stone-500">New orders use Cash on Delivery. The final-mile delivery rider collects the full amount shown below.</p></div><div class="p-5"><label class="block cursor-pointer"><input type="radio" name="payment_method" value="COD" class="peer sr-only" checked><span class="flex items-start gap-3 rounded-xl border border-red-800 bg-red-50 p-4"><span class="text-red-800">₱</span><span><strong class="block text-xs">Cash on Delivery (COD)</strong><small class="text-[10px] text-stone-500">Pay the product amount plus shipping when your order arrives.</small></span></span></label></div>@error('payment_method')<p class="px-5 pb-5 text-xs font-semibold text-red-700">{{ $message }}</p>@enderror</section>
+                <section class="rounded-2xl border border-stone-200 bg-white shadow-sm"><div class="border-b border-stone-100 px-5 py-4"><h2 class="text-base font-bold text-stone-900">Payment Method</h2><p class="mt-1 text-xs text-stone-500">Choose how you want to pay for this order.</p></div><div class="grid gap-3 p-5 sm:grid-cols-2"><label class="block cursor-pointer"><input required type="radio" name="payment_method" value="COD" class="peer sr-only" checked><span class="flex h-full items-start gap-3 rounded-xl border border-red-800 bg-red-50 p-4"><span class="text-red-800">₱</span><span><strong class="block text-xs">Cash on Delivery (COD)</strong><small class="text-[10px] text-stone-500">Pay when your order arrives.</small></span></span></label><label class="block cursor-not-allowed opacity-60"><input type="radio" disabled class="peer sr-only"><span class="flex h-full items-start gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4"><span class="text-stone-500">◎</span><span><strong class="block text-xs text-stone-700">E-Wallet</strong><small class="text-[10px] text-stone-500">Coming Soon</small></span></span></label></div>@error('payment_method')<p class="px-5 pb-5 text-xs font-semibold text-red-700">{{ $message }}</p>@enderror</section>
             </div>
 
-             <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><h2 class="text-base font-bold text-stone-900">Order summary</h2><dl class="mt-4 space-y-3 text-sm"><div class="flex justify-between"><dt class="text-stone-500">Subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div><div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div><div class="flex justify-between text-amber-800"><dt>Additional Care</dt><dd id="checkout-protection-total">&#8369;{{ number_format((float) data_get($preview, 'protection_total', 0), 2) }}</dd></div><div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div></dl>@error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror<button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked)>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) ? 'Delivery unavailable' : ($checkoutBlocked ? 'Review cart items' : 'Place Order') }}</button></aside>
+             <aside class="h-fit rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+                <h2 class="text-base font-bold text-stone-900">Order Summary</h2>
+                <p class="mt-1 text-xs text-stone-500">Shipping and eligible shop discounts are confirmed at checkout.</p>
+                <dl class="mt-4 space-y-3 text-sm">
+                    <div class="flex justify-between"><dt class="text-stone-500">Selected items</dt><dd>{{ collect($cartItems)->count() }}</dd></div>
+                    <div class="flex justify-between"><dt class="text-stone-500">Selected subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div>
+                    <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
+                        <div>
+                            <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
+                            <p class="mt-1 text-[11px] text-stone-500">Enter a seller voucher code. Choose a LIKHAE voucher from the picker.</p>
+                        </div>
+                        <label for="checkout-voucher-code" class="block text-[11px] font-semibold text-stone-700">Voucher code</label>
+                        <div class="flex gap-2">
+                            <input id="checkout-voucher-code" name="voucher_code" value="{{ old('voucher_code', $voucherSource === 'seller' ? ($voucherCode ?? '') : '') }}" maxlength="80" autocomplete="off" autocapitalize="characters" class="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs uppercase" placeholder="Enter your voucher">
+                            <button type="submit" name="apply_seller_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg bg-red-900 px-3 py-2 text-xs font-semibold text-white">Apply Voucher</button>
+                            @if($voucherSource === 'seller' && filled(old('voucher_code', $voucherCode ?? '')))
+                                <button type="submit" name="clear_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-stone-600">Clear</button>
+                            @endif
+                        </div>
+                        @error('voucher_code')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
+                        <p class="text-[10px] text-stone-500">Seller vouchers apply to that shop. Your total updates after applying the code.</p>
+                        @if($sellerAvailableVouchers->isNotEmpty())
+                            <div class="space-y-2 border-t border-stone-200 pt-3">
+                                <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available seller vouchers</p>
+                                @foreach($sellerAvailableVouchers as $sellerId => $vouchers)
+                                    @php $voucherShop = data_get($groups->get($sellerId), 'seller.business_name', 'Shop'); @endphp
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="text-[10px] text-stone-500">{{ $voucherShop }}:</span>
+                                        @foreach($vouchers as $voucher)
+                                            <button type="button" data-checkout-voucher-suggestion data-voucher-code="{{ $voucher->code }}" class="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-50" aria-label="Use {{ $voucher->code }} at {{ $voucherShop }}">{{ $voucher->code }} &middot; {{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off</button>
+                                        @endforeach
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                    <div class="rounded-xl border border-red-200 bg-red-50/60 p-3">
+                        <button type="button" data-open-platform-vouchers aria-haspopup="dialog" aria-controls="checkout-platform-voucher-dialog" class="flex w-full items-center justify-between gap-3 text-left">
+                            <span class="flex items-center gap-3">
+                                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-900 text-xs font-black tracking-wide text-white">LK</span>
+                                <span>
+                                    <strong class="block text-sm text-stone-900">LIKHAE Voucher</strong>
+                                    <small class="mt-0.5 block text-[11px] text-stone-500">{{ $platformVouchers->isEmpty() ? 'No platform vouchers available' : 'Choose from '.$platformVouchers->count().' available '.\Illuminate\Support\Str::plural('voucher', $platformVouchers->count()) }}</small>
+                                </span>
+                            </span>
+                            <span class="rounded-lg bg-red-900 px-3 py-2 text-[11px] font-bold text-white">{{ $platformVouchers->isEmpty() ? 'Unavailable' : 'Browse' }}</span>
+                        </button>
+                        @if($voucherSource === 'platform' && filled($voucherCode ?? null))
+                            <div class="mt-3 flex items-center justify-between gap-3 border-t border-red-200 pt-3 text-xs">
+                                <span class="font-semibold text-emerald-800">Applied: {{ $voucherCode }}</span>
+                                <button type="submit" name="clear_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
+                            </div>
+                        @endif
+                    </div>
+                    <div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div>
+                    <div class="flex justify-between"><dt class="text-stone-500">Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div>
+                    <div class="flex items-center justify-between gap-3 text-amber-800">
+                        <dt><label for="checkout-protection-master" class="flex cursor-pointer items-center gap-2"><input id="checkout-protection-master" type="checkbox" data-protection-master aria-label="Apply Additional Care to all eligible items" @disabled($protectionEligibleItemCount === 0)><span><span>Apply Additional Care</span><small class="mt-1 block text-[10px] text-stone-500">{{ $protectionEligibleItemCount > 0 ? 'All eligible items' : 'Not available for these items' }}</small></span></label></dt>
+                        <dd id="checkout-protection-total">&#8369;{{ number_format((float) data_get($preview, 'protection_total', 0), 2) }}</dd>
+                    </div>
+                    <div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Estimated total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div>
+                </dl>
+                @error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror
+                <button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked || !data_get($selectedDeliveryAvailability, 'available'))>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) || !data_get($selectedDeliveryAvailability, 'available') ? 'Delivery unavailable' : ($checkoutBlocked || $hasUnavailableStock ? 'Review checkout' : 'Place Order') }}</button>
+                <p class="mt-3 text-center text-[10px] leading-4 text-stone-400">Review your delivery and payment details before placing the order.</p>
+            </aside>
+
+            <dialog id="checkout-platform-voucher-dialog" class="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-3xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-0 shadow-2xl backdrop:bg-stone-950/60" aria-labelledby="checkout-platform-voucher-title">
+                <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-stone-200 bg-white p-5 sm:p-6">
+                    <div>
+                        <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-red-800">LIKHAE Platform</span>
+                        <h2 id="checkout-platform-voucher-title" class="mt-1 text-xl font-bold text-stone-900">Choose a platform voucher</h2>
+                        <p class="mt-1 text-xs text-stone-500">Select one LIKHAE voucher to apply across eligible items in this order.</p>
+                    </div>
+                    <button type="button" data-close-platform-vouchers class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-stone-200 text-xl leading-none text-stone-600 hover:bg-stone-50" aria-label="Close voucher picker">&times;</button>
+                </div>
+                <div class="p-5 sm:p-6">
+                    @error('platform_voucher_code')<p class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800" role="alert">{{ $message }}</p>@enderror
+                    @if($platformVouchers->isEmpty())
+                        <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 p-8 text-center">
+                            <strong class="block text-sm text-stone-800">No LIKHAE vouchers are available right now.</strong>
+                            <p class="mt-1 text-xs text-stone-500">You can still enter a seller voucher in the voucher field.</p>
+                        </div>
+                    @else
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            @foreach($platformVouchers as $voucher)
+                                @php
+                                    $voucherIsApplied = $voucherSource === 'platform' && mb_strtoupper((string) $voucher->code) === mb_strtoupper((string) $voucherCode);
+                                    $voucherDiscountLabel = $voucher->discount_type === 'PERCENT'
+                                        ? number_format((float) $voucher->discount_value, 0).'% off'
+                                        : 'PHP '.number_format((float) $voucher->discount_value, 2).' off';
+                                @endphp
+                                <article class="relative overflow-hidden rounded-2xl border {{ $voucherIsApplied ? 'border-emerald-300 bg-emerald-50/50' : 'border-stone-200 bg-white' }} shadow-sm">
+                                    <div class="h-1.5 bg-gradient-to-r from-red-950 via-red-700 to-amber-400"></div>
+                                    <div class="p-4 sm:p-5">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div>
+                                                <span class="inline-flex rounded-full bg-red-100 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide text-red-900">LIKHAE Platform</span>
+                                                <h3 class="mt-3 text-base font-bold text-stone-900">{{ $voucher->name ?: 'LIKHAE Voucher' }}</h3>
+                                            </div>
+                                            <span class="rounded-xl bg-red-950 px-3 py-2 text-lg font-black text-white">{{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 0) }}</span>
+                                        </div>
+                                        <p class="mt-3 text-sm font-semibold text-red-900">{{ $voucherDiscountLabel }}</p>
+                                        <div class="mt-3 flex flex-wrap gap-2 text-[10px] text-stone-600">
+                                            <span class="rounded-full bg-stone-100 px-2.5 py-1">Min. spend &#8369;{{ number_format((float) $voucher->minimum_order_amount, 2) }}</span>
+                                            @if($voucher->maximum_discount_amount !== null)<span class="rounded-full bg-stone-100 px-2.5 py-1">Up to &#8369;{{ number_format((float) $voucher->maximum_discount_amount, 2) }} off</span>@endif
+                                            @if($voucher->ends_at)<span class="rounded-full bg-stone-100 px-2.5 py-1">Ends {{ $voucher->ends_at->format('M j, Y') }}</span>@endif
+                                        </div>
+                                        <div class="mt-4 flex items-center justify-between gap-3 border-t border-dashed border-stone-300 pt-3">
+                                            <span class="font-mono text-xs font-bold tracking-wide text-stone-800">{{ $voucher->code }}</span>
+                                            @if($voucherIsApplied)
+                                                <span class="rounded-lg bg-emerald-700 px-3 py-2 text-[11px] font-bold text-white">Applied</span>
+                                            @else
+                                                <button type="submit" name="platform_voucher_code" value="{{ $voucher->code }}" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg bg-red-900 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-red-950">Use voucher</button>
+                                            @endif
+                                        </div>
+                                    </div>
+                                </article>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+            </dialog>
         </form>
     @endif
 </div>
@@ -242,6 +343,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             const shipping = document.getElementById('checkout-shipping-total');
             const protection = document.getElementById('checkout-protection-total');
+            const protectionMaster = document.querySelector('[data-protection-master]');
             const total = document.getElementById('checkout-grand-total');
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
@@ -250,6 +352,13 @@
             const updateTotals = (input) => {
                 let shippingTotal = 0;
                 let protectionTotal = 0;
+                const protectionCheckboxes = [...document.querySelectorAll('[data-protection-checkbox]')];
+                const selectedProtectionCount = protectionCheckboxes.filter((checkbox) => checkbox.checked).length;
+
+                if (protectionMaster) {
+                    protectionMaster.checked = protectionCheckboxes.length > 0 && selectedProtectionCount === protectionCheckboxes.length;
+                    protectionMaster.indeterminate = selectedProtectionCount > 0 && selectedProtectionCount < protectionCheckboxes.length;
+                }
 
                 document.querySelectorAll('[data-seller-card]').forEach((card) => {
                     const sellerId = card.dataset.sellerId;
@@ -278,15 +387,26 @@
             document.querySelectorAll('[data-protection-checkbox]').forEach((input) => {
                 input.addEventListener('change', () => updateTotals(document.querySelector('input[name="logistics_center_id"]:checked')));
             });
+            protectionMaster?.addEventListener('change', () => {
+                document.querySelectorAll('[data-protection-checkbox]').forEach((input) => {
+                    input.checked = protectionMaster.checked;
+                });
+                updateTotals(document.querySelector('input[name="logistics_center_id"]:checked'));
+            });
+            updateTotals(document.querySelector('input[name="logistics_center_id"]:checked'));
 
             document.querySelectorAll('input[name="logistics_center_id"]').forEach((input) => {
-                input.addEventListener('change', () => updateTotals(input));
+                input.addEventListener('change', () => {
+                    updateTotals(input);
+                    updateDeliveryAvailability();
+                });
                 if (input.checked) updateTotals(input);
             });
+            document.querySelectorAll('input[name="address_id"]').forEach((input) => input.addEventListener('change', updateDeliveryAvailability));
             document.querySelectorAll('[data-seller-note]').forEach((textarea) => {
                 const counter = textarea.parentElement?.querySelector('[data-seller-note-count]');
                 const updateCount = () => {
-                    if (counter) counter.textContent = `${Array.from(textarea.value).length} / 500`;
+                    if (counter) counter.textContent = `${Array.from(textarea.value).length} / 200`;
                 };
                 textarea.addEventListener('input', updateCount);
                 updateCount();
@@ -294,7 +414,45 @@
 
             const checkoutForm = document.querySelector('[data-checkout-form]');
             const placeOrderButton = checkoutForm?.querySelector('[data-place-order-submit]');
+            const deliveryStatus = document.querySelector('[data-delivery-availability]');
+            const deliveryAvailability = @json($deliveryAvailability);
+            const automaticRouting = @json($automaticRouting);
+            const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked);
+            const availabilityMessage = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
+            const updateDeliveryAvailability = () => {
+                const addressId = document.querySelector('input[name="address_id"]:checked')?.value || '';
+                const providerId = document.querySelector('input[name="logistics_center_id"]:checked')?.value || '';
+                const key = automaticRouting ? addressId : `${addressId}:${providerId}`;
+                const availability = deliveryAvailability[key] || { available: false, requires_review: false, message: availabilityMessage };
+                if (deliveryStatus) {
+                    deliveryStatus.textContent = availability.message || (availability.available ? 'Delivery is available to this address.' : availabilityMessage);
+                    deliveryStatus.classList.toggle('border-emerald-200', availability.available && !availability.requires_review);
+                    deliveryStatus.classList.toggle('bg-emerald-50', availability.available && !availability.requires_review);
+                    deliveryStatus.classList.toggle('text-emerald-800', availability.available && !availability.requires_review);
+                    deliveryStatus.classList.toggle('border-amber-200', availability.available && availability.requires_review);
+                    deliveryStatus.classList.toggle('bg-amber-50', availability.available && availability.requires_review);
+                    deliveryStatus.classList.toggle('text-amber-900', availability.available && availability.requires_review);
+                    deliveryStatus.classList.toggle('border-red-200', !availability.available);
+                    deliveryStatus.classList.toggle('bg-red-50', !availability.available);
+                    deliveryStatus.classList.toggle('text-red-800', !availability.available);
+                }
+                if (placeOrderButton && !placeOrderButton.textContent.includes('Placing order')) {
+                    placeOrderButton.disabled = checkoutBlocked || !availability.available;
+                    placeOrderButton.textContent = checkoutBlocked ? 'Review checkout' : (availability.available ? 'Place Order' : 'Delivery unavailable');
+                }
+            };
             const voucherInput = document.getElementById('checkout-voucher-code');
+            const platformVoucherDialog = document.getElementById('checkout-platform-voucher-dialog');
+            const openPlatformVouchers = document.querySelector('[data-open-platform-vouchers]');
+            const closePlatformVouchers = platformVoucherDialog?.querySelector('[data-close-platform-vouchers]');
+            openPlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.showModal());
+            closePlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.close());
+            platformVoucherDialog?.addEventListener('click', (event) => {
+                if (event.target === platformVoucherDialog) platformVoucherDialog.close();
+            });
+            @if($errors->has('platform_voucher_code'))
+                platformVoucherDialog?.showModal();
+            @endif
             document.querySelectorAll('[data-checkout-voucher-suggestion]').forEach((button) => {
                 button.addEventListener('click', () => {
                     if (!voucherInput) return;
@@ -302,6 +460,7 @@
                     voucherInput.focus();
                 });
             });
+            updateDeliveryAvailability();
             checkoutForm?.addEventListener('submit', (event) => {
                 if (!event.submitter?.matches('[data-place-order-submit]')) return;
                 if (!placeOrderButton) return;

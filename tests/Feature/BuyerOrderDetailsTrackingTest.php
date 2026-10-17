@@ -103,7 +103,7 @@ class BuyerOrderDetailsTrackingTest extends TestCase
             ->assertSee('Sorted by destination')
             ->assertSee('Pending')
             ->assertSee('1 Saved Order Street')
-            ->assertSee('Collect on delivery · pending')
+            ->assertSee('Cash on Delivery (COD)')
             ->assertSee('data-map-live="false"', false)
             ->assertDontSee('Proof of Delivery');
 

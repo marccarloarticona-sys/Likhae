@@ -51,9 +51,11 @@
             <label class="sl-field sl-span-2"><span>Voucher name</span><input name="name" type="text" required></label>
             <label class="sl-field"><span>Code</span><input name="code" maxlength="80" required></label>
             <label class="sl-field"><span>Discount type</span><select name="discount_type"><option value="PERCENT">Percent</option><option value="FIXED">Fixed amount</option></select></label>
-                <label class="sl-field"><span>Discount value</span><input name="discount_value" type="number" min="0" step="0.01" value="10" required></label>
+                <label class="sl-field"><span>Discount value</span><input name="discount_value" type="number" min="0.01" step="0.01" value="10" required></label>
             <label class="sl-field"><span>Minimum order amount</span><input name="minimum_order_amount" type="number" min="0" step="0.01" value="0"></label>
+                <label class="sl-field"><span>Maximum discount</span><input name="maximum_discount_amount" type="number" min="0.01" step="0.01" placeholder="No cap"></label>
                 <label class="sl-field"><span>Usage limit</span><input name="usage_limit" type="number" min="1"></label>
+                <label class="sl-field"><span>Uses per buyer</span><input name="per_user_limit" type="number" min="1" placeholder="No limit"></label>
                 <label class="sl-field"><span>Start date</span><input name="starts_at" type="datetime-local"></label>
                 <label class="sl-field"><span>End date</span><input name="ends_at" type="datetime-local"></label>
             </div>

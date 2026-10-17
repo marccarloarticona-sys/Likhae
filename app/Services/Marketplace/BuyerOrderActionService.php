@@ -2,6 +2,7 @@
 
 namespace App\Services\Marketplace;
 
+use App\Events\ShipmentTrackingUpdated;
 use App\Models\Admin\Notification;
 use App\Models\Buyer\Order;
 use App\Models\Logistics\ShipmentEvent;
@@ -19,7 +20,7 @@ class BuyerOrderActionService
     /** @return array<string, mixed> */
     public function state(Order $order, bool $returnRefundStorageReady = true): array
     {
-        $order->loadMissing('sellerOrders.shipments.events', 'disputes');
+        $order->loadMissing('sellerOrders.shipments.events', 'disputes', 'payments');
 
         if ($returnRefundStorageReady) {
             $order->loadMissing('returnRefundRequests.sellerRequests');
@@ -52,7 +53,7 @@ class BuyerOrderActionService
             ->max('occurred_at');
         $returnDeadline = $deliveredAt?->copy()->addDays(5);
         $autoConfirmAt = $allDeliveredWithTimestamps && $deliveredAt
-            ? $deliveredAt->copy()->addHours(72)
+            ? $deliveredAt->copy()->addDays(3)
             : null;
         $activeDispute = $order->disputes
             ->where('type', 'RETURN_REFUND')
@@ -69,12 +70,20 @@ class BuyerOrderActionService
                 ->first()
             : null;
         $activeCase = $activeDispute ?: $activeRequest;
+        $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
+        $canCancel = in_array($order->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true)
+            && $activeSellerOrders->isNotEmpty()
+            && $activeSellerOrders->every(fn ($sellerOrder): bool => in_array($sellerOrder->status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)
+                && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)))
+            && ! $order->payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID')
+            && ! $activeCase;
 
         return [
             'all_delivered' => $allDelivered,
             'delivered_at' => $deliveredAt,
             'return_deadline' => $returnDeadline,
             'auto_confirm_at' => $autoConfirmAt,
+            'can_cancel' => $canCancel,
             'active_dispute' => $activeCase,
             'latest_request' => $latestRequest,
             'can_confirm_received' => $order->status === 'PROCESSING' && $allAwaitingReceipt && ! $activeCase,
@@ -170,6 +179,8 @@ class BuyerOrderActionService
                         'occurred_at' => $completedAt,
                     ]);
                 }
+
+                event(ShipmentTrackingUpdated::fromShipment($shipment));
             }
         }
 

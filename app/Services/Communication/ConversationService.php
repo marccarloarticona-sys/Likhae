@@ -25,7 +25,9 @@ class ConversationService
         }
 
         $query = Conversation::query()
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $user->id))
+            ->whereHas('participantRecords', fn ($query) => $query
+                ->where('user_id', $user->id)
+                ->whereNull('left_at'))
             ->with($relations)
             ->latest('updated_at');
 
@@ -34,6 +36,10 @@ class ConversationService
         }
 
         $conversations = $query->get();
+        $authorization = app(ConversationAuthorizationService::class);
+        $conversations = $conversations
+            ->filter(fn (Conversation $conversation): bool => $authorization->canAccess($user, $conversation))
+            ->values();
 
         if ($includeMessages) {
             $conversations->load('messages.sender');
@@ -90,10 +96,12 @@ class ConversationService
     public function messagesFor(User $user, int $conversationId, int $limit = 50, ?int $afterId = null): Collection
     {
         $conversation = Conversation::query()
-            ->select('conversations.id')
             ->whereKey($conversationId)
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $user->id))
+            ->whereHas('participantRecords', fn ($query) => $query
+                ->where('user_id', $user->id)
+                ->whereNull('left_at'))
             ->firstOrFail();
+        app(ConversationAuthorizationService::class)->assertCanAccess($user, $conversation);
 
         $columns = ['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at'];
         if (Schema::hasColumn('messages', 'attachment_path')) {
@@ -121,7 +129,7 @@ class ConversationService
             'body' => $message->body,
             'time' => $sentAt?->diffForHumans() ?? 'Just now',
             'sent_at' => $sentAt?->toIso8601String(),
-            'attachment_url' => filled($message->attachment_path) ? route('seller.messages.attachments.show', $message->id) : null,
+            'attachment_url' => app(MessageAttachmentService::class)->privateUrl($message),
         ];
     }
 
@@ -142,6 +150,7 @@ class ConversationService
     {
         $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation, $attachmentPath): Message {
             $conversation ??= $this->findOrCreate($sender, $recipientUserId, $context);
+            app(ConversationAuthorizationService::class)->assertCanAccess($sender, $conversation);
             $now = now();
 
             $attributes = [
@@ -213,7 +222,12 @@ class ConversationService
     /** Start a thread before either participant has written a message. */
     public function start(User $creator, int $recipientUserId, array $context = []): Conversation
     {
-        return DB::transaction(fn (): Conversation => $this->findOrCreate($creator, $recipientUserId, $context));
+        return DB::transaction(function () use ($creator, $recipientUserId, $context): Conversation {
+            $conversation = $this->findOrCreate($creator, $recipientUserId, $context);
+            app(ConversationAuthorizationService::class)->assertCanAccess($creator, $conversation);
+
+            return $conversation;
+        });
     }
 
     /** Preserve a thread's order metadata when a participant replies. */
@@ -232,6 +246,7 @@ class ConversationService
         ConversationParticipant::query()
             ->where('conversation_id', $conversation->id)
             ->where('user_id', $user->id)
+            ->whereNull('left_at')
             ->update(['last_read_at' => now()]);
     }
 
@@ -249,7 +264,7 @@ class ConversationService
             ?: $this->findPairConversation($ids);
 
         if ($conversation) {
-            return $conversation;
+            return $this->preserveMissingContext($conversation, $context);
         }
 
         try {
@@ -273,7 +288,7 @@ class ConversationService
                 ->first()
                 ?: $this->findPairConversation($ids);
             if ($conversation) {
-                return $conversation;
+                return $this->preserveMissingContext($conversation, $context);
             }
 
             throw $exception;
@@ -298,6 +313,28 @@ class ConversationService
         ]);
 
         return $conversation;
+    }
+
+    /** Add verified order/shipment metadata to an existing plain direct thread. */
+    private function preserveMissingContext(Conversation $conversation, array $context): Conversation
+    {
+        $keys = ['order_id', 'seller_order_id', 'shipment_id'];
+        $hasContext = collect($keys)->contains(fn (string $key): bool => filled($conversation->{$key}));
+        if ($hasContext) {
+            return $conversation;
+        }
+
+        $updates = collect($keys)
+            ->mapWithKeys(fn (string $key): array => [$key => $context[$key] ?? null])
+            ->filter(fn ($value): bool => filled($value))
+            ->all();
+        if ($updates === []) {
+            return $conversation;
+        }
+
+        $conversation->forceFill($updates + ['type' => $context['type'] ?? $conversation->type])->saveQuietly();
+
+        return $conversation->refresh();
     }
 
     private function findPairConversation(Collection $ids): ?Conversation

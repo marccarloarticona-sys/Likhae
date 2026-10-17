@@ -113,6 +113,120 @@ class CheckoutService
             ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', number_format((float) config('likhae.standard_shipping_fee', 50), 2, '.', '')));
     }
 
+    /** @return array{available: bool, requires_review: bool, message: string|null} */
+    public function deliveryAvailability(Collection $items, Address $destination, ?LogisticsCenter $provider = null): array
+    {
+        try {
+            $requiresReview = $this->assertDeliveryAvailable($items, $destination, $provider);
+
+            return [
+                'available' => true,
+                'requires_review' => $requiresReview,
+                'message' => $requiresReview ? 'Delivery details may need confirmation after your order is placed.' : null,
+            ];
+        } catch (ValidationException $exception) {
+            $message = collect($exception->errors())->flatten()->filter()->first()
+                ?: 'Delivery is not available for this address.';
+
+            return [
+                'available' => false,
+                'requires_review' => false,
+                'message' => $this->buyerFacingDeliveryError((string) $message),
+            ];
+        }
+    }
+
+    private function assertDeliveryAvailable(Collection $items, Address $destination, ?LogisticsCenter $provider = null): bool
+    {
+        try {
+            AddressCoordinateValidator::assertValid([
+                'latitude' => $destination->latitude,
+                'longitude' => $destination->longitude,
+            ]);
+        } catch (ValidationException $exception) {
+            throw ValidationException::withMessages([
+                'address_id' => $this->buyerFacingDeliveryError((string) (collect($exception->errors())->flatten()->filter()->first() ?? '')),
+            ]);
+        }
+
+        if (! $this->automaticRoutingReady()) {
+            if (! $provider) {
+                throw ValidationException::withMessages([
+                    'logistics_center_id' => 'Select an available delivery provider.',
+                ]);
+            }
+
+            try {
+                if (! $this->serviceAreaLocationForAddress($destination, $provider)) {
+                    throw ValidationException::withMessages([
+                        'address_id' => 'This delivery provider does not serve the selected address.',
+                    ]);
+                }
+            } catch (ValidationException $exception) {
+                throw ValidationException::withMessages([
+                    'address_id' => $this->buyerFacingDeliveryError((string) (collect($exception->errors())->flatten()->filter()->first() ?? '')),
+                ]);
+            }
+
+            return false;
+        }
+
+        $requiresReview = false;
+        foreach ($items as $item) {
+            $item->loadMissing('productVariant.product.sellerProfile.businessAddress');
+            $seller = $item->productVariant?->product?->sellerProfile;
+            if (! $seller) {
+                continue;
+            }
+
+            try {
+                $route = $this->routing->resolve($seller, $destination);
+                $this->assertCrossHubCustodyReady($route);
+            } catch (ValidationException $exception) {
+                $reason = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
+                if ($this->isUnserviceableBuyerAddress($reason) || str_contains(mb_strtolower($reason), 'cross-hub fulfillment')) {
+                    throw ValidationException::withMessages([
+                        'address_id' => $this->buyerFacingDeliveryError($reason),
+                    ]);
+                }
+
+                // Ambiguous or incomplete seller-side routing remains a
+                // logistics review state. Buyer-address coverage failures
+                // are blocked before order creation below.
+                if (! $this->routingReviewReason($exception)) {
+                    throw ValidationException::withMessages([
+                        'address_id' => $this->buyerFacingDeliveryError($reason),
+                    ]);
+                }
+
+                $requiresReview = true;
+            }
+        }
+
+        return $requiresReview;
+    }
+
+    private function isUnserviceableBuyerAddress(string $reason): bool
+    {
+        $message = mb_strtolower($reason);
+
+        return str_contains($message, 'buyer delivery')
+            && (str_contains($message, 'no active logistics hub')
+                || str_contains($message, 'not covered')
+                || str_contains($message, 'missing a canonical')
+                || str_contains($message, 'missing or does not belong'));
+    }
+
+    private function buyerFacingDeliveryError(string $reason): string
+    {
+        $message = mb_strtolower($reason);
+        if (str_contains($message, 'latitude') || str_contains($message, 'longitude') || str_contains($message, 'pin')) {
+            return 'Confirm the exact delivery pin in your saved address before placing this order.';
+        }
+
+        return 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
+    }
+
     public function preview(
         Collection $items,
         array|string $voucherCodes = [],
@@ -286,6 +400,7 @@ class CheckoutService
         array $protectionItemIds = [],
         array $sellerNotes = [],
         ?string $checkoutAttemptKey = null,
+        ?array $expectedPriceSnapshot = null,
     ): Order
     {
         if (strtoupper($paymentMethod) !== 'COD') {
@@ -334,7 +449,7 @@ class CheckoutService
         }
 
         try {
-            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash): Order {
+            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash, $expectedPriceSnapshot): Order {
             $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash, true);
             if ($existing) {
                 return $existing;
@@ -471,6 +586,31 @@ class CheckoutService
                 $variant->setRelation('product', $product);
                 $item->setRelation('productVariant', $variant);
             }
+
+            if ($expectedPriceSnapshot !== null) {
+                $priceChanges = [];
+                foreach ($items as $item) {
+                    $expectedPrice = $expectedPriceSnapshot[(string) $item->id] ?? null;
+                    if ($expectedPrice === null) {
+                        continue;
+                    }
+
+                    $currentPrice = (float) $item->productVariant->final_price;
+                    if ((int) round((float) $expectedPrice * 100) !== (int) round($currentPrice * 100)) {
+                        $priceChanges[] = $item->productVariant->product->name
+                            .' changed from PHP '.number_format((float) $expectedPrice, 2)
+                            .' to PHP '.number_format($currentPrice, 2).'.';
+                    }
+                }
+
+                if ($priceChanges !== []) {
+                    throw ValidationException::withMessages([
+                        'price_changed' => 'Product prices changed while you were reviewing checkout. '.implode(' ', $priceChanges).' Review the updated totals before placing the order.',
+                    ]);
+                }
+            }
+
+            $this->assertDeliveryAvailable($items, $address, $logisticsProvider);
 
             $this->lockVoucherRows($voucherCodes);
 
@@ -783,6 +923,12 @@ class CheckoutService
             }
 
             $trimmed = trim((string) ($note ?? ''));
+            if (mb_strlen($trimmed) > 200) {
+                throw ValidationException::withMessages([
+                    'seller_notes.'.$sellerId => 'Seller notes may not exceed 200 characters.',
+                ]);
+            }
+
             $normalized[(int) $sellerId] = $trimmed !== '' ? $trimmed : null;
         }
 
