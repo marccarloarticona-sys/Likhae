@@ -108,6 +108,51 @@ const setConnectionStatus = (thread, message, error = false) => {
     dot?.classList.toggle('is-error', error);
 };
 
+const markConversationRead = async (thread) => {
+    const readUrl = thread.dataset.readUrl;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (!readUrl || !csrfToken) return;
+    if (thread.dataset.readRequestInFlight === 'true') {
+        thread.dataset.readRequestPending = 'true';
+        return;
+    }
+
+    thread.dataset.readRequestInFlight = 'true';
+    try {
+        const response = await fetch(readUrl, {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken,
+            },
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        if (!response.ok) throw new Error(`Read state update failed with status ${response.status}.`);
+    } catch (error) {
+        setConnectionStatus(thread, error?.message || 'Read state could not be updated.', true);
+    } finally {
+        thread.dataset.readRequestInFlight = 'false';
+        if (thread.dataset.readRequestPending === 'true') {
+            delete thread.dataset.readRequestPending;
+            markConversationRead(thread);
+        }
+    }
+};
+
+const acknowledgeIncomingMessage = (thread, payload) => {
+    const senderId = String(payload?.sender_id || payload?.sender_user_id || '');
+    const currentUserId = String(thread.dataset.currentUserId || '');
+    const messageId = Number(payload?.id || 0);
+    if (!senderId || senderId === currentUserId || messageId < 1) return;
+
+    const lastAcknowledgedId = Number(thread.dataset.lastAcknowledgedMessageId || 0);
+    if (messageId <= lastAcknowledgedId) return;
+    thread.dataset.lastAcknowledgedMessageId = String(messageId);
+    markConversationRead(thread);
+};
+
 const subscribeToThread = (thread) => {
     const conversationId = thread.dataset.conversationId;
     if (!conversationId) return;
@@ -122,7 +167,10 @@ const subscribeToThread = (thread) => {
     if (window.Echo && thread.dataset.realtimeSubscribed !== 'true') {
         thread.dataset.realtimeSubscribed = 'true';
         window.Echo.private(`conversations.${conversationId}`)
-            .listen('.message.sent', (payload) => appendRealtimeMessage(thread, payload));
+            .listen('.message.sent', (payload) => {
+                appendRealtimeMessage(thread, payload);
+                acknowledgeIncomingMessage(thread, payload);
+            });
     }
 
     const connection = window.Echo?.connector?.pusher?.connection;
@@ -163,6 +211,7 @@ const subscribeToThread = (thread) => {
                 ...message,
                 sender_id: message.sender_id ?? message.sender_user_id,
             }));
+            payload.messages.forEach((message) => acknowledgeIncomingMessage(thread, message));
             setConnectionStatus(thread, 'Fallback polling active', true);
         } catch (_) {
             // The next fallback attempt will retry.
@@ -189,6 +238,7 @@ const subscribeToUserMessages = () => {
             const activeThread = document.querySelector('.lk-chat-stream[data-message-thread]');
             if (activeThread && String(activeThread.dataset.conversationId) === String(payload.conversation_id)) {
                 appendRealtimeMessage(activeThread, payload);
+                acknowledgeIncomingMessage(activeThread, payload);
                 window.likhaePlayNotificationSound?.('MESSAGE');
                 return;
             }

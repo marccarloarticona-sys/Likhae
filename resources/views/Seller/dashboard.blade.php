@@ -8,14 +8,14 @@
 @php
     $firstName = data_get($seller, 'first_name') ?: str($seller->name)->before(' ');
     $stats = $dashboardStats;
-    $activeOrders = collect($orderStatusCounts)->sum();
+    $allOrders = $stats['orders'];
 @endphp
 <div class="sl-page sl-seller-dashboard">
     <section class="sl-welcome-panel">
         <div>
             <span class="sl-eyebrow">{{ now()->format('l, F j') }}</span>
             <h2>Good {{ now()->hour < 12 ? 'morning' : (now()->hour < 18 ? 'afternoon' : 'evening') }}, {{ $firstName }}.</h2>
-            <p>Your live store data shows <strong>{{ $orderStatusCounts['placed'] }} new orders</strong> and <strong>{{ $inventoryAlerts->count() }} inventory alerts</strong> that may need attention.</p>
+            <p>Your live store data shows <strong>{{ $orderStatusCounts['placed'] }} new orders</strong> and <strong>{{ number_format($stats['inventory_alerts']) }} inventory alerts</strong> that may need attention.</p>
         </div>
         <div class="sl-welcome-actions">
             <a href="{{ route('seller.products', ['mode' => 'add']) }}" class="sl-btn sl-btn-white">
@@ -27,15 +27,39 @@
     </section>
 
     <section class="sl-stat-grid" aria-label="Store summary">
-        <x-seller.stat-card label="Today's Order Value" :value="'₱'.number_format($stats['today_sales'], 2)" icon="sales" />
+        <x-seller.stat-card label="Orders Placed Today" :value="number_format($stats['orders_today'])" icon="orders" />
         <x-seller.stat-card label="Total Orders" :value="number_format($stats['orders'])" icon="orders" />
-        <x-seller.stat-card label="Completed Revenue" :value="'₱'.number_format($stats['revenue'], 2)" icon="revenue" />
-        <x-seller.stat-card label="Total Products" :value="number_format($stats['products_sold'])" icon="products" />
+        <x-seller.stat-card label="All-time completed order value; shipping and Additional Care included" :value="'₱'.number_format($stats['completed_order_value_all_time'], 2)" icon="revenue" />
+        <x-seller.stat-card label="Total Products" :value="number_format($stats['products_total'])" icon="products" />
         <x-seller.stat-card label="Ready for Pickup" :value="number_format($stats['pending_shipment'])" change="Needs action" direction="down" icon="shipping" />
     </section>
 
     <section class="sl-card" style="margin-top:16px">
-        <header class="sl-card-head"><div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable status</h2><p>Commission is calculated from original product prices; discount-funded rows remain in review.</p></div><a href="{{ route('seller.reports') }}" class="sl-text-link">View reports</a></header>
+        <header class="sl-card-head"><div><span class="sl-eyebrow">Recognized financials</span><h2>Gross Sales, Commission &amp; Net Sales</h2><p>Original merchandise value recognized on delivered order records, less assessed commission. Shipping and Additional Care are excluded. Reporting period: {{ $financialFrom->format('M d, Y') }} – {{ $financialTo->format('M d, Y') }}.</p></div><a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Open matching report</a></header>
+        <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-dashboard-period sl-form-grid sl-form-grid-4" aria-label="Financial reporting period">
+            <label class="sl-field"><span>From</span><input name="from" type="date" value="{{ $financialFrom->toDateString() }}" required></label>
+            <label class="sl-field"><span>To</span><input name="to" type="date" value="{{ $financialTo->toDateString() }}" required></label>
+            <button class="sl-btn sl-btn-soft sl-btn-sm" type="submit">Apply period</button>
+        </form>
+        <div class="sl-stat-grid sl-stat-grid-3" style="margin-top:12px" aria-label="Seller financial totals">
+            <x-seller.stat-card label="Gross Sales" :value="html_entity_decode('&#8369;').number_format($financialSummary['gross'], 2)" icon="sales" />
+            <x-seller.stat-card label="Commission" :value="html_entity_decode('&#8369;').number_format($financialSummary['commission'], 2)" icon="finance" />
+            <x-seller.stat-card label="Net Sales" :value="html_entity_decode('&#8369;').number_format($financialSummary['net'], 2)" icon="revenue" />
+        </div>
+    </section>
+
+    <section class="sl-card" style="margin-top:16px">
+        <header class="sl-card-head"><div><span class="sl-eyebrow">Stock health</span><h2>Inventory Overview</h2><p>Stock indicators count active variants; each product appears once in the product totals.</p></div><a href="{{ route('seller.products', ['mode' => 'inventory']) }}" class="sl-text-link">Manage inventory</a></header>
+        <div class="sl-mini-stats">
+            <div><span>Visible products</span><strong>{{ number_format($inventorySummary['visible_products']) }}</strong><small>{{ number_format($inventorySummary['all_products']) }} total seller products</small></div>
+            <div><span>Low-stock variants</span><strong>{{ number_format($inventorySummary['low_stock_variants']) }}</strong><small>Across {{ number_format($inventorySummary['low_stock_products']) }} products</small></div>
+            <div><span>Out-of-stock variants</span><strong>{{ number_format($inventorySummary['out_of_stock_variants']) }}</strong><small>Across {{ number_format($inventorySummary['out_of_stock_products']) }} products</small></div>
+            <div><span>Products with alerts</span><strong>{{ number_format($stats['inventory_alerts']) }}</strong><small>Low-stock or out-of-stock variants</small></div>
+        </div>
+    </section>
+
+    <section class="sl-card" style="margin-top:16px">
+        <header class="sl-card-head"><div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable status</h2><p>Commission is calculated from original product prices; discount-funded rows remain in review.</p></div><a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">View reports</a></header>
         @if($settlementSummary['schema_ready'])
             <div class="sl-stat-grid" style="margin-top:0"><x-seller.stat-card label="Pending / Review" :value="'₱'.number_format($settlementSummary['pending'], 2)" icon="orders" /><x-seller.stat-card label="Authorized" :value="'₱'.number_format($settlementSummary['authorized'], 2)" icon="money" /><x-seller.stat-card label="Paid" :value="'₱'.number_format($settlementSummary['paid'], 2)" icon="revenue" /><x-seller.stat-card label="Outstanding" :value="'₱'.number_format($settlementSummary['outstanding'], 2)" icon="shipping" /></div>
         @else
@@ -46,12 +70,12 @@
     <div class="sl-dashboard-grid">
         <section class="sl-card sl-sales-panel">
             <header class="sl-card-head">
-                <div><span class="sl-eyebrow">Performance</span><h2>Sales Overview</h2><p>Revenue collected over the last 7 days.</p></div>
-                <a href="{{ route('seller.reports') }}" class="sl-text-link">View reports</a>
+                <div><span class="sl-eyebrow">Performance</span><h2>Sales Overview</h2><p>Gross merchandise sales recognized over the last 7 days.</p></div>
+                <a href="{{ route('seller.reports', ['from' => now()->subDays(6)->toDateString(), 'to' => now()->toDateString()]) }}" class="sl-text-link">View reports</a>
             </header>
             <div class="sl-chart-summary">
-                <div><span>Completed revenue · last 7 days</span><strong>₱{{ number_format($stats['weekly_revenue'], 2) }}</strong></div>
-                <span class="sl-positive">Completed orders</span>
+                <div><span>Gross sales (last 7 days)</span><strong>₱{{ number_format($stats['weekly_revenue'], 2) }}</strong></div>
+                <span class="sl-positive">Delivered orders</span>
             </div>
             <div class="sl-bar-chart" aria-label="Sales chart for the last seven days">
                 @foreach ($salesChart as $point)
@@ -69,12 +93,18 @@
                 <a href="{{ route('seller.orders') }}" class="sl-text-link">View all</a>
             </header>
             <div class="sl-donut-wrap">
-                <div class="sl-donut" aria-label="{{ $activeOrders }} orders"><span><strong>{{ $activeOrders }}</strong><small>Orders</small></span></div>
+                <div class="sl-donut" aria-label="{{ $allOrders }} orders"><span><strong>{{ $allOrders }}</strong><small>Orders</small></span></div>
                 <div class="sl-chart-legend">
                     <a href="{{ route('seller.orders', ['status' => 'placed']) }}"><i class="is-blue"></i><span>Placed</span><strong>{{ $orderStatusCounts['placed'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'confirmed']) }}"><i class="is-indigo"></i><span>Accepted</span><strong>{{ $orderStatusCounts['confirmed'] }}</strong></a>
                     <a href="{{ route('seller.orders', ['status' => 'preparing']) }}"><i class="is-indigo"></i><span>Preparing</span><strong>{{ $orderStatusCounts['preparing'] }}</strong></a>
-                    <a href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}"><i class="is-slate"></i><span>Ready Pickup</span><strong>{{ $orderStatusCounts['ready-for-pickup'] }}</strong></a>
-                    <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><i class="is-light"></i><span>In Transit</span><strong>{{ $orderStatusCounts['shipping'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}"><i class="is-slate"></i><span>Ready for Pickup</span><strong>{{ $orderStatusCounts['ready-for-pickup'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><i class="is-light"></i><span>Picked Up</span><strong>{{ $orderStatusCounts['picked-up'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><i class="is-light"></i><span>In Transit</span><strong>{{ $orderStatusCounts['in-transit'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><i class="is-light"></i><span>Delivered, awaiting completion</span><strong>{{ $orderStatusCounts['delivered'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'completed']) }}"><i class="is-green"></i><span>Completed</span><strong>{{ $orderStatusCounts['completed'] }}</strong></a>
+                    <a href="{{ route('seller.orders', ['status' => 'cancelled']) }}"><i class="is-red"></i><span>Cancelled</span><strong>{{ $orderStatusCounts['cancelled'] }}</strong></a>
+                    <a href="{{ route('seller.orders') }}"><i class="is-light"></i><span>Other</span><strong>{{ $orderStatusCounts['other'] }}</strong></a>
                 </div>
             </div>
         </section>
@@ -93,8 +123,8 @@
                         @forelse ($sellerOrders as $order)
                             @php
                                 $tone = match (data_get($order, 'status_key')) {
-                                    'completed' => 'is-success',
-                                    'shipping', 'ready-pickup' => 'is-info',
+                                    'completed', 'delivered' => 'is-success',
+                                    'shipping', 'picked-up', 'in-transit', 'ready-for-pickup' => 'is-info',
                                     'to-prepare' => 'is-warning',
                                     'returns', 'cancelled' => 'is-danger',
                                     default => 'is-neutral',

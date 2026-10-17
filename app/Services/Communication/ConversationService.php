@@ -29,7 +29,12 @@ class ConversationService
                 ->where('user_id', $user->id)
                 ->whereNull('left_at'))
             ->with($relations)
-            ->latest('updated_at');
+            // Persisted message IDs make activity ordering deterministic even
+            // when separate messages share the same timestamp second.
+            ->withMax('messages as latest_message_id', 'id')
+            ->orderByDesc('latest_message_id')
+            ->latest('updated_at')
+            ->latest('id');
 
         if ($limit !== null) {
             $query->limit(max(1, min($limit, 100)));
@@ -59,10 +64,14 @@ class ConversationService
         $query = Message::query()
             ->join('conversation_participants as unread_participants', function ($join) use ($user): void {
                 $join->on('unread_participants.conversation_id', '=', 'messages.conversation_id')
-                    ->where('unread_participants.user_id', $user->id);
+                    ->where('unread_participants.user_id', $user->id)
+                    ->whereNull('unread_participants.left_at');
             })
             ->whereIn('messages.conversation_id', $conversationIds)
-            ->where('messages.sender_user_id', '!=', $user->id)
+            ->where(function ($query) use ($user): void {
+                $query->whereNull('messages.sender_user_id')
+                    ->orWhere('messages.sender_user_id', '<>', $user->id);
+            })
             ->where(function ($query): void {
                 $query->whereNull('unread_participants.last_read_at')
                     ->orWhereColumn('messages.sent_at', '>', 'unread_participants.last_read_at');
@@ -88,6 +97,11 @@ class ConversationService
             $active->setRelation('messages', $this->messagesFor($user, (int) $active->id));
             $this->markRead($active, $user);
         }
+
+        $unreadCounts = $this->unreadCountsFor($user, $conversations);
+        $conversations->each(function (Conversation $conversation) use ($unreadCounts): void {
+            $conversation->setAttribute('unread_count', (int) $unreadCounts->get($conversation->id, 0));
+        });
 
         return $conversations;
     }

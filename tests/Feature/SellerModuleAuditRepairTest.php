@@ -11,6 +11,7 @@ use App\Models\Communication\Message;
 use App\Models\Admin\AuditLog;
 use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderAssignment;
@@ -56,9 +57,29 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->assertNull($seller->fresh()->profile_photo_path);
         $this->actingAs($seller)->get(route('seller.store'))->assertOk()->assertSee('name="business_name"', false);
 
+        $this->actingAs($seller)->putJson(route('seller.store.update'), [
+            'business_name' => 'ab',
+        ])->assertStatus(422)->assertJsonValidationErrors('business_name');
+        $this->actingAs($seller)->putJson(route('seller.store.update'), [
+            'business_name' => 'New',
+        ])->assertRedirect();
+        $this->actingAs($seller)->putJson(route('seller.store.update'), [
+            'business_name' => str_repeat('S', 30),
+        ])->assertRedirect();
+        $this->actingAs($seller)->putJson(route('seller.store.update'), [
+            'business_name' => 'New Craft Shop',
+        ])->assertRedirect();
+        $this->actingAs($seller)->putJson(route('seller.store.update'), [
+            'business_name' => str_repeat('S', 31),
+        ])->assertStatus(422)->assertJsonValidationErrors('business_name');
+
         [$otherSeller] = $this->seller('Another Shop');
         $this->actingAs($otherSeller)->put(route('seller.store.update'), [
             'business_name' => '  NEW CRAFT SHOP  ',
+        ])->assertRedirect()->assertSessionHasErrors('business_name');
+
+        $this->actingAs($otherSeller)->put(route('seller.store.update'), [
+            'business_name' => '  New   Craft   Shop  ',
         ])->assertRedirect()->assertSessionHasErrors('business_name');
 
         $this->actingAs($otherSeller)->put(route('seller.store.update'), [
@@ -133,6 +154,39 @@ class SellerModuleAuditRepairTest extends TestCase
             'from_date' => '2026-10-13',
             'to_date' => '2026-10-12',
         ]))->assertStatus(422)->assertJsonValidationErrors('to_date');
+    }
+
+    public function test_order_pagination_preserves_status_search_and_date_filters(): void
+    {
+        [$seller, $profile] = $this->seller('Paginated Order Shop');
+        for ($number = 1; $number <= 21; $number++) {
+            $fixture = $this->orderFixture($profile, sprintf('PAGE-%02d', $number), 'PLACED', '2026-10-12 12:00:00');
+            $fixture['item']->update(['product_name' => 'Page Widget']);
+            $fixture['sellerOrder']->forceFill([
+                'created_at' => Carbon::parse('2026-10-12 12:00:00')->subMinutes($number),
+            ])->save();
+        }
+
+        $filters = [
+            'status' => 'placed',
+            'q' => 'Page Widget',
+            'from_date' => '2026-10-12',
+            'to_date' => '2026-10-12',
+        ];
+        $response = $this->actingAs($seller)->get(route('seller.orders', $filters));
+        $response->assertOk();
+        $this->assertSame(1, preg_match('/href="([^"]*page=2[^"]*)"/', $response->getContent(), $matches));
+        parse_str((string) parse_url(html_entity_decode($matches[1]), PHP_URL_QUERY), $pageTwoQuery);
+
+        $this->assertSame('placed', $pageTwoQuery['status'] ?? null);
+        $this->assertSame('Page Widget', $pageTwoQuery['q'] ?? null);
+        $this->assertSame('2026-10-12', $pageTwoQuery['from_date'] ?? null);
+        $this->assertSame('2026-10-12', $pageTwoQuery['to_date'] ?? null);
+        $this->assertSame('2', $pageTwoQuery['page'] ?? null);
+
+        $this->actingAs($seller)->get(route('seller.orders', $pageTwoQuery))
+            ->assertOk()
+            ->assertSee('PAGE-21');
     }
 
     public function test_packing_is_required_before_ready_or_direct_handover_and_waybill_uses_recorded_measurements(): void
@@ -447,6 +501,21 @@ class SellerModuleAuditRepairTest extends TestCase
             'status' => 'PUBLISHED',
         ]);
         $review->forceFill(['created_at' => Carbon::parse('2026-10-12 12:00:00')])->save();
+        $ratingComments = [5 => 'Beautiful handmade work.'];
+        foreach ([1, 2, 3, 4] as $rating) {
+            $ratedFixture = $this->orderFixture($profile, 'REVIEW-RATING-'.$rating, 'COMPLETED');
+            $ratingComments[$rating] = 'Own '.$rating.'-star review';
+            $ratingReview = Review::create([
+                'order_item_id' => $ratedFixture['item']->id,
+                'buyer_user_id' => $ratedFixture['buyer']->id,
+                'rating' => $rating,
+                'comment' => $ratingComments[$rating],
+                'status' => 'PUBLISHED',
+            ]);
+            if ($rating === 4) {
+                $ratingReview->forceFill(['created_at' => Carbon::parse('2026-10-12 11:00:00')])->save();
+            }
+        }
         $imagePath = 'reviews/'.$review->id.'/buyer-photo.webp';
         Storage::disk('public')->put($imagePath, 'test-image');
         AuditLog::create([
@@ -455,6 +524,16 @@ class SellerModuleAuditRepairTest extends TestCase
             'auditable_type' => Review::class,
             'auditable_id' => $review->id,
             'new_values' => ['image_path' => $imagePath],
+            'created_at' => now(),
+        ]);
+        $secondImagePath = 'reviews/'.$review->id.'/second-buyer-photo.webp';
+        Storage::disk('public')->put($secondImagePath, 'second-test-image');
+        AuditLog::create([
+            'actor_user_id' => $fixture['buyer']->id,
+            'event' => 'buyer.review.image.updated',
+            'auditable_type' => Review::class,
+            'auditable_id' => $review->id,
+            'new_values' => ['image_path' => $secondImagePath],
             'created_at' => now(),
         ]);
         [, $foreignProfile] = $this->seller('Foreign Review Shop');
@@ -467,6 +546,37 @@ class SellerModuleAuditRepairTest extends TestCase
             'status' => 'PUBLISHED',
         ]);
 
+        foreach ($ratingComments as $rating => $expectedComment) {
+            $filteredReviews = $this->actingAs($seller)
+                ->get(route('seller.reviews', ['rating' => $rating]))
+                ->assertOk()
+                ->assertSee($expectedComment)
+                ->assertDontSee('Private foreign review.');
+            foreach ($ratingComments as $otherRating => $otherComment) {
+                if ($otherRating !== $rating) {
+                    $filteredReviews->assertDontSee($otherComment);
+                }
+            }
+        }
+
+        $this->actingAs($seller)->get(route('seller.reviews', [
+            'rating' => 4,
+            'from_date' => '2026-10-12',
+            'to_date' => '2026-10-12',
+        ]))->assertOk()
+            ->assertSee('Own 4-star review')
+            ->assertDontSee('Own 3-star review')
+            ->assertDontSee('Beautiful handmade work.');
+
+        $this->actingAs($seller)->get(route('seller.reviews'))
+            ->assertOk()
+            ->assertSee('Own 1-star review')
+            ->assertSee('Own 2-star review')
+            ->assertSee('Own 3-star review')
+            ->assertSee('Own 4-star review')
+            ->assertSee('Beautiful handmade work.')
+            ->assertDontSee('Private foreign review.');
+
         $this->actingAs($seller)->get(route('seller.reviews', [
             'rating' => 5,
             'product_id' => $product->id,
@@ -478,6 +588,8 @@ class SellerModuleAuditRepairTest extends TestCase
             ->assertSee('Reviewed Vase')
             ->assertSee('Blue / Small')
             ->assertSee(Storage::disk('public')->url($imagePath), false)
+            ->assertSee(Storage::disk('public')->url($secondImagePath), false)
+            ->assertDontSee($fixture['buyer']->name)
             ->assertDontSee('Private foreign review.');
 
         $this->actingAs($seller)->post(route('seller.reviews.reply', $review), [
@@ -485,14 +597,23 @@ class SellerModuleAuditRepairTest extends TestCase
         ])->assertRedirect();
         $this->assertSame('Thank you for supporting our shop.', $review->fresh()->seller_reply);
         $this->assertNotNull($review->fresh()->seller_replied_at);
+        $this->actingAs($seller)->post(route('seller.reviews.reply', $review), [
+            'seller_reply' => 'Updated response.',
+            'comment' => 'Attempt to replace buyer review.',
+            'rating' => 1,
+        ])->assertRedirect();
+        $this->assertSame('Updated response.', $review->fresh()->seller_reply);
+        $this->assertSame('Beautiful handmade work.', $review->fresh()->comment);
+        $this->assertSame(5, (int) $review->fresh()->rating);
+        $this->assertSame(1, Review::query()->where('order_item_id', $fixture['item']->id)->count());
         [, $foreignProfile] = $this->seller('Foreign Reply Shop');
         $foreignSeller = $foreignProfile->user;
         $this->actingAs($foreignSeller)->post(route('seller.reviews.reply', $review), [
             'seller_reply' => 'Unauthorized reply.',
         ])->assertForbidden();
-        $this->assertSame('Thank you for supporting our shop.', $review->fresh()->seller_reply);
+        $this->assertSame('Updated response.', $review->fresh()->seller_reply);
         $this->actingAs($seller)->get(route('seller.reviews'))->assertOk()
-            ->assertSee('Thank you for supporting our shop.')
+            ->assertSee('Updated response.')
             ->assertSee('Edit reply');
     }
 
@@ -513,6 +634,95 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->assertSame('PUBLISHED', $review->fresh()->status);
         $this->assertSame('Keep this buyer review.', $review->fresh()->comment);
         $this->assertNull($review->fresh()->seller_replied_at);
+    }
+
+    public function test_reviews_export_is_seller_scoped_filtered_private_and_pdf_safe(): void
+    {
+        [$seller, $profile] = $this->seller('Review Export Shop');
+        $fixture = $this->orderFixture($profile, 'REVIEW-EXPORT-OWN', 'COMPLETED');
+        $product = Product::create([
+            'seller_profile_id' => $profile->id,
+            'category_id' => $profile->primary_category_id,
+            'name' => '=HYPERLINK("https://example.invalid")',
+            'slug' => 'review-export-'.uniqid(),
+            'status' => 'ACTIVE',
+        ]);
+        $fixture['item']->update(['product_id' => $product->id, 'product_name' => $product->name, 'variant_description' => '+SUM(1,1)']);
+        $review = Review::create([
+            'order_item_id' => $fixture['item']->id,
+            'buyer_user_id' => $fixture['buyer']->id,
+            'rating' => 5,
+            'comment' => '=1+1',
+            'status' => 'PUBLISHED',
+            'seller_reply' => '@SUM(1,1)',
+        ]);
+        [, $foreignProfile] = $this->seller('Foreign Review Export Shop');
+        $foreign = $this->orderFixture($foreignProfile, 'REVIEW-EXPORT-FOREIGN', 'COMPLETED');
+        Review::create([
+            'order_item_id' => $foreign['item']->id,
+            'buyer_user_id' => $foreign['buyer']->id,
+            'rating' => 5,
+            'comment' => 'Foreign private feedback.',
+            'status' => 'PUBLISHED',
+        ]);
+
+        $response = $this->actingAs($seller)
+            ->get(route('seller.reviews.export', ['rating' => 5]))
+            ->assertOk()
+            ->assertHeader('content-type', 'application/pdf')
+            ->assertDownload();
+        $pdf = $response->getContent();
+
+        $this->assertStringStartsWith('%PDF-1.4', $pdf);
+        $this->assertStringContainsString('Product reviews', $pdf);
+        $this->assertStringNotContainsString('Foreign private feedback.', $pdf);
+        $this->assertStringNotContainsString($fixture['buyer']->email, $pdf);
+        $this->assertStringNotContainsString($fixture['buyer']->name, $pdf);
+        $this->assertStringContainsString((string) $review->id, $pdf);
+        $this->assertStringContainsString('=1+1', $pdf);
+    }
+
+    public function test_orders_export_is_pdf_and_contains_only_the_authenticated_sellers_orders(): void
+    {
+        [$seller, $profile] = $this->seller('Own Order Export Shop');
+        $own = $this->orderFixture($profile, 'ORDER-PDF-OWN', 'PLACED');
+        Shipment::create([
+            'seller_order_id' => $own['sellerOrder']->id,
+            'tracking_number' => 'TRACK-PDF-OWN',
+            'current_status' => 'READY_FOR_PICKUP',
+            'destination_province_code' => 'P1',
+            'destination_province_name' => 'Province',
+            'destination_municipality_code' => 'M1',
+            'destination_municipality_name' => 'Municipality',
+            'destination_barangay_code' => 'B1',
+            'destination_barangay_name' => 'Barangay',
+        ]);
+
+        [, $foreignProfile] = $this->seller('Foreign Order Export Shop');
+        $foreign = $this->orderFixture($foreignProfile, 'ORDER-PDF-FOREIGN', 'PLACED');
+        Shipment::create([
+            'seller_order_id' => $foreign['sellerOrder']->id,
+            'tracking_number' => 'TRACK-PDF-FOREIGN',
+            'current_status' => 'READY_FOR_PICKUP',
+            'destination_province_code' => 'P1',
+            'destination_province_name' => 'Province',
+            'destination_municipality_code' => 'M1',
+            'destination_municipality_name' => 'Municipality',
+            'destination_barangay_code' => 'B1',
+            'destination_barangay_name' => 'Barangay',
+        ]);
+
+        $response = $this->actingAs($seller)->get(route('seller.orders.export'))
+            ->assertOk()
+            ->assertHeader('content-type', 'application/pdf')
+            ->assertDownload();
+        $pdf = $response->getContent();
+
+        $this->assertStringStartsWith('%PDF-1.4', $pdf);
+        $this->assertStringContainsString('ORDER-PDF-OWN', $pdf);
+        $this->assertStringContainsString('TRACK-PDF-OWN', $pdf);
+        $this->assertStringNotContainsString('ORDER-PDF-FOREIGN', $pdf);
+        $this->assertStringNotContainsString('TRACK-PDF-FOREIGN', $pdf);
     }
 
     public function test_seller_chat_accepts_private_images_and_streams_attachment_urls_only_to_participants(): void

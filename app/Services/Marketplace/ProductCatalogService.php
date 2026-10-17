@@ -168,6 +168,9 @@ class ProductCatalogService
             'slug' => $product->slug,
             'description' => $includeDetails ? $product->description : str($product->description ?? '')->limit(180)->toString(),
             'status' => $product->status,
+            'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
+                ? null
+                : (int) $product->purchase_limit_per_buyer,
             'rating' => (float) ($product->reviews_avg_rating ?? 0),
             'reviews' => (int) ($product->reviews_count ?? 0),
             'sold' => (int) ($product->order_items_sum_quantity ?? 0),
@@ -183,6 +186,7 @@ class ProductCatalogService
                 'id' => $product->sellerProfile->id,
                 'user_id' => $product->sellerProfile->user_id,
                 'business_name' => $product->sellerProfile->business_name,
+                'avatar_path' => $product->sellerProfile->avatar_path,
                 'status' => $product->sellerProfile->status,
             ] : null,
             'images' => $images,

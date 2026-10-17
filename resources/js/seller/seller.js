@@ -32,6 +32,63 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     window.slShowToast = showToast;
 
+    const notificationBadges = selectAll('[data-seller-notification-count]');
+    const sellerUserId = window.LIKHAE_NOTIFICATION_SOUND_CONFIG?.userId;
+    if (notificationBadges.length && sellerUserId && window.Echo
+        && document.body.dataset.sellerNotificationsSubscribed !== 'true') {
+        document.body.dataset.sellerNotificationsSubscribed = 'true';
+        const seenNotificationIds = new Set();
+        window.Echo.private(`App.Models.User.${sellerUserId}`)
+            .listen('.notification.created', (notification) => {
+                const notificationId = String(notification?.id || '');
+                if (!notificationId || seenNotificationIds.has(notificationId)) return;
+                seenNotificationIds.add(notificationId);
+
+                const currentCount = Math.max(0, ...notificationBadges.map((badge) => Number.parseInt(badge.textContent || '0', 10) || 0));
+                const nextCount = currentCount + 1;
+                notificationBadges.forEach((badge) => {
+                    badge.textContent = String(nextCount);
+                    badge.style.display = '';
+                });
+
+                const notificationList = select('[data-seller-notification-list]');
+                const openTemplate = notificationList?.dataset.sellerNotificationOpenTemplate;
+                const currentPage = new URL(window.location.href).searchParams.get('page');
+                if (notificationList && openTemplate && (!currentPage || currentPage === '1')
+                    && /^\d+$/.test(notificationId)
+                    && !notificationList.querySelector(`[data-seller-notification-event-id="${notificationId}"]`)) {
+                    const emptyState = notificationList.querySelector(':scope > div');
+                    if (emptyState && !notificationList.querySelector('a')) emptyState.remove();
+
+                    const row = document.createElement('a');
+                    row.href = openTemplate.replace('__id__', encodeURIComponent(notificationId));
+                    row.dataset.sellerNotificationEventId = notificationId;
+                    row.style.cssText = notificationList.querySelector('a')?.getAttribute('style')
+                        || 'display:block;padding:15px 17px;border-bottom:1px solid rgba(125,95,75,.16);color:inherit;text-decoration:none';
+                    row.style.background = 'rgba(80,130,180,.10)';
+                    const title = document.createElement('strong');
+                    title.style.cssText = 'display:block;font-size:14px';
+                    title.textContent = notification?.title || 'New notification';
+                    row.appendChild(title);
+                    if (notification?.message) {
+                        const message = document.createElement('span');
+                        message.style.cssText = 'display:block;margin-top:4px;opacity:.72;font-size:13px;line-height:1.45';
+                        message.textContent = notification.message;
+                        row.appendChild(message);
+                    }
+                    const time = document.createElement('small');
+                    time.style.cssText = 'display:block;margin-top:6px;opacity:.55;font-size:11px';
+                    time.textContent = notification?.created_at
+                        ? new Date(notification.created_at).toLocaleString('en-PH', {timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short'})
+                        : 'Just now';
+                    row.appendChild(time);
+                    notificationList.prepend(row);
+                }
+
+                showToast(notification?.title || 'A new notification has arrived.');
+            });
+    }
+
     const setMobileSidebar = (open) => {
         if (!sidebar) return;
         sidebar.classList.toggle('is-open', open);
@@ -117,7 +174,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     selectAll('[data-modal-open]').forEach((button) => button.addEventListener('click', () => {
-        openModal(select(`[data-modal="${button.dataset.modalOpen}"]`));
+        const modal = select(`[data-modal="${button.dataset.modalOpen}"]`);
+        const editPayload = button.dataset.voucherEdit;
+        if (modal && editPayload) {
+            const form = select('[data-voucher-edit-form]', modal);
+            if (!form || !button.dataset.updateUrl) return;
+            form.action = button.dataset.updateUrl;
+            const values = {
+                edit_voucher_id: button.dataset.voucherId,
+                name: button.dataset.voucherName,
+                code: button.dataset.voucherCode,
+                discount_type: button.dataset.discountType,
+                discount_value: button.dataset.discountValue,
+                minimum_order_amount: button.dataset.minimumOrderAmount,
+                maximum_discount_amount: button.dataset.maximumDiscountAmount,
+                usage_limit: button.dataset.usageLimit,
+                per_user_limit: button.dataset.perUserLimit,
+                starts_at: button.dataset.startsAt,
+                ends_at: button.dataset.endsAt,
+            };
+            Object.entries(values).forEach(([name, value]) => {
+                const field = select(`[name="${name}"]`, form);
+                if (field) field.value = value ?? '';
+            });
+        }
+        openModal(modal);
     }));
     selectAll('[data-modal-close]').forEach((button) => button.addEventListener('click', () => closeModal(button.closest('[data-modal]'))));
     selectAll('[data-modal]').forEach((modal) => modal.addEventListener('click', (event) => {

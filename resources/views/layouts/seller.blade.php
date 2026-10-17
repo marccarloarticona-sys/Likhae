@@ -2,6 +2,8 @@
     $pageTitle = trim($__env->yieldContent('title')) ?: 'Seller Center';
     $activePage = trim($__env->yieldContent('active')) ?: 'dashboard';
     $pageSubtitle = trim($__env->yieldContent('subtitle')) ?: 'Manage your store operations and performance.';
+    $sellerThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    $sellerAiEnabled = (bool) data_get(auth()->user()?->notification_preferences, 'seller_ai_assistant_enabled', true);
 @endphp
 <!doctype html>
 <html lang="en">
@@ -14,10 +16,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    @vite(['resources/css/seller/seller.css', 'resources/css/shared/likhae-workspace-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/likhae-workspace-ai.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @vite(['resources/css/seller/seller.css', 'resources/css/shared/workspace-sidebar.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @if($sellerAiEnabled) @vite(['resources/css/shared/likhae-workspace-ai.css', 'resources/js/shared/likhae-workspace-ai.js']) @endif
     @stack('head')
     <script>
-        (function(){var t=localStorage.getItem('likhae-theme');document.documentElement.classList.toggle('dark',t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches))})();
+        (function(){var t=@json($sellerThemePreference);if(!['light','dark','system'].includes(t))t='system';try{if(t==='system')localStorage.removeItem('likhae-theme');else localStorage.setItem('likhae-theme',t)}catch(_){}document.documentElement.classList.toggle('dark',t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches))})();
     </script></head>
 <body class="sl-body">
     <x-admin.sidebar role="seller" :active="$activePage" />
@@ -38,7 +41,7 @@
     <div class="sl-toast" data-sl-toast data-flash="{{ session('status') }}" data-error="{{ $errors->first() }}" role="status" aria-live="polite"></div>
     <x-notification-popover />
     @include('partials.confirm-action-modal')
-    @if(data_get(auth()->user()?->notification_preferences, 'seller_ai_assistant_enabled', true))
+    @if($sellerAiEnabled)
         <x-workspace.ai-assistant workspace="seller" :page="$activePage" :page-title="$pageTitle" />
     @endif
 

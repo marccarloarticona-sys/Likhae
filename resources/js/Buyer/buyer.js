@@ -448,6 +448,13 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Requested quantity exceeds available stock.');
             return;
         }
+        const remainingAllowance = scope.dataset.purchaseLimitRemaining === undefined
+            ? null
+            : Number(scope.dataset.purchaseLimitRemaining);
+        if (remainingAllowance !== null && requestedQuantity > remainingAllowance) {
+            showToast(`You can purchase up to ${remainingAllowance} more unit${remainingAllowance === 1 ? '' : 's'} of this product.`);
+            return;
+        }
 
         const form = document.createElement('form');
         form.method = 'POST';
@@ -512,6 +519,14 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Requested quantity exceeds available stock.');
             return;
         }
+        const remainingAllowance = scope.dataset.purchaseLimitRemaining === undefined
+            ? null
+            : Number(scope.dataset.purchaseLimitRemaining);
+        if (remainingAllowance !== null && requestedQuantity > remainingAllowance) {
+            event.preventDefault();
+            showToast(`You can purchase up to ${remainingAllowance} more unit${remainingAllowance === 1 ? '' : 's'} of this product.`);
+            return;
+        }
 
         const variantField = one('input[name="product_variant_id"]', form);
         const quantityField = one('input[name="quantity"]', form);
@@ -564,8 +579,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         : `${(variation?.discountValue || 0).toLocaleString('en-PH', {maximumFractionDigits: 2})}% OFF`;
                 }
             }
-            if (quantity) { quantity.max = Math.max(1, stock); quantity.value = Math.min(Number(quantity.value || 1), Math.max(1, stock)); }
-            const purchaseBlocked = stock < 1 || product.dataset.sellerVacation === '1';
+            const remainingAllowance = product.dataset.purchaseLimitRemaining === undefined
+                ? null
+                : Number(product.dataset.purchaseLimitRemaining);
+            const maxQuantity = Math.max(0, Math.min(stock, remainingAllowance ?? stock));
+            if (quantity) {
+                quantity.max = Math.max(1, maxQuantity);
+                quantity.value = Math.min(Number(quantity.value || 1), Math.max(1, maxQuantity));
+            }
+            const purchaseBlocked = stock < 1 || product.dataset.sellerVacation === '1' || maxQuantity < 1;
             all('[data-product-purchase]', product).forEach((control) => { control.disabled = purchaseBlocked; control.setAttribute('aria-disabled', String(purchaseBlocked)); });
         };
         all('[data-variation-option]', product).forEach((button) => button.addEventListener('click', sync));
@@ -690,10 +712,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let refreshNotifications = async () => {};
     if (buyerUserId && window.Echo) {
+        const seenNotificationIds = new Set();
         window.Echo.private(`App.Models.User.${buyerUserId}`)
             .listen('.notification.created', (notification) => {
-                if (notificationPage) refreshNotifications();
-                else showToast(notification?.title || 'You have a new notification.');
+                const notificationId = String(notification?.id || '');
+                if (notificationId && seenNotificationIds.has(notificationId)) return;
+                if (notificationId) seenNotificationIds.add(notificationId);
+                if (notificationPage) {
+                    refreshNotifications();
+                } else {
+                    all('[data-buyer-notification-count]').forEach((badge) => {
+                        badge.textContent = String((Number.parseInt(badge.textContent || '0', 10) || 0) + 1);
+                        badge.style.display = '';
+                    });
+                    const unreadLabel = one('[data-notification-unread-label]');
+                    if (unreadLabel) {
+                        const current = Number.parseInt(unreadLabel.textContent, 10) || 0;
+                        unreadLabel.textContent = `${current + 1} unread`;
+                    }
+                    showToast(notification?.title || 'You have a new notification.');
+                }
             });
     }
     if (notificationPage?.dataset.notificationStreamUrl) {
@@ -753,9 +791,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     credentials: 'same-origin',
                 });
                 const payload = await response.json();
-                if (!response.ok || !payload.version || payload.version === notificationPage.dataset.notificationVersion) return;
+                if (!response.ok) return;
+                const unreadCount = Math.max(0, Number(payload.unread_count) || 0);
+                all('[data-buyer-notification-count]').forEach((badge) => {
+                    badge.textContent = String(unreadCount);
+                    badge.style.display = unreadCount ? '' : 'none';
+                });
+                const unreadLabel = one('[data-notification-unread-label]');
+                if (unreadLabel) unreadLabel.textContent = unreadCount ? `${unreadCount} unread` : 'You are all caught up';
+                if (!payload.version || payload.version === notificationPage.dataset.notificationVersion) return;
                 renderNotifications((payload.notifications || []).filter((item) => notificationType === 'all' || item.category === notificationType));
-                one('[data-notification-unread-count]')?.replaceChildren(document.createTextNode(String(payload.unread_count || 0)));
+                one('[data-notification-unread-count]')?.replaceChildren(document.createTextNode(String(unreadCount)));
                 notificationPage.dataset.notificationVersion = payload.version;
             } catch (_) {
                 // Retry on the next fallback interval while Reverb is unavailable.

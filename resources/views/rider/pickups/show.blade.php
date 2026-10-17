@@ -92,7 +92,7 @@
                 <article class="rounded-2xl border border-line p-4">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ ($shipment?->orderItem?->product_name ?? $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</p></div>
-                        @if($assignment?->status === 'COMPLETED')
+                        @if($collectedAssignmentIds->contains($assignment?->id))
                             <span class="text-sm font-semibold text-green-700">âœ“ Received by rider Â· waiting for logistics intake</span>
                         @elseif(in_array($assignment?->status, ['REJECTED', 'CANCELLED'], true))
                             <span class="text-sm font-semibold text-amber-800">Not collected: {{ $assignment->rejection_reason ?: 'Resolved' }}</span>

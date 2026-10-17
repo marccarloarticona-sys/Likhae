@@ -18,7 +18,8 @@
         const openKey = `likhaeWorkspaceAiOpen:${workspace}`;
         let openedOnce = false;
         let sending = false;
-        let enabled = sessionStorage.getItem(enableKey) === '1';
+        let enabled = sessionStorage.getItem(enableKey) !== '0';
+        let unavailable = workspace === 'seller' && (widget.dataset.aiConfigured !== '1' || sessionStorage.getItem('likhaeSellerAiUnavailable') === '1');
 
         const scrollToBottom = () => { messages.scrollTop = messages.scrollHeight; };
 
@@ -91,9 +92,24 @@
             head.setAttribute('aria-expanded', String(isOpen));
             sessionStorage.setItem(openKey, isOpen ? '1' : '0');
             if (isOpen) {
+                if (unavailable) {
+                    showComingSoon();
+                    return;
+                }
                 addWelcome();
                 requestAnimationFrame(() => input.focus());
             }
+        };
+
+        const showComingSoon = () => {
+            unavailable = true;
+            sessionStorage.setItem('likhaeSellerAiUnavailable', '1');
+            messages.replaceChildren();
+            addBubble('Coming Soon');
+            addBubble('Your AI assistant for Seller Center is not available yet.');
+            form.hidden = true;
+            toggle.hidden = true;
+            stateText.textContent = 'Coming Soon';
         };
 
         const setEnabled = (isEnabled) => {
@@ -147,11 +163,21 @@
                     body: JSON.stringify({ message: text, page: config.page || 'dashboard' }),
                 });
                 const payload = await response.json().catch(() => ({}));
+                if (workspace === 'seller' && payload.mode === 'unavailable') {
+                    typing.remove();
+                    showComingSoon();
+                    return;
+                }
                 if (!response.ok || !payload.reply) throw new Error('Assistant request failed');
                 typing.remove();
                 addBubble(payload.reply, 'assistant', Array.isArray(payload.options) ? payload.options : []);
-                playResponseSound();
+                if (payload.mode === 'ai') playResponseSound();
             } catch (_) {
+                if (workspace === 'seller') {
+                    typing.remove();
+                    showComingSoon();
+                    return;
+                }
                 typing.remove();
                 addBubble('I’m unable to reach the AI service right now, but I can still help with the workspace navigation and common workflows.', 'assistant');
             } finally {

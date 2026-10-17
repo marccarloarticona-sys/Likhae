@@ -62,6 +62,25 @@ class BuyerStorefrontFiltersTest extends TestCase
         ));
     }
 
+    public function test_store_profile_updates_are_visible_to_buyers_and_vacation_state_is_clear(): void
+    {
+        [$buyer, $seller] = $this->storeFixture();
+
+        $this->actingAs($seller->user)->put(route('seller.store.update'), [
+            'business_name' => 'Updated Buyer Store',
+            'description' => '<script>alert(1)</script> Handmade goods for everyday use.',
+            'vacation_mode' => true,
+        ])->assertRedirect();
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.shop', ['seller' => $seller->id]))
+            ->assertOk()
+            ->assertSee('Updated Buyer Store')
+            ->assertSee('This store is temporarily on vacation and is not accepting new orders.')
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', escape: false)
+            ->assertDontSee('<script>alert(1)</script>', escape: false);
+    }
+
     public function test_store_search_is_trimmed_case_insensitive_and_escapes_wildcards(): void
     {
         [$buyer, $seller, , $category] = $this->storeFixture();

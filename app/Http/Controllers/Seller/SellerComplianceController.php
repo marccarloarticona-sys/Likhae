@@ -41,6 +41,12 @@ class SellerComplianceController extends Controller
             'actions.performedBy',
             'responses',
         ]);
+        $case->responses->each(function (SellerComplianceResponse $response): void {
+            $response->setAttribute(
+                'evidence_available',
+                filled($response->evidence_path) && Storage::disk('local')->exists($response->evidence_path),
+            );
+        });
 
         $warningAction = $case->actions->where('action_type', 'WARNING')->last();
         $publicActions = $case->actions->whereIn('action_type', ['WARNING', 'PRODUCT_SUSPEND']);

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
+use App\Models\Admin\Notification;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\User;
@@ -80,6 +81,12 @@ class BuyerReviewSubmissionTest extends TestCase
         $this->actingAs($buyer)
             ->postJson(route('buyer.orders.review.store', $item), ['rating' => 5, 'comment' => 'First'])
             ->assertOk();
+        $reviewId = (int) $item->review()->value('id');
+        $this->assertSame(1, Notification::query()
+            ->where('type', 'SELLER_REVIEW_SUBMITTED')
+            ->where('reference_type', 'SELLER_REVIEW')
+            ->where('reference_id', $reviewId)
+            ->count());
 
         $this->actingAs($buyer)
             ->postJson(route('buyer.orders.review.store', $item), ['rating' => 3, 'comment' => 'Second'])
@@ -97,6 +104,11 @@ class BuyerReviewSubmissionTest extends TestCase
         }
 
         $this->assertSame(1, Review::query()->where('order_item_id', $item->id)->count());
+        $this->assertSame(1, Notification::query()
+            ->where('type', 'SELLER_REVIEW_SUBMITTED')
+            ->where('reference_type', 'SELLER_REVIEW')
+            ->where('reference_id', $reviewId)
+            ->count());
         $this->assertDatabaseHas('reviews', ['order_item_id' => $item->id, 'rating' => 5, 'comment' => 'Updated text']);
         $this->assertSame(1, $product->reviews()->count());
         $this->assertSame(5.0, round((float) $product->reviews()->avg('rating'), 1));
@@ -270,6 +282,23 @@ class BuyerReviewSubmissionTest extends TestCase
             ->assertSee($seller->business_name)
             ->assertSee('A published review')
             ->assertSee('Oct 17, 2026')
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', escape: false)
+            ->assertDontSee('<script>alert(1)</script>', escape: false);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee('Seller Response')
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', escape: false)
+            ->assertDontSee('<script>alert(1)</script>', escape: false);
+
+        $this->followingRedirects()
+            ->actingAs($buyer)
+            ->get(route('buyer.account.reviews'))
+            ->assertOk()
+            ->assertSee('Your Product Reviews')
+            ->assertSee('Seller Response')
+            ->assertSee($product->name)
             ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', escape: false)
             ->assertDontSee('<script>alert(1)</script>', escape: false);
 

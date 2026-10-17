@@ -188,7 +188,7 @@
             if (!response.ok || !payload.reply) throw new Error('Assistant request failed');
             typing.remove();
             addBubble(payload.reply, 'assistant', Array.isArray(payload.options) ? payload.options : []);
-            playResponseSound();
+            if (payload.mode === 'ai') playResponseSound();
         } catch (_) {
             typing.remove();
             addBubble('Sorry, the LIKHAE AI Assistant is temporarily unavailable. Please try again.', 'assistant');

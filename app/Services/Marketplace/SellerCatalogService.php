@@ -25,9 +25,10 @@ class SellerCatalogService
     public function save(SellerProfile $seller, SaveSellerProductRequest $request, ?Product $product = null): Product
     {
         $storedPaths = [];
+        $deletedPaths = [];
 
         try {
-            return DB::transaction(function () use ($seller, $request, $product, &$storedPaths): Product {
+            $savedProduct = DB::transaction(function () use ($seller, $request, $product, &$storedPaths, &$deletedPaths): Product {
                 $product ??= new Product(['seller_profile_id' => $seller->id]);
 
                 if ((int) $product->seller_profile_id !== (int) $seller->id) {
@@ -48,6 +49,7 @@ class SellerCatalogService
                     'slug' => $this->uniqueSlug($request->string('name')->toString(), $product),
                     'description' => $request->input('description'),
                     'status' => $status,
+                    'purchase_limit_per_buyer' => $request->input('purchase_limit_per_buyer'),
                     'published_at' => $status === 'ACTIVE' ? ($product->published_at ?: now()) : $product->published_at,
                     'archived_at' => $status === 'ARCHIVED' ? now() : null,
                 ]);
@@ -59,7 +61,7 @@ class SellerCatalogService
                 }
 
                 $optionValuesByKey = $this->syncOptions($product, (array) $request->input('options', []));
-                $this->removeImages($product, (array) $request->input('delete_image_ids', []));
+                $this->removeImages($product, (array) $request->input('delete_image_ids', []), $deletedPaths);
                 $newImageReferences = $this->storeImages(
                     $seller,
                     $product,
@@ -77,6 +79,18 @@ class SellerCatalogService
 
             throw $exception;
         }
+
+        // The database changes have committed, so removing these files can no
+        // longer leave a rolled-back product record pointing at missing media.
+        foreach (array_unique($deletedPaths) as $path) {
+            try {
+                Storage::disk('public')->delete($path);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return $savedProduct;
     }
 
     public function archiveOrRestore(SellerProfile $seller, Product $product): Product
@@ -97,9 +111,21 @@ class SellerCatalogService
     public function updateSingleStock(SellerProfile $seller, Product $product, int $stock): void
     {
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
-        abort_unless($product->variants()->where('is_active', true)->count() === 1, 409, 'Edit variant stock from the product editor.');
-
-        $product->variants()->where('is_active', true)->firstOrFail()->update(['stock' => $stock]);
+        DB::transaction(function () use ($seller, $product, $stock): void {
+            $isOwned = Product::query()
+                ->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)
+                ->exists();
+            abort_unless($isOwned, 403);
+            $variants = ProductVariant::query()
+                ->where('product_id', $product->id)
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            abort_unless($variants->count() === 1, 409, 'Edit variant stock from the product editor.');
+            $variants->first()->update(['stock' => $stock]);
+        }, attempts: 3);
     }
 
     public function updateVariantStock(
@@ -107,11 +133,25 @@ class SellerCatalogService
         Product $product,
         ProductVariant $variant,
         int $stock,
-    ): void {
+    ): ProductVariant {
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
         abort_unless((int) $variant->product_id === (int) $product->id, 404);
 
-        $variant->update(['stock' => $stock]);
+        return DB::transaction(function () use ($seller, $product, $variant, $stock): ProductVariant {
+            $isOwned = Product::query()
+                ->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)
+                ->exists();
+            abort_unless($isOwned, 403);
+            $lockedVariant = ProductVariant::query()
+                ->whereKey($variant->id)
+                ->where('product_id', $product->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $lockedVariant->update(['stock' => $stock]);
+
+            return $lockedVariant;
+        }, attempts: 3);
     }
 
     /** @return array<string, ProductOptionValue> */
@@ -515,7 +555,7 @@ class SellerCatalogService
         return $references;
     }
 
-    private function removeImages(Product $product, array $imageIds): void
+    private function removeImages(Product $product, array $imageIds, array &$deletedPaths): void
     {
         $imageIds = collect($imageIds)->filter()->map(fn ($id) => (int) $id)->unique()->values();
         if ($imageIds->isEmpty()) {
@@ -533,7 +573,7 @@ class SellerCatalogService
 
         foreach ($images as $image) {
             if (filled($image->file_path)) {
-                Storage::disk('public')->delete($image->file_path);
+                $deletedPaths[] = $image->file_path;
             }
 
             $image->delete();

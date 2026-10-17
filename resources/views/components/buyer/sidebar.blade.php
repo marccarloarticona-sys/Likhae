@@ -21,9 +21,6 @@
         ?? data_get($buyer, 'profile_photo_url')
         ?? data_get($buyer, 'avatar_url');
 
-    $avatar = $profilePhoto
-        ? (\Illuminate\Support\Str::startsWith($profilePhoto, ['http://', 'https://']) ? $profilePhoto : \Illuminate\Support\Facades\Storage::url($profilePhoto))
-        : null;
 
     $orderStatus = request('status', 'all');
     $rewardTab = request('tab', 'vouchers');
@@ -779,14 +776,7 @@
 
     <div class="lk-sidebar-profile">
         <span class="lk-sidebar-avatar">
-            @if($avatar)
-                <img
-                    src="{{ $avatar }}"
-                    alt="{{ $buyerName }}"
-                >
-            @else
-                {{ $buyerInitials }}
-            @endif
+            <x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" />
         </span>
 
         <span class="lk-sidebar-profile-copy">

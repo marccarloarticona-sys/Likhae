@@ -38,27 +38,28 @@ class BuyerAiController extends Controller
         // Live account questions bypass the model so a model can never invent
         // delivery data or select another buyer's order.
         if ($this->isLiveOrderQuestion($message)) {
-            return response()->json($this->answerOrderQuestion($request, $message));
+            return response()->json($this->answerOrderQuestion($request, $message) + ['mode' => 'live-data']);
         }
 
         if ($this->isNotificationCountQuestion($message)) {
-            return response()->json(['reply' => $this->notificationCountAnswer($request)]);
+            return response()->json(['reply' => $this->notificationCountAnswer($request), 'mode' => 'live-data']);
         }
 
         if ($reply = $this->buyerPortalAnswer($request, $message)) {
-            return response()->json(['reply' => $reply]);
+            return response()->json(['reply' => $reply, 'mode' => 'local-help']);
         }
 
         $context = self::PAGE_CONTEXTS[$page];
         // Common Buyer guidance is deterministic and remains available even
         // when Gemini is down or has not been configured yet.
         if ($this->hasLocalHelpAnswer($message) || ! $gemini->configured()) {
-            return response()->json(['reply' => $this->localHelp($message, $context)]);
+            return response()->json(['reply' => $this->localHelp($message, $context), 'mode' => 'local-help']);
         }
 
         try {
             return response()->json([
                 'reply' => $gemini->generate($this->systemInstruction(), $this->generalPrompt($message, $context)),
+                'mode' => 'ai',
             ]);
         } catch (Throwable) {
             report('LIKHAE Buyer AI request failed.');

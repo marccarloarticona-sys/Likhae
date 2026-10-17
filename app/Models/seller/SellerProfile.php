@@ -86,6 +86,11 @@ class SellerProfile extends Model
         return $this->hasMany(SellerOrder::class);
     }
 
+    public function pickupRequests(): HasMany
+    {
+        return $this->hasMany(SellerPickupRequest::class);
+    }
+
     public function vouchers(): HasMany
     {
         return $this->hasMany(Voucher::class);

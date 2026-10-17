@@ -24,6 +24,7 @@ use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
+use App\Services\AccountNotificationService;
 use App\Services\RiderRatingService;
 use App\Services\ReviewImageService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
@@ -926,7 +927,13 @@ class BuyerOrderController extends Controller
         return back()->with('buyer_notice', $existing ? 'Your return/refund request is already under review.' : 'Your return/refund request was submitted for review.');
     }
 
-    public function review(Request $request, OrderItem $item, RiderRatingService $riderRatings, ReviewImageService $reviewImages): RedirectResponse|JsonResponse
+    public function review(
+        Request $request,
+        OrderItem $item,
+        RiderRatingService $riderRatings,
+        ReviewImageService $reviewImages,
+        AccountNotificationService $notifications,
+    ): RedirectResponse|JsonResponse
     {
         $item->loadMissing('review', 'sellerOrder.order', 'shipment.riderAssignments.riderProfile');
         abort_unless((int) $item->sellerOrder->order->buyer_user_id === (int) $request->user()->id, 403);
@@ -1012,6 +1019,7 @@ class BuyerOrderController extends Controller
         }
 
         $existingReview = $item->review;
+        $createsProductReview = $existingReview === null && filled($data['rating'] ?? null);
         $previousReviewComment = $existingReview?->comment;
         $review = $existingReview ?? Review::query()->make(['order_item_id' => $item->id]);
         $review->buyer_user_id = $request->user()->id;
@@ -1046,7 +1054,7 @@ class BuyerOrderController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($review, $existingReview, $reviewCommentChanged, $previousReviewComment, $requestedReviewComment, $imageFiles, $reviewImages, $request, $item): void {
+            DB::transaction(function () use ($review, $existingReview, $createsProductReview, $reviewCommentChanged, $previousReviewComment, $requestedReviewComment, $imageFiles, $reviewImages, $notifications, $request, $item): void {
                 if ($existingReview !== null && $reviewCommentChanged) {
                     $lockedReview = Review::query()->whereKey($existingReview->id)->lockForUpdate()->firstOrFail();
                     abort_unless((int) $lockedReview->order_item_id === (int) $item->id
@@ -1096,6 +1104,10 @@ class BuyerOrderController extends Controller
 
                 if ($imageFiles !== []) {
                     $reviewImages->storeMany($review, $imageFiles, $request->user(), $request);
+                }
+
+                if ($createsProductReview) {
+                    $notifications->reviewSubmitted($review);
                 }
             });
         } catch (\RuntimeException $exception) {

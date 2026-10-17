@@ -7,11 +7,6 @@
 
 @php
     $photoPath = $user?->profile_photo_path;
-    $photoUrl = $photoPath
-        ? (\Illuminate\Support\Str::startsWith($photoPath, ['http://', 'https://'])
-            ? $photoPath
-            : '/storage/'.ltrim($photoPath, '/'))
-        : null;
     $initials = collect(explode(' ', trim((string) ($user?->name ?? 'Account'))))
         ->filter()
         ->take(2)
@@ -21,8 +16,8 @@
 
 <div class="profile-photo-upload" data-profile-photo-picker>
     <div class="profile-photo-upload__preview">
-        <span data-profile-photo-initials @if($photoUrl) hidden @endif>{{ $initials }}</span>
-        <img data-profile-photo-image @if(! $photoUrl) hidden @endif @if($photoUrl) src="{{ $photoUrl }}" @endif alt="{{ $user?->name ?? 'Profile photo' }}">
+        <span data-profile-photo-initials hidden>{{ $initials }}</span>
+        <x-shared.profile-image :path="$photoPath" role="buyer" :alt="$user?->name ?? 'Profile photo'" data-profile-photo-image />
     </div>
     <div class="profile-photo-upload__details">
         <strong>{{ $slot->isNotEmpty() ? $slot : $label }}</strong>

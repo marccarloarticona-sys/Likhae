@@ -376,6 +376,16 @@
                                 </div>
                             @endif
 
+                            @if(filled($item->review?->seller_reply))
+                                <div class="rounded-xl border border-stone-200 bg-stone-50 p-4">
+                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                        <strong>Seller Response</strong>
+                                        @if($item->review->seller_replied_at)<time class="text-sm text-stone-500">{{ $item->review->seller_replied_at->format('M j, Y') }}</time>@endif
+                                    </div>
+                                    <p class="mt-2 whitespace-pre-line">{{ $item->review->seller_reply }}</p>
+                                </div>
+                            @endif
+
                             <label class="grid gap-1 text-sm font-medium">Add a product photo
                                 <span class="text-xs font-normal text-stone-500">JPG, PNG, or WebP, up to 5 MB each; up to 5 photos</span>
                                 <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple class="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-3 file:py-2" @disabled($item->review)>

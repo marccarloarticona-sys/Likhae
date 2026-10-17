@@ -4,7 +4,7 @@
     $activeConversation = $messageConversations->firstWhere('id', $selectedConversationId) ?: $messageConversations->first();
     $activeOther = $activeConversation?->participants?->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
     $activeOtherName = $activeOther?->name ?: 'Conversation';
-    $activeOtherAvatar = 'https://ui-avatars.com/api/?name='.urlencode($activeOtherName).'&background=561C17&color=fff';
+    $activeOtherAvatar = asset('images/defaults/profile-avatar.svg');
     $activeStreamUrl = $activeConversation && filled($streamRoute ?? null)
         ? $streamRoute.(str_contains($streamRoute, '?') ? '&' : '?').'conversation='.$activeConversation->id
         : null;
@@ -32,6 +32,7 @@
     .lk-unified-messages .lk-conversation-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .lk-unified-messages .lk-conversation-name { overflow: hidden; color: var(--msg-text); font-size: 12px; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
     .lk-unified-messages .lk-conversation-time { color: var(--msg-muted-2); font-size: 10px; font-weight: 600; white-space: nowrap; }
+    .lk-unified-messages .lk-conversation-unread { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; padding: 0 5px; border-radius: 999px; background: var(--msg-maroon); color: #fff; font-size: 10px; font-weight: 900; }
     .lk-unified-messages .lk-conversation-preview { overflow: hidden; margin: 4px 0 0; color: var(--msg-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
     .lk-unified-messages .lk-messages-empty { padding: 42px 20px; color: var(--msg-muted); font-size: 12px; text-align: center; }
     .lk-unified-messages .lk-chat-area { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--msg-soft); }
@@ -95,14 +96,15 @@
                     @php
                         $other = $conversation->participants->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
                         $name = $other?->name ?: 'Conversation';
-                        $avatar = 'https://ui-avatars.com/api/?name='.urlencode($name).'&background=561C17&color=fff';
+                        $avatar = asset('images/defaults/profile-avatar.svg');
                         $isActive = (int) $conversation->id === (int) ($activeConversation?->id);
                     @endphp
                     <a href="{{ url()->current().'?conversation='.$conversation->id }}" class="lk-conversation-item {{ $isActive ? 'is-active' : '' }}">
                         <img class="lk-chat-avatar" src="{{ $avatar }}" alt="{{ $name }}">
                         <div class="lk-conversation-copy">
-                            <div class="lk-conversation-top"><strong class="lk-conversation-name">{{ $name }}</strong><span class="lk-conversation-time">{{ $conversation->updated_at?->diffForHumans() }}</span></div>
+                            <div class="lk-conversation-top"><strong class="lk-conversation-name">{{ $name }}</strong><span class="lk-conversation-time">{{ $conversation->latestMessage?->sent_at?->diffForHumans() ?? $conversation->updated_at?->diffForHumans() }}</span></div>
                             <p class="lk-conversation-preview">{{ $conversation->latestMessage?->body ?: 'Start a conversation.' }}</p>
+                            @if(($conversation->unread_count ?? 0) > 0)<span class="lk-conversation-unread" data-conversation-unread aria-label="{{ $conversation->unread_count }} unread messages">{{ $conversation->unread_count }}</span>@endif
                         </div>
                     </a>
                 @empty
@@ -128,7 +130,7 @@
                         @if(!empty($messageContext['items']))<div>Items: {{ implode(', ', $messageContext['items']) }}</div>@endif
                     </div>
                 @endif
-                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
+                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif @if(filled($messageReadRouteTemplate ?? null)) data-read-url="{{ str_replace('__conversation__', (string) $activeConversation->id, $messageReadRouteTemplate) }}" @endif>
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($activeMessages as $message)
                         @php($fromMe = (int) $message->sender_user_id === (int) auth()->id())

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class RiderLocalTrip extends Model
 {
@@ -43,6 +44,7 @@ class RiderLocalTrip extends Model
     public function seller(): BelongsTo { return $this->belongsTo(SellerProfile::class, 'seller_profile_id'); }
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by_user_id'); }
     public function items(): HasMany { return $this->hasMany(RiderLocalTripItem::class, 'rider_local_trip_id'); }
+    public function sellerPickupRequest(): HasOne { return $this->hasOne(\App\Models\Seller\SellerPickupRequest::class, 'rider_local_trip_id'); }
 
     public function scopeOpen(Builder $query): Builder
     {

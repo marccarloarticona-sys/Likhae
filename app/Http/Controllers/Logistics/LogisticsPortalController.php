@@ -30,6 +30,7 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\RegistrationWorkflowService;
+use App\Services\Reports\WorkspaceExportPdfService;
 use App\Services\RiderRatingService;
 use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
@@ -668,19 +669,43 @@ class LogisticsPortalController extends Controller
         ]);
     }
 
-    public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery)
+    public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery, WorkspaceExportPdfService $pdf)
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
-        $rows = $shipmentQuery->operationalFor($center)->latest()->get();
-        $csv = "Tracking,Status,Destination,Updated\n".$rows->map(fn ($shipment) => implode(',', [
-            $shipment->tracking_number,
-            $shipment->current_status,
-            '"'.str_replace('"', '""', collect([$shipment->destination_barangay_name, $shipment->destination_municipality_name, $shipment->destination_province_name])->filter()->implode(', ')).'"',
-            $shipment->updated_at?->toDateTimeString(),
-        ]))->implode("\n");
+        $rows = $shipmentQuery->operationalFor($center)
+            ->orderByDesc('shipments.id')
+            ->lazyById(500, 'shipments.id', 'id')
+            ->map(fn (Shipment $shipment): array => [
+                (string) $shipment->tracking_number,
+                (string) $shipment->current_status,
+                collect([
+                    $shipment->destination_barangay_name,
+                    $shipment->destination_municipality_name,
+                    $shipment->destination_province_name,
+                ])->filter()->implode(', '),
+                (string) ($shipment->updated_at?->toDateTimeString() ?? ''),
+            ]);
+        $filename = 'logistics-report-'.$center->id.'-'.now()->format('Ymd-His').'.pdf';
 
-        return response($csv, 200, ['Content-Type' => 'text/csv', 'Content-Disposition' => 'attachment; filename="logistics-report.csv"']);
+        return response($pdf->render([
+            'workspace' => 'Logistics Portal',
+            'title' => 'Shipment operations report',
+            'description' => 'Operational shipments visible to '.$center->business_name.'.',
+            'generated_at' => now()->format('Y-m-d H:i:s T'),
+            'orientation' => 'landscape',
+            'columns' => [
+                ['label' => 'Tracking', 'width' => 0.25],
+                ['label' => 'Status', 'width' => 0.2],
+                ['label' => 'Destination', 'width' => 0.35],
+                ['label' => 'Updated', 'width' => 0.2],
+            ],
+            'rows' => $rows,
+            'empty_message' => 'No operational shipments are available to this logistics center.',
+        ]), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+        ]);
     }
 
     public function profile(Request $request): View

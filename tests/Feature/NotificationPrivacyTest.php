@@ -31,7 +31,7 @@ class NotificationPrivacyTest extends TestCase
             ->assertOk()
             ->assertSee($signedInNotification->title)
             ->assertDontSee('Another accounts update')
-            ->assertSee('class="lk-badge">1</span>', escape: false);
+            ->assertSee('data-buyer-notification-count style="">1</span>', escape: false);
     }
 
     public function test_opening_one_notification_marks_only_that_owned_notification_read_and_redirects_safely(): void
@@ -66,6 +66,25 @@ class NotificationPrivacyTest extends TestCase
         $this->actingAs($otherBuyer)
             ->get(route('buyer.notifications.open', $opened))
             ->assertNotFound();
+    }
+
+    public function test_popover_preview_limit_does_not_limit_the_unread_count(): void
+    {
+        $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        for ($number = 1; $number <= 10; $number++) {
+            $buyer->notifications()->create([
+                'type' => 'ACCOUNT_UPDATE',
+                'title' => 'Preview notice '.$number,
+                'message' => 'Unread item '.$number,
+            ]);
+        }
+
+        $response = $this->actingAs($buyer)->get(route('notifications.index'))->assertOk()
+            ->assertSee('10 unread')
+            ->assertSee('data-buyer-notification-count style="">10</span>', escape: false);
+
+        $this->assertSame(8, substr_count($response->getContent(), 'class="lk-notification-popover__item'));
+        $this->assertStringContainsString('Preview notice 10', $response->getContent());
     }
 
     public function test_logistics_and_rider_headers_show_the_signed_in_accounts_unread_count(): void

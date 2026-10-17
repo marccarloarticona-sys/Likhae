@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\OrderItem;
+use App\Models\Logistics\ParcelScan;
+use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
@@ -11,8 +13,10 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Maps\MapDataService;
 use App\Support\FinancialRules;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Collection;
 use RuntimeException;
 use Illuminate\View\View;
 
@@ -35,6 +39,7 @@ class SellerOrderController extends Controller
         $toDate = $filters['to_date'] ?? null;
 
         $selectedOrderView = null;
+        $selectedRecord = null;
         if ($request->query('mode') === 'show') {
             $orderNumber = $request->validate([
                 'order' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9-]+$/'],
@@ -63,6 +68,7 @@ class SellerOrderController extends Controller
                 'shipments.riderAssignments.localTripItems.trip.seller',
                 'shipments.riderAssignments.localTripItems.trip.logisticsCenter.address',
                 'shipments.riderAssignments.localTripItems.trip.items',
+                'shipments.riderAssignments.localTripItems.trip.items.riderAssignment.shipment',
             ];
         }
         $ownedOrders = SellerOrder::query()->where('seller_profile_id', $seller->id);
@@ -103,11 +109,24 @@ class SellerOrderController extends Controller
                     ->whereRaw('DATE(COALESCE(placed_at, created_at)) '.$operator.' ?', [$date]));
             }
         }
-        $orders = $ordersQuery->get();
+        $orders = $ordersQuery->paginate(20)->withQueryString();
+        $ordersPage = $orders->getCollection();
 
         if ($request->query('mode') === 'show') {
             $selectedRecord = (clone $ownedOrders)->where('seller_order_number', $orderNumber)->with($orderRelations)->firstOrFail();
-            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady);
+        }
+
+        $progressOrders = $selectedRecord ? $ordersPage->concat([$selectedRecord]) : $ordersPage;
+        $pickupAssignments = $progressOrders
+            ->flatMap(fn (SellerOrder $order) => $order->shipments->flatMap->riderAssignments)
+            ->filter(fn ($assignment): bool => $assignment->assignment_type === 'PICKUP'
+                && $assignment->relationLoaded('localTripItems')
+                && $assignment->localTripItems->isNotEmpty())
+            ->unique('id')
+            ->values();
+        $successfulPickupScanKeys = $this->successfulPickupScanKeys($pickupAssignments);
+        if ($selectedRecord) {
+            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady, $successfulPickupScanKeys);
         }
 
         $refundSearch = $requestedStatus === 'returns' ? $search : '';
@@ -151,12 +170,46 @@ class SellerOrderController extends Controller
             'fromDate' => $fromDate,
             'toDate' => $toDate,
             'selectedOrderView' => $selectedOrderView,
-            'sellerOrders' => $orders->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady)),
+            'sellerOrders' => $ordersPage->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady, $successfulPickupScanKeys)),
             'refundRequests' => $refundRequests,
             'refundCounts' => $refundCounts,
             'refundStatus' => $refundStatus,
             'statusCounts' => $statusCounts,
             'readyPickupCount' => $readyPickupCount,
+        ]);
+    }
+
+    public function pickupProgress(Request $request, int $trip): JsonResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller, 403);
+        abort_unless(app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady(), 503);
+
+        $pickup = RiderLocalTrip::query()
+            ->whereKey($trip)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->where('seller_profile_id', $seller->id)
+            ->with([
+                'rider.user',
+                'items.riderAssignment.shipment',
+            ])
+            ->firstOrFail();
+
+        $progress = $this->pickupProgressFor(
+            $pickup,
+            $this->successfulPickupScanKeys($pickup->items->map(fn ($item) => $item->riderAssignment)->filter()),
+        );
+
+        return response()->json([
+            'batch' => 'P-'.$pickup->id,
+            'status' => $pickup->status,
+            'rider' => $pickup->rider?->user?->name,
+            'collected' => $progress['collected'],
+            'total' => $progress['total'],
+            'parcels' => $progress['parcels']->map(fn (array $parcel): array => [
+                'tracking_number' => $parcel['tracking_number'],
+                'status' => $parcel['status'],
+            ]),
         ]);
     }
 
@@ -274,7 +327,7 @@ class SellerOrderController extends Controller
             : 'Logistics pickup requested.');
     }
 
-    private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady): array
+    private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady, array $successfulPickupScanKeys): array
     {
         $address = $order->order?->address;
         $items = $order->items;
@@ -299,10 +352,16 @@ class SellerOrderController extends Controller
         $pickupBatch = $pickupBatchSchemaReady
             ? $pickupAssignment?->localTripItems?->sortByDesc('id')->first()?->trip
             : null;
+        $pickupProgress = $pickupBatch ? $this->pickupProgressFor($pickupBatch, $successfulPickupScanKeys) : [
+            'collected' => 0,
+            'total' => 0,
+            'parcels' => collect(),
+        ];
         $parcelStatuses = $shipments->pluck('current_status');
         $pickupStatus = match (true) {
             $parcelStatuses->isNotEmpty() && $parcelStatuses->every(fn (string $status): bool => in_array($status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true)) => 'Picked up',
             $pickupBatch?->status === 'EN_ROUTE_TO_HUB' => 'In transit to logistics',
+            $pickupBatch?->status === 'IN_PROGRESS' => 'Pickup in Progress',
             $pickupAssignment && in_array($pickupAssignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true) => 'Pickup scheduled',
             $parcelStatuses->contains('READY_FOR_PICKUP') => 'Waiting for Logistics',
             default => null,
@@ -364,6 +423,19 @@ class SellerOrderController extends Controller
             'pickup_status' => $pickupStatus,
             'pickup_batch' => $pickupBatch ? 'P-'.$pickupBatch->id : null,
             'pickup_batch_size' => $pickupBatch?->items?->count() ?? ($pickupAssignment ? 1 : null),
+            'pickup_progress_collected' => $pickupProgress['collected'],
+            'pickup_progress_total' => $pickupProgress['total'],
+            'pickup_progress_parcels' => $pickupProgress['parcels'],
+            'pickup_batch_status' => $pickupBatch?->status,
+            'pickup_progress_active' => $pickupBatch && in_array($pickupBatch->status, [
+                RiderLocalTrip::LOADING,
+                RiderLocalTrip::READY,
+                RiderLocalTrip::IN_PROGRESS,
+            ], true),
+            'pickup_progress_url' => $pickupBatch
+                ? route('seller.orders.pickups.progress', $pickupBatch->id)
+                : null,
+            'pickup_progress_shipment_ids' => $pickupProgress['parcels']->pluck('shipment_id')->values(),
             'pickup_rider' => $pickupAssignment?->riderProfile?->user?->name,
             'pickup_assigned_at' => $pickupAssignment?->assigned_at,
             'pickup_collected_at' => $pickupAssignment?->completed_at,
@@ -374,6 +446,77 @@ class SellerOrderController extends Controller
             'delivery' => $shipments->first(),
             'map_markers' => app(MapDataService::class)->forShipments($shipments, includeSeller: true),
         ];
+    }
+
+    /** @param Collection<int, \App\Models\Rider\RiderAssignment> $assignments */
+    private function successfulPickupScanKeys(Collection $assignments): array
+    {
+        $assignmentIds = $assignments
+            ->filter(fn ($assignment): bool => $assignment->assignment_type === 'PICKUP')
+            ->pluck('id')
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($assignmentIds->isEmpty() || ! Schema::hasTable('parcel_scans')) {
+            return [];
+        }
+
+        return ParcelScan::query()
+            ->whereIn('rider_assignment_id', $assignmentIds)
+            ->where('scan_type', 'PICKUP_COLLECTED')
+            ->where('result', 'SUCCESS')
+            ->get(['shipment_id', 'rider_assignment_id', 'scanned_code'])
+            ->mapWithKeys(fn (ParcelScan $scan): array => [
+                $this->pickupScanKey((int) $scan->shipment_id, (int) $scan->rider_assignment_id, (string) $scan->scanned_code) => true,
+            ])
+            ->all();
+    }
+
+    /**
+     * Progress is derived from successful parcel scan records, one entry per waybill.
+     *
+     * @return array{collected:int,total:int,parcels:\Illuminate\Support\Collection<int, array{shipment_id:int,tracking_number:string,status:string,collected:bool}>}
+     */
+    private function pickupProgressFor(RiderLocalTrip $pickup, array $successfulPickupScanKeys): array
+    {
+        $parcels = $pickup->items
+            ->map(function ($item) use ($successfulPickupScanKeys): ?array {
+                $assignment = $item->riderAssignment;
+                $shipment = $assignment?->shipment;
+                if (! $shipment) {
+                    return null;
+                }
+
+                $collected = isset($successfulPickupScanKeys[
+                    $this->pickupScanKey((int) $shipment->id, (int) $assignment->id, (string) $shipment->tracking_number)
+                ]);
+
+                return [
+                    'shipment_id' => (int) $shipment->id,
+                    'tracking_number' => (string) $shipment->tracking_number,
+                    'status' => $collected ? 'Collected' : match ($assignment->status) {
+                        'REJECTED' => 'Not collected',
+                        'CANCELLED' => 'Cancelled',
+                        default => 'Waiting',
+                    },
+                    'collected' => $collected,
+                ];
+            })
+            ->filter()
+            ->unique('shipment_id')
+            ->values();
+
+        return [
+            'collected' => $parcels->where('collected', true)->count(),
+            'total' => $parcels->count(),
+            'parcels' => $parcels,
+        ];
+    }
+
+    private function pickupScanKey(int $shipmentId, int $assignmentId, string $code): string
+    {
+        return $shipmentId.'|'.$assignmentId.'|'.$code;
     }
 
     private function statusKey(string $status): string

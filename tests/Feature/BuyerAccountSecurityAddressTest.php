@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Mail\BuyerEmailChangeVerificationCode;
+use App\Mail\BuyerMobileChangeVerificationCode;
 use App\Models\Buyer\Address;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -432,6 +433,45 @@ class BuyerAccountSecurityAddressTest extends TestCase
         $this->assertSame(User::TYPE_BUYER, $buyer->fresh()->account_type);
         $this->assertSame(User::STATUS_ACTIVE, $buyer->fresh()->status);
         $this->assertSame('+639171234567', $buyer->fresh()->contact_number);
+    }
+
+    public function test_buyer_api_confirms_mobile_change_with_otp_sent_to_verified_email(): void
+    {
+        Mail::fake();
+        $buyer = User::factory()->create([
+            'email' => 'buyer@example.com',
+            'email_verified_at' => now(),
+            'contact_number' => '+639171234567',
+            'account_type' => User::TYPE_BUYER,
+        ]);
+        $token = $this->issueApiToken($buyer);
+        $payload = [
+            'first_name' => 'Maria',
+            'middle_initial' => 'A.',
+            'last_name' => 'Santos',
+            'name_extension' => 'Jr.',
+            'contact_number' => '0998 222 2222',
+        ];
+
+        $this->withToken($token)
+            ->patchJson(route('api.v1.buyer.profile.update'), $payload)
+            ->assertAccepted()
+            ->assertJsonPath('verification_for', 'mobile_change');
+        $this->assertSame('+639171234567', $buyer->fresh()->contact_number);
+
+        $mailable = Mail::sent(BuyerMobileChangeVerificationCode::class)->sole();
+        $this->assertTrue($mailable->hasTo('buyer@example.com'));
+        $wrongCode = str_pad((string) (((int) $mailable->code + 1) % 1000000), 6, '0', STR_PAD_LEFT);
+        $this->withToken($token)
+            ->patchJson(route('api.v1.buyer.profile.update'), $payload + ['mobile_change_code' => $wrongCode])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('code');
+        $this->assertSame('+639171234567', $buyer->fresh()->contact_number);
+
+        $this->withToken($token)
+            ->patchJson(route('api.v1.buyer.profile.update'), $payload + ['mobile_change_code' => $mailable->code])
+            ->assertOk();
+        $this->assertSame('+639982222222', $buyer->fresh()->contact_number);
     }
 
     public function test_buyer_api_enforces_address_limit_default_deletion_and_ownership(): void

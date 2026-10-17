@@ -44,7 +44,8 @@ class RiderPickupBatchController extends Controller
 
         $items = $pickup->items;
         $total = $items->count();
-        $collected = $items->filter(fn ($item): bool => $item->riderAssignment?->status === 'COMPLETED')->count();
+        $collectedAssignmentIds = app(SellerPickupBatchService::class)->collectedAssignmentIds($pickup);
+        $collected = $collectedAssignmentIds->count();
         $resolved = $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
         $pickupFinished = $pickup->status === RiderLocalTrip::IN_PROGRESS && $resolved;
         $address = $pickup->seller?->businessAddress;
@@ -68,6 +69,7 @@ class RiderPickupBatchController extends Controller
             'items' => $items,
             'total' => $total,
             'collected' => $collected,
+            'collectedAssignmentIds' => $collectedAssignmentIds,
             'resolved' => $resolved,
             'pickupFinished' => $pickupFinished,
             'navigationTargetKind' => $pickup->status === RiderLocalTrip::EN_ROUTE_TO_HUB ? 'logistics' : 'seller',

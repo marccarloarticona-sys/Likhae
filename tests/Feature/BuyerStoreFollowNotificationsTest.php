@@ -93,6 +93,32 @@ class BuyerStoreFollowNotificationsTest extends TestCase
         $this->assertSame(2, Notification::query()->where('type', 'STORE_RESTOCK')->count());
     }
 
+    public function test_seller_inventory_update_notifies_on_restock_but_not_on_positive_to_positive_change(): void
+    {
+        [$buyer, $seller, $product, $variant] = $this->storeFixtureWithProduct(stock: 0);
+        SellerFollower::query()->create([
+            'buyer_user_id' => $buyer->id,
+            'seller_profile_id' => $seller->id,
+        ]);
+        WishlistItem::query()->create(['user_id' => $buyer->id, 'product_id' => $product->id]);
+
+        $sellerUser = $seller->user;
+        $this->actingAs($sellerUser)
+            ->patch(route('seller.products.variants.stock', ['product' => $product->id, 'variant' => $variant->id]), ['stock' => 10])
+            ->assertRedirect(route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id]));
+        $this->assertSame(10, (int) $variant->fresh()->stock);
+        $this->assertSame(1, Notification::query()->where('user_id', $buyer->id)->where('type', 'STORE_RESTOCK')->count());
+
+        $this->patch(route('seller.products.variants.stock', ['product' => $product->id, 'variant' => $variant->id]), ['stock' => 15])
+            ->assertRedirect(route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id]));
+        $this->assertSame(15, (int) $variant->fresh()->stock);
+        $this->assertSame(1, Notification::query()->where('user_id', $buyer->id)->where('type', 'STORE_RESTOCK')->count());
+
+        $this->get(route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id]))
+            ->assertOk()
+            ->assertSee('value="15"', false);
+    }
+
     public function test_unfollowing_suppresses_future_store_notifications(): void
     {
         [$buyer, $seller, , $variant] = $this->storeFixtureWithProduct(stock: 0);

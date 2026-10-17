@@ -81,7 +81,7 @@ class MessageAttachmentService
         app(ConversationAuthorizationService::class)->assertCanAccess($user, $conversation);
 
         $relativePath = (string) $message->attachment_path;
-        abort_unless(preg_match('#^message-attachments/[A-Fa-f0-9-]+\.(jpg|jpeg|png|webp)$#D', $relativePath) === 1, 404);
+        abort_unless(preg_match('#^message-attachments/[A-Za-z0-9-]+\.(jpg|jpeg|png|webp)$#D', $relativePath) === 1, 404);
 
         $disk = Storage::disk('local');
         $absolutePath = realpath($disk->path($relativePath));

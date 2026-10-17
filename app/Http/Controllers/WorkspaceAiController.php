@@ -30,12 +30,15 @@ class WorkspaceAiController extends Controller
             return response()->json(['reply' => $reply, 'mode' => 'local-live-data']);
         }
 
-        if ($reply = $this->curatedAnswer($message, $config)) {
-            return response()->json(['reply' => $reply]);
+        if ($workspace !== 'seller' && ($reply = $this->curatedAnswer($message, $config))) {
+            return response()->json(['reply' => $reply, 'mode' => 'local-help']);
         }
 
         if (! $gemini->configured()) {
-            return response()->json(['reply' => $this->localHelp($context)]);
+            if ($workspace === 'seller') {
+                return response()->json(['reply' => 'Your AI assistant for Seller Center is not available yet.', 'mode' => 'unavailable'], 503);
+            }
+            return response()->json(['reply' => $this->localHelp($context), 'mode' => 'local-help']);
         }
 
         try {
@@ -44,9 +47,14 @@ class WorkspaceAiController extends Controller
                     (string) $config['system_prompt'],
                     $this->generalPrompt($message, $context)
                 ),
+                'mode' => 'ai',
             ]);
         } catch (Throwable) {
             report("LIKHAE {$config['label']} AI request failed.");
+
+            if ($workspace === 'seller') {
+                return response()->json(['reply' => 'Your AI assistant for Seller Center is not available yet.', 'mode' => 'unavailable'], 503);
+            }
 
             return response()->json([
                 'reply' => $this->localHelp($context),

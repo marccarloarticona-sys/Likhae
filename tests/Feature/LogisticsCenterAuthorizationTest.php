@@ -39,6 +39,24 @@ class LogisticsCenterAuthorizationTest extends TestCase
         $this->assertDatabaseHas('pickup_requests', ['id' => $pickup->id, 'status' => 'PENDING']);
     }
 
+    public function test_logistics_report_download_is_pdf_and_scoped_to_the_authenticated_center(): void
+    {
+        [$user, $center] = $this->approvedCenter('PDF-CENTER-A');
+        [, $otherCenter] = $this->approvedCenter('PDF-CENTER-B');
+        $ownPickup = $this->pickupForCenter($center);
+        $foreignPickup = $this->pickupForCenter($otherCenter);
+
+        $response = $this->actingAs($user)->get(route('logistics.reports.export'))
+            ->assertOk()
+            ->assertHeader('content-type', 'application/pdf')
+            ->assertDownload();
+        $pdf = $response->getContent();
+
+        $this->assertStringStartsWith('%PDF-1.4', $pdf);
+        $this->assertStringContainsString($ownPickup->shipment->tracking_number, $pdf);
+        $this->assertStringNotContainsString($foreignPickup->shipment->tracking_number, $pdf);
+    }
+
     private function center(string $code): array
     {
         $user = User::factory()->create([
@@ -50,6 +68,30 @@ class LogisticsCenterAuthorizationTest extends TestCase
             'code' => $code,
             'business_name' => $code.' Sorting Center',
             'status' => 'ACTIVE',
+        ]);
+
+        return [$user, $center];
+    }
+
+    private function approvedCenter(string $code): array
+    {
+        $user = User::factory()->create([
+            'account_type' => User::TYPE_LOGISTICS,
+            'status' => User::STATUS_ACTIVE,
+            'email_verified_at' => now(),
+        ]);
+        $admin = User::factory()->create([
+            'account_type' => User::TYPE_ADMIN,
+            'status' => User::STATUS_ACTIVE,
+            'email_verified_at' => now(),
+        ]);
+        $center = LogisticsCenter::create([
+            'owner_user_id' => $user->id,
+            'code' => $code,
+            'business_name' => $code.' Sorting Center',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
         ]);
 
         return [$user, $center];

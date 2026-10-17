@@ -38,6 +38,7 @@ class CheckoutService
         private readonly PsgcLogisticsRoutingService $routing,
         private readonly ShipmentTransferService $transfers,
         private readonly FragileProtectionRuleService $protection,
+        private readonly PurchaseLimitService $purchaseLimits,
     ) {}
 
     public function automaticRoutingReady(): bool
@@ -572,6 +573,12 @@ class CheckoutService
                     ]);
                 }
 
+                if ($seller->vacation_mode) {
+                    throw ValidationException::withMessages([
+                        'cart_item_ids' => 'One or more sellers are currently on vacation and are not accepting purchases. Refresh your cart and try again later.',
+                    ]);
+                }
+
                 if (! $variant || ! $variant->is_active || (int) $variant->stock < (int) $item->quantity) {
                     throw ValidationException::withMessages([
                         'cart' => 'One or more products no longer have enough stock.',
@@ -585,6 +592,28 @@ class CheckoutService
                 $product->setRelation('sellerProfile', $seller);
                 $variant->setRelation('product', $product);
                 $item->setRelation('productVariant', $variant);
+            }
+
+            // This runs against the products locked above, after the cart and
+            // variant locks. The product lock serializes separate checkouts
+            // for the same product while the current-read history query sees
+            // any order committed by the preceding checkout.
+            $requestedByProduct = $items
+                ->groupBy(fn (CartItem $item): int => (int) $lockedVariants->get($item->product_variant_id)->product_id)
+                ->sortKeys();
+            foreach ($requestedByProduct as $productId => $productItems) {
+                $product = $lockedProducts->get((int) $productId);
+                if (! $product) {
+                    continue;
+                }
+
+                $this->purchaseLimits->assertWithinLimit(
+                    $buyer,
+                    $product,
+                    (int) $productItems->sum('quantity'),
+                    attribute: 'cart',
+                    lockHistoricalRows: true,
+                );
             }
 
             if ($expectedPriceSnapshot !== null) {

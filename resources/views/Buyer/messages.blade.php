@@ -19,7 +19,7 @@
             'id' => $dbActiveSeller->id,
             'name' => $activeName,
             'slug' => \Illuminate\Support\Str::slug($activeName).'-'.$dbActiveSeller->id,
-            'avatar' => 'https://ui-avatars.com/api/?name='.urlencode($activeName).'&background=561C17&color=fff',
+            'avatar' => asset('images/defaults/profile-avatar.svg'),
             'last_message' => 'Start a conversation with this seller.',
             'time' => '',
             'unread' => 0,

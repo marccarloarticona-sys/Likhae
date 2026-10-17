@@ -1161,6 +1161,24 @@ class ShipmentWorkflowService
             ->whereIn('status', ['PENDING', 'APPROVED'])
             ->update(['status' => 'CANCELLED', 'rejection_reason' => 'Seller order cancelled: '.$reason]);
 
+        if (Schema::hasTable('seller_pickup_request_shipments') && Schema::hasTable('seller_pickup_requests')) {
+            $pickupRequestIds = DB::table('seller_pickup_request_shipments')
+                ->where('seller_order_id', $sellerOrder->id)
+                ->where('active_slot', true)
+                ->distinct()
+                ->pluck('seller_pickup_request_id');
+            if ($pickupRequestIds->isNotEmpty()) {
+                DB::table('seller_pickup_requests')
+                    ->whereIn('id', $pickupRequestIds)
+                    ->whereIn('status', ['REQUESTED', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                    ->update(['status' => 'CANCELLED', 'updated_at' => now()]);
+                DB::table('seller_pickup_request_shipments')
+                    ->whereIn('seller_pickup_request_id', $pickupRequestIds)
+                    ->where('active_slot', true)
+                    ->update(['active_slot' => null, 'updated_at' => now()]);
+            }
+        }
+
         $sellerOrder->update(['status' => 'CANCELLED']);
         foreach ($shipments as $shipment) {
             $this->recordEvent($shipment, $shipment->current_status, $actor, 'SELLER_ORDER_CANCELLED: '.$reason);

@@ -4,7 +4,7 @@
 @section('subtitle', 'Read buyer feedback and manage your replies.')
 @section('content')
 <div class="sl-page">
-    <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Feedback</span><h2>Product Reviews</h2><p>Reviews are shown only for products in your store.</p></div></div>
+    <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Feedback</span><h2>Product Reviews</h2><p>Reviews are shown only for products in your store.</p></div><a class="sl-btn sl-btn-ghost" href="{{ route('seller.reviews.export', $filters) }}">Download PDF</a></div>
 
     <section class="sl-card sl-order-filters">
         <form method="GET" action="{{ route('seller.reviews') }}" class="grid gap-3 md:grid-cols-6">
@@ -19,10 +19,10 @@
 
     @forelse($reviews as $review)
         <article class="sl-card mb-4">
-            <header class="sl-card-head"><div><span class="sl-eyebrow">{{ $review->created_at?->format('M d, Y g:i A') }}</span><h3>{{ $review->buyer?->name ?? 'Buyer' }}</h3></div><strong aria-label="{{ $review->rating }} out of 5 stars">{{ str_repeat('★', (int) $review->rating) }}{{ str_repeat('☆', 5 - (int) $review->rating) }} <span>{{ $review->rating }}/5</span></strong></header>
+            <header class="sl-card-head"><div><span class="sl-eyebrow">{{ $review->created_at?->format('M d, Y g:i A') }}</span><h3>{{ $review->buyer_display_name ?? 'Verified Buyer' }}</h3></div><strong aria-label="{{ $review->rating }} out of 5 stars">{{ str_repeat('★', (int) $review->rating) }}{{ str_repeat('☆', 5 - (int) $review->rating) }} <span>{{ $review->rating }}/5</span></strong></header>
             <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
                 <div><p class="font-semibold">{{ $review->orderItem?->product_name ?? $review->orderItem?->product?->name ?? 'Product' }}</p><p class="text-sm text-stone-600">Variant: {{ $review->orderItem?->variant_description ?: 'Standard' }}</p><p class="mt-3 whitespace-pre-line">{{ $review->comment ?: 'No written comment.' }}</p></div>
-                @if(!empty($reviewImagesById[$review->id]))<img class="h-40 w-full rounded-xl border border-stone-200 object-cover" src="{{ $reviewImagesById[$review->id] }}" alt="Review photo from {{ $review->buyer?->name ?? 'buyer' }}">@endif
+                @if(!empty($reviewImagesById[$review->id] ?? []))<div class="flex flex-wrap gap-2">@foreach($reviewImagesById[$review->id] as $reviewImageUrl)<img class="h-40 w-40 max-w-full rounded-xl border border-stone-200 object-cover" src="{{ $reviewImageUrl }}" alt="Buyer review photo">@endforeach</div>@endif
             </div>
 
             @if(filled($review->seller_reply))

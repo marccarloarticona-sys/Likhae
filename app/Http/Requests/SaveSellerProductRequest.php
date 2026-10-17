@@ -17,12 +17,14 @@ class SaveSellerProductRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         $discountValue = $this->input('discount_value', $this->input('discount', $this->input('discount_percentage')));
-        $discountType = strtolower((string) $this->input('discount_type', 'none'));
+        $discountType = strtolower((string) ($this->input('discount_type') ?? 'none'));
 
         $this->merge([
             'product_type' => strtolower((string) $this->input('product_type', 'single')),
             'status' => strtoupper((string) $this->input('status', $this->input('listing_status', 'DRAFT'))),
-            'discount_type' => in_array($discountType, ['none', 'percentage', 'fixed'], true) ? $discountType : 'none',
+            // Keep unknown values intact so the Rule::in validation below
+            // rejects tampered input instead of silently treating it as none.
+            'discount_type' => $discountType,
             'discount_value' => $discountValue,
         ]);
     }
@@ -39,6 +41,7 @@ class SaveSellerProductRequest extends FormRequest
             'name' => ['required', 'string', 'max:200'],
             'category_id' => ['required', 'integer', $categoryRule],
             'description' => ['nullable', 'string', 'max:10000'],
+            'purchase_limit_per_buyer' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'ARCHIVED'])],
 
             'price' => ['required_if:product_type,single', 'nullable', 'numeric', 'min:0', 'max:999999.99'],

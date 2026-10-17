@@ -16,7 +16,9 @@ use App\Models\Seller\Product;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
+use App\Services\Account\BuyerMobileChangeOtpService;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\MessageAttachmentService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
@@ -24,7 +26,9 @@ use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
+use App\Support\BuyerNameRules;
 use App\Support\PhilippineAddressValidator;
+use App\Support\PhilippineMobileNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +37,8 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password as PasswordRule;
+use Illuminate\Validation\ValidationException;
 
 class BuyerApiController extends Controller
 {
@@ -55,13 +61,23 @@ class BuyerApiController extends Controller
             'quantity' => ['sometimes', 'integer', 'min:1', 'max:999'],
         ]);
 
-        $product = Product::query()->visible()->findOrFail($data['product_id']);
-        $item = $cart->add(
-            $request->user(),
-            $product,
-            (int) $data['product_variant_id'],
-            (int) ($data['quantity'] ?? 1),
-        );
+        $product = Product::query()->visible()->with('sellerProfile')->findOrFail($data['product_id']);
+        try {
+            $item = $cart->add(
+                $request->user(),
+                $product,
+                (int) $data['product_variant_id'],
+                (int) ($data['quantity'] ?? 1),
+            );
+        } catch (ValidationException $exception) {
+            if (str_contains(mb_strtolower((string) collect($exception->errors())->flatten()->first()), 'currently on vacation')) {
+                throw ValidationException::withMessages([
+                    'product_id' => 'This seller is currently on vacation and is not accepting purchases.',
+                ]);
+            }
+
+            throw $exception;
+        }
         $item->load(['productVariant.product.images', 'productVariant.product.sellerProfile', 'productVariant.optionValues.option']);
 
         return response()->json(['success' => true, 'data' => $this->cartItemPayload($item)], 201);
@@ -205,22 +221,45 @@ class BuyerApiController extends Controller
     public function createAddress(Request $request): JsonResponse
     {
         $this->authorizeBuyer($request);
+        if (is_string($request->input('contact_number'))) {
+            $normalizedContact = PhilippineMobileNumber::normalize($request->input('contact_number'));
+            if ($normalizedContact !== null) {
+                $request->merge(['contact_number' => $normalizedContact]);
+            }
+        }
         $data = $request->validate([
             'label' => ['nullable', 'string', 'max:50'],
             'recipient_name' => ['required', 'string', 'max:200'],
-            'contact_number' => ['required', 'string', 'max:30'],
+            'contact_number' => ['required', 'string', 'max:30', 'regex:/^(?:09|\\+?639)\\d{9}$/'],
             ...PhilippineAddressValidator::rules(),
             ...AddressCoordinateValidator::rules(),
             'is_default' => ['sometimes', 'boolean'],
         ]);
+        $data['contact_number'] = PhilippineMobileNumber::normalize($data['contact_number'])
+            ?? throw ValidationException::withMessages([
+                'contact_number' => 'Enter a valid Philippine mobile number for the delivery recipient.',
+            ]);
         PhilippineAddressValidator::assertValid($data);
         AddressCoordinateValidator::assertValid($data);
 
-        if ($request->boolean('is_default')) {
-            $request->user()->addresses()->update(['is_default' => false]);
-        }
-        $addressData = $data + ['is_default' => $request->boolean('is_default')];
-        $address = $request->user()->addresses()->create($addressData);
+        $buyer = $request->user();
+        $address = DB::transaction(function () use ($buyer, $data, $request): Address {
+            $lockedBuyer = User::query()->whereKey($buyer->id)->lockForUpdate()->firstOrFail();
+            $addressCount = $lockedBuyer->addresses()->count();
+
+            if ($addressCount >= 10) {
+                throw ValidationException::withMessages([
+                    'address_limit' => 'You can save up to 10 delivery addresses.',
+                ]);
+            }
+
+            $makeDefault = $request->boolean('is_default') || $addressCount === 0;
+            if ($makeDefault) {
+                $lockedBuyer->addresses()->update(['is_default' => false]);
+            }
+
+            return $lockedBuyer->addresses()->create($data + ['is_default' => $makeDefault]);
+        });
 
         return response()->json(['success' => true, 'data' => $this->addressPayload($address)], 201);
     }
@@ -230,11 +269,16 @@ class BuyerApiController extends Controller
         $this->authorizeBuyer($request);
         abort_unless((int) $address->user_id === (int) $request->user()->id, 403);
         DB::transaction(function () use ($request, $address): void {
-            $wasDefault = (bool) $address->is_default;
-            $address->delete();
-            if ($wasDefault) {
-                $request->user()->addresses()->latest()->first()?->update(['is_default' => true]);
+            $lockedBuyer = User::query()->whereKey($request->user()->id)->lockForUpdate()->firstOrFail();
+            $lockedAddress = $lockedBuyer->addresses()->whereKey($address->id)->lockForUpdate()->firstOrFail();
+
+            if ($lockedAddress->is_default && $lockedBuyer->addresses()->count() > 1) {
+                throw ValidationException::withMessages([
+                    'address' => 'Set another address as default before deleting this address.',
+                ]);
             }
+
+            $lockedAddress->delete();
         });
 
         return response()->json(['success' => true]);
@@ -253,21 +297,64 @@ class BuyerApiController extends Controller
         return response()->json(['success' => true, 'data' => $this->addressPayload($address->fresh())]);
     }
 
-    public function updateProfile(Request $request, ImageOptimizationService $images): JsonResponse
+    public function updateProfile(Request $request, ImageOptimizationService $images, BuyerMobileChangeOtpService $mobileChanges): JsonResponse
     {
         $this->authorizeBuyer($request);
+        if (is_string($request->input('contact_number'))) {
+            $normalized = PhilippineMobileNumber::normalize($request->input('contact_number'));
+            if ($normalized !== null) {
+                $request->merge(['contact_number' => $normalized]);
+            }
+        }
         $data = $request->validate([
-            'first_name' => ['required', 'string', 'max:100'],
-            'middle_initial' => ['nullable', 'string', 'max:10'],
-            'last_name' => ['required', 'string', 'max:100'],
-            'name_extension' => ['nullable', 'string', 'max:20'],
-            'contact_number' => ['required', 'string', 'max:30', Rule::unique('users', 'contact_number')->ignore($request->user()->id)],
+            'first_name' => ['required', 'string', 'min:2', 'max:100', BuyerNameRules::personName()],
+            'middle_initial' => ['nullable', 'string', 'max:10', BuyerNameRules::personName(true)],
+            'last_name' => ['required', 'string', 'min:2', 'max:100', BuyerNameRules::personName()],
+            'name_extension' => ['nullable', 'string', 'max:20', BuyerNameRules::extension()],
+            'contact_number' => ['required', 'string', 'max:30'],
             'birthday' => ['sometimes', 'nullable', 'date', 'before_or_equal:today'],
             'sex' => ['sometimes', 'nullable', Rule::in(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'])],
             'profile_photo' => ['sometimes', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            'mobile_change_code' => ['sometimes', 'nullable', 'digits:6'],
         ]);
         $user = $request->user();
+        $submittedPhone = PhilippineMobileNumber::normalize((string) $data['contact_number']);
+        $currentPhone = PhilippineMobileNumber::normalize((string) $user->contact_number);
+        $sameLegacyPhone = trim((string) $data['contact_number']) === (string) $user->contact_number;
+        if ($submittedPhone === null && ! $sameLegacyPhone) {
+            throw ValidationException::withMessages([
+                'contact_number' => 'Enter a valid Philippine mobile number.',
+            ]);
+        }
+        $phoneChanged = $submittedPhone !== null && $submittedPhone !== $currentPhone;
+        if ($phoneChanged) {
+            if (! $user->email_verified_at) {
+                throw ValidationException::withMessages([
+                    'contact_number' => 'Verify your account email before changing your mobile number.',
+                ]);
+            }
+            if (User::query()->where('contact_number', $submittedPhone)->whereKeyNot($user->id)->exists()) {
+                throw ValidationException::withMessages([
+                    'contact_number' => 'This mobile number is already in use.',
+                ]);
+            }
+            if (! filled($data['mobile_change_code'] ?? null)) {
+                if ($mobileChanges->pendingPhone($user) !== $submittedPhone) {
+                    $mobileChanges->send($user, (string) $submittedPhone);
+                }
+
+                return response()->json([
+                    'requires_verification' => true,
+                    'verification_for' => 'mobile_change',
+                    'target' => (string) $user->email,
+                    'message' => 'A six-digit code was sent to your verified email address. Enter it to confirm your mobile number change.',
+                ], 202);
+            }
+        }
+
         unset($data['profile_photo']);
+        unset($data['mobile_change_code']);
+        unset($data['contact_number']);
         if (isset($data['sex'])) {
             $data['sex'] = $data['sex'] === '' ? null : Str::upper($data['sex']);
         }
@@ -276,12 +363,61 @@ class BuyerApiController extends Controller
             $data['profile_photo_path'] = $images->store($request->file('profile_photo'), 'profile-photos');
             $oldPath = $user->profile_photo_path;
         }
-        $user->update($data);
+        if ($phoneChanged) {
+            $originalPhone = (string) $user->contact_number;
+            $verifiedEmail = mb_strtolower((string) $user->email);
+            $mobileChanges->confirm($user, (string) $request->input('mobile_change_code'), function (string $pendingPhone) use ($user, $submittedPhone, $originalPhone, $verifiedEmail, $data): void {
+                if ($pendingPhone !== $submittedPhone) {
+                    throw ValidationException::withMessages([
+                        'code' => 'This code was sent for a different mobile number. Request a new code.',
+                    ]);
+                }
+
+                DB::transaction(function () use ($user, $pendingPhone, $originalPhone, $verifiedEmail, $data): void {
+                    $lockedBuyer = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+                    if (! $lockedBuyer->email_verified_at || mb_strtolower((string) $lockedBuyer->email) !== $verifiedEmail) {
+                        throw ValidationException::withMessages([
+                            'code' => 'The verified email address changed. Request a new mobile number code.',
+                        ]);
+                    }
+                    if ((string) $lockedBuyer->contact_number !== $originalPhone) {
+                        throw ValidationException::withMessages([
+                            'code' => 'Your mobile number changed after this code was sent. Request a new code.',
+                        ]);
+                    }
+                    if (User::query()->where('contact_number', $pendingPhone)->whereKeyNot($user->id)->exists()) {
+                        throw ValidationException::withMessages([
+                            'contact_number' => 'This mobile number is already in use.',
+                        ]);
+                    }
+
+                    $lockedBuyer->forceFill($data + ['contact_number' => $pendingPhone])->save();
+                });
+            });
+        } else {
+            $user->update($data);
+        }
         if ($oldPath) {
             Storage::disk('public')->delete($oldPath);
         }
 
         return response()->json(['success' => true, 'user' => $this->userPayload($user->fresh())]);
+    }
+
+    public function resendMobileChangeCode(Request $request, BuyerMobileChangeOtpService $mobileChanges): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $user = $request->user();
+        $pendingPhone = $mobileChanges->pendingPhone($user);
+        if (! $pendingPhone) {
+            throw ValidationException::withMessages([
+                'contact_number' => 'Request a mobile number change before asking for a verification code.',
+            ]);
+        }
+
+        $mobileChanges->send($user, $pendingPhone);
+
+        return response()->json(['message' => 'A new verification code was sent to your verified email address.']);
     }
 
     public function deleteProfilePhoto(Request $request): JsonResponse
@@ -435,7 +571,7 @@ class BuyerApiController extends Controller
         $this->authorizeBuyer($request);
         $data = $request->validate([
             'current_password' => ['required', 'current_password'],
-            'password' => ['required', 'confirmed', 'min:8'],
+            'password' => ['required', 'confirmed', 'different:current_password', 'max:72', PasswordRule::min(8)->mixedCase()->numbers()->symbols()],
         ]);
         $request->user()->update(['password' => Hash::make($data['password'])]);
 
@@ -498,7 +634,7 @@ class BuyerApiController extends Controller
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
-    public function conversationMessages(Request $request, int $conversation, ConversationService $service): JsonResponse
+    public function conversationMessages(Request $request, int $conversation, ConversationService $service, MessageAttachmentService $attachments): JsonResponse
     {
         $this->authorizeBuyer($request);
         $messages = $service->messagesFor(
@@ -514,7 +650,7 @@ class BuyerApiController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $messages->map(function ($message) use ($request): array {
+            'data' => $messages->map(function ($message) use ($request, $attachments): array {
                 $attachmentPath = $message->getAttribute('attachment_path');
 
                 return [
@@ -524,20 +660,20 @@ class BuyerApiController extends Controller
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
                 'from_buyer' => (int) $message->sender_user_id === (int) $request->user()->id,
-                'attachment_url' => $attachmentPath ? Storage::disk('public')->url($attachmentPath) : null,
+                'attachment_url' => $attachments->privateUrl($message),
                 'attachment_name' => $attachmentPath ? basename($attachmentPath) : null,
                 ];
             })->values(),
         ]);
     }
 
-    public function sendMessage(Request $request, ConversationService $service, ImageOptimizationService $images): JsonResponse
+    public function sendMessage(Request $request, ConversationService $service, MessageAttachmentService $attachments): JsonResponse
     {
         $this->authorizeBuyer($request);
         $data = $request->validate([
             'recipient_id' => ['required', 'integer', Rule::exists('users', 'id')],
-            'body' => ['nullable', 'string', 'max:2000'],
-            'attachment' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'body' => ['nullable', 'string', 'max:1000'],
+            'attachment' => $attachments->validationRules(),
             'order_id' => ['nullable', 'integer', Rule::exists('orders', 'id')->where('buyer_user_id', $request->user()->id)],
         ]);
         abort_if(blank($data['body'] ?? null) && ! $request->hasFile('attachment'), 422, 'A message or photo attachment is required.');
@@ -545,14 +681,19 @@ class BuyerApiController extends Controller
             ->where('status', 'ACTIVE')
             ->whereHas('user', fn ($query) => $query->whereKey($data['recipient_id'])->where('status', 'ACTIVE'))
             ->firstOrFail();
-        $attachmentPath = $request->hasFile('attachment')
-            ? $images->store($request->file('attachment'), 'message-attachments')
-            : null;
-        $message = $service->send($request->user(), (int) $recipient->user_id, trim((string) ($data['body'] ?? '')) ?: '[Photo]', [
-            'order_id' => $data['order_id'] ?? null,
-        ]);
-        if ($attachmentPath) {
-            $message->forceFill(['attachment_path' => $attachmentPath])->save();
+        $attachmentPath = $request->hasFile('attachment') ? $attachments->store($request->file('attachment')) : null;
+        try {
+            $message = $service->send(
+                $request->user(),
+                (int) $recipient->user_id,
+                trim((string) ($data['body'] ?? '')) ?: '[Photo]',
+                ['order_id' => $data['order_id'] ?? null],
+                null,
+                $attachmentPath,
+            );
+        } catch (\Throwable $exception) {
+            $attachments->delete($attachmentPath);
+            throw $exception;
         }
 
         return response()->json([
@@ -564,7 +705,7 @@ class BuyerApiController extends Controller
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
                 'from_buyer' => true,
-                'attachment_url' => $attachmentPath ? Storage::disk('public')->url($attachmentPath) : null,
+                'attachment_url' => $attachments->privateUrl($message),
                 'attachment_name' => $request->file('attachment')?->getClientOriginalName(),
             ],
         ], 201);

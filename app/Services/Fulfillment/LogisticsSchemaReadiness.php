@@ -61,6 +61,17 @@ final class LogisticsSchemaReadiness
             ]);
     }
 
+    public function sellerPickupRequestsReady(): bool
+    {
+        return $this->sellerPickupBatchesReady()
+            && $this->hasColumns('seller_pickup_requests', [
+                'seller_profile_id', 'pickup_address_id', 'rider_local_trip_id', 'status',
+            ])
+            && $this->hasColumns('seller_pickup_request_shipments', [
+                'seller_pickup_request_id', 'seller_profile_id', 'seller_order_id', 'shipment_id', 'active_slot',
+            ]);
+    }
+
     private function hasTable(string $table): bool
     {
         try {

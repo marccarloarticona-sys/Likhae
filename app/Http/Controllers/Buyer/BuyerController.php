@@ -26,6 +26,7 @@ use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
+use App\Services\Marketplace\PurchaseLimitService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Support\PhilippineAddressValidator;
@@ -55,6 +56,7 @@ class BuyerController extends Controller
         private readonly CartService $cartService,
         private readonly ConversationService $conversations,
         private readonly PlatformCampaignCatalog $platformCampaigns,
+        private readonly PurchaseLimitService $purchaseLimits,
     ) {}
 
     public function home(Request $request): View
@@ -489,10 +491,14 @@ class BuyerController extends Controller
         }
     }
 
-    public function product(string $slug): View
+    public function product(Request $request, string $slug): View
     {
         $product = $this->catalog->findVisibleBySlug($slug);
         $productPayload = $this->catalog->productPayload($product, true);
+        if ($request->user()) {
+            $productPayload['purchase_limit_per_buyer_remaining'] = $this->purchaseLimits
+                ->remainingAllowance($request->user(), $product);
+        }
         $productPayload['seller']['vacation_mode'] = (bool) $product->sellerProfile?->vacation_mode;
         $productPayload['seller_rating'] = $product->sellerProfile
             ? $this->catalog->sellerRating($product->sellerProfile)
@@ -1131,7 +1137,7 @@ class BuyerController extends Controller
                 'store_key' => $isSeller ? $seller->id : null,
                 'is_seller' => $isSeller,
                 'is_support' => $isSupport,
-                'avatar' => 'https://ui-avatars.com/api/?name='.urlencode($name).'&background=561C17&color=fff',
+                'avatar' => asset('images/defaults/profile-avatar.svg'),
                 'last_message' => $conversation->latestMessage?->body ?: 'Start a conversation.',
                 'time' => $conversation->latestMessage?->sent_at?->diffForHumans() ?? '',
                 'unread' => 0,
@@ -1538,7 +1544,12 @@ class BuyerController extends Controller
             'addressLimit' => 10,
             'pendingEmail' => $emailChanges->pendingEmail($buyer),
             'pendingPhone' => $mobileChanges->pendingPhone($buyer),
-            'reviews' => $buyer->orders()->with('items.review')->latest()->get()->flatMap->items->pluck('review')->filter(),
+            'reviews' => Review::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->with('orderItem')
+                ->latest()
+                ->paginate(10)
+                ->withQueryString(),
         ]);
     }
 

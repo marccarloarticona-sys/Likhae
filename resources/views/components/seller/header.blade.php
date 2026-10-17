@@ -30,7 +30,8 @@
         </a>
         <button type="button" class="sl-icon-btn sl-header-action" aria-label="Notifications" aria-controls="notificationPopover" aria-expanded="false" data-notification-toggle>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
-            @if(($sellerUiCounts['notifications'] ?? 0) > 0)<span class="sl-action-badge">{{ $sellerUiCounts['notifications'] }}</span>@endif
+            @php($notificationCount = (int) ($sellerUiCounts['notifications'] ?? 0))
+            <span class="sl-action-badge" data-seller-notification-count style="{{ $notificationCount > 0 ? '' : 'display:none' }}">{{ $notificationCount }}</span>
         </button>
         <x-workspace-account-menu label="Seller Account" profile-route="seller.account" />
     </div>

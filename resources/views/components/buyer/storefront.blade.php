@@ -4,9 +4,7 @@
     $sellerSlug = data_get($seller, 'id', 'store');
     $sellerName = data_get($seller, 'business_name', 'LIKHAE Store');
     $sellerAvatar = data_get($seller, 'avatar_path');
-    $sellerAvatarUrl = $sellerAvatar ? (\Illuminate\Support\Str::startsWith($sellerAvatar, ['http://', 'https://']) ? $sellerAvatar : \Illuminate\Support\Facades\Storage::url($sellerAvatar)) : null;
     $sellerBanner = data_get($seller, 'banner_path');
-    $sellerBannerUrl = $sellerBanner ? (\Illuminate\Support\Str::startsWith($sellerBanner, ['http://', 'https://']) ? $sellerBanner : \Illuminate\Support\Facades\Storage::url($sellerBanner)) : null;
     $storeProducts = collect($products)->filter(function ($product) use ($sellerSlug) {
         return (string) data_get($product, 'seller.id') === (string) $sellerSlug;
     })->values();
@@ -26,9 +24,9 @@
 
 <div class="lk-page">
     <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-        <div class="h-24 bg-gradient-to-r from-red-950 via-red-900 to-stone-900" @if($sellerBannerUrl) style="background-image:linear-gradient(90deg,rgba(40,10,10,.32),rgba(40,10,10,.08)),url('{{ $sellerBannerUrl }}');background-position:center;background-size:cover" @endif></div>
+        <div class="relative h-24 overflow-hidden bg-gradient-to-r from-red-950 via-red-900 to-stone-900"><x-shared.profile-image :path="$sellerBanner" role="store-banner" class="absolute inset-0 h-full w-full object-cover" :alt="$sellerName.' banner'" /><div class="absolute inset-0 bg-gradient-to-r from-red-950/30 to-transparent" aria-hidden="true"></div></div>
         <div class="flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:p-6">
-            @if($sellerAvatarUrl)<img class="-mt-14 h-24 w-24 rounded-2xl border-4 border-white bg-white object-cover shadow-sm" src="{{ $sellerAvatarUrl }}" alt="{{ $sellerName }}">@else<div class="-mt-14 grid h-24 w-24 place-items-center rounded-2xl border-4 border-white bg-red-900 text-xl font-bold text-white shadow-sm">{{ collect(explode(' ', $sellerName))->filter()->take(2)->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))->implode('') }}</div>@endif
+            <x-shared.profile-image :path="$sellerAvatar" role="seller" class="-mt-14 h-24 w-24 rounded-2xl border-4 border-white bg-white object-cover shadow-sm" :alt="$sellerName" />
             <div class="min-w-0 flex-1"><span class="text-[10px] font-bold uppercase tracking-widest text-red-800">Verified LIKHAE store</span><h1 class="truncate text-2xl font-bold text-stone-950">{{ $sellerName }}</h1>@if(data_get($seller, 'tagline'))<p class="mt-1 text-sm text-stone-600">{{ data_get($seller, 'tagline') }}</p>@endif<p class="mt-1 text-xs text-stone-500">{{ data_get($seller, 'location') }} · Joined {{ data_get($seller, 'joined') }}</p></div>
             <div class="flex flex-wrap gap-2">
                 @if($guest)
@@ -55,6 +53,12 @@
             <div class="px-2 py-3 sm:px-4" data-store-stat="followers"><dd class="text-lg font-bold text-stone-900" data-store-follower-count>{{ number_format($followerCount) }}</dd><dt class="text-[11px] font-medium text-stone-500">{{ $followerCount === 1 ? 'follower' : 'followers' }}</dt></div>
         </dl>
     </section>
+
+    @if((bool) data_get($seller, 'vacation_mode'))
+        <div class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+            This store is temporarily on vacation and is not accepting new orders. You can still browse its products.
+        </div>
+    @endif
 
     <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
         <form method="GET" action="{{ $searchAction }}" class="mt-4" aria-label="Filter this store's products" data-live-filters>

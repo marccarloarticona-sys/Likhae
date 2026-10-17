@@ -204,6 +204,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
         $product->sellerProfile->update(['vacation_mode' => false]);
         $cartItem = app(CartService::class)->add($buyer, $product, $variant->id, 1);
         $product->sellerProfile->update(['vacation_mode' => true]);
+        $buyer->addresses()->firstOrFail()->update(['latitude' => 14.5995, 'longitude' => 120.9842]);
 
         $this->from(route('buyer.cart'))
             ->post(route('buyer.checkout.post'), ['cart_item_ids' => [$cartItem->id]])

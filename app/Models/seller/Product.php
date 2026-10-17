@@ -24,6 +24,7 @@ class Product extends Model
         'slug',
         'description',
         'status',
+        'purchase_limit_per_buyer',
         'published_at',
         'archived_at',
     ];
@@ -33,6 +34,7 @@ class Product extends Model
         return [
             'published_at' => 'datetime',
             'archived_at' => 'datetime',
+            'purchase_limit_per_buyer' => 'integer',
         ];
     }
 

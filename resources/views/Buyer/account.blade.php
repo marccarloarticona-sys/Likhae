@@ -27,17 +27,12 @@
         ?? data_get($user, 'profile_picture')
         ?? null;
 
-    $profilePhotoUrl = $profilePhoto
-        ? (\Illuminate\Support\Str::startsWith($profilePhoto, ['http://', 'https://'])
-            ? $profilePhoto
-            : '/storage/'.ltrim($profilePhoto, '/'))
-        : null;
-
     $buyerInitial = strtoupper(mb_substr($buyerName, 0, 1));
 
     $allowedTabs = [
         'profile',
         'addresses',
+        'reviews',
         'password',
         'danger',
     ];
@@ -56,6 +51,10 @@
         'addresses' => [
             'label' => 'Addresses',
             'description' => 'Delivery locations',
+        ],
+        'reviews' => [
+            'label' => 'Reviews',
+            'description' => 'Your product feedback',
         ],
         'password' => [
             'label' => 'Change Password',
@@ -80,6 +79,12 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/>
                     <circle cx="12" cy="10" r="2.5"/>
+                </svg>
+            ',
+
+            'reviews' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>
                 </svg>
             ',
 
@@ -159,15 +164,7 @@
             <div class="border-b border-stone-100 p-4">
                 <div class="flex items-center gap-3">
                     <div class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-red-100 text-sm font-bold text-red-900">
-                        @if ($profilePhotoUrl)
-                            <img
-                                src="{{ $profilePhotoUrl }}"
-                                alt="{{ $buyerName }}"
-                                class="h-full w-full object-cover"
-                            >
-                        @else
-                            {{ $buyerInitial }}
-                        @endif
+                        <x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" class="h-full w-full object-cover" />
                     </div>
 
                     <div class="min-w-0">
@@ -463,6 +460,48 @@
                             <div class="sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                         </form>
                         @endif
+                    </div>
+                </section>
+            @endif
+
+            @if ($activeTab === 'reviews')
+                <section aria-labelledby="reviews-heading">
+                    <div class="border-b border-stone-100 px-5 py-4 sm:px-6">
+                        <h2 id="reviews-heading" class="text-base font-semibold text-stone-900">Your Product Reviews</h2>
+                        <p class="mt-1 text-xs text-stone-500">Read your order reviews and any Seller responses.</p>
+                    </div>
+                    <div class="space-y-3 p-5 sm:p-6">
+                        @forelse($reviews ?? [] as $review)
+                            <article class="rounded-xl border border-stone-200 bg-white p-4">
+                                <div class="flex flex-wrap items-start justify-between gap-2">
+                                    <div>
+                                        <h3 class="font-semibold text-stone-900">{{ $review->orderItem?->product_name ?? 'Purchased product' }}</h3>
+                                        <p class="mt-1 text-xs text-stone-500">Variant: {{ $review->orderItem?->variant_description ?: 'Standard' }}</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <strong class="text-amber-600" aria-label="{{ $review->rating }} out of 5 stars">{{ str_repeat('★', (int) $review->rating) }}{{ str_repeat('☆', 5 - (int) $review->rating) }}</strong>
+                                        <time class="mt-1 block text-xs text-stone-500">{{ $review->created_at?->format('M j, Y') }}</time>
+                                    </div>
+                                </div>
+                                @if(filled($review->comment))<p class="mt-3 whitespace-pre-line text-sm text-stone-700">{{ $review->comment }}</p>@endif
+                                @if(filled($review->seller_reply))
+                                    <div class="mt-4 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <strong class="text-sm text-stone-900">Seller Response</strong>
+                                            @if($review->seller_replied_at)<time class="text-xs text-stone-500">{{ $review->seller_replied_at->format('M j, Y') }}</time>@endif
+                                        </div>
+                                        <p class="mt-2 whitespace-pre-line text-sm text-stone-700">{{ $review->seller_reply }}</p>
+                                    </div>
+                                @endif
+                            </article>
+                        @empty
+                            <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center">
+                                <h3 class="font-semibold text-stone-800">No product reviews yet</h3>
+                                <p class="mt-1 text-sm text-stone-500">Reviews you leave on completed orders will appear here.</p>
+                                <a class="mt-4 inline-flex rounded-xl bg-red-900 px-4 py-2 text-xs font-semibold text-white hover:bg-red-950" href="{{ route('buyer.orders') }}">View My Orders</a>
+                            </div>
+                        @endforelse
+                        @if($reviews->hasPages())<div class="pt-2">{{ $reviews->links() }}</div>@endif
                     </div>
                 </section>
             @endif

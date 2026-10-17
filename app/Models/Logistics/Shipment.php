@@ -11,6 +11,7 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Buyer\OrderItem;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -108,6 +109,11 @@ class Shipment extends Model
     public function pickupRequests(): HasMany
     {
         return $this->hasMany(PickupRequest::class);
+    }
+
+    public function sellerPickupMemberships(): HasMany
+    {
+        return $this->hasMany(SellerPickupRequestShipment::class, 'shipment_id');
     }
 
     public function riderAssignments(): HasMany

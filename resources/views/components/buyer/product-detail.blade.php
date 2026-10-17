@@ -6,6 +6,8 @@
 
 @php
     $productId = data_get($product, 'db_id', data_get($product, 'id'));
+    $purchaseLimit = data_get($product, 'purchase_limit_per_buyer');
+    $remainingPurchaseAllowance = $guest ? null : data_get($product, 'purchase_limit_per_buyer_remaining');
 
     $slug = data_get($product, 'slug', data_get($product, 'id', 'product'));
 
@@ -42,11 +44,7 @@
     );
     $sellerUserId = (int) data_get($product, 'seller.user_id', 0);
 
-    $sellerAvatar = data_get(
-        $product,
-        'seller_avatar',
-        'https://ui-avatars.com/api/?name=' . urlencode($seller) . '&background=561C17&color=fff'
-    );
+    $sellerAvatar = data_get($product, 'seller.avatar_path', data_get($product, 'seller_avatar'));
 
     $images = collect(data_get($product, 'images', []))->pluck('url')
         ->filter()
@@ -1362,6 +1360,7 @@
         <div
             class="lk-detail-info-card"
             data-seller-vacation="{{ $sellerOnVacation ? '1' : '0' }}"
+            @if(! $guest && $remainingPurchaseAllowance !== null) data-purchase-limit-remaining="{{ (int) $remainingPurchaseAllowance }}" @endif
             @if($variantStock)
                 data-variant-stock-product
                 data-variant-stocks='@json($variantStock)'
@@ -1469,6 +1468,18 @@
                         <span data-variant-availability>
                             {{ $stock }} available
                         </span>
+                        @if($purchaseLimit !== null)
+                            <small>Purchase limit: {{ (int) $purchaseLimit }} per Buyer</small>
+                        @endif
+                        @if(! $guest && $remainingPurchaseAllowance !== null)
+                            <small data-purchase-limit-note>
+                                @if((int) $remainingPurchaseAllowance > 0)
+                                    {{ (int) $remainingPurchaseAllowance }} unit{{ (int) $remainingPurchaseAllowance === 1 ? '' : 's' }} remaining for you.
+                                @else
+                                    You have reached this product's purchase limit.
+                                @endif
+                            </small>
+                        @endif
                     </div>
 
                     <div
@@ -1599,10 +1610,7 @@
 
     <section class="lk-detail-seller-card">
         <div class="lk-detail-seller-avatar">
-            <img
-                src="{{ $sellerAvatar }}"
-                alt="{{ $seller }}"
-            >
+            <x-shared.profile-image :path="$sellerAvatar" role="seller" :alt="$seller" />
         </div>
 
         <div class="lk-detail-seller-copy">
@@ -1745,11 +1753,7 @@
                     @if($loop->index >= $reviewPreviewLimit) hidden @endif
                 >
                     <div class="lk-detail-review-inner">
-                        <img
-                            class="lk-detail-review-avatar"
-                            src="{{ data_get($review, 'avatar', 'https://ui-avatars.com/api/?name=' . urlencode(data_get($review, 'name', 'Buyer')) . '&background=EADCCC&color=3B211B') }}"
-                            alt=""
-                        >
+                        <x-shared.profile-image role="buyer" class="lk-detail-review-avatar" alt="" />
 
                         <div class="lk-detail-review-body">
                             <div class="lk-detail-review-meta">

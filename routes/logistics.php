@@ -46,6 +46,10 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
 
         Route::get('/pickups', [DispatchController::class, 'pickups'])->name('pickups');
+        Route::post('/pickups/requests/{pickupRequest}/assign', [DispatchController::class, 'assignSellerPickupRequest'])
+            ->whereNumber('pickupRequest')->name('pickups.requests.assign');
+        Route::post('/pickups/requests/{pickupRequest}/reject', [DispatchController::class, 'rejectSellerPickupRequest'])
+            ->whereNumber('pickupRequest')->name('pickups.requests.reject');
         Route::post('/pickups/assignments', [DispatchController::class, 'assignPickupBatch'])->name('pickups.assignments.store');
         Route::post('/pickups/{pickupRequest}/approve', [DispatchController::class, 'approvePickup'])->name('pickups.approve');
         Route::post('/pickups/{pickupRequest}/reject', [DispatchController::class, 'rejectPickup'])->name('pickups.reject');

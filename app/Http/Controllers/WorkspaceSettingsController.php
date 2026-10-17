@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class WorkspaceSettingsController extends Controller
@@ -22,15 +23,43 @@ class WorkspaceSettingsController extends Controller
     public function update(Request $request, string $workspace): RedirectResponse
     {
         $config = $this->config($workspace);
-        $data = $request->validate([
+        foreach (['user_id', 'seller_id', 'seller_profile_id'] as $ownerKey) {
+            if ($request->exists($ownerKey)) {
+                throw ValidationException::withMessages([
+                    $ownerKey => 'Account ownership is determined by your signed-in session.',
+                ]);
+            }
+        }
+
+        $rules = [
             'theme' => ['required', Rule::in(['light', 'dark', 'system'])],
-            'language' => ['required', Rule::in(['en'])],
-        ]);
+            'language' => ['sometimes', Rule::in(['en'])],
+        ];
+        foreach ($this->booleanKeys($config) as $key) {
+            $rules[$key] = ['sometimes', 'boolean'];
+        }
+        $allowedKeys = array_merge(['_token', '_method', 'theme', 'language'], array_keys($rules));
+        $unknownKeys = array_diff(array_keys($request->all()), $allowedKeys);
+        if ($unknownKeys !== []) {
+            throw ValidationException::withMessages([
+                reset($unknownKeys) => 'This setting is not available for your workspace.',
+            ]);
+        }
+        $data = $request->validate($rules);
         $current = (array) $request->user()->notification_preferences;
-        $updated = ['theme' => $data['theme'], 'language' => $data['language']];
+        $updated = [
+            'theme' => $data['theme'],
+            'language' => $data['language'] ?? ($current['language'] ?? 'en'),
+        ];
 
         foreach ($this->booleanKeys($config) as $key) {
             $updated[$key] = $request->boolean($key);
+        }
+        foreach ($config['notifications'] as $notification) {
+            $key = $notification[0];
+            if (($notification[3] ?? true) === false) {
+                $updated[$key] = $current[$key] ?? false;
+            }
         }
 
         $request->user()->forceFill([
@@ -49,11 +78,11 @@ class WorkspaceSettingsController extends Controller
                 'update_route' => 'seller.settings.update',
                 'description' => 'Tune store alerts, workspace assistance, and display preferences.',
                 'notifications' => [
-                    ['seller_order_updates', 'Order Updates', 'New orders, cancellations, returns, and fulfillment changes.'],
-                    ['seller_inventory_updates', 'Inventory Alerts', 'Low-stock and out-of-stock reminders for active products.'],
-                    ['seller_chat_updates', 'Customer Messages', 'New messages and buyer follow-ups.'],
-                    ['seller_review_updates', 'Reviews & Compliance', 'New reviews, moderation actions, and account notices.'],
-                    ['seller_marketing_updates', 'Marketing & Vouchers', 'Campaign status, voucher usage, and promotion reminders.'],
+                    ['seller_order_updates', 'Order Updates', 'New orders, returns, and pickup or shipment changes.', true],
+                    ['seller_inventory_updates', 'Inventory Alerts', 'Low-stock and out-of-stock reminders for active products.', false],
+                    ['seller_chat_updates', 'Customer Messages', 'Live chat remains available. Message alert preferences are coming soon.', false],
+                    ['seller_review_updates', 'Review Updates', 'New product reviews. Compliance and security notices remain enabled.', true],
+                    ['seller_marketing_updates', 'Marketing & Vouchers', 'Campaign and voucher alerts are coming soon.', false],
                 ],
             ],
             'admin' => [
@@ -108,14 +137,22 @@ class WorkspaceSettingsController extends Controller
     {
         $defaults = ['theme' => 'system', 'language' => 'en', $config['sound_key'] => true];
         if ($config['show_ai']) $defaults += [$config['ai_key'] => true, $config['ai_sound_key'] => false];
-        foreach ($config['notifications'] as [$key]) $defaults[$key] = true;
+        foreach ($config['notifications'] as $notification) {
+            $defaults[$notification[0]] = ($notification[3] ?? true) === true;
+        }
         return $defaults;
     }
 
     /** @return array<int, string> */
     private function booleanKeys(array $config): array
     {
-        $keys = array_merge(array_column($config['notifications'], 0), [$config['sound_key']]);
+        $notificationKeys = [];
+        foreach ($config['notifications'] as $notification) {
+            if (($notification[3] ?? true) === true) {
+                $notificationKeys[] = $notification[0];
+            }
+        }
+        $keys = array_merge($notificationKeys, [$config['sound_key']]);
         return $config['show_ai'] ? array_merge($keys, [$config['ai_key'], $config['ai_sound_key']]) : $keys;
     }
 }

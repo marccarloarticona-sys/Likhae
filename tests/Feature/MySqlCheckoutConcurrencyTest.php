@@ -143,6 +143,42 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertNotNull($center->fresh());
     }
 
+    public function test_mysql_product_lock_prevents_concurrent_checkouts_exceeding_the_buyer_limit(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller, $category] = $this->sellerRoutingFixture('purchase-limit-race');
+        $variant = $this->variant($seller, $category, 'purchase-limit-race', 2);
+        $product = $variant->product()->firstOrFail();
+        $product->update(['purchase_limit_per_buyer' => 1]);
+        [$buyer, $address, $firstItem] = $this->buyerCart($variant, 'purchase-limit-race-a');
+
+        // Separate active carts make the two requests independent at the cart
+        // lock. Both represent one unit of the same product for this Buyer.
+        $secondCart = Cart::query()->create([
+            'buyer_user_id' => $buyer->id,
+            'status' => Cart::STATUS_ACTIVE,
+        ]);
+        $secondItem = CartItem::query()->create([
+            'cart_id' => $secondCart->id,
+            'product_variant_id' => $variant->id,
+            'quantity' => 1,
+        ]);
+
+        $results = $this->runWorkers([
+            ['buyer' => $buyer, 'address' => $address, 'item' => $firstItem, 'key' => (string) str()->uuid()],
+            ['buyer' => $buyer, 'address' => $address, 'item' => $secondItem, 'key' => (string) str()->uuid()],
+        ]);
+
+        $this->assertSame(1, collect($results)->where('status', 'success')->count(), json_encode($results));
+        $this->assertSame(1, collect($results)->where('status', 'business_failure')->count(), json_encode($results));
+        $failure = collect($results)->firstWhere('status', 'business_failure');
+        $this->assertArrayHasKey('cart', $failure['errors'] ?? []);
+        $this->assertStringContainsString('limit of 1', strtolower((string) ($failure['errors']['cart'][0] ?? '')));
+        $this->assertSame(1, OrderItem::query()->where('product_id', $product->id)->sum('quantity'));
+        $this->assertSame(1, (int) $variant->fresh()->stock);
+    }
+
     private function assertDisposableMySql(): void
     {
         $expectedDatabase = trim((string) env('LIKHAE_DISPOSABLE_DB'));

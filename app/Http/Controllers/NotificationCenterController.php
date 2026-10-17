@@ -22,7 +22,10 @@ class NotificationCenterController extends Controller
 
         return view('notifications.index', [
             'layout' => $layout,
-            'notifications' => $user->notifications()->latest()->paginate(30),
+            'notifications' => $user->notifications()
+                ->latest('created_at')
+                ->latest('id')
+                ->paginate(30),
         ]);
     }
 
