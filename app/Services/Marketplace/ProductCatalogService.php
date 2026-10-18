@@ -168,6 +168,9 @@ class ProductCatalogService
             'slug' => $product->slug,
             'description' => $includeDetails ? $product->description : str($product->description ?? '')->limit(180)->toString(),
             'status' => $product->status,
+            'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
+                ? null
+                : (int) $product->purchase_limit_per_buyer,
             'rating' => (float) ($product->reviews_avg_rating ?? 0),
             'reviews' => (int) ($product->reviews_count ?? 0),
             'sold' => (int) ($product->order_items_sum_quantity ?? 0),
@@ -183,6 +186,7 @@ class ProductCatalogService
                 'id' => $product->sellerProfile->id,
                 'user_id' => $product->sellerProfile->user_id,
                 'business_name' => $product->sellerProfile->business_name,
+                'avatar_path' => $product->sellerProfile->avatar_path,
                 'status' => $product->sellerProfile->status,
             ] : null,
             'images' => $images,
@@ -193,16 +197,20 @@ class ProductCatalogService
 
         if ($includeDetails) {
             $product->loadMissing(['reviews.buyer', 'reviews.orderItem']);
-            $reviewImageUrls = $this->reviewImages->urlsFor($product->reviews);
+            $reviewPhotoUrls = $this->reviewImages->photoUrlsFor($product->reviews);
             $payload['customer_reviews'] = $product->reviews
                 ->sortByDesc('created_at')
                 ->map(fn (Review $review): array => [
                     'name' => $this->maskedBuyerName($review->buyer?->name),
                     'rating' => (int) $review->rating,
                     'comment' => $review->comment,
-                    'image_url' => $reviewImageUrls[$review->id] ?? null,
+                    'image_urls' => $reviewPhotoUrls[$review->id] ?? [],
+                    'image_url' => $reviewPhotoUrls[$review->id][0] ?? null,
                     'date' => $review->created_at?->format('M j, Y') ?? 'Recently',
                     'variant' => $review->orderItem?->variant_description ?: 'Standard',
+                    'seller_reply' => filled($review->seller_reply) ? $review->seller_reply : null,
+                    'seller_reply_date' => filled($review->seller_reply) ? $review->seller_replied_at?->format('M j, Y') : null,
+                    'seller_name' => filled($review->seller_reply) ? $product->sellerProfile?->business_name : null,
                 ])
                 ->values()
                 ->all();

@@ -25,6 +25,8 @@ class LogisticsBarcodeScannerTest extends TestCase
             'code' => 'SCAN-CENTER',
             'business_name' => 'Scanner Test Center',
             'status' => 'ACTIVE',
+            'approved_by_user_id' => $user->id,
+            'approved_at' => now(),
         ]);
 
         $tracking = 'LK-WAYBILL-TEST-001';

@@ -1,8 +1,8 @@
 ## Registration and administrator approval
 
-Registration at `/register` saves buyers, sellers, logistics operators, and riders to the configured database with hashed passwords and a `pending` status. All applicants need a valid ID; sellers and logistics operators also need a business permit, and riders need vehicle details, OR/CR, and a driver's license. Documents accept JPG, PNG, or PDF files up to 5 MB each.
+Registration at `/register` saves buyers, sellers, logistics operators, and riders to the configured database with hashed passwords and a `pending` status. All applicants need a valid ID. Sellers submit the certificates required for their business type, logistics operators submit a business permit, SEC certificate, and BIR Form 2303, and riders submit vehicle details, OR/CR, and a driver's license. Documents accept JPG, PNG, WebP, or PDF files up to 5 MB each; profile and store avatar photos accept 5 MB, and store banners accept 8 MB.
 
-An active administrator signs in at `/login` and opens `/admin/registrations` to download documents, approve an application, or reject it with a reason. Decisions save the reviewer and review time. Reviewed applications cannot be decided a second time. Only approved accounts can sign in or use protected workspaces. Buyers and sellers use `/login`; logistics operators and riders use `/logistics/login`.
+An active administrator signs in at `/login` and opens `/admin/registrations` to inspect all applications and their documents. The administrator decides buyer, seller, and logistics applications; the rider's selected logistics center decides rider applications. Decisions save the reviewer and review time. Reviewed applications cannot be decided a second time. Only approved accounts can sign in or use protected workspaces. Buyers and sellers use `/login`; logistics operators and riders use `/logistics/login`.
 
 For a fresh setup, configure the database in `.env`, then run:
 
@@ -19,6 +19,8 @@ php artisan serve
 ```
 
 This single command starts and supervises the complete origin: Apache/Cloudflare proxy on port 8000, Laravel on port 8001, Reverb on port 8080, and Vite on port 5173. Cloudflare Tunnel must continue targeting `http://127.0.0.1:8000`. To open the development site directly on another device, connect it to the same Wi-Fi and browse to the computer's LAN address on port 8000 (for example, `http://192.168.1.52:8000`). If Windows Firewall prompts, allow Apache, PHP, and Node on your private network. `VITE_HMR_HOST` can be set in `.env` when the computer has multiple network interfaces.
+
+The supervised Laravel server uses `serve:uploads` internally so the PHP web process accepts files allowed by the registration form. A standalone PHP or web server must also set `upload_max_filesize` above 8 MB and `post_max_size` above the total multipart request size; `public/.user.ini` supplies the project limits for supported hosted PHP setups.
 
 Verify the full proxy-to-Reverb broadcast path with:
 

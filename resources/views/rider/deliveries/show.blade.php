@@ -30,9 +30,9 @@
             <h2 id="rider-pin-required-heading" class="font-bold">DELIVERY PIN REQUIRED</h2>
             <p class="mt-2 text-sm">The Buyer has not confirmed an exact destination pin for this order. Navigation will become available once the Buyer confirms the delivery pin. No route, distance, or ETA is available yet.</p>
             @if(filled($parcel['contact']))
-                <a class="mt-3 inline-flex min-h-11 items-center rounded-xl bg-amber-900 px-4 py-2 text-sm font-semibold text-white" href="tel:{{ preg_replace('/[^0-9+]/', '', $parcel['contact']) }}">Contact Buyer · {{ $parcel['contact'] }}</a>
+                <a class="mt-3 inline-flex min-h-11 items-center rounded-xl bg-amber-900 px-4 py-2 text-sm font-semibold text-white" href="tel:{{ preg_replace('/[^0-9+]/', '', $parcel['contact']) }}">Contact Buyer Â· {{ $parcel['contact'] }}</a>
             @endif
-            <a class="mt-3 inline-flex min-h-11 items-center rounded-xl border border-amber-900 px-4 py-2 text-sm font-semibold text-amber-950 sm:ml-2" href="{{ route('rider.messages') }}">Message Buyer</a>
+            <a class="mt-3 inline-flex min-h-11 items-center rounded-xl border border-amber-900 px-4 py-2 text-sm font-semibold text-amber-950 sm:ml-2" href="{{ route('rider.messages', ['shipment_id' => $delivery->shipment_id, 'recipient_user_id' => $delivery->shipment?->sellerOrder?->order?->buyer_user_id]) }}">Message Buyer</a>
         </section>
     @endif
 
@@ -41,28 +41,41 @@
     <section class="grid gap-6 lg:grid-cols-2">
         <article class="rounded-3xl border border-line bg-surface p-8">
             <h2 class="text-lg font-bold text-ink">Recipient</h2>
-            <div class="mt-5 flex flex-wrap gap-3">@foreach($delivery->shipment?->sellerOrder?->items ?? [] as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
+            <div class="mt-5 flex flex-wrap gap-3">@foreach(($delivery->shipment?->orderItem ? collect([$delivery->shipment->orderItem]) : ($delivery->shipment?->sellerOrder?->items ?? collect())) as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
             <dl class="mt-5 grid gap-3 text-sm">
                 <div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div>
                 <div><dt class="text-muted">Contact</dt><dd class="font-semibold text-ink">{{ $parcel['contact'] }}</dd></div>
                 <div><dt class="text-muted">Delivery Address</dt><dd class="font-semibold text-ink whitespace-pre-line">{{ $parcel['address'] }}</dd></div>
-                <div><dt class="text-muted">COD Amount Due</dt><dd class="font-semibold text-ink">₱{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div>
+                <div><dt class="text-muted">COD Amount Due</dt><dd class="font-semibold text-ink">â‚±{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div>
             </dl>
             @if(filled($parcel['contact']))<a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink" href="tel:{{ preg_replace('/[^0-9+]/', '', $parcel['contact']) }}">Call Buyer</a>@endif
-            <a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink sm:ml-2" href="{{ route('rider.messages') }}">Message Buyer</a>
+            <a class="mt-4 inline-flex min-h-11 items-center rounded-xl border border-line px-4 py-2 text-sm font-semibold text-ink sm:ml-2" href="{{ route('rider.messages', ['shipment_id' => $delivery->shipment_id, 'recipient_user_id' => $delivery->shipment?->sellerOrder?->order?->buyer_user_id]) }}">Message Buyer</a>
         </article>
 
         <article class="rounded-3xl border border-line bg-surface p-8">
             <h2 class="text-lg font-bold text-ink">Delivery Actions</h2>
             <div class="mt-5 grid gap-3">
-                @if($parcel['status'] === 'ASSIGNED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Accept delivery assignment?" data-confirm-message="Accept responsibility for delivering this parcel?" data-confirm-label="Accept delivery">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Delivery</button></form>
+                @if($parcel['status'] === 'ASSIGNED' && !$parcel['offer_expired'])
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="accept"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Delivery</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3 rounded-xl border border-line p-4">@csrf @method('PATCH')<input type="hidden" name="action" value="reject"><label class="grid gap-2 text-sm font-semibold text-ink">Reason for declining<textarea name="reason" rows="2" required maxlength="1000" class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" placeholder="Explain why you cannot take this delivery">{{ old('reason') }}</textarea></label><button class="w-full rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700">Decline Delivery</button></form>
+                @elseif($parcel['status'] === 'ASSIGNED')
+                    <p class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">This delivery offer expired and can no longer be accepted. It is being returned to the dispatch queue.</p>
                 @elseif($parcel['status'] === 'ACCEPTED')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" data-confirm-title="Start delivery?" data-confirm-message="Mark this delivery as in progress?" data-confirm-label="Start delivery">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-confirm-title="Confirm delivery?" data-confirm-message="Submit this proof and mark the parcel as delivered?" data-confirm-label="Complete delivery" data-confirm-buyer="{{ $parcel['buyer'] }}" data-confirm-cod="{{ number_format((float) $parcel['cod_expected'], 2, '.', '') }}">
+                    <x-parcel-scanner
+                        :action="route('rider.deliveries.scan', $delivery)"
+                        :tracking="old('tracking', session('verified_tracking', ''))"
+                        :method="request('scan_method', 'MANUAL')"
+                        title="Scan Waybill"
+                        description="Verify this parcel against this specific delivery assignment before completing the delivery."
+                        button="Verify This Delivery"
+                    />
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form>
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
+                        <input type="hidden" name="scanned_code" value="{{ old('scanned_code', session('verified_tracking', '')) }}">
+                        <input type="hidden" name="scan_method" value="{{ old('scan_method', session('verified_scan_method', 'MANUAL')) }}">
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             Cash received from buyer
                             <input type="number" name="collected_amount" min="0" step="0.01" value="{{ old('collected_amount') }}" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-cash-input>
@@ -84,9 +97,10 @@
                         </div>
                         <button type="submit" class="w-full rounded-xl bg-green-700 px-5 py-3 text-sm font-semibold text-white" data-delivery-proof-submit>Upload Proof &amp; Mark Delivered</button>
                     </form>
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3" data-delivery-failed-form data-confirm-title="Record failed delivery?" data-confirm-message="Save this failed delivery attempt. This will not automatically return the parcel." data-confirm-label="Record failed delivery" data-confirm-tone="danger">
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3" data-delivery-failed-form>
                         @csrf @method('PATCH')<input type="hidden" name="action" value="delivery_failed">
                         <input type="hidden" name="failure_reason" data-delivery-failure-reason>
+                        <input type="hidden" name="attempt_status" value="FAILED">
                         <label class="grid gap-2 text-sm font-semibold text-ink">Reason
                             <select required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-failure-category>
                                 <option value="">Select a reason</option><option>Buyer unavailable</option><option>Buyer requested reschedule</option><option>Incorrect or inaccessible location</option><option>Buyer refused parcel</option><option>Unable to contact Buyer</option><option>Other</option>
@@ -104,6 +118,16 @@
     </section>
 
 </div>
+<dialog class="w-[calc(100%-2rem)] max-w-lg rounded-2xl p-0 shadow-2xl backdrop:bg-black/50" data-delivery-confirm-dialog aria-labelledby="delivery-confirm-heading">
+    <div class="grid gap-4 p-6">
+        <div><h2 id="delivery-confirm-heading" class="text-xl font-bold text-ink">Confirm Successful Delivery</h2><p class="mt-1 text-sm text-muted">This will record the parcel as delivered and submit the proof photo.</p></div>
+        <dl class="grid gap-2 rounded-xl bg-page-secondary p-4 text-sm"><div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div><div><dt class="text-muted">COD expected</dt><dd class="font-semibold text-ink">â‚±{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div><div><dt class="text-muted">Cash received</dt><dd class="font-semibold text-ink" data-confirm-delivery-cash>Not entered</dd></div><div><dt class="text-muted">Proof photo</dt><dd class="font-semibold text-ink" data-confirm-delivery-proof>Not attached</dd></div></dl>
+        <div class="flex flex-wrap justify-end gap-2"><button type="button" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink" data-delivery-confirm-cancel>Cancel</button><button type="button" class="rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white" data-delivery-confirm-submit>Confirm Delivery</button></div>
+    </div>
+</dialog>
+<dialog class="w-[calc(100%-2rem)] max-w-lg rounded-2xl p-0 shadow-2xl backdrop:bg-black/50" data-delivery-failed-dialog aria-labelledby="delivery-failed-heading">
+    <div class="grid gap-4 p-6"><div><h2 id="delivery-failed-heading" class="text-xl font-bold text-ink">Record Failed Delivery</h2><p class="mt-1 text-sm text-muted">A buyer refusal or third failed attempt starts Return to Seller review. The parcel remains in failed-delivery custody until a verified reverse handover is recorded.</p></div><p class="rounded-xl bg-page-secondary p-4 text-sm text-ink" data-delivery-failure-summary></p><div class="flex justify-end gap-2"><button type="button" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink" data-delivery-failed-cancel>Cancel</button><button type="button" class="rounded-xl bg-red-700 px-4 py-3 text-sm font-semibold text-white" data-delivery-failed-confirm>Record Failed Delivery</button></div></div>
+</dialog>
 <script>
     (() => {
         const form = document.querySelector('[data-delivery-proof-form]');
@@ -114,8 +138,14 @@
         const preview = form?.querySelector('[data-delivery-proof-preview]');
         const replace = form?.querySelector('[data-delivery-proof-replace]');
         const cashInput = form?.querySelector('[data-delivery-cash-input]');
+        const confirmDialog = document.querySelector('[data-delivery-confirm-dialog]');
+        const confirmedCash = confirmDialog?.querySelector('[data-confirm-delivery-cash]');
+        const confirmedProof = confirmDialog?.querySelector('[data-confirm-delivery-proof]');
+        const confirmButton = confirmDialog?.querySelector('[data-delivery-confirm-submit]');
+        const cancelConfirm = confirmDialog?.querySelector('[data-delivery-confirm-cancel]');
         const targetBytes = 1536 * 1024;
         let optimizing = false;
+        let confirmedDelivery = false;
         let previewUrl = null;
 
         if (!form || !input || !status || !submit) return;
@@ -188,7 +218,7 @@
             optimizing = true;
             submit.disabled = true;
             submit.classList.add('cursor-wait', 'opacity-70');
-            setStatus('Optimizing photo for upload…');
+            setStatus('Optimizing photo for uploadâ€¦');
 
             try {
                 const optimized = await optimize(file);
@@ -210,31 +240,78 @@
 
         replace?.addEventListener('click', () => input.click());
 
-        form.addEventListener('shared-confirm:prepare', (event) => {
+        form.addEventListener('submit', (event) => {
             if (optimizing) {
                 event.preventDefault();
                 setStatus('Please wait for photo optimization to finish.');
+                return;
             }
-            const cash = Number(cashInput.value || 0).toFixed(2);
-            const proof = input.files.length ? input.files[0].name : 'Not attached';
-            form.dataset.confirmDetails = `Buyer: ${form.dataset.confirmBuyer}
-COD expected: PHP ${form.dataset.confirmCod}
-Cash received: PHP ${cash}
-Proof photo: ${proof}`;
+            if (confirmedDelivery) return;
+
+            event.preventDefault();
+            if (!confirmDialog?.showModal) {
+                if (window.confirm('Confirm successful delivery and submit the proof photo?')) {
+                    confirmedDelivery = true;
+                    form.requestSubmit(submit);
+                }
+                return;
+            }
+            if (confirmedCash) confirmedCash.textContent = `â‚±${Number(cashInput.value || 0).toFixed(2)}`;
+            if (confirmedProof) confirmedProof.textContent = input.files.length ? input.files[0].name : 'Not attached';
+            confirmDialog.showModal();
+        });
+
+        cancelConfirm?.addEventListener('click', () => confirmDialog.close());
+        confirmButton?.addEventListener('click', () => {
+            confirmedDelivery = true;
+            confirmDialog.close();
+            form.requestSubmit(submit);
         });
     })();
 
     (() => {
         const form = document.querySelector('[data-delivery-failed-form]');
+        const dialog = document.querySelector('[data-delivery-failed-dialog]');
         const category = form?.querySelector('[data-delivery-failure-category]');
         const notes = form?.querySelector('[data-delivery-failure-notes]');
         const reasonInput = form?.querySelector('[data-delivery-failure-reason]');
+        const summary = dialog?.querySelector('[data-delivery-failure-summary]');
+        const confirmButton = dialog?.querySelector('[data-delivery-failed-confirm]');
+        const cancelButton = dialog?.querySelector('[data-delivery-failed-cancel]');
+        let confirmed = false;
         if (!form || !category || !notes || !reasonInput) return;
 
-        form.addEventListener('shared-confirm:prepare', () => {
+        form.addEventListener('submit', (event) => {
+            if (confirmed) return;
+            event.preventDefault();
             reasonInput.value = `${category.value}: ${notes.value.trim()}`;
-            form.dataset.confirmDetails = reasonInput.value;
+            if (!dialog?.showModal) {
+                if (window.confirm(`Record failed delivery?\n\n${reasonInput.value}`)) {
+                    confirmed = true;
+                    form.requestSubmit();
+                }
+                return;
+            }
+            if (summary) summary.textContent = reasonInput.value;
+            dialog.showModal();
+        });
+
+        cancelButton?.addEventListener('click', () => dialog.close());
+        confirmButton?.addEventListener('click', () => {
+            confirmed = true;
+            dialog.close();
+            form.requestSubmit();
         });
     })();
+
+    document.addEventListener('parcel-scanner:success', (event) => {
+        const result = event.detail || {};
+        if (!result.verified || !result.tracking) return;
+        const proofForm = document.querySelector('[data-delivery-proof-form]');
+        const scannedCode = proofForm?.querySelector('[name="scanned_code"]');
+        const scanMethod = proofForm?.querySelector('[name="scan_method"]');
+        if (scannedCode) scannedCode.value = result.tracking;
+        if (scanMethod) scanMethod.value = result.scan_method || 'MANUAL';
+    });
 </script>
 @endsection

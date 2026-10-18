@@ -6,10 +6,23 @@
 
 @php
     $productId = data_get($product, 'db_id', data_get($product, 'id'));
+    $purchaseLimit = data_get($product, 'purchase_limit_per_buyer');
+    $remainingPurchaseAllowance = $guest ? null : data_get($product, 'purchase_limit_per_buyer_remaining');
 
     $slug = data_get($product, 'slug', data_get($product, 'id', 'product'));
 
     $name = (string) data_get($product, 'name', 'Product');
+    $isWishlistSaved = false;
+    if (! $guest && auth()->check() && $productId !== null) {
+        $wishlistUserId = request()->attributes->get('buyer_wishlist_user_id');
+        $wishlistProductIds = request()->attributes->get('buyer_wishlist_product_ids');
+        if ((int) $wishlistUserId !== (int) auth()->id() || ! is_array($wishlistProductIds)) {
+            $wishlistProductIds = auth()->user()->wishlistItems()->pluck('product_id')->map(fn ($savedProductId) => (string) $savedProductId)->all();
+            request()->attributes->set('buyer_wishlist_user_id', auth()->id());
+            request()->attributes->set('buyer_wishlist_product_ids', $wishlistProductIds);
+        }
+        $isWishlistSaved = in_array((string) $productId, $wishlistProductIds, true);
+    }
 
     $categoryValue = data_get($product, 'category.name') ?? 'Local Find';
 
@@ -22,6 +35,7 @@
     $seller = is_scalar($sellerValue)
         ? (string) $sellerValue
         : 'LIKHAE Seller';
+    $sellerOnVacation = (bool) data_get($product, 'seller.vacation_mode', false);
 
     $sellerSlug = data_get(
         $product,
@@ -30,11 +44,7 @@
     );
     $sellerUserId = (int) data_get($product, 'seller.user_id', 0);
 
-    $sellerAvatar = data_get(
-        $product,
-        'seller_avatar',
-        'https://ui-avatars.com/api/?name=' . urlencode($seller) . '&background=561C17&color=fff'
-    );
+    $sellerAvatar = data_get($product, 'seller.avatar_path', data_get($product, 'seller_avatar'));
 
     $images = collect(data_get($product, 'images', []))->pluck('url')
         ->filter()
@@ -124,6 +134,11 @@
         }
         $discount = $discountType === 'percentage' ? $discountValue : 0;
     }
+
+    $discountAmount = max(0, (float) data_get($defaultVariant, 'discount_amount', $oldPrice - $price));
+    $discountBadgeValue = $discountType === 'fixed'
+        ? $discountAmount
+        : (float) data_get($defaultVariant, 'discount_percentage', $discountValue);
 
     $variantStock = $variants
         ->mapWithKeys(fn ($variant) => [(string) data_get($variant, 'id') => (int) data_get($variant, 'stock', 0)])
@@ -1344,6 +1359,8 @@
 
         <div
             class="lk-detail-info-card"
+            data-seller-vacation="{{ $sellerOnVacation ? '1' : '0' }}"
+            @if(! $guest && $remainingPurchaseAllowance !== null) data-purchase-limit-remaining="{{ (int) $remainingPurchaseAllowance }}" @endif
             @if($variantStock)
                 data-variant-stock-product
                 data-variant-stocks='@json($variantStock)'
@@ -1354,8 +1371,8 @@
                     {{ $category }}
                 </span>
 
-                <span class="lk-detail-badge lk-detail-badge-tan" data-variation-discount-badge-wrapper @if($discountValue <= 0) hidden @endif>
-                    <span data-variation-discount-badge>{{ $discountType === 'fixed' ? '₱'.number_format($discountValue, 2).' OFF' : number_format($discountValue, 2).'% OFF' }}</span>
+                <span class="lk-detail-badge lk-detail-badge-tan" data-variation-discount-badge-wrapper @if($discountAmount <= 0) hidden @endif>
+                    <span data-variation-discount-badge>{{ $discountType === 'fixed' ? '₱'.number_format($discountAmount, 2).' OFF' : number_format($discountBadgeValue, 2).'% OFF' }}</span>
                 </span>
             </div>
 
@@ -1384,7 +1401,7 @@
                         ₱{{ number_format($price, 2) }}
                     </strong>
 
-                    @if($oldPrice > $price && $discountValue > 0)
+                    @if($oldPrice > $price && $discountAmount > 0)
                         <del class="lk-detail-old-price" data-variation-old-price>
                             ₱{{ number_format($oldPrice, 2) }}
                         </del>
@@ -1396,6 +1413,12 @@
                 <p class="lk-detail-price-note">
                     VAT included · Secure LIKHAE checkout · Protected payment
                 </p>
+                @if(!$guest && \Illuminate\Support\Facades\Route::has('buyer.rewards'))
+                    <a class="lk-detail-price-note" href="{{ route('buyer.rewards') }}">View voucher codes in Rewards</a>
+                @endif
+                @if($sellerOnVacation)
+                    <p class="lk-detail-price-note" role="status">This seller is currently on vacation and is not accepting purchases.</p>
+                @endif
             </div>
 
             <div class="lk-detail-options">
@@ -1430,12 +1453,12 @@
                                         ->mapWithKeys(fn ($option) => [strtolower((string) data_get($option, 'option')) => (string) data_get($option, 'value')])
                                         ->all();
                                 @endphp
-                                <button type="button" class="lk-detail-option-btn {{ $selected ? 'is-selected' : '' }}" data-variation-option data-variation-id="{{ data_get($variant, 'id') }}" data-variation-value="{{ data_get($variant, 'description', data_get($variant, 'sku')) }}" data-variation-stock="{{ data_get($variant, 'stock', 0) }}" data-variation-price="{{ data_get($variant, 'price', 0) }}" data-variation-original-price="{{ data_get($variant, 'original_price', data_get($variant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($variant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($variant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($variant, 'discount_value', data_get($variant, 'discount_percentage', 0)) }}" data-variation-discount-amount="{{ data_get($variant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($variant, "image_urls", []))' data-option-values='@json($variantOptionValues)' aria-pressed="{{ $selected ? 'true' : 'false' }}">{{ data_get($variant, 'description', data_get($variant, 'sku')) }}</button>
+                                <button type="button" class="lk-detail-option-btn {{ $selected ? 'is-selected' : '' }}" data-variation-option data-variation-id="{{ data_get($variant, 'id') }}" data-variation-value="{{ data_get($variant, 'description', data_get($variant, 'sku')) }}" data-variation-stock="{{ data_get($variant, 'stock', 0) }}" data-variation-price="{{ data_get($variant, 'price', 0) }}" data-variation-original-price="{{ data_get($variant, 'original_price', data_get($variant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($variant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($variant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($variant, "image_urls", []))' data-option-values='@json($variantOptionValues)' aria-pressed="{{ $selected ? 'true' : 'false' }}">{{ data_get($variant, 'description', data_get($variant, 'sku')) }}</button>
                             @endforeach
                         </div>
                     </div>
                 @elseif($defaultVariant)
-                    <button type="button" hidden data-variation-option data-variation-id="{{ data_get($defaultVariant, 'id') }}" data-variation-value="{{ data_get($defaultVariant, 'description', 'Default') }}" data-variation-stock="{{ data_get($defaultVariant, 'stock', 0) }}" data-variation-price="{{ data_get($defaultVariant, 'price', 0) }}" data-variation-original-price="{{ data_get($defaultVariant, 'original_price', data_get($defaultVariant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($defaultVariant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($defaultVariant, 'discount_value', data_get($defaultVariant, 'discount_percentage', 0)) }}" data-variation-discount-amount="{{ data_get($defaultVariant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($defaultVariant, "image_urls", []))' aria-pressed="true">Default</button>
+                    <button type="button" hidden data-variation-option data-variation-id="{{ data_get($defaultVariant, 'id') }}" data-variation-value="{{ data_get($defaultVariant, 'description', 'Default') }}" data-variation-stock="{{ data_get($defaultVariant, 'stock', 0) }}" data-variation-price="{{ data_get($defaultVariant, 'price', 0) }}" data-variation-original-price="{{ data_get($defaultVariant, 'original_price', data_get($defaultVariant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($defaultVariant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($defaultVariant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($defaultVariant, "image_urls", []))' aria-pressed="true">Default</button>
                 @endif
 
                 <div class="lk-detail-qty-row">
@@ -1445,6 +1468,18 @@
                         <span data-variant-availability>
                             {{ $stock }} available
                         </span>
+                        @if($purchaseLimit !== null)
+                            <small>Purchase limit: {{ (int) $purchaseLimit }} per Buyer</small>
+                        @endif
+                        @if(! $guest && $remainingPurchaseAllowance !== null)
+                            <small data-purchase-limit-note>
+                                @if((int) $remainingPurchaseAllowance > 0)
+                                    {{ (int) $remainingPurchaseAllowance }} unit{{ (int) $remainingPurchaseAllowance === 1 ? '' : 's' }} remaining for you.
+                                @else
+                                    You have reached this product's purchase limit.
+                                @endif
+                            </small>
+                        @endif
                     </div>
 
                     <div
@@ -1515,13 +1550,14 @@
                         data-test-add-cart
                         data-cart-url="{{ route('buyer.cart.add', ['product' => $productId]) }}"
                         data-product-purchase
+                        @disabled($sellerOnVacation || $stock < 1)
                     >
                         Add to Cart
                     </button>
 
                     <form method="POST" action="{{ route('buyer.buy-now', ['product' => $productId]) }}" style="display: contents" data-buy-now-form>
                         @csrf
-                        <input type="hidden" name="product_variant_id" value="{{ data_get($defaultVariant, 'id') }}">
+                        <input type="hidden" name="product_variant_id" value="{{ $variants->count() === 1 ? data_get($defaultVariant, 'id') : '' }}">
                         <input type="hidden" name="quantity" value="1">
                         <button
                             type="submit"
@@ -1530,6 +1566,7 @@
                             data-cart-url="{{ route('buyer.buy-now', ['product' => $productId]) }}"
                             data-checkout="1"
                             data-product-purchase
+                            @disabled($sellerOnVacation || $stock < 1)
                         >
                             Buy Now
                         </button>
@@ -1537,11 +1574,16 @@
 
                     <button
                         type="button"
-                        class="lk-btn lk-btn-light lk-btn-full lk-detail-wide"
+                        class="lk-btn lk-btn-light lk-btn-full lk-detail-wide {{ $isWishlistSaved ? 'is-active' : '' }}"
                         data-wishlist
-                        data-product-id="{{ $productId ?? $slug }}"
+                        data-product-id="{{ $productId }}"
+                        data-product-name="{{ $name }}"
+                        data-wishlist-url="{{ route('buyer.wishlist.toggle', ['product' => $productId]) }}"
+                        aria-pressed="{{ $isWishlistSaved ? 'true' : 'false' }}"
+                        aria-label="{{ $isWishlistSaved ? 'Remove' : 'Save' }} {{ $name }} {{ $isWishlistSaved ? 'from' : 'to' }} wishlist"
                     >
-                        ♡ Save to Wishlist
+                        <span aria-hidden="true" data-wishlist-icon>@if($isWishlistSaved)&#9829;@else&#9825;@endif</span>
+                        <span data-wishlist-label>{{ $isWishlistSaved ? 'Remove from Wishlist' : 'Save to Wishlist' }}</span>
                     </button>
                 @endif
             </div>
@@ -1568,10 +1610,7 @@
 
     <section class="lk-detail-seller-card">
         <div class="lk-detail-seller-avatar">
-            <img
-                src="{{ $sellerAvatar }}"
-                alt="{{ $seller }}"
-            >
+            <x-shared.profile-image :path="$sellerAvatar" role="seller" :alt="$seller" />
         </div>
 
         <div class="lk-detail-seller-copy">
@@ -1701,6 +1740,10 @@
                 @php
                     $reviewRating = (int) data_get($review, 'rating', 5);
                     $reviewVariant = (string) data_get($review, 'variant', 'Standard');
+                    $reviewPhotos = collect(data_get($review, 'image_urls', []))->filter()->values();
+                    if ($reviewPhotos->isEmpty() && data_get($review, 'image_url')) {
+                        $reviewPhotos = collect([data_get($review, 'image_url')]);
+                    }
                 @endphp
                 <article
                     class="lk-detail-review-item"
@@ -1710,11 +1753,7 @@
                     @if($loop->index >= $reviewPreviewLimit) hidden @endif
                 >
                     <div class="lk-detail-review-inner">
-                        <img
-                            class="lk-detail-review-avatar"
-                            src="{{ data_get($review, 'avatar', 'https://ui-avatars.com/api/?name=' . urlencode(data_get($review, 'name', 'Buyer')) . '&background=EADCCC&color=3B211B') }}"
-                            alt=""
-                        >
+                        <x-shared.profile-image role="buyer" class="lk-detail-review-avatar" alt="" />
 
                         <div class="lk-detail-review-body">
                             <div class="lk-detail-review-meta">
@@ -1740,14 +1779,33 @@
                                 {{ data_get($review, 'comment') }}
                             </p>
 
-                            @if(data_get($review, 'image_url'))
-                                <img class="mt-3 max-h-64 max-w-full rounded-lg object-contain" src="{{ data_get($review, 'image_url') }}" alt="Photo shared with buyer review" loading="lazy">
+                            @if($reviewPhotos->isNotEmpty())
+                                <div class="mt-3 flex flex-wrap gap-2">
+                                    @foreach($reviewPhotos as $photoUrl)
+                                        <img class="max-h-64 max-w-full rounded-lg object-contain" src="{{ $photoUrl }}" alt="Photo shared with buyer review" loading="lazy">
+                                    @endforeach
+                                </div>
                             @endif
 
                             @if(data_get($review, 'variant'))
                                 <span class="lk-detail-review-variant">
                                     Variation: {{ data_get($review, 'variant') }}
                                 </span>
+                            @endif
+
+                            @if(filled(data_get($review, 'seller_reply')))
+                                <div class="mt-3 rounded-lg border border-[#eadbce] bg-[#fcf8f4] p-3">
+                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                        <strong>Seller Response</strong>
+                                        @if(data_get($review, 'seller_name'))
+                                            <span class="text-sm text-stone-600">{{ data_get($review, 'seller_name') }}</span>
+                                        @endif
+                                        @if(data_get($review, 'seller_reply_date'))
+                                            <time class="text-sm text-stone-500">{{ data_get($review, 'seller_reply_date') }}</time>
+                                        @endif
+                                    </div>
+                                    <p class="mt-2 whitespace-pre-line">{{ data_get($review, 'seller_reply') }}</p>
+                                </div>
                             @endif
                         </div>
                     </div>

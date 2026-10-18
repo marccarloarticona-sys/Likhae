@@ -20,14 +20,16 @@
 			<div class="box"><strong>Seller</strong><p>{{ $order?->sellerProfile?->business_name }}<br>{{ $order?->sellerProfile?->businessAddress?->formatted() }}</p></div>
 			<div class="box"><strong>Recipient</strong><p>{{ $order?->order?->address?->recipient_name }}<br>{{ $order?->order?->address?->formatted() }}</p></div>
 		</section>
+		@if($shipment->orderItem)
 		<table class="items">
 			<thead><tr><th>Item</th><th>Variant</th><th>Qty</th></tr></thead>
 			<tbody>
-				@foreach($order?->items ?? [] as $item)
-					<tr><td>{{ $item->product_name }}</td><td>{{ $item->variant_description ?: 'Standard' }}</td><td>{{ $item->quantity }}</td></tr>
-				@endforeach
+				<tr><td>{{ $shipment->orderItem->product_name }}<br><small>SKU: {{ $shipment->orderItem->sku ?: 'Not provided' }}</small></td><td>{{ $shipment->orderItem->variant_description ?: 'Standard' }}</td><td>{{ $shipment->orderItem->quantity }}</td></tr>
 			</tbody>
 		</table>
+		@else
+		<p>Legacy parcel contents: {{ $order?->items?->pluck('product_name')->implode(', ') }}. This tracking number covers the legacy parcel.</p>
+		@endif
 	</main>
 	<script>window.addEventListener('load',()=>window.print())</script>
 </body>

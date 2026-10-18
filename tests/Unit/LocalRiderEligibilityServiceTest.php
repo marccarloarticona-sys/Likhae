@@ -9,25 +9,32 @@ use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Fulfillment\LocalRiderEligibilityService;
-use PHPUnit\Framework\TestCase;
+use Illuminate\Support\Facades\Http;
 use RuntimeException;
+use Tests\TestCase;
 
 class LocalRiderEligibilityServiceTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Http::fake(fn () => Http::response([], 500));
+    }
+
     public function test_active_local_rider_can_cover_one_barangay_owned_by_the_center(): void
     {
         $service = new LocalRiderEligibilityService;
         $center = $this->center();
         $area = $this->area([
-            'province_code' => 'PH-04',
-            'municipality_code' => 'PH-0401',
-            'barangay_code' => 'PH-040101',
+            'province_code' => '0403400000',
+            'municipality_code' => '0403419000',
+            'barangay_code' => '0403419001',
         ]);
         $rider = $this->rider('motorcycle');
 
         $location = $service->assertRiderCanCoverArea($center, $rider, $area);
 
-        $this->assertSame('PH-040101', $location->barangay_code);
+        $this->assertSame('0403419001', $location->barangay_code);
     }
 
     public function test_local_assignment_rejects_foreign_or_ambiguous_area_and_non_local_vehicle(): void
@@ -38,11 +45,11 @@ class LocalRiderEligibilityServiceTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $service->assertRiderCanCoverArea($center, $rider, $this->area([
-            'province_code' => 'PH-04',
-            'municipality_code' => 'PH-0401',
-            'barangay_code' => 'PH-040101',
+            'province_code' => '0403400000',
+            'municipality_code' => '0403419000',
+            'barangay_code' => '0403419001',
         ], [
-            ['province_code' => 'PH-04', 'municipality_code' => 'PH-0401', 'barangay_code' => 'PH-040102'],
+            ['province_code' => '0403400000', 'municipality_code' => '0403419000', 'barangay_code' => '0403419002'],
         ]));
     }
 
@@ -52,17 +59,19 @@ class LocalRiderEligibilityServiceTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $service->assertRiderCanCoverArea($this->center(), $this->rider('truck'), $this->area([
-            'province_code' => 'PH-04',
-            'municipality_code' => 'PH-0401',
-            'barangay_code' => 'PH-040101',
+            'province_code' => '0403400000',
+            'municipality_code' => '0403419000',
+            'barangay_code' => '0403419001',
         ]));
     }
 
     private function center(): LogisticsCenter
     {
         $address = (new Address)->forceFill([
-            'province_code' => 'PH-04',
-            'municipality_code' => 'PH-0401',
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
         ]);
         $center = new LogisticsCenter;
         $center->setRawAttributes([

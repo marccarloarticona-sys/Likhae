@@ -125,7 +125,7 @@ class LocalTripController extends Controller
         } catch (RuntimeException $exception) {
             return back()->withErrors(['trip' => $exception->getMessage()]);
         }
-        return back()->with('status', 'Local trip parcels scanned and load verified.');
+        return back()->with('status', 'Local trip load verified.');
     }
 
     public function close(Request $request, int $trip): RedirectResponse

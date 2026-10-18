@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderAddress;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ServiceArea;
 use App\Models\Seller\Category;
+use App\Models\Buyer\OrderItem;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
@@ -63,15 +65,41 @@ class SellerDropoffWorkflowTest extends TestCase
             'status' => 'PLACED',
             'grand_total' => 100,
         ]);
+        OrderItem::create([
+            'seller_order_id' => $sellerOrder->id,
+            'product_name' => 'Pickup Workflow Item',
+            'sku' => 'PICKUP-ONLY-SKU',
+            'quantity' => 1,
+            'unit_price' => 100,
+            'original_unit_price' => 100,
+            'line_total' => 100,
+        ]);
         $workflow = app(ShipmentWorkflowService::class);
         $workflow->sellerTransition($sellerOrder, 'confirm', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'prepare', $sellerUser);
+        $area = ServiceArea::create([
+            'logistics_center_id' => $center->id,
+            'code' => 'PICKUP-ONLY-AREA',
+            'name' => 'Pickup Only Area',
+            'is_active' => true,
+        ]);
+        $shipment = $sellerOrder->items()->firstOrFail()->shipment()->firstOrFail();
+        $shipment->update([
+            'logistics_center_id' => $center->id,
+            'origin_logistics_center_id' => $center->id,
+            'destination_logistics_center_id' => $center->id,
+            'service_area_id' => $area->id,
+            'origin_province_code' => '0403400000',
+            'origin_municipality_code' => '0403424000',
+            'origin_barangay_code' => '0403424001',
+        ]);
+        $workflow->sellerTransition($sellerOrder, 'pack', $sellerUser);
         $workflow->sellerTransition($sellerOrder, 'ready', $sellerUser);
 
-        $shipment = $sellerOrder->shipment()->firstOrFail();
+        $shipment = $sellerOrder->items()->firstOrFail()->shipment()->firstOrFail();
         $pickupRequest = $shipment->pickupRequests()->firstOrFail();
 
-        $this->assertFalse(Route::has('seller.logistics.pickup'));
+        $this->assertTrue(Route::has('seller.logistics.pickup'));
         $this->assertSame('READY_FOR_PICKUP', $shipment->current_status);
         $this->assertSame('PENDING', $pickupRequest->status);
         $this->assertStringStartsWith('LOGISTICS_PICKUP:', (string) $pickupRequest->notes);

@@ -9,9 +9,8 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
 });
 
 Broadcast::channel('conversations.{conversation}', function ($user, Conversation $conversation) {
-    return $conversation->participants()
-        ->whereKey($user->id)
-        ->exists();
+    return app(\App\Services\Communication\ConversationAuthorizationService::class)
+        ->canAccess($user, $conversation);
 });
 
 Broadcast::channel('shipments.{shipment}', function ($user, Shipment $shipment) {

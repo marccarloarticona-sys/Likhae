@@ -3,10 +3,12 @@
 use App\Http\Controllers\Auth\AccountRecoveryController;
 use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Auth\GoogleAuthenticationController;
+use App\Http\Controllers\Auth\MobileGoogleAuthenticationController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Auth\RegistrationController;
 use App\Http\Controllers\Buyer\GuestMarketplaceController;
 use App\Http\Controllers\Buyer\TrackingController;
+use App\Http\Controllers\Communication\ConversationAttachmentController;
 use App\Http\Controllers\NotificationCenterController;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
 use Illuminate\Http\Request;
@@ -35,6 +37,9 @@ Route::get('/products/{slug}', [GuestMarketplaceController::class, 'show'])->nam
 Route::get('/track/{trackingCode}', [TrackingController::class, 'show'])->middleware('throttle:30,1')->name('tracking.show');
 Route::get('/track/{trackingCode}/live', [TrackingController::class, 'live'])->middleware('throttle:120,1')->name('tracking.live');
 Route::get('/delivery-events/{event}/proof', [TrackingController::class, 'proof'])->middleware('auth')->name('delivery-events.proof');
+Route::get('/messages/{message}/attachment', [ConversationAttachmentController::class, 'show'])
+    ->middleware('throttle:120,1')
+    ->name('messages.attachments.show');
 
 Route::middleware(['auth', 'verified'])->group(function (): void {
     Route::get('/notifications', [NotificationCenterController::class, 'index'])->name('notifications.index');
@@ -128,8 +133,9 @@ Route::post('/logout', [AuthenticationController::class, 'destroy'])->name('logo
 Route::get('/auth/google', [GoogleAuthenticationController::class, 'redirect'])
     ->middleware('guest')
     ->name('google.redirect');
+Route::get('/auth/google/mobile', [MobileGoogleAuthenticationController::class, 'redirect'])
+    ->name('google.mobile.redirect');
 Route::get('/auth/google/callback', [GoogleAuthenticationController::class, 'callback'])
-    ->middleware('guest')
     ->name('google.callback');
 
 Route::get('/continue-as-guest', function (Request $request) {

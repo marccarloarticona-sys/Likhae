@@ -12,12 +12,12 @@ use App\Models\Seller\SellerProfile;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Marketplace\SellerCatalogService;
 use App\Services\Reports\SellerInventoryPdfService;
+use App\Services\Reports\WorkspaceExportPdfService;
 use App\Support\InventoryStockStatus;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\View\View;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SellerProductController extends Controller
 {
@@ -30,20 +30,93 @@ class SellerProductController extends Controller
     {
         $seller = $this->seller($request);
         $seller->loadMissing('primaryCategory.children');
-        $products = $seller->products()
-            ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'orderItems.review'])
-            ->latest()
-            ->get();
-        $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
-        $inventoryProducts = $request->query('mode') === 'inventory'
-            ? $this->inventoryRows($products)
-            : collect();
+        $mode = (string) $request->query('mode', 'list');
+        $inventoryMode = $mode === 'inventory';
+        $inventoryPage = null;
+        $productsPage = null;
+        $productStats = ['total' => 0, 'active' => 0, 'low_stock' => 0, 'archived' => 0];
+        $selectedProductModel = null;
+        if ($inventoryMode) {
+            $filters = $request->validate([
+                'search' => ['nullable', 'string', 'max:120'],
+                'status' => ['nullable', 'string', 'in:all,low,out,healthy'],
+            ]);
+            $search = trim((string) ($filters['search'] ?? ''));
+            $status = $filters['status'] ?? 'all';
+            $matchingVariants = fn ($query) => $this->applyInventoryStatus($query->where('is_active', true), $status);
+            $productsQuery = $seller->products()
+                ->with(['images', 'variants' => $matchingVariants, 'variants.optionValues.option'])
+                ->whereHas('variants', $matchingVariants)
+                ->latest('id');
+
+            if ($search !== '') {
+                $like = '%'.addcslashes($search, '\\%_').'%';
+                $productsQuery->where(function ($query) use ($like): void {
+                    $query->where('name', 'like', $like)
+                        ->orWhereHas('variants', fn ($variants) => $variants
+                            ->where('is_active', true)
+                            ->where(function ($matching) use ($like): void {
+                                $matching->where('sku', 'like', $like)
+                                    ->orWhereHas('optionValues', fn ($values) => $values->where('value', 'like', $like));
+                            }));
+                });
+            }
+
+            $inventoryPage = $productsQuery->paginate(20)->withQueryString();
+            $products = $inventoryPage->getCollection();
+            $sellerProducts = collect();
+            $inventoryProducts = $this->inventoryRows($products);
+            if ($search !== '') {
+                $needle = mb_strtolower($search);
+                $inventoryProducts = $inventoryProducts->filter(fn (array $row): bool => str_contains(mb_strtolower($row['name']), $needle)
+                    || str_contains(mb_strtolower($row['variant'].' '.($row['sku'] ?? '')), $needle))->values();
+            }
+        } elseif ($mode === 'edit') {
+            abort_unless($request->filled('product'), 404);
+            $selectedProductModel = $seller->products()
+                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'orderItems.review'])
+                ->whereKey($request->integer('product'))
+                ->firstOrFail();
+            $products = collect([$selectedProductModel]);
+            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
+            $inventoryProducts = collect();
+        } elseif ($mode === 'add') {
+            $products = collect();
+            $sellerProducts = collect();
+            $inventoryProducts = collect();
+        } else {
+            $filters = $request->validate([
+                'search' => ['nullable', 'string', 'max:120'],
+                'status' => ['nullable', 'string', 'in:all,active,archived,draft'],
+            ]);
+            $search = trim((string) ($filters['search'] ?? ''));
+            $status = $filters['status'] ?? 'all';
+            $productsQuery = $seller->products()
+                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'orderItems.review'])
+                ->when($status !== 'all', fn ($query) => $query->where('status', strtoupper($status)))
+                ->latest('id');
+
+            if ($search !== '') {
+                $like = '%'.addcslashes($search, '\\%_').'%';
+                $productsQuery->where(function ($query) use ($like): void {
+                    $query->where('name', 'like', $like)
+                        ->orWhereHas('variants', fn ($variants) => $variants->where('sku', 'like', $like));
+                });
+            }
+
+            $productsPage = $productsQuery->paginate(20)->withQueryString();
+            $products = $productsPage->getCollection();
+            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
+            $inventoryProducts = collect();
+            $productStats = $this->productStats($seller);
+        }
         $inventoryGroups = $inventoryProducts->groupBy('db_id')->map(function (Collection $variants): array {
             $first = $variants->first();
 
             return [
                 'db_id' => (int) $first['db_id'],
                 'name' => $first['name'],
+                'listing_status' => $first['listing_status'],
                 'image' => $first['image'],
                 'variant_count' => $variants->count(),
                 'total_stock' => (int) $variants->sum('stock'),
@@ -52,33 +125,31 @@ class SellerProductController extends Controller
                 'variants' => $variants->values(),
             ];
         })->values();
-        $inventoryStats = [
-            'total' => $inventoryProducts->count(),
-            'total_units' => (int) $inventoryProducts->sum('stock'),
-            'in_stock' => $inventoryProducts->where('stock', '>', 0)->count(),
-            'low_stock' => $inventoryProducts->where('stock_level', 'low')->count(),
-            'out_of_stock' => $inventoryProducts->where('stock_level', 'out')->count(),
+        $inventoryStats = $inventoryMode ? $this->inventoryStats($seller) : [
+            'total' => 0,
+            'total_units' => 0,
+            'in_stock' => 0,
+            'low_stock' => 0,
+            'out_of_stock' => 0,
         ];
 
-        $selected = null;
-        $selectedProductModel = null;
-        if ($request->filled('product')) {
-            $selected = $sellerProducts->firstWhere('db_id', $request->integer('product'));
-            $selectedProductModel = $products->firstWhere('id', $request->integer('product'));
-        }
-
-        if ($request->query('mode') === 'edit' && $selected === null) {
-            abort(404);
-        }
+        $selected = $mode === 'edit' ? $sellerProducts->first() : null;
 
         return view('Seller.products', [
-            'mode' => $request->query('mode', 'list'),
+            'mode' => $mode,
             'seller' => $seller,
             'products' => $products,
             'sellerProducts' => $sellerProducts,
             'inventoryProducts' => $inventoryProducts,
             'inventoryGroups' => $inventoryGroups,
             'inventoryStats' => $inventoryStats,
+            'inventoryPage' => $inventoryPage,
+            'productsPage' => $productsPage,
+            'productStats' => $productStats,
+            'productSearch' => $request->query('search', ''),
+            'productStatus' => $request->query('status', 'all'),
+            'inventorySearch' => $request->query('search', ''),
+            'inventoryStatus' => $request->query('status', 'all'),
             'expandedInventoryProductId' => $request->integer('expanded_product'),
             'selectedProduct' => $selected,
             'lineOfBusinessCategory' => $seller->primaryCategory,
@@ -87,8 +158,23 @@ class SellerProductController extends Controller
                 ->with(['product.category.parent'])
                 ->latest('opened_at')
                 ->latest('id')
+                ->limit(3)
                 ->get(),
         ]);
+    }
+
+    /** @return array{total:int,active:int,low_stock:int,archived:int} */
+    private function productStats(SellerProfile $seller): array
+    {
+        return [
+            'total' => $seller->products()->count(),
+            'active' => $seller->products()->where('status', 'ACTIVE')->count(),
+            'low_stock' => $seller->products()->whereHas('variants', fn ($query) => $query
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('stock', '<=', InventoryStockStatus::LOW_STOCK_THRESHOLD))->count(),
+            'archived' => $seller->products()->where('status', 'ARCHIVED')->count(),
+        ];
     }
 
     public function store(SaveSellerProductRequest $request): RedirectResponse
@@ -130,7 +216,7 @@ class SellerProductController extends Controller
             'stock' => ['required', 'integer', 'min:0', 'max:999999'],
         ]);
 
-        $this->sellerCatalog->updateVariantStock(
+        $variant = $this->sellerCatalog->updateVariantStock(
             $this->seller($request),
             $product,
             $variant,
@@ -184,32 +270,48 @@ class SellerProductController extends Controller
         return back()->with('status', 'Product image removed.');
     }
 
-    public function export(Request $request): StreamedResponse
+    public function export(Request $request, WorkspaceExportPdfService $pdf)
     {
-        $products = $this->seller($request)
+        $seller = $this->seller($request);
+        $products = $seller
             ->products()
             ->with(['category', 'variants'])
-            ->latest()
-            ->get();
-
-        return response()->streamDownload(function () use ($products): void {
-            $out = fopen('php://output', 'wb');
-            fputcsv($out, ['ID', 'Product', 'Category', 'Minimum Price', 'Total Stock', 'Status']);
-
-            foreach ($products as $product) {
+            ->orderByDesc('id')
+            ->lazyById(500)
+            ->map(function (Product $product): array {
                 $activeVariants = $product->variants->where('is_active', true);
-                fputcsv($out, [
-                    $product->id,
-                    $product->name,
-                    $product->category?->name,
-                    number_format((float) $activeVariants->min('price'), 2, '.', ''),
-                    $activeVariants->sum('stock'),
-                    $product->status,
-                ]);
-            }
 
-            fclose($out);
-        }, 'seller-products-'.now()->format('Ymd-His').'.csv');
+                return [
+                    (string) $product->id,
+                    (string) $product->name,
+                    (string) ($product->category?->name ?? ''),
+                    number_format((float) $activeVariants->min('price'), 2, '.', ''),
+                    (string) $activeVariants->sum('stock'),
+                    (string) $product->status,
+                ];
+            });
+        $filename = 'seller-products-'.$seller->id.'-'.now()->format('Ymd-His').'.pdf';
+
+        return response($pdf->render([
+            'workspace' => 'Seller Center',
+            'title' => 'Product catalog',
+            'description' => 'Products available to your Seller workspace.',
+            'generated_at' => now()->format('Y-m-d H:i:s T'),
+            'orientation' => 'portrait',
+            'columns' => [
+                ['label' => 'ID', 'width' => 0.07],
+                ['label' => 'Product', 'width' => 0.28],
+                ['label' => 'Category', 'width' => 0.19],
+                ['label' => 'Minimum price (PHP)', 'width' => 0.18],
+                ['label' => 'Total stock', 'width' => 0.12],
+                ['label' => 'Status', 'width' => 0.16],
+            ],
+            'rows' => $products,
+            'empty_message' => 'No products are available for this Seller workspace.',
+        ]), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+        ]);
     }
 
     public function inventoryPreview(Request $request): View
@@ -273,6 +375,34 @@ class SellerProductController extends Controller
                     ];
                 });
         })->values();
+    }
+
+    private function applyInventoryStatus($query, string $status)
+    {
+        return match ($status) {
+            'low' => $query->where('stock', '>', 0)->where('stock', '<=', InventoryStockStatus::LOW_STOCK_THRESHOLD),
+            'out' => $query->where('stock', '<=', 0),
+            'healthy' => $query->where('stock', '>', InventoryStockStatus::LOW_STOCK_THRESHOLD),
+            default => $query,
+        };
+    }
+
+    /** @return array{total:int,total_units:int,in_stock:int,low_stock:int,out_of_stock:int} */
+    private function inventoryStats(SellerProfile $seller): array
+    {
+        $totals = ProductVariant::query()
+            ->where('is_active', true)
+            ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id))
+            ->selectRaw('COUNT(*) AS total, COALESCE(SUM(stock), 0) AS total_units, SUM(CASE WHEN stock > 0 THEN 1 ELSE 0 END) AS in_stock, SUM(CASE WHEN stock > 0 AND stock <= ? THEN 1 ELSE 0 END) AS low_stock, SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) AS out_of_stock', [InventoryStockStatus::LOW_STOCK_THRESHOLD])
+            ->first();
+
+        return [
+            'total' => (int) ($totals->total ?? 0),
+            'total_units' => (int) ($totals->total_units ?? 0),
+            'in_stock' => (int) ($totals->in_stock ?? 0),
+            'low_stock' => (int) ($totals->low_stock ?? 0),
+            'out_of_stock' => (int) ($totals->out_of_stock ?? 0),
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -363,8 +493,11 @@ class SellerProductController extends Controller
         return [
             'db_id' => $product->id,
             'id' => (string) $product->id,
-            'sku' => $activeVariants->pluck('sku')->filter()->join(', '),
+            'sku' => $allVariants->pluck('sku')->filter()->join(', '),
             'name' => $product->name,
+            'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
+                ? null
+                : (int) $product->purchase_limit_per_buyer,
             'category' => $product->category?->name ?? 'Uncategorized',
             'category_id' => $product->category_id,
             'price' => (float) ($activeVariants->min(fn (ProductVariant $variant) => $variant->final_price) ?? 0),
@@ -419,6 +552,7 @@ class SellerProductController extends Controller
                 'discount_value' => $variant->discount_value,
                 'payment_method' => $variant->payment_method ?: 'cod_online',
                 'stock' => $variant->stock,
+                'weight_kg' => $variant->weight_kg,
                 'values' => $variant->optionValues->sortBy(fn ($value) => $value->option?->sort_order ?? 0)->pluck('value')->join(', '),
                 'option_value_ids' => $variant->optionValues->pluck('id')->values()->all(),
                 'product_image_id' => $variant->product_image_id,

@@ -16,6 +16,9 @@
     $buyerNameExtension = data_get($user, 'name_extension', '');
     $buyerEmail = data_get($user, 'email', 'buyer@example.com');
     $buyerPhone = data_get($user, 'contact_number', '');
+    $buyerPhoneDisplay = filled($buyerPhone)
+        ? \App\Support\PhilippineMobileNumber::format((string) $buyerPhone)
+        : '';
     $buyerBirthday = data_get($user, 'birthday', '');
     $buyerGender = data_get($user, 'sex', '');
 
@@ -24,17 +27,12 @@
         ?? data_get($user, 'profile_picture')
         ?? null;
 
-    $profilePhotoUrl = $profilePhoto
-        ? (\Illuminate\Support\Str::startsWith($profilePhoto, ['http://', 'https://'])
-            ? $profilePhoto
-            : '/storage/'.ltrim($profilePhoto, '/'))
-        : null;
-
     $buyerInitial = strtoupper(mb_substr($buyerName, 0, 1));
 
     $allowedTabs = [
         'profile',
         'addresses',
+        'reviews',
         'password',
         'danger',
     ];
@@ -53,6 +51,10 @@
         'addresses' => [
             'label' => 'Addresses',
             'description' => 'Delivery locations',
+        ],
+        'reviews' => [
+            'label' => 'Reviews',
+            'description' => 'Your product feedback',
         ],
         'password' => [
             'label' => 'Change Password',
@@ -77,6 +79,12 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/>
                     <circle cx="12" cy="10" r="2.5"/>
+                </svg>
+            ',
+
+            'reviews' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>
                 </svg>
             ',
 
@@ -156,15 +164,7 @@
             <div class="border-b border-stone-100 p-4">
                 <div class="flex items-center gap-3">
                     <div class="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-red-100 text-sm font-bold text-red-900">
-                        @if ($profilePhotoUrl)
-                            <img
-                                src="{{ $profilePhotoUrl }}"
-                                alt="{{ $buyerName }}"
-                                class="h-full w-full object-cover"
-                            >
-                        @else
-                            {{ $buyerInitial }}
-                        @endif
+                        <x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" class="h-full w-full object-cover" />
                     </div>
 
                     <div class="min-w-0">
@@ -222,7 +222,7 @@
                     </div>
 
                     <div class="p-5 sm:p-6">
-                        <form id="buyerProfileForm" method="POST" enctype="multipart/form-data" action="{{ route('buyer.account.profile.update') }}">
+                        <form id="buyerProfileForm" method="POST" enctype="multipart/form-data" action="{{ route('buyer.account.profile.update') }}" data-original-email="{{ $buyerEmail }}" data-original-phone="{{ $buyerPhoneDisplay }}">
                             @csrf
                             @method('PUT')
                             <div class="grid gap-5 sm:grid-cols-2">
@@ -255,32 +255,47 @@
                                 </div>
 
                                 <div>
-                                    <label for="profile-email" class="mb-1.5 block text-xs font-semibold text-stone-700">
-                                        Email address
-                                    </label>
+                                    <div class="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                                        <label for="profile-email" class="text-xs font-semibold text-stone-700">Email address</label>
+                                        @if($user->email_verified_at)
+                                            <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">Verified</span>
+                                        @else
+                                            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">Verification required</span>
+                                        @endif
+                                    </div>
 
                                     <input
                                         id="profile-email"
                                         type="email"
                                         name="email"
-                                        value="{{ old('email', $buyerEmail) }}"
+                                        value="{{ filled($pendingEmail) ? $pendingEmail : old('email', $buyerEmail) }}"
                                         class="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900 outline-none transition focus:border-red-800 focus:ring-4 focus:ring-red-100"
                                     >
                                 </div>
 
                                 <div>
-                                    <label for="profile-phone" class="mb-1.5 block text-xs font-semibold text-stone-700">
-                                        Mobile number
-                                    </label>
+                                    <div class="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                                        <label for="profile-phone" class="text-xs font-semibold text-stone-700">Mobile number</label>
+                                        @if($user->email_verified_at)
+                                            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">Email confirmation required</span>
+                                        @else
+                                            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">Verify email first</span>
+                                        @endif
+                                    </div>
 
                                     <input
                                         id="profile-phone"
                                         type="tel"
                                         name="phone"
-                                        value="{{ old('phone', $buyerPhone) }}"
+                                        value="{{ old('phone', filled($pendingPhone) ? \App\Support\PhilippineMobileNumber::format((string) $pendingPhone) : $buyerPhoneDisplay) }}"
                                         placeholder="09XX XXX XXXX"
                                         class="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-red-800 focus:ring-4 focus:ring-red-100"
                                     >
+                                    @if($user->email_verified_at)
+                                        <p class="mt-1.5 text-[11px] leading-5 text-stone-500">Changing this number sends a confirmation code to your verified email address.</p>
+                                    @else
+                                        <p class="mt-1.5 text-[11px] leading-5 text-stone-500">Verify your account email before changing your mobile number.</p>
+                                    @endif
                                 </div>
 
                                 <div>
@@ -323,6 +338,44 @@
                                     Save Changes
                                 </button>
                             </div>
+                            <p data-profile-form-status role="status" aria-live="polite" class="mt-3 text-right text-xs text-stone-600"></p>
+
+                            @php
+                                $profileOtpPurpose = session('profile_mobile_otp_pending') || filled($pendingPhone) || filled(old('mobile_change_code')) ? 'mobile_change' : 'email_change';
+                                $showProfileOtp = session('profile_email_otp_pending') || session('profile_mobile_otp_pending') || filled($pendingEmail) || filled($pendingPhone) || $errors->has('code');
+                                $profileOtpTarget = $profileOtpPurpose === 'mobile_change'
+                                    ? $buyerEmail
+                                    : ($pendingEmail ?: old('email', $buyerEmail));
+                            @endphp
+                            <div
+                                data-profile-otp-dialog
+                                data-profile-otp-purpose="{{ $profileOtpPurpose }}"
+                                role="dialog"
+                                aria-modal="true"
+                                aria-labelledby="profile-otp-title"
+                                class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/50 p-4"
+                                @unless($showProfileOtp) style="display:none" @endunless
+                            >
+                                <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                                    <div class="flex items-start justify-between gap-4">
+                                        <div>
+                                            <h3 id="profile-otp-title" data-profile-otp-title class="text-base font-semibold text-stone-900">{{ $profileOtpPurpose === 'mobile_change' ? 'Confirm your mobile number change' : 'Verify your email change' }}</h3>
+                                            <p class="mt-1 text-xs leading-5 text-stone-600"><span data-profile-otp-description>{{ $profileOtpPurpose === 'mobile_change' ? 'Enter the six-digit code sent to your verified email address' : 'Enter the six-digit code sent to' }}</span> <strong data-profile-otp-target>{{ $profileOtpTarget }}</strong>. Your profile changes will be saved after verification.</p>
+                                        </div>
+                                        <button type="button" data-profile-otp-close aria-label="Close" class="rounded-lg px-2 py-1 text-lg leading-none text-stone-500 hover:bg-stone-100">&times;</button>
+                                    </div>
+                                    <label for="profile-change-code" class="mt-5 grid gap-1.5 text-xs font-semibold text-stone-700">
+                                        Six-digit verification code
+                                        <input id="profile-change-code" name="{{ $profileOtpPurpose === 'mobile_change' ? 'mobile_change_code' : 'email_change_code' }}" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" value="" data-profile-otp-code class="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-3 text-center text-lg tracking-[0.35em] outline-none focus:border-red-800 focus:ring-4 focus:ring-red-100">
+                                    </label>
+                                    <p data-profile-otp-error role="alert" class="mt-2 text-xs text-red-700"></p>
+                                    <p data-profile-otp-status role="status" aria-live="polite" class="mt-2 text-xs text-stone-600">Codes expire after 5 minutes.</p>
+                                    <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+                                        <button type="button" data-profile-otp-resend class="text-xs font-semibold text-red-900 underline decoration-red-300 underline-offset-4 hover:text-red-950">Send a new code</button>
+                                        <button type="submit" data-profile-otp-submit class="rounded-xl bg-red-900 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950">Verify and Save Changes</button>
+                                    </div>
+                                </div>
+                            </div>
                         </form>
                     </div>
                 </section>
@@ -333,6 +386,7 @@
                     <div class="border-b border-stone-100 px-5 py-4 sm:px-6">
                         <h2 id="addresses-heading" class="text-base font-semibold text-stone-900">Delivery Addresses</h2>
                         <p class="mt-1 text-xs text-stone-500">Manage delivery destinations. Changes apply to future orders; existing orders keep their original address.</p>
+                        <p class="mt-2 text-xs font-medium text-stone-600">{{ $addressCount ?? collect($addresses ?? [])->count() }} of {{ $addressLimit ?? 10 }} saved addresses</p>
                     </div>
                     <div class="space-y-4 p-5 sm:p-6">
                         @forelse(collect($addresses ?? []) as $address)
@@ -343,7 +397,7 @@
                                             <h3 class="text-sm font-semibold text-stone-900">{{ $address->label }} <span class="text-stone-400">·</span> {{ $address->recipient_name }}</h3>
                                             @if($address->is_default)<span class="rounded-full bg-red-100 px-2.5 py-1 text-[10px] font-semibold text-red-900">Default address</span>@endif
                                         </div>
-                                        <p class="mt-2 text-xs font-medium text-stone-600">{{ $address->contact_number }}</p>
+                                        <p class="mt-2 text-xs font-medium text-stone-600">{{ \App\Support\PhilippineMobileNumber::format((string) $address->contact_number) }}</p>
                                         <p class="mt-2 text-sm leading-6 text-stone-600">{{ $address->formatted() }}</p>
                                         @if(filled($address->latitude) && filled($address->longitude))
                                             <p class="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700"><span aria-hidden="true">✓</span> Delivery pin confirmed</p>
@@ -366,7 +420,7 @@
                                                 </label>
                                                 <label class="grid gap-1 text-xs font-semibold text-stone-700">
                                                     Contact number
-                                                    <input required name="contact_number" value="{{ old('contact_number', $address->contact_number) }}" maxlength="30" inputmode="tel" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal">
+                                                    <input required name="contact_number" value="{{ old('contact_number', \App\Support\PhilippineMobileNumber::format((string) $address->contact_number)) }}" maxlength="30" inputmode="tel" placeholder="09XX XXX XXXX" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal">
                                                 </label>
                                                 <x-shared.philippine-address-fields :address="$address" wrapper-class="contents" />
                                                 <x-shared.address-pin :address="$address" class="sm:col-span-2" />
@@ -376,7 +430,10 @@
                                         </details>
                                         <form method="POST" action="{{ route('buyer.account.addresses.destroy', ['address' => $address->id]) }}" data-confirm-title="Delete saved address?" data-confirm-message="This saved address will be removed from your account." data-confirm-label="Delete address" data-confirm-tone="danger">
                                             @csrf @method('DELETE')
-                                            <button type="submit" class="rounded-lg px-2 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100">Delete</button>
+                                            @if($address->is_default && ($addressCount ?? collect($addresses ?? [])->count()) > 1)
+                                                <p class="mb-1 max-w-44 text-right text-[10px] leading-4 text-amber-800">Set another address as default before deleting this address.</p>
+                                            @endif
+                                            <button type="submit" @disabled($address->is_default && ($addressCount ?? collect($addresses ?? [])->count()) > 1) class="rounded-lg px-2 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100 disabled:cursor-not-allowed disabled:opacity-50">Delete</button>
                                         </form>
                                     </div>
                                 </div>
@@ -388,17 +445,63 @@
                             </div>
                         @endforelse
 
+                        @if(($addressCount ?? collect($addresses ?? [])->count()) >= ($addressLimit ?? 10))
+                            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">You can save up to 10 delivery addresses.</div>
+                        @else
                         <form method="POST" action="{{ route('buyer.account.addresses.store') }}" class="grid gap-4 rounded-2xl border border-stone-200 bg-stone-50 p-4 sm:p-5 sm:grid-cols-2">
                             @csrf
                             <div class="sm:col-span-2"><h3 class="text-sm font-semibold text-stone-900">Add delivery address</h3><p class="mt-1 text-xs text-stone-500">Choose a precise location so the courier can find you.</p></div>
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Address label<input required name="label" value="{{ old('label','Home') }}" maxlength="50" placeholder="Home, Work" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Recipient name<input required name="recipient_name" value="{{ old('recipient_name',$buyerName) }}" maxlength="200" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
-                            <label class="grid gap-1 text-xs font-semibold text-stone-700">Contact number<input required name="contact_number" value="{{ old('contact_number',$buyerPhone) }}" maxlength="30" inputmode="tel" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
+                            <label class="grid gap-1 text-xs font-semibold text-stone-700">Recipient contact number<input required name="contact_number" value="{{ old('contact_number',$buyerPhoneDisplay) }}" maxlength="30" inputmode="tel" placeholder="09XX XXX XXXX" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
                             <x-shared.philippine-address-fields wrapper-class="contents" />
                             <x-shared.address-pin class="sm:col-span-2" />
                             <label class="flex items-center gap-2 text-xs font-semibold text-stone-700 sm:col-span-2"><input type="checkbox" name="is_default" value="1" @checked(old('is_default', collect($addresses ?? [])->isEmpty()))> Use as my default address</label>
                             <div class="sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                         </form>
+                        @endif
+                    </div>
+                </section>
+            @endif
+
+            @if ($activeTab === 'reviews')
+                <section aria-labelledby="reviews-heading">
+                    <div class="border-b border-stone-100 px-5 py-4 sm:px-6">
+                        <h2 id="reviews-heading" class="text-base font-semibold text-stone-900">Your Product Reviews</h2>
+                        <p class="mt-1 text-xs text-stone-500">Read your order reviews and any Seller responses.</p>
+                    </div>
+                    <div class="space-y-3 p-5 sm:p-6">
+                        @forelse($reviews ?? [] as $review)
+                            <article class="rounded-xl border border-stone-200 bg-white p-4">
+                                <div class="flex flex-wrap items-start justify-between gap-2">
+                                    <div>
+                                        <h3 class="font-semibold text-stone-900">{{ $review->orderItem?->product_name ?? 'Purchased product' }}</h3>
+                                        <p class="mt-1 text-xs text-stone-500">Variant: {{ $review->orderItem?->variant_description ?: 'Standard' }}</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <strong class="text-amber-600" aria-label="{{ $review->rating }} out of 5 stars">{{ str_repeat('★', (int) $review->rating) }}{{ str_repeat('☆', 5 - (int) $review->rating) }}</strong>
+                                        <time class="mt-1 block text-xs text-stone-500">{{ $review->created_at?->format('M j, Y') }}</time>
+                                    </div>
+                                </div>
+                                @if(filled($review->comment))<p class="mt-3 whitespace-pre-line text-sm text-stone-700">{{ $review->comment }}</p>@endif
+                                @if(filled($review->seller_reply))
+                                    <div class="mt-4 rounded-lg border border-stone-200 bg-stone-50 p-3">
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <strong class="text-sm text-stone-900">Seller Response</strong>
+                                            @if($review->seller_replied_at)<time class="text-xs text-stone-500">{{ $review->seller_replied_at->format('M j, Y') }}</time>@endif
+                                        </div>
+                                        <p class="mt-2 whitespace-pre-line text-sm text-stone-700">{{ $review->seller_reply }}</p>
+                                    </div>
+                                @endif
+                            </article>
+                        @empty
+                            <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center">
+                                <h3 class="font-semibold text-stone-800">No product reviews yet</h3>
+                                <p class="mt-1 text-sm text-stone-500">Reviews you leave on completed orders will appear here.</p>
+                                <a class="mt-4 inline-flex rounded-xl bg-red-900 px-4 py-2 text-xs font-semibold text-white hover:bg-red-950" href="{{ route('buyer.orders') }}">View My Orders</a>
+                            </div>
+                        @endforelse
+                        @if($reviews->hasPages())<div class="pt-2">{{ $reviews->links() }}</div>@endif
                     </div>
                 </section>
             @endif
@@ -462,8 +565,7 @@
                             </div>
 
                             <div class="rounded-xl border border-stone-200 bg-stone-50 p-4 text-xs leading-5 text-stone-700">
-                                Your password should contain at least eight characters,
-                                one uppercase letter, one number, and one special character.
+                                Use at least eight characters, including uppercase and lowercase letters, a number, and a symbol. You cannot reuse your current password.
                             </div>
 
                             <button
@@ -699,6 +801,157 @@
     if (!form || !password || !confirmation || !submit) return;
     const sync = () => { submit.disabled = !password.value || confirmation.value.trim() !== 'DELETE'; };
     password.addEventListener('input', sync); confirmation.addEventListener('input', sync);
+})();
+</script>
+@endif
+@if($activeTab === 'profile')
+<script>
+(() => {
+    const form = document.getElementById('buyerProfileForm');
+    const email = document.getElementById('profile-email');
+    const phone = document.getElementById('profile-phone');
+    const dialog = document.querySelector('[data-profile-otp-dialog]');
+    const code = document.querySelector('[data-profile-otp-code]');
+    const target = document.querySelector('[data-profile-otp-target]');
+    const title = document.querySelector('[data-profile-otp-title]');
+    const description = document.querySelector('[data-profile-otp-description]');
+    const error = document.querySelector('[data-profile-otp-error]');
+    const status = document.querySelector('[data-profile-otp-status]');
+    const formStatus = document.querySelector('[data-profile-form-status]');
+    const resend = document.querySelector('[data-profile-otp-resend]');
+    if (!form || !email || !phone || !dialog || !code) return;
+
+    const originalEmail = (form.dataset.originalEmail || '').trim().toLowerCase();
+    const originalPhone = (form.dataset.originalPhone || '').trim();
+    const emailChanged = () => email.value.trim().toLowerCase() !== originalEmail;
+    const phoneChanged = () => phone.value.trim() !== originalPhone;
+    let activePurpose = dialog.dataset.profileOtpPurpose || 'email_change';
+    let isSubmitting = false;
+    const setPurpose = (purpose, recipient = '') => {
+        activePurpose = purpose === 'mobile_change' ? 'mobile_change' : 'email_change';
+        dialog.dataset.profileOtpPurpose = activePurpose;
+        code.name = activePurpose === 'mobile_change' ? 'mobile_change_code' : 'email_change_code';
+        if (title) title.textContent = activePurpose === 'mobile_change' ? 'Confirm your mobile number change' : 'Verify your email change';
+        if (description) description.textContent = activePurpose === 'mobile_change'
+            ? 'Enter the six-digit code sent to your verified email address'
+            : 'Enter the six-digit code sent to';
+        if (target && recipient) target.textContent = recipient;
+    };
+    const lockPurposeField = () => {
+        email.readOnly = activePurpose === 'email_change';
+        phone.readOnly = activePurpose === 'mobile_change';
+    };
+    const openDialog = (purpose = activePurpose, message = '', recipient = '') => {
+        setPurpose(purpose, recipient || (purpose === 'mobile_change' ? originalEmail : email.value.trim()));
+        dialog.style.display = 'flex';
+        lockPurposeField();
+        if (error) error.textContent = '';
+        if (status && message) status.textContent = message;
+        code.focus();
+    };
+    const closeDialog = () => {
+        dialog.style.display = 'none';
+        email.readOnly = false;
+        phone.readOnly = false;
+        code.value = '';
+    };
+    if (dialog.style.display !== 'none') lockPurposeField();
+    const setBusy = (busy) => {
+        const submit = dialog.querySelector('[data-profile-otp-submit]');
+        if (submit) {
+            submit.disabled = busy;
+            submit.textContent = busy ? 'Please wait…' : 'Verify and Save Changes';
+        }
+        if (resend) resend.disabled = busy;
+    };
+    const postForm = async (body) => fetch(form.action, {
+        method: 'POST',
+        body,
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+    });
+
+    form.addEventListener('submit', async (event) => {
+        const changingEmail = emailChanged();
+        const changingPhone = phoneChanged();
+        if (!changingEmail && !changingPhone) return;
+        event.preventDefault();
+        if (isSubmitting) return;
+
+        const dialogIsOpen = dialog.style.display !== 'none';
+        if (dialogIsOpen && !code.value.trim()) {
+            if (error) error.textContent = 'Enter the six-digit code to save your changes.';
+            code.focus();
+            return;
+        }
+
+        const body = new FormData(form);
+        const verifying = code.value.trim().length > 0;
+        if (error) error.textContent = '';
+        if (formStatus) formStatus.textContent = '';
+        isSubmitting = true;
+        setBusy(true);
+        try {
+            const response = await postForm(body);
+            const result = await response.json();
+            if (result.requires_verification) {
+                openDialog(result.verification_for || (changingPhone ? 'mobile_change' : 'email_change'), result.message || 'A verification code was sent.', result.target || '');
+                return;
+            }
+            if (result.saved && result.redirect) {
+                window.location.assign(result.redirect);
+                return;
+            }
+
+            const firstError = result.errors ? Object.values(result.errors).flat()[0] : null;
+            const message = firstError || result.message || 'The profile could not be saved. Please review your details and try again.';
+            if (verifying) {
+                openDialog(activePurpose);
+                if (error) error.textContent = message;
+            } else if (formStatus) {
+                formStatus.textContent = message;
+            }
+        } catch (exception) {
+            const message = 'Could not reach the server. Check your connection and try again.';
+            if (code.value.trim()) {
+                openDialog(activePurpose);
+                if (error) error.textContent = message;
+            } else if (formStatus) {
+                formStatus.textContent = message;
+            }
+        } finally {
+            setBusy(false);
+            isSubmitting = false;
+        }
+    });
+
+    const close = document.querySelector('[data-profile-otp-close]');
+    if (close) close.addEventListener('click', closeDialog);
+    if (resend) resend.addEventListener('click', async () => {
+        if (error) error.textContent = '';
+        if (status) status.textContent = 'Sending a new code…';
+        resend.disabled = true;
+        try {
+            const body = new FormData();
+            body.append('_token', form.querySelector('input[name="_token"]').value);
+            const resendUrl = activePurpose === 'mobile_change'
+                ? @json(route('buyer.account.mobile.resend'))
+                : @json(route('buyer.account.email.resend'));
+            const response = await fetch(resendUrl, {
+                method: 'POST', body,
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin'
+            });
+            const result = await response.json();
+            const firstError = result.errors ? Object.values(result.errors).flat()[0] : null;
+            if (!response.ok) throw new Error(firstError || result.message || 'A new code could not be sent yet.');
+            if (status) status.textContent = result.message || 'A new code was sent.';
+        } catch (exception) {
+            if (status) status.textContent = exception.message || 'A new code could not be sent yet.';
+        } finally {
+            resend.disabled = false;
+        }
+    });
 })();
 </script>
 @endif

@@ -10,6 +10,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
+use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerOrder;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -167,6 +168,56 @@ class AccountNotificationService
         );
     }
 
+    public function sellerPickupBatchAssigned(RiderLocalTrip $trip): void
+    {
+        $trip->loadMissing('seller.user', 'rider.user', 'items');
+        $riderName = $trip->rider?->user?->name ?: 'A local rider';
+        $parcelCount = $trip->items->count();
+
+        $this->record(
+            $trip->seller?->user,
+            'SELLER_PICKUP_ASSIGNED',
+            'Pickup rider assigned',
+            $riderName.' was assigned to collect '.$parcelCount.' parcel'.($parcelCount === 1 ? '' : 's').' in pickup batch #P-'.$trip->id.'.',
+            'SELLER_PICKUP_BATCH',
+            $trip->id,
+            '/seller/orders',
+        );
+    }
+
+    public function sellerPickupBatchStarted(RiderLocalTrip $trip): void
+    {
+        $trip->loadMissing('seller.user', 'rider.user', 'items');
+        $riderName = $trip->rider?->user?->name ?: 'The assigned rider';
+
+        $this->record(
+            $trip->seller?->user,
+            'SELLER_PICKUP_STARTED',
+            'Rider started pickup',
+            $riderName.' started pickup batch #P-'.$trip->id.'. Follow each parcel scan in Orders.',
+            'SELLER_PICKUP_BATCH',
+            $trip->id,
+            '/seller/orders',
+        );
+    }
+
+    public function sellerPickupBatchFinished(RiderLocalTrip $trip): void
+    {
+        $trip->loadMissing('seller.user', 'items.riderAssignment');
+        $total = $trip->items->count();
+        $collected = $trip->items->filter(fn ($item): bool => $item->riderAssignment?->status === 'COMPLETED')->count();
+
+        $this->record(
+            $trip->seller?->user,
+            'SELLER_PICKUP_COMPLETED',
+            'Seller pickup finished',
+            'Pickup batch #P-'.$trip->id.' finished at '.$collected.' / '.$total.' parcels collected.',
+            'SELLER_PICKUP_BATCH',
+            $trip->id,
+            '/seller/orders',
+        );
+    }
+
     public function reviewSubmitted(Review $review): void
     {
         $review->loadMissing('buyer', 'orderItem.sellerOrder.sellerProfile.user');
@@ -223,6 +274,12 @@ class AccountNotificationService
             return;
         }
 
+        $preferenceKey = $this->sellerNotificationPreferenceKey($user, $type);
+        if ($preferenceKey !== null
+            && ! (bool) data_get($user->notification_preferences, $preferenceKey, true)) {
+            return;
+        }
+
         $notification = Notification::query()->firstOrCreate(
             [
                 'user_id' => $user->id,
@@ -243,7 +300,7 @@ class AccountNotificationService
                     Mail::to($user->email)->send(new AccountAlert(
                         type: $notification->type,
                         title: $notification->title,
-                        message: $notification->message,
+                        body: $notification->message,
                         actionUrl: $notification->action_url ?: '/notifications',
                         actionLabel: 'View notification',
                         userName: $user->name,
@@ -257,6 +314,21 @@ class AccountNotificationService
                 }
             });
         }
+    }
+
+    private function sellerNotificationPreferenceKey(User $user, string $type): ?string
+    {
+        if (! $user->isAccountType(User::TYPE_SELLER)) {
+            return null;
+        }
+
+        return match (true) {
+            str_starts_with($type, 'SELLER_ORDER'),
+            str_starts_with($type, 'SELLER_SHIPMENT'),
+            str_starts_with($type, 'SELLER_PICKUP') => 'seller_order_updates',
+            str_starts_with($type, 'SELLER_REVIEW') => 'seller_review_updates',
+            default => null,
+        };
     }
 
     private function label(?string $value): string

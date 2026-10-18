@@ -15,20 +15,27 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\TransferManifest;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\AccountNotificationService;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\ConversationMessageSender;
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Fulfillment\LocalRiderEligibilityService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\RegistrationWorkflowService;
+use App\Services\Reports\WorkspaceExportPdfService;
 use App\Services\RiderRatingService;
 use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
+use App\Support\RiderVehicleType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -45,10 +52,66 @@ class LogisticsPortalController extends Controller
         private readonly LocalRiderEligibilityService $localRiderEligibility,
     ) {}
 
-    public function dashboard(Request $request): View
+    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
+        $filters = $shipmentQuery->filters($request);
+
+        // Related figures come from one read transaction; the next request reads
+        // current persisted statuses after any rider workflow transaction commits.
+        $shipmentData = DB::transaction(function () use ($center, $filters, $shipmentQuery): array {
+            $base = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $filters);
+            $counts = $shipmentQuery->counts($base);
+            $ready = app(LogisticsSchemaReadiness::class)->automaticRoutingReady();
+            $operational = [
+                'incoming' => (clone $base)->where(function ($query) use ($center, $ready): void {
+                    $query->where(fn ($local) => $local->where('current_status', 'PICKED_UP')
+                        ->where('logistics_center_id', $center->id));
+                    if ($ready) {
+                        $query->orWhereHas('transferLegs', fn ($leg) => $leg
+                            ->where('destination_logistics_center_id', $center->id)
+                            ->whereIn('status', ['RELEASED', 'IN_TRANSIT']));
+                    }
+                })->count(),
+                'outgoing' => $ready ? (clone $base)->whereHas('transferLegs', fn ($leg) => $leg
+                    ->where('origin_logistics_center_id', $center->id)
+                    ->whereIn('status', ['READY', 'RELEASED', 'IN_TRANSIT']))->count() : 0,
+                'sorting' => (clone $base)->where('current_status', 'AT_SORTING_CENTER')->count(),
+                'rider_assignment' => (clone $base)->where('current_status', 'SORTED')
+                    ->whereDoesntHave('riderAssignments', fn ($assignment) => $assignment
+                        ->where('assignment_type', 'DELIVERY')
+                        ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))->count(),
+                'pickup' => (clone $base)->where('current_status', 'ASSIGNED_TO_RIDER')
+                    ->whereHas('riderAssignments', fn ($assignment) => $assignment
+                        ->where('assignment_type', 'PICKUP')
+                        ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))->count(),
+                'last_mile' => (clone $base)->whereIn('current_status', ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'])->count(),
+                'manifests' => 0,
+            ];
+            if (app(LogisticsSchemaReadiness::class)->transferReady()) {
+                $manifests = TransferManifest::query()
+                    ->where(fn ($query) => $query->where('origin_logistics_center_id', $center->id)
+                        ->orWhere('destination_logistics_center_id', $center->id))
+                    ->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
+                if (! empty($filters['from_date'])) {
+                    $manifests->whereDate('created_at', '>=', $filters['from_date']);
+                }
+                if (! empty($filters['to_date'])) {
+                    $manifests->whereDate('created_at', '<=', $filters['to_date']);
+                }
+                $operational['manifests'] = $manifests->count();
+            }
+
+            return [
+                'counts' => $counts,
+                'operational' => $operational,
+                'recentShipments' => (clone $base)
+                    ->with(['originLogisticsCenter', 'destinationLogisticsCenter',
+                        'latestEvent', 'latestRiderAssignment.riderProfile.user'])
+                    ->latest('shipments.updated_at')->limit(10)->get(),
+            ];
+        });
 
         $finance = [
             'rider_cod_obligations' => 0.0,
@@ -73,14 +136,8 @@ class LogisticsPortalController extends Controller
 
         return view('Logistics.dashboard.index', [
             'center' => $center,
-            'stats' => [
-                'shipments' => Shipment::where('logistics_center_id', $center->id)->count(),
-                'for_receive' => Shipment::where('logistics_center_id', $center->id)->whereIn('current_status', ['PICKED_UP', 'READY_FOR_PICKUP'])->count(),
-                'for_sorting' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'AT_SORTING_CENTER')->count(),
-                'for_dispatch' => Shipment::where('logistics_center_id', $center->id)->where('current_status', 'SORTED')->count(),
-                'active_riders' => $center->riders()->whereIn('status', ['ACTIVE', 'WARNED'])->count(),
-            ],
-            'recentShipments' => Shipment::where('logistics_center_id', $center->id)->with(['sellerOrder.order.address'])->latest()->limit(10)->get(),
+            'filters' => $filters,
+            ...$shipmentData,
             'financeSummary' => $finance,
         ]);
     }
@@ -177,8 +234,15 @@ class LogisticsPortalController extends Controller
             ['label' => 'Pending', 'value' => (clone $riderQuery)->where('status', 'PENDING')->count()],
             ['label' => 'Suspended / Banned', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])->count()],
         ];
+        $localRiderCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::localValues())->count();
+        $interLogisticsDriverCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::interLogisticsValues())->count();
+        $classificationCounts = [
+            'local' => $localRiderCount,
+            'inter_logistics' => $interLogisticsDriverCount,
+            'other' => max(0, (int) $stats[0]['value'] - $localRiderCount - $interLogisticsDriverCount),
+        ];
 
-        return view('Logistics.riders.index', compact('riders', 'center', 'stats'));
+        return view('Logistics.riders.index', compact('riders', 'center', 'stats', 'classificationCounts'));
     }
 
     public function riderShow(Request $request, RiderProfile $rider, RiderRatingService $riderRatings): View
@@ -198,7 +262,8 @@ class LogisticsPortalController extends Controller
         $rider->setAttribute('rating_average', $ratingSummary['average']);
         $rider->setAttribute('rating_count', $ratingSummary['count']);
 
-        $serviceAreas = $center->address
+        $isLocalRider = RiderVehicleType::isLocalBarangay($rider->vehicle_type);
+        $serviceAreas = $isLocalRider && $center->address
             ? ServiceArea::query()
                 ->where('logistics_center_id', $center->id)
                 ->where('is_active', true)
@@ -216,12 +281,15 @@ class LogisticsPortalController extends Controller
         if ($centerMarker = $maps->centerMarker($center->loadMissing('address'))) {
             $mapMarkers[] = $centerMarker;
         }
+        $schema = app(LogisticsSchemaReadiness::class);
         return view('Logistics.riders.show', [
             'rider' => $rider,
             'center' => $center,
             'mapMarkers' => $mapMarkers,
             'serviceAreas' => $serviceAreas,
-            'manifestSchemaReady' => app(LogisticsSchemaReadiness::class)->manifestReady(),
+            'isLocalRider' => $isLocalRider,
+            'manifestSchemaReady' => $schema->manifestReady(),
+            'localTripsSchemaReady' => $schema->localTripsReady(),
         ]);
     }
 
@@ -262,13 +330,20 @@ class LogisticsPortalController extends Controller
             ]);
         });
 
-        return back()->with('status', 'Rider transfer capacity saved as an approved hub setting.');
+        $message = RiderVehicleType::isLocalBarangay($rider->vehicle_type)
+            ? 'Rider local-trip parcel capacity saved.'
+            : 'Rider transfer capacity saved as an approved hub setting.';
+
+        return back()->with('status', $message);
     }
 
     public function reassignRiderArea(Request $request, RiderProfile $rider): RedirectResponse
     {
         $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
+        if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {
+            return back()->withErrors(['service_area_id' => 'Four-wheel inter-hub drivers cannot be assigned a local delivery area.']);
+        }
 
         $data = $request->validate([
             'service_area_id' => ['nullable', 'integer'],
@@ -593,31 +668,55 @@ class LogisticsPortalController extends Controller
         return back()->with('status', 'Service area updated.');
     }
 
-    public function reports(Request $request): View
+    public function reports(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
 
         return view('Logistics.reports.index', [
             'center' => $center,
-            'shipmentsByStatus' => Shipment::where('logistics_center_id', $center->id)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
+            'shipmentsByStatus' => $shipmentQuery->operationalFor($center)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
             'riderCount' => RiderProfile::where('logistics_center_id', $center->id)->count(),
         ]);
     }
 
-    public function exportReport(Request $request)
+    public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery, WorkspaceExportPdfService $pdf)
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
-        $rows = Shipment::query()->where('logistics_center_id', $center->id)->latest()->get();
-        $csv = "Tracking,Status,Destination,Updated\n".$rows->map(fn ($shipment) => implode(',', [
-            $shipment->tracking_number,
-            $shipment->current_status,
-            '"'.str_replace('"', '""', collect([$shipment->destination_barangay_name, $shipment->destination_municipality_name, $shipment->destination_province_name])->filter()->implode(', ')).'"',
-            $shipment->updated_at?->toDateTimeString(),
-        ]))->implode("\n");
+        $rows = $shipmentQuery->operationalFor($center)
+            ->orderByDesc('shipments.id')
+            ->lazyById(500, 'shipments.id', 'id')
+            ->map(fn (Shipment $shipment): array => [
+                (string) $shipment->tracking_number,
+                (string) $shipment->current_status,
+                collect([
+                    $shipment->destination_barangay_name,
+                    $shipment->destination_municipality_name,
+                    $shipment->destination_province_name,
+                ])->filter()->implode(', '),
+                (string) ($shipment->updated_at?->toDateTimeString() ?? ''),
+            ]);
+        $filename = 'logistics-report-'.$center->id.'-'.now()->format('Ymd-His').'.pdf';
 
-        return response($csv, 200, ['Content-Type' => 'text/csv', 'Content-Disposition' => 'attachment; filename="logistics-report.csv"']);
+        return response($pdf->render([
+            'workspace' => 'Logistics Portal',
+            'title' => 'Shipment operations report',
+            'description' => 'Operational shipments visible to '.$center->business_name.'.',
+            'generated_at' => now()->format('Y-m-d H:i:s T'),
+            'orientation' => 'landscape',
+            'columns' => [
+                ['label' => 'Tracking', 'width' => 0.25],
+                ['label' => 'Status', 'width' => 0.2],
+                ['label' => 'Destination', 'width' => 0.35],
+                ['label' => 'Updated', 'width' => 0.2],
+            ],
+            'rows' => $rows,
+            'empty_message' => 'No operational shipments are available to this logistics center.',
+        ]), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+        ]);
     }
 
     public function profile(Request $request): View
@@ -695,16 +794,39 @@ class LogisticsPortalController extends Controller
         return back()->with('status', 'Account password updated.');
     }
 
-    public function messages(Request $request, ConversationService $conversationService): View
+    public function messages(Request $request, ConversationService $conversationService): View|RedirectResponse
     {
+        $shipmentId = $request->integer('shipment_id');
+        $recipientId = $request->integer('recipient_user_id');
+        if ($shipmentId > 0 || $recipientId > 0) {
+            abort_unless($shipmentId > 0 && $recipientId > 0, 404);
+            $recipient = User::query()->whereKey($recipientId)->where('status', User::STATUS_ACTIVE)->firstOrFail();
+            $context = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+                ->contextForNew($request->user(), $recipient, $shipmentId);
+            abort_if($context === null || empty($context['shipment_id']), 403);
+            $conversation = $conversationService->start($request->user(), $recipient->id, $context);
+
+            return redirect()->route('logistics.messages', ['conversation' => $conversation->id]);
+        }
+
         $conversations = $conversationService->workspaceThreads(
             $request->user(),
             $request->integer('conversation') ?: null,
         );
+        $contacts = User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)
+            ->orderBy('first_name')->limit(100)
+            ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
+        $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+            ->filterRecipients($request->user(), $contacts);
 
         return view('Logistics.messages.index', [
             'conversations' => $conversations,
-            'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
+            'contacts' => $contacts,
+            'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
+            'messageContext' => app(ConversationContextPresenter::class)->forUser(
+                $request->user(),
+                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+            ),
         ]);
     }
 
@@ -720,26 +842,14 @@ class LogisticsPortalController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
+    public function sendMessage(Request $request, ConversationService $conversationService, ConversationMessageSender $sender): JsonResponse|RedirectResponse
     {
-        $data = $request->validate([
+        $recipientData = $request->validate([
             'recipient_user_id' => ['required', 'integer', 'exists:users,id'],
-            'conversation_id' => ['nullable', 'integer', 'exists:conversations,id'],
-            'body' => ['required', 'string', 'max:5000'],
         ]);
-
-        $context = [];
-        $conversation = null;
-        if (! empty($data['conversation_id'])) {
-            $conversation = Conversation::query()
-                ->whereKey((int) $data['conversation_id'])
-                ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-                ->whereHas('participants', fn ($query) => $query->where('users.id', (int) $data['recipient_user_id']))
-                ->firstOrFail();
-            $context = $conversationService->contextFor($conversation);
-        }
-
-        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context, $conversation);
+        $data = $recipientData + $sender->validate($request);
+        $recipient = User::query()->whereKey($data['recipient_user_id'])->where('status', User::STATUS_ACTIVE)->firstOrFail();
+        $message = $sender->send($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
             return response()->json([

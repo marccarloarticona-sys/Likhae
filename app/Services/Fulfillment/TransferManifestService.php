@@ -2,14 +2,15 @@
 
 namespace App\Services\Fulfillment;
 
-use App\Models\Admin\PlatformSetting;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ShipmentTransferLeg;
+use App\Models\Logistics\ShipmentEvent;
 use App\Models\Logistics\TransferManifest;
 use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -21,28 +22,73 @@ final class TransferManifestService
         private readonly TransferCapacityService $capacity,
     ) {}
 
-    public function create(User $actor, LogisticsCenter $origin, LogisticsCenter $destination, ?string $notes = null): TransferManifest
+    public function create(
+        User $actor,
+        LogisticsCenter $origin,
+        LogisticsCenter $destination,
+        ?string $notes = null,
+        ?RiderProfile $driver = null,
+    ): TransferManifest
     {
         $this->assertReady();
-        $this->assertActorAtCenter($actor, (int) $origin->id);
-        $origin->loadMissing('address');
-        $destination->loadMissing('address');
-        if (! $origin->address || blank($origin->address->province_code) || blank($origin->address->municipality_code)
-            || ! $destination->address || blank($destination->address->province_code) || blank($destination->address->municipality_code)) {
-            throw new RuntimeException('A transfer manifest requires valid canonical municipality PSGC codes for both hubs.');
-        }
-        if ((int) $origin->id === (int) $destination->id) {
-            throw new RuntimeException('A transfer manifest requires different origin and destination hubs.');
-        }
 
-        return TransferManifest::query()->create([
-            'manifest_number' => $this->uniqueManifestNumber(),
-            'origin_logistics_center_id' => $origin->id,
-            'destination_logistics_center_id' => $destination->id,
-            'status' => TransferManifest::DRAFT,
-            'created_by_user_id' => $actor->id,
-            'notes' => $notes,
-        ]);
+        return DB::transaction(function () use ($actor, $origin, $destination, $notes, $driver): TransferManifest {
+            $this->assertActorAtCenter($actor, (int) $origin->id);
+            $origin->loadMissing('address');
+            $destination->loadMissing('address');
+            if (! $origin->address || blank($origin->address->province_code) || blank($origin->address->municipality_code)
+                || ! $destination->address || blank($destination->address->province_code) || blank($destination->address->municipality_code)) {
+                throw new RuntimeException('A transfer manifest requires valid canonical municipality PSGC codes for both hubs.');
+            }
+            if ((int) $origin->id === (int) $destination->id) {
+                throw new RuntimeException('A transfer manifest requires different origin and destination hubs.');
+            }
+
+            $manifest = TransferManifest::query()->create([
+                'manifest_number' => $this->uniqueManifestNumber(),
+                'origin_logistics_center_id' => $origin->id,
+                'destination_logistics_center_id' => $destination->id,
+                'status' => TransferManifest::DRAFT,
+                'created_by_user_id' => $actor->id,
+                'notes' => $notes,
+            ]);
+
+            return $driver
+                ? $this->assignDriverWithinTransaction($actor, $manifest, $driver)
+                : $manifest;
+        });
+    }
+
+    /** @return Collection<int, RiderProfile> */
+    public function eligibleDriversForCenter(int $centerId, ?int $manifestId = null): Collection
+    {
+        return RiderProfile::query()
+            ->where('rider_profiles.logistics_center_id', $centerId)
+            ->where('rider_profiles.status', 'ACTIVE')
+            ->whereNotNull('rider_profiles.approved_by_user_id')
+            ->whereNotNull('rider_profiles.approved_at')
+            ->whereIn('rider_profiles.vehicle_type', \App\Support\RiderVehicleType::interLogisticsValues())
+            ->whereNotNull('rider_profiles.approved_parcel_capacity')
+            ->where('rider_profiles.approved_parcel_capacity', '>', 0)
+            ->whereNotNull('rider_profiles.approved_weight_capacity_kg')
+            ->where('rider_profiles.approved_weight_capacity_kg', '>', 0)
+            ->whereNotNull('rider_profiles.approved_volume_capacity_liters')
+            ->where('rider_profiles.approved_volume_capacity_liters', '>', 0)
+            ->whereHas('user', fn ($query) => $query
+                ->where('account_type', User::TYPE_RIDER)
+                ->where('status', User::STATUS_ACTIVE))
+            ->whereNotExists(function ($query) use ($manifestId): void {
+                $query->selectRaw('1')
+                    ->from('transfer_manifests')
+                    ->whereColumn('transfer_manifests.assigned_driver_rider_profile_id', 'rider_profiles.id')
+                    ->whereNotIn('transfer_manifests.status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
+                if ($manifestId !== null) {
+                    $query->where('transfer_manifests.id', '<>', $manifestId);
+                }
+            })
+            ->with('user')
+            ->orderBy('rider_profiles.id')
+            ->get();
     }
 
     public function addLeg(User $actor, TransferManifest $manifest, ShipmentTransferLeg $leg): TransferManifestItem
@@ -84,41 +130,83 @@ final class TransferManifestService
         });
     }
 
+    public function recordItemMeasurements(
+        User $actor,
+        TransferManifest $manifest,
+        TransferManifestItem $item,
+        string $weightKg,
+        ?string $volumeLiters,
+    ): TransferManifestItem {
+        $this->assertReady();
+        $weight = $this->normalizeMeasurement($weightKg, 9999999.999);
+        $volume = filled($volumeLiters) ? $this->normalizeMeasurement($volumeLiters, 999999999.999) : null;
+
+        return DB::transaction(function () use ($actor, $manifest, $item, $weight, $volume): TransferManifestItem {
+            $manifest = TransferManifest::query()->whereKey($manifest->id)->lockForUpdate()->firstOrFail();
+            $this->assertActorAtCenter($actor, (int) $manifest->origin_logistics_center_id);
+            if ($manifest->status !== TransferManifest::DRAFT) {
+                throw new RuntimeException('Parcel measurements can only be recorded on a draft manifest.');
+            }
+
+            $item = TransferManifestItem::query()->whereKey($item->id)->where('manifest_id', $manifest->id)
+                ->with('transferLeg')->lockForUpdate()->firstOrFail();
+            $leg = $item->transferLeg;
+            $shipment = $leg?->shipment()->lockForUpdate()->first();
+            if ($item->status !== TransferManifestItem::EXPECTED || $leg?->status !== ShipmentTransferLeg::READY
+                || (int) $shipment?->logistics_center_id !== (int) $manifest->origin_logistics_center_id) {
+                throw new RuntimeException('Only a ready parcel in the origin hub may be measured.');
+            }
+            if (TransferManifestItem::query()
+                ->whereHas('transferLeg', fn ($query) => $query->where('shipment_id', $shipment->id))
+                ->whereHas('manifest', fn ($query) => $query->whereNotIn('status', [TransferManifest::DRAFT, TransferManifest::CANCELLED]))
+                ->exists()) {
+                throw new RuntimeException('Parcel measurements are locked after a transfer manifest is sealed.');
+            }
+
+            $beforeWeight = $shipment->parcel_weight_kg;
+            $beforeVolume = $shipment->parcel_volume_liters;
+            if ((string) $beforeWeight === $weight && ($beforeVolume === null ? null : (string) $beforeVolume) === $volume) {
+                return $item;
+            }
+            $shipment->update(['parcel_weight_kg' => $weight, 'parcel_volume_liters' => $volume]);
+
+            if ($manifest->assigned_driver_rider_profile_id) {
+                $manifest->load('items.transferLeg.shipment', 'assignedDriver.user');
+                $this->assertManifestCapacity($manifest, null, true);
+            }
+
+            $volumeNote = $volume === null ? 'volume not recorded' : 'volume '.$volume.' L';
+            ShipmentEvent::query()->create([
+                'shipment_id' => $shipment->id,
+                'status' => $shipment->current_status,
+                'actor_user_id' => $actor->id,
+                'logistics_center_id' => $manifest->origin_logistics_center_id,
+                'notes' => 'Origin hub recorded measured packed weight '.$weight.' kg and '.$volumeNote.' for draft manifest '.$manifest->manifest_number.'.',
+                'occurred_at' => now(),
+            ]);
+
+            return $item->refresh();
+        });
+    }
+
+    private function normalizeMeasurement(string $value, float $maximum): string
+    {
+        $value = trim($value);
+        if (! preg_match('/^\d+(?:\.\d{1,3})?$/D', $value)
+            || (float) $value <= 0 || (float) $value > $maximum) {
+            throw new RuntimeException('Enter a positive measured value with at most three decimal places.');
+        }
+
+        return number_format((float) $value, 3, '.', '');
+    }
+
     public function assignDriver(User $actor, TransferManifest $manifest, RiderProfile $driver): TransferManifest
     {
         $this->assertReady();
 
         return DB::transaction(function () use ($actor, $manifest, $driver): TransferManifest {
             $locked = TransferManifest::query()->whereKey($manifest->id)->lockForUpdate()->firstOrFail();
-            $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
-            if ($locked->status !== TransferManifest::DRAFT) {
-                throw new RuntimeException('The driver can only be assigned while the manifest is a draft.');
-            }
-
-            $driver = RiderProfile::query()->with('user')->lockForUpdate()->findOrFail($driver->id);
-            if ((int) $driver->logistics_center_id !== (int) $locked->origin_logistics_center_id
-                || $driver->status !== 'ACTIVE'
-                || $driver->user?->account_type !== 'RIDER') {
-                throw new RuntimeException('The driver is not an active rider authorized by the origin hub.');
-            }
-            if (! \App\Support\RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
-                throw new RuntimeException('Local motorcycle/tricycle riders cannot be assigned to inter-hub manifests.');
-            }
-            $conflict = TransferManifest::query()
-                ->where('assigned_driver_rider_profile_id', $driver->id)
-                ->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])
-                ->whereKeyNot($locked->id)
-                ->exists();
-            if ($conflict) {
-                throw new RuntimeException('The driver already has an active transfer manifest.');
-            }
-
-            $locked->setRelation('assignedDriver', $driver);
-            $this->assertManifestCapacity($locked);
-
-            $locked->update(['assigned_driver_rider_profile_id' => $driver->id]);
-
-            return $locked->refresh();
+            return $this->assignDriverWithinTransaction($actor, $locked, $driver);
         });
     }
 
@@ -133,7 +221,6 @@ final class TransferManifestService
                 throw new RuntimeException('Only a draft manifest can be sealed.');
             }
             $this->assertManifestIntegrity($locked);
-            $this->snapshotTransferCommission($locked);
             $locked->update([
                 'status' => TransferManifest::SEALED,
                 'sealed_by_user_id' => $actor->id,
@@ -144,7 +231,8 @@ final class TransferManifestService
         });
     }
 
-    public function release(User $actor, TransferManifest $manifest, array $scannedCodes, array $scanMethods): TransferManifest
+    /** @param array<int|string, string> $scannedCodes keyed by transfer manifest item ID */
+    public function release(User $actor, TransferManifest $manifest, array $scannedCodes, array $scanMethods = []): TransferManifest
     {
         $this->assertReady();
 
@@ -157,13 +245,19 @@ final class TransferManifestService
             if ($locked->status !== TransferManifest::SEALED) {
                 throw new RuntimeException('Only a sealed manifest can be released.');
             }
+            $locked->loadMissing('assignedDriver.user', 'items.transferLeg.shipment');
+            if (! $locked->driver_accepted_at
+                || (int) $locked->driver_accepted_by_user_id !== (int) $locked->assignedDriver?->user_id) {
+                throw new RuntimeException('The assigned transfer driver must accept the sealed manifest before Logistics can release it.');
+            }
+            $this->assertManifestCapacity($locked, $locked->assignedDriver);
+            $this->assertScannedCodes($locked, $scannedCodes);
             foreach ($locked->items as $item) {
-                $legId = (int) $item->transfer_leg_id;
                 $this->transfers->release(
                     $item->transferLeg,
                     $actor,
-                    (string) ($scannedCodes[$legId] ?? ''),
-                    (string) ($scanMethods[$legId] ?? 'MANUAL'),
+                    (string) $scannedCodes[$item->id],
+                    (string) ($scanMethods[$item->id] ?? 'MANUAL'),
                 );
             }
             $locked->update([
@@ -176,26 +270,57 @@ final class TransferManifestService
         });
     }
 
-    public function depart(User $actor, TransferManifest $manifest): TransferManifest
+    public function releaseItem(User $actor, TransferManifest $manifest, TransferManifestItem $item, string $scannedCode, string $scanMethod = 'MANUAL'): TransferManifest
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $manifest): TransferManifest {
-            $locked = TransferManifest::query()->whereKey($manifest->id)->with('items.transferLeg.shipment')->lockForUpdate()->firstOrFail();
+        return DB::transaction(function () use ($actor, $manifest, $item, $scannedCode, $scanMethod): TransferManifest {
+            $locked = TransferManifest::query()->whereKey($manifest->id)
+                ->with('assignedDriver.user', 'items.transferLeg.shipment')
+                ->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
-            if ($locked->status === TransferManifest::IN_TRANSIT) {
-                return $locked;
-            }
-            if ($locked->status !== TransferManifest::RELEASED) {
-                throw new RuntimeException('Only a released manifest can depart.');
-            }
-            foreach ($locked->items as $item) {
-                $this->transfers->depart($item->transferLeg, $actor, $item->transferLeg->shipment?->tracking_number ?? '');
-            }
-            $locked->update(['status' => TransferManifest::IN_TRANSIT, 'departed_at' => now()]);
 
-            return $locked->refresh();
+            $item = TransferManifestItem::query()->whereKey($item->id)->where('manifest_id', $locked->id)
+                ->with('transferLeg.shipment')->lockForUpdate()->firstOrFail();
+            $tracking = trim((string) $item->transferLeg?->shipment?->tracking_number);
+            $code = trim($scannedCode);
+            if ($tracking === '' || $code === '' || strtoupper($code) !== strtoupper($tracking)) {
+                throw new RuntimeException('The scanned barcode does not match manifest parcel '.$tracking.'.');
+            }
+            if ($item->transferLeg?->status === ShipmentTransferLeg::RELEASED) {
+                return $locked->refresh()->load('items.transferLeg');
+            }
+            if ($locked->status !== TransferManifest::SEALED || $item->status !== TransferManifestItem::EXPECTED
+                || $item->transferLeg?->status !== ShipmentTransferLeg::READY) {
+                throw new RuntimeException('Only an expected parcel on a sealed manifest can be released.');
+            }
+            if (! $locked->driver_accepted_at
+                || (int) $locked->driver_accepted_by_user_id !== (int) $locked->assignedDriver?->user_id) {
+                throw new RuntimeException('The assigned transfer driver must accept the sealed manifest before Logistics can release a parcel.');
+            }
+
+            $this->assertManifestCapacity($locked, $locked->assignedDriver);
+            $this->transfers->release($item->transferLeg, $actor, $code, $scanMethod);
+            $locked->load('items.transferLeg');
+            if ($locked->items->isNotEmpty() && $locked->items->every(
+                fn (TransferManifestItem $manifestItem): bool => $manifestItem->transferLeg?->status === ShipmentTransferLeg::RELEASED
+            )) {
+                $locked->update([
+                    'status' => TransferManifest::RELEASED,
+                    'released_by_user_id' => $actor->id,
+                    'released_at' => now(),
+                ]);
+            }
+
+            return $locked->refresh()->load('items.transferLeg');
         });
+    }
+
+    public function depart(User $actor, TransferManifest $manifest): TransferManifest
+    {
+        // Kept as a compatibility entry point; departure belongs to the
+        // assigned rider and is enforced by driverStart().
+        return $this->driverStart($actor, $manifest);
     }
 
     public function driverAccept(User $actor, TransferManifest $manifest): TransferManifest
@@ -220,6 +345,38 @@ final class TransferManifestService
         });
     }
 
+    public function driverDecline(User $actor, TransferManifest $manifest, string $reason): TransferManifest
+    {
+        $this->assertReady();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new RuntimeException('A reason is required when declining a transfer manifest.');
+        }
+
+        return DB::transaction(function () use ($actor, $manifest, $reason): TransferManifest {
+            $locked = TransferManifest::query()->whereKey($manifest->id)->with('assignedDriver.user')->lockForUpdate()->firstOrFail();
+            $this->assertAssignedDriver($actor, $locked);
+            if (! in_array($locked->status, [TransferManifest::DRAFT, TransferManifest::SEALED], true)
+                || $locked->driver_accepted_at) {
+                throw new RuntimeException('Only an unaccepted draft or sealed manifest can be declined.');
+            }
+
+            $declineNote = 'Assigned driver declined: '.$reason;
+            $notes = trim(implode("\n", array_filter([(string) $locked->notes, $declineNote])));
+            $locked->update([
+                'status' => TransferManifest::DRAFT,
+                'assigned_driver_rider_profile_id' => null,
+                'driver_accepted_by_user_id' => null,
+                'driver_accepted_at' => null,
+                'sealed_by_user_id' => null,
+                'sealed_at' => null,
+                'notes' => $notes,
+            ]);
+
+            return $locked->refresh();
+        });
+    }
+
     public function driverStart(User $actor, TransferManifest $manifest): TransferManifest
     {
         $this->assertReady();
@@ -236,8 +393,9 @@ final class TransferManifestService
             if (! $locked->driver_accepted_at) {
                 throw new RuntimeException('The assigned driver must accept the manifest before starting transport.');
             }
+            $this->assertManifestCapacity($locked, $locked->assignedDriver);
             foreach ($locked->items as $item) {
-                $this->transfers->depart($item->transferLeg, $actor, $item->transferLeg->shipment?->tracking_number ?? '');
+                $this->transfers->depart($item->transferLeg, $actor);
             }
             $locked->update(['status' => TransferManifest::IN_TRANSIT, 'departed_at' => now()]);
 
@@ -258,16 +416,13 @@ final class TransferManifestService
             if ($locked->status !== TransferManifest::IN_TRANSIT) {
                 throw new RuntimeException('Only an in-transit manifest can arrive.');
             }
-            foreach ($locked->items as $item) {
-                $this->transfers->recordArrival($item->transferLeg, $actor, $item->transferLeg->shipment?->tracking_number ?? '');
-            }
             $locked->update(['status' => TransferManifest::ARRIVED, 'arrived_at' => now()]);
 
             return $locked->refresh();
         });
     }
 
-    public function receiveItem(User $actor, TransferManifestItem $item, string $outcome, ?string $scannedCode = null, string $scanMethod = 'MANUAL', ?string $notes = null): TransferManifestItem
+    public function receiveItem(User $actor, TransferManifestItem $item, string $outcome, ?string $scannedCode = null, ?string $notes = null, string $scanMethod = 'MANUAL'): TransferManifestItem
     {
         $this->assertReady();
         $outcome = strtoupper(trim($outcome));
@@ -275,19 +430,26 @@ final class TransferManifestService
             throw new RuntimeException('Unsupported manifest receipt outcome.');
         }
 
-        return DB::transaction(function () use ($actor, $item, $outcome, $scannedCode, $scanMethod, $notes): TransferManifestItem {
+        return DB::transaction(function () use ($actor, $item, $outcome, $scannedCode, $notes, $scanMethod): TransferManifestItem {
             $locked = TransferManifestItem::query()->whereKey($item->id)->with('manifest', 'transferLeg.shipment')->lockForUpdate()->firstOrFail();
             $manifest = TransferManifest::query()->whereKey($locked->manifest_id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $manifest->destination_logistics_center_id);
             if (! in_array($manifest->status, [TransferManifest::IN_TRANSIT, TransferManifest::ARRIVED, TransferManifest::PARTIAL, TransferManifest::EXCEPTION], true)) {
-                throw new RuntimeException('The manifest is not ready for receipt.');
+                throw new RuntimeException('The manifest must be in transit or at the destination before parcels can be received.');
             }
             if ($locked->status !== TransferManifestItem::EXPECTED) {
                 return $locked;
             }
 
-            if ($outcome === TransferManifestItem::RECEIVED) {
+            if ($manifest->status === TransferManifest::IN_TRANSIT) {
+                $manifest->update(['status' => TransferManifest::ARRIVED, 'arrived_at' => now()]);
+                $manifest->status = TransferManifest::ARRIVED;
+            }
+
+            if ($outcome !== TransferManifestItem::MISSING) {
                 $this->transfers->receive($locked->transferLeg, $actor, (string) $scannedCode, $scanMethod);
+            }
+            if ($outcome === TransferManifestItem::RECEIVED) {
                 $locked->update([
                     'status' => TransferManifestItem::RECEIVED,
                     'received_by_user_id' => $actor->id,
@@ -304,14 +466,18 @@ final class TransferManifestService
             }
 
             $statuses = $manifest->items()->pluck('status');
-            if ($statuses->every(fn (string $status): bool => $status === TransferManifestItem::RECEIVED)) {
+            $hasOutstanding = $statuses->contains(TransferManifestItem::EXPECTED);
+            $hasException = $statuses->contains(fn (string $status): bool => in_array($status, [TransferManifestItem::MISSING, TransferManifestItem::DAMAGED], true));
+            if (! $hasOutstanding && ! $hasException) {
                 $manifest->update([
                     'status' => TransferManifest::RECEIVED,
                     'received_by_user_id' => $actor->id,
                     'received_at' => now(),
                 ]);
-            } elseif ($statuses->contains(fn (string $status): bool => in_array($status, [TransferManifestItem::MISSING, TransferManifestItem::DAMAGED], true))) {
+            } elseif ($hasOutstanding && $statuses->contains(fn (string $status): bool => $status !== TransferManifestItem::EXPECTED)) {
                 $manifest->update(['status' => TransferManifest::PARTIAL, 'exception_notes' => $notes ?: $manifest->exception_notes]);
+            } elseif (! $hasOutstanding && $hasException) {
+                $manifest->update(['status' => TransferManifest::EXCEPTION, 'exception_notes' => $notes ?: $manifest->exception_notes]);
             }
 
             return $locked->refresh();
@@ -330,6 +496,9 @@ final class TransferManifestService
             $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
             if (! in_array($locked->status, [TransferManifest::DRAFT, TransferManifest::SEALED], true)) {
                 throw new RuntimeException('Only draft or sealed manifests can be cancelled before release.');
+            }
+            if ($locked->items->contains(fn (TransferManifestItem $item): bool => $item->transferLeg?->status === ShipmentTransferLeg::RELEASED)) {
+                throw new RuntimeException('This manifest has parcels already handed off to the driver and cannot be cancelled.');
             }
             foreach ($locked->items as $item) {
                 if ($item->transferLeg && in_array($item->transferLeg->status, [ShipmentTransferLeg::PLANNED, ShipmentTransferLeg::READY], true)) {
@@ -362,48 +531,95 @@ final class TransferManifestService
         foreach ($manifest->items as $item) {
             if ($item->transferLeg?->status !== ShipmentTransferLeg::READY
                 || (int) $item->transferLeg?->origin_logistics_center_id !== (int) $manifest->origin_logistics_center_id
-                || (int) $item->transferLeg?->destination_logistics_center_id !== (int) $manifest->destination_logistics_center_id) {
-                throw new RuntimeException('Every manifest item must be a ready leg with matching endpoints.');
+                || (int) $item->transferLeg?->destination_logistics_center_id !== (int) $manifest->destination_logistics_center_id
+                || $item->status !== TransferManifestItem::EXPECTED
+                || (int) $item->transferLeg?->shipment?->logistics_center_id !== (int) $manifest->origin_logistics_center_id) {
+                throw new RuntimeException('Every manifest item must be an eligible ready parcel in origin custody with matching endpoints.');
             }
         }
         $driver = $manifest->assignedDriver ?: RiderProfile::query()->with('user')->findOrFail($manifest->assigned_driver_rider_profile_id);
         $this->assertManifestCapacity($manifest, $driver);
     }
 
-    private function assertManifestCapacity(TransferManifest $manifest, ?RiderProfile $driver = null): void
+    private function assertManifestCapacity(TransferManifest $manifest, ?RiderProfile $driver = null, bool $allowMissingWeights = false): void
     {
         $driver ??= $manifest->assignedDriver ?: RiderProfile::query()->with('user')->findOrFail($manifest->assigned_driver_rider_profile_id);
+        $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
+        $this->assertDriverAvailable($driver, (int) $manifest->id);
         $rows = $manifest->items->map(fn (TransferManifestItem $item): array => [
             'weight_kg' => $item->transferLeg?->shipment?->parcel_weight_kg,
             'volume_liters' => $item->transferLeg?->shipment?->parcel_volume_liters,
         ]);
-        $this->capacity->assertCapacity($driver, $rows);
+        $this->capacity->assertCapacity($driver, $rows, $allowMissingWeights);
     }
 
-    private function snapshotTransferCommission(TransferManifest $manifest): void
+    private function assignDriverWithinTransaction(User $actor, TransferManifest $manifest, RiderProfile $requestedDriver): TransferManifest
     {
-        $type = strtoupper((string) PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'));
-        $type = in_array($type, ['PERCENT', 'FIXED'], true) ? $type : 'PERCENT';
-        $value = max(0, (float) PlatformSetting::valueOf('transfer_commission_value', 0));
-        $shippingBase = (float) $manifest->items->sum(
-            fn (TransferManifestItem $item): float => (float) ($item->transferLeg?->shipment?->sellerOrder?->shipping_fee ?? 0),
-        );
-        $parcelCount = $manifest->items->count();
-        $amount = $type === 'PERCENT'
-            ? round($shippingBase * $value / 100, 2)
-            : round($parcelCount * $value, 2);
+        $this->assertActorAtCenter($actor, (int) $manifest->origin_logistics_center_id);
+        if ($manifest->status !== TransferManifest::DRAFT) {
+            throw new RuntimeException('The driver can only be assigned while the manifest is a draft.');
+        }
 
-        $manifest->update([
-            'transfer_commission_type' => $type,
-            'transfer_commission_value' => $value,
-            'transfer_commission_base' => round($shippingBase, 2),
-            'transfer_commission_amount' => $amount,
-        ]);
+        $driver = RiderProfile::query()->with('user')->lockForUpdate()->findOrFail($requestedDriver->id);
+        $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
+        $this->assertDriverAvailable($driver, (int) $manifest->id);
+
+        $manifest->load('items.transferLeg.shipment');
+        $manifest->setRelation('assignedDriver', $driver);
+        $this->assertManifestCapacity($manifest, $driver, true);
+        $manifest->update(['assigned_driver_rider_profile_id' => $driver->id]);
+
+        return $manifest->refresh()->load('assignedDriver.user');
+    }
+
+    private function assertEligibleDriver(RiderProfile $driver, int $originCenterId): void
+    {
+        if ((int) $driver->logistics_center_id !== $originCenterId
+            || $driver->status !== 'ACTIVE'
+            || ! $driver->approved_by_user_id
+            || ! $driver->approved_at
+            || $driver->user?->account_type !== User::TYPE_RIDER
+            || $driver->user?->status !== User::STATUS_ACTIVE) {
+            throw new RuntimeException('The driver must be approved, active, and authorized by the origin hub.');
+        }
+        if (! \App\Support\RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
+            throw new RuntimeException('Only an approved four-wheel inter-hub vehicle can be assigned to an inter-hub manifest.');
+        }
+    }
+
+    private function assertDriverAvailable(RiderProfile $driver, int $manifestId): void
+    {
+        $conflict = TransferManifest::query()
+            ->where('assigned_driver_rider_profile_id', $driver->id)
+            ->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])
+            ->whereKeyNot($manifestId)
+            ->exists();
+        if ($conflict) {
+            throw new RuntimeException('The driver already has an active transfer manifest and is unavailable.');
+        }
+    }
+
+    /** @param array<int|string, string> $scannedCodes */
+    private function assertScannedCodes(TransferManifest $manifest, array $scannedCodes): void
+    {
+        if ($manifest->items->isEmpty() || count($scannedCodes) !== $manifest->items->count()) {
+            throw new RuntimeException('Scan every manifest parcel before custody changes.');
+        }
+
+        foreach ($manifest->items as $item) {
+            $code = trim((string) ($scannedCodes[$item->id] ?? ''));
+            $tracking = trim((string) $item->transferLeg?->shipment?->tracking_number);
+            if ($code === '' || $tracking === '' || strtoupper($code) !== strtoupper($tracking)) {
+                throw new RuntimeException('The scanned barcode does not match manifest parcel '.$tracking.'.');
+            }
+        }
     }
 
     private function assertActorAtCenter(User $actor, int $centerId): void
     {
-        if ((int) $actor->logisticsCenter?->id !== $centerId) {
+        if ($actor->account_type !== User::TYPE_LOGISTICS
+            || $actor->status !== User::STATUS_ACTIVE
+            || (int) $actor->logisticsCenter?->id !== $centerId) {
             throw new RuntimeException('The authenticated user is not authorized for this logistics center.');
         }
     }
@@ -412,13 +628,11 @@ final class TransferManifestService
     {
         $actor->loadMissing('riderProfile');
         $driver = $manifest->assignedDriver;
-        if (! $driver || (int) $driver->user_id !== (int) $actor->id
-            || $driver->status !== 'ACTIVE'
-            || $actor->account_type !== User::TYPE_RIDER
-            || $actor->status !== User::STATUS_ACTIVE
-            || ! \App\Support\RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
+        if (! $driver || (int) $driver->user_id !== (int) $actor->id) {
             throw new RuntimeException('Only the assigned active inter-logistics driver can operate this manifest.');
         }
+
+        $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
     }
 
     private function assertReady(): void

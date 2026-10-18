@@ -29,7 +29,7 @@
     @else
         <p class="text-sm text-muted">{{ $trip->items->count() }}/{{ $trip->approved_parcel_capacity }} parcels loaded</p>
         @if($trip->status === 'LOADING')
-            <form method="POST" action="{{ route('logistics.local-trips.items.store', $trip->id) }}" class="flex gap-2 border border-line bg-surface p-4" data-confirm-title="Add parcel to trip?" data-confirm-message="Add the selected rider assignment to this trip's load?" data-confirm-label="Add parcel">
+            <form method="POST" action="{{ route('logistics.local-trips.items.store', $trip->id) }}" class="flex gap-2 border border-line bg-surface p-4">
                 @csrf
                 <select name="rider_assignment_id" required class="min-w-0 flex-1 border border-line bg-white px-3 py-2">
                     <option value="">Select eligible assignment</option>
@@ -39,8 +39,7 @@
             </form>
         @endif
         <div class="flex flex-wrap gap-2">
-            @if($trip->status === 'LOADING')<form method="POST" action="{{ route('logistics.local-trips.load', $trip->id) }}" data-confirm-title="Verify trip load?" data-confirm-message="Confirm that the parcels on this trip have been physically loaded?" data-confirm-label="Verify load">@csrf<button class="bg-primary px-4 py-2 font-semibold text-white">Scan and verify load</button></form>@endif
-            @if(in_array($trip->status, ['READY','IN_PROGRESS']))<form method="POST" action="{{ route('logistics.local-trips.close', $trip->id) }}" data-confirm-title="Close this trip?" data-confirm-message="Close the trip and finalize its current status?" data-confirm-label="Close trip">@csrf<button class="border border-line px-4 py-2 font-semibold">Close trip</button></form>@endif
+            @if(in_array($trip->status, ['READY','IN_PROGRESS']))<form method="POST" action="{{ route('logistics.local-trips.close', $trip->id) }}">@csrf<button class="border border-line px-4 py-2 font-semibold">Close trip</button></form>@endif
         </div>
     @endif
 

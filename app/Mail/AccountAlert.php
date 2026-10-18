@@ -15,7 +15,7 @@ class AccountAlert extends Mailable
     public function __construct(
         public readonly string $type,
         public readonly string $title,
-        public readonly string $message,
+        public readonly string $body,
         public readonly ?string $actionUrl,
         public readonly string $actionLabel = 'View notification',
         public readonly ?string $userName = null,

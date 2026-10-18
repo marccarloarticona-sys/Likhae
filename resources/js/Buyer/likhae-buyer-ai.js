@@ -15,10 +15,11 @@
     const endpoint = widget.dataset.chatUrl;
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
     const page = window.LIKHAE_BUYER_AI_PAGE_CONTEXT?.page || 'buyer';
-    const responseSoundEnabled = widget.dataset.aiResponseSound === '1';
+    let responseSoundEnabled = widget.dataset.aiResponseSound === '1';
     let openedOnce = false;
     let sending = false;
     let enabled = sessionStorage.getItem('likhaeBuyerAiEnabled') === '1';
+    let stopResponseSound = () => {};
 
     const scrollToBottom = () => { messages.scrollTop = messages.scrollHeight; };
     const addBubble = (text, type = 'assistant', options = []) => {
@@ -77,6 +78,16 @@
         }
     };
 
+    const setVisibility = (isVisible) => {
+        widget.hidden = !isVisible;
+        if (!isVisible) {
+            setOpen(false);
+            sessionStorage.removeItem('likhaeBuyerAiOpen');
+            stopResponseSound();
+            stopResponseSound = () => {};
+        }
+    };
+
     const setEnabled = (isEnabled) => {
         enabled = isEnabled;
         widget.classList.toggle('likhae-buyer-ai-is-off', !enabled);
@@ -101,13 +112,17 @@
     };
 
     const playResponseSound = () => {
-        if (!responseSoundEnabled) return;
+        if (!responseSoundEnabled || widget.hidden) return;
+        stopResponseSound();
+        stopResponseSound = () => {};
         if (window.likhaePlayNotificationSound) {
-            window.likhaePlayNotificationSound('AI_RESPONSE', { force: true });
+            const cancel = window.likhaePlayNotificationSound('AI_RESPONSE', { force: true });
+            if (typeof cancel === 'function') stopResponseSound = cancel;
             return;
         }
-        if (!window.AudioContext) return;
-        const context = new window.AudioContext();
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const context = new AudioContext();
         const oscillator = context.createOscillator();
         const gain = context.createGain();
         oscillator.frequency.value = 660;
@@ -115,8 +130,33 @@
         gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.14);
         oscillator.connect(gain).connect(context.destination);
         oscillator.start(); oscillator.stop(context.currentTime + 0.14);
-        oscillator.addEventListener('ended', () => context.close());
+        let stopped = false;
+        const closeContext = () => {
+            if (stopped) return;
+            stopped = true;
+            context.close().catch(() => {});
+        };
+        oscillator.addEventListener('ended', closeContext, { once: true });
+        stopResponseSound = () => {
+            try { oscillator.stop(); } catch (_) {}
+            closeContext();
+        };
     };
+
+    window.addEventListener('likhae:buyer-ai-preference', (event) => {
+        const preference = event.detail || {};
+        if (preference.key === 'ai_assistant_enabled') {
+            setVisibility(Boolean(preference.enabled));
+        }
+        if (preference.key === 'ai_response_sound') {
+            responseSoundEnabled = Boolean(preference.enabled);
+            widget.dataset.aiResponseSound = responseSoundEnabled ? '1' : '0';
+            if (!responseSoundEnabled) {
+                stopResponseSound();
+                stopResponseSound = () => {};
+            }
+        }
+    });
 
     async function submitMessage(value) {
         const text = (value ?? input.value).trim();
@@ -148,7 +188,7 @@
             if (!response.ok || !payload.reply) throw new Error('Assistant request failed');
             typing.remove();
             addBubble(payload.reply, 'assistant', Array.isArray(payload.options) ? payload.options : []);
-            playResponseSound();
+            if (payload.mode === 'ai') playResponseSound();
         } catch (_) {
             typing.remove();
             addBubble('Sorry, the LIKHAE AI Assistant is temporarily unavailable. Please try again.', 'assistant');
@@ -179,5 +219,6 @@
     });
 
     setEnabled(enabled);
-    if (sessionStorage.getItem('likhaeBuyerAiOpen') === '1') setOpen(true);
+    if (widget.hidden) sessionStorage.removeItem('likhaeBuyerAiOpen');
+    if (!widget.hidden && sessionStorage.getItem('likhaeBuyerAiOpen') === '1') setOpen(true);
 })();

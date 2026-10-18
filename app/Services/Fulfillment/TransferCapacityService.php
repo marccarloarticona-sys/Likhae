@@ -10,12 +10,14 @@ use RuntimeException;
 final class TransferCapacityService
 {
     /** @param Collection<int, array{weight_kg: mixed, volume_liters: mixed}>|array<int, array{weight_kg: mixed, volume_liters: mixed}> $parcels */
-    public function assertCapacity(RiderProfile $driver, Collection|array $parcels): void
+    public function assertCapacity(RiderProfile $driver, Collection|array $parcels, bool $allowMissingWeights = false): void
     {
         if (! RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
-            throw new RuntimeException('Only an approved van, closed van, or truck may carry an inter-logistics manifest.');
+            throw new RuntimeException('Only an approved four-wheel inter-hub vehicle may carry an inter-logistics manifest.');
         }
-        if ($driver->status !== 'ACTIVE' || $driver->user?->account_type !== 'RIDER') {
+        if ($driver->status !== 'ACTIVE'
+            || $driver->user?->account_type !== \App\Models\User::TYPE_RIDER
+            || $driver->user?->status !== \App\Models\User::STATUS_ACTIVE) {
             throw new RuntimeException('The assigned inter-logistics driver is not active and authorized.');
         }
 
@@ -33,22 +35,35 @@ final class TransferCapacityService
             throw new RuntimeException('The manifest exceeds the driver\'s approved parcel capacity.');
         }
 
-        $weight = 0.0;
-        $volume = 0.0;
+        $weight = 0;
+        $volume = 0;
+        $allVolumesMeasured = true;
         foreach ($parcelRows as $parcel) {
-            if (! array_key_exists('weight_kg', $parcel) || $parcel['weight_kg'] === null
-                || ! array_key_exists('volume_liters', $parcel) || $parcel['volume_liters'] === null) {
-                throw new RuntimeException('The manifest cannot be sealed because parcel weight or volume is missing.');
+            $weightValue = $parcel['weight_kg'] ?? null;
+            if ($weightValue === null || trim((string) $weightValue) === '') {
+                if (! $allowMissingWeights) {
+                    throw new RuntimeException('The manifest cannot be sealed because a parcel weight is missing.');
+                }
+            } else {
+                $parcelWeight = $this->thousandths($weightValue);
+                if ($parcelWeight <= 0) {
+                    throw new RuntimeException('Parcel weight must be positive.');
+                }
+                $weight += $parcelWeight;
             }
-            $parcelWeight = (float) $parcel['weight_kg'];
-            $parcelVolume = (float) $parcel['volume_liters'];
-            if ($parcelWeight <= 0 || $parcelVolume <= 0) {
-                throw new RuntimeException('The manifest cannot be sealed because parcel weight and volume must be positive.');
+            $volumeValue = $parcel['volume_liters'] ?? null;
+            if ($volumeValue === null || trim((string) $volumeValue) === '') {
+                $allVolumesMeasured = false;
+                continue;
             }
-            $weight += $parcelWeight;
+            $parcelVolume = $this->thousandths($volumeValue);
+            if ($parcelVolume <= 0) {
+                throw new RuntimeException('Parcel volume must be positive when provided.');
+            }
             $volume += $parcelVolume;
         }
-        if ($weight > (float) $weightCapacity || $volume > (float) $volumeCapacity) {
+        if ($weight > $this->thousandths($weightCapacity)
+            || ($allVolumesMeasured && $volume > $this->thousandths($volumeCapacity))) {
             throw new RuntimeException('The manifest exceeds the driver\'s approved weight or volume capacity.');
         }
     }
@@ -61,5 +76,10 @@ final class TransferCapacityService
         if ($parcelCount > 10) {
             throw new RuntimeException('A local motorcycle or tricycle trip cannot exceed 10 parcels.');
         }
+    }
+
+    private function thousandths(mixed $value): int
+    {
+        return (int) round((float) $value * 1000, 0, PHP_ROUND_HALF_UP);
     }
 }

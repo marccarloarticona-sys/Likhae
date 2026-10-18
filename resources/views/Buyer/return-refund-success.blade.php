@@ -9,7 +9,7 @@
         <h1 class="mt-2 text-3xl font-bold text-stone-950 dark:text-white">We received your request</h1>
         <p class="mt-2 text-sm text-stone-600 dark:text-stone-300">Your request was recorded. You can track its stored status below; updates will be sent to {{ $requestRecord->buyer_email }}.</p>
         <dl class="mx-auto mt-6 grid max-w-md gap-3 rounded-xl bg-[#fff7f2] p-4 text-left text-sm dark:bg-[#30211d] sm:grid-cols-2"><div><dt class="text-stone-500 dark:text-stone-300">Request ID</dt><dd class="font-bold">{{ $requestRecord->request_number }}</dd></div><div><dt class="text-stone-500 dark:text-stone-300">Status</dt><dd class="font-bold">{{ str($requestRecord->status)->headline() }}</dd></div><div><dt class="text-stone-500 dark:text-stone-300">Solution</dt><dd class="font-bold">{{ $requestRecord->solution }}</dd></div><div><dt class="text-stone-500 dark:text-stone-300">Estimated refund</dt><dd class="font-bold">₱{{ number_format((float) $requestRecord->requested_amount, 2) }}</dd></div></dl>
-        <div class="mt-7 flex flex-wrap justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.returns') }}">View Returns & Refunds</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">Back to Order</a></div>
+        <div class="mt-7 flex flex-wrap justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.returns') }}">View Returns & Refunds</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">Back to Purchase</a></div>
     </section>
 </div>
 @endsection

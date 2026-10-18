@@ -32,6 +32,63 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     window.slShowToast = showToast;
 
+    const notificationBadges = selectAll('[data-seller-notification-count]');
+    const sellerUserId = window.LIKHAE_NOTIFICATION_SOUND_CONFIG?.userId;
+    if (notificationBadges.length && sellerUserId && window.Echo
+        && document.body.dataset.sellerNotificationsSubscribed !== 'true') {
+        document.body.dataset.sellerNotificationsSubscribed = 'true';
+        const seenNotificationIds = new Set();
+        window.Echo.private(`App.Models.User.${sellerUserId}`)
+            .listen('.notification.created', (notification) => {
+                const notificationId = String(notification?.id || '');
+                if (!notificationId || seenNotificationIds.has(notificationId)) return;
+                seenNotificationIds.add(notificationId);
+
+                const currentCount = Math.max(0, ...notificationBadges.map((badge) => Number.parseInt(badge.textContent || '0', 10) || 0));
+                const nextCount = currentCount + 1;
+                notificationBadges.forEach((badge) => {
+                    badge.textContent = String(nextCount);
+                    badge.style.display = '';
+                });
+
+                const notificationList = select('[data-seller-notification-list]');
+                const openTemplate = notificationList?.dataset.sellerNotificationOpenTemplate;
+                const currentPage = new URL(window.location.href).searchParams.get('page');
+                if (notificationList && openTemplate && (!currentPage || currentPage === '1')
+                    && /^\d+$/.test(notificationId)
+                    && !notificationList.querySelector(`[data-seller-notification-event-id="${notificationId}"]`)) {
+                    const emptyState = notificationList.querySelector(':scope > div');
+                    if (emptyState && !notificationList.querySelector('a')) emptyState.remove();
+
+                    const row = document.createElement('a');
+                    row.href = openTemplate.replace('__id__', encodeURIComponent(notificationId));
+                    row.dataset.sellerNotificationEventId = notificationId;
+                    row.style.cssText = notificationList.querySelector('a')?.getAttribute('style')
+                        || 'display:block;padding:15px 17px;border-bottom:1px solid rgba(125,95,75,.16);color:inherit;text-decoration:none';
+                    row.style.background = 'rgba(80,130,180,.10)';
+                    const title = document.createElement('strong');
+                    title.style.cssText = 'display:block;font-size:14px';
+                    title.textContent = notification?.title || 'New notification';
+                    row.appendChild(title);
+                    if (notification?.message) {
+                        const message = document.createElement('span');
+                        message.style.cssText = 'display:block;margin-top:4px;opacity:.72;font-size:13px;line-height:1.45';
+                        message.textContent = notification.message;
+                        row.appendChild(message);
+                    }
+                    const time = document.createElement('small');
+                    time.style.cssText = 'display:block;margin-top:6px;opacity:.55;font-size:11px';
+                    time.textContent = notification?.created_at
+                        ? new Date(notification.created_at).toLocaleString('en-PH', {timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short'})
+                        : 'Just now';
+                    row.appendChild(time);
+                    notificationList.prepend(row);
+                }
+
+                showToast(notification?.title || 'A new notification has arrived.');
+            });
+    }
+
     const setMobileSidebar = (open) => {
         if (!sidebar) return;
         sidebar.classList.toggle('is-open', open);
@@ -117,7 +174,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     selectAll('[data-modal-open]').forEach((button) => button.addEventListener('click', () => {
-        openModal(select(`[data-modal="${button.dataset.modalOpen}"]`));
+        const modal = select(`[data-modal="${button.dataset.modalOpen}"]`);
+        const editPayload = button.dataset.voucherEdit;
+        if (modal && editPayload) {
+            const form = select('[data-voucher-edit-form]', modal);
+            if (!form || !button.dataset.updateUrl) return;
+            form.action = button.dataset.updateUrl;
+            const values = {
+                edit_voucher_id: button.dataset.voucherId,
+                name: button.dataset.voucherName,
+                code: button.dataset.voucherCode,
+                discount_type: button.dataset.discountType,
+                discount_value: button.dataset.discountValue,
+                minimum_order_amount: button.dataset.minimumOrderAmount,
+                maximum_discount_amount: button.dataset.maximumDiscountAmount,
+                usage_limit: button.dataset.usageLimit,
+                per_user_limit: button.dataset.perUserLimit,
+                starts_at: button.dataset.startsAt,
+                ends_at: button.dataset.endsAt,
+            };
+            Object.entries(values).forEach(([name, value]) => {
+                const field = select(`[name="${name}"]`, form);
+                if (field) field.value = value ?? '';
+            });
+        }
+        openModal(modal);
     }));
     selectAll('[data-modal-close]').forEach((button) => button.addEventListener('click', () => closeModal(button.closest('[data-modal]'))));
     selectAll('[data-modal]').forEach((modal) => modal.addEventListener('click', (event) => {
@@ -607,7 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const previousDiscountType = normalizeDiscountType(previousValue('discount_type', 'none'), previousValue('discount_value') ? 'percentage' : 'none');
             const row = document.createElement('div');
             row.className = 'sl-variation-row';
-            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><select name="variants[${index}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" ${previousDiscountType === 'none' ? 'selected' : ''}>None</option><option value="percentage" ${previousDiscountType === 'percentage' ? 'selected' : ''}>Percentage</option><option value="fixed" ${previousDiscountType === 'fixed' ? 'selected' : ''}>Fixed</option></select><input name="variants[${index}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="${escapeHtml(previousValue('discount_value', '0'))}" placeholder="0" aria-label="Discount value"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
+            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" ${previousDiscountType === 'none' ? 'selected' : ''}>None</option><option value="percentage" ${previousDiscountType === 'percentage' ? 'selected' : ''}>Percentage</option><option value="fixed" ${previousDiscountType === 'fixed' ? 'selected' : ''}>Fixed</option></select><input name="variants[${index}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="${escapeHtml(previousValue('discount_value', '0'))}" placeholder="0" aria-label="Discount value"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
             list.appendChild(row);
         });
         syncAllVariantImageButtons();

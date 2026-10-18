@@ -9,7 +9,7 @@
     background: #fffdf9;
     box-shadow: 0 10px 28px rgba(86, 28, 23, .07);
 }
-.sl-map-seller { margin-block: 12px; }
+.sl-map-seller { width: 100%; max-width: none; margin-block: 0 12px; }
 .lk-map-lock-scroll { overflow: hidden; }
 
 .lk-map-shell.is-fullscreen {
@@ -84,7 +84,7 @@
 .lk-address-pin-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fffdf9; }
 .lk-address-pin-footer .lk-map-status { flex: 1; }
 .lk-map-marker { width: 18px; height: 18px; border: 3px solid #fff; border-radius: 50% 50% 50% 0; background: #8a3d32; box-shadow: 0 2px 8px rgba(40, 17, 12, .3); transform: rotate(-45deg); }
-.lk-map-marker[data-kind="rider"] { background: #2563eb; }
+.lk-map-marker[data-kind="rider"] { background: #800000; }
 .lk-map-marker[data-kind="center"] { background: #15803d; }
 .lk-map-popup { color: #321d17; font: 12px/1.4 Inter, Arial, sans-serif; }
 .lk-map-popup strong { display: block; margin-bottom: 2px; }

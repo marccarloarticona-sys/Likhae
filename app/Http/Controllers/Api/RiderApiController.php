@@ -13,11 +13,13 @@ use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\MessageAttachmentService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupBatchService;
+use App\Support\RiderVehicleType;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -29,7 +31,7 @@ class RiderApiController extends Controller
 {
     public function dashboard(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $deliveries = (clone $assignments)->delivery();
         $pendingPickupCount = $schema->sellerPickupBatchesReady()
@@ -62,7 +64,7 @@ class RiderApiController extends Controller
 
     public function assignments(Request $request): JsonResponse
     {
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
         $query = RiderAssignment::query()->where('rider_profile_id', $rider->id)->delivery()
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->with($this->assignmentRelations())->latest();
@@ -80,7 +82,7 @@ class RiderApiController extends Controller
 
     public function pickups(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
         if (! $schema->sellerPickupBatchesReady()) {
             return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
         }
@@ -130,7 +132,7 @@ class RiderApiController extends Controller
             'already_verified' => $result['already_verified'],
             'assignment_id' => $result['assignment']->id,
             'shipment_status' => $result['assignment']->shipment?->current_status,
-            'message' => $result['already_verified'] ? 'Parcel already verified.' : 'Parcel verified and collected.',
+            'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
         ]]);
     }
 
@@ -217,7 +219,7 @@ class RiderApiController extends Controller
 
     public function history(Request $request): JsonResponse
     {
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
         $rows = RiderAssignment::query()->where('rider_profile_id', $rider->id)
             ->where(fn ($query) => $query->whereIn('status', ['COMPLETED', 'REJECTED', 'CANCELLED'])->orWhereHas('deliveryAttempts'))
             ->with($this->assignmentRelations())->latest()->paginate($this->perPage($request));
@@ -426,32 +428,44 @@ class RiderApiController extends Controller
         $thread = Conversation::query()->select('id')->findOrFail($conversation);
         $service->markRead($thread, $request->user());
 
-        return response()->json(['success' => true, 'data' => $messages->map(fn ($message): array => [
-            'id' => (string) $message->id, 'conversation_id' => (string) $message->conversation_id,
-            'body' => $message->body, 'sender_user_id' => $message->sender_user_id,
-            'sent_at' => $message->sent_at?->toIso8601String(),
-            'from_rider' => (int) $message->sender_user_id === (int) $request->user()->id,
-        ])->values()]);
+        return response()->json(['success' => true, 'data' => $messages->map(function ($message) use ($service, $request): array {
+            return $service->messagePayload($message) + [
+                'from_rider' => (int) $message->sender_user_id === (int) $request->user()->id,
+            ];
+        })->values()]);
     }
 
-    public function sendMessage(Request $request, ConversationService $service): JsonResponse
+    public function sendMessage(Request $request, ConversationService $service, MessageAttachmentService $attachments): JsonResponse
     {
         $this->rider($request);
-        $data = $request->validate(['conversation_id' => ['required', 'integer'], 'body' => ['required', 'string', 'max:2000']]);
+        if (is_string($request->input('body'))) {
+            $request->merge(['body' => preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $request->input('body')) ?? trim($request->input('body'))]);
+        }
+        $data = $request->validate([
+            'conversation_id' => ['required', 'integer'],
+            'body' => ['required', 'string', 'max:1000'],
+            'attachment' => $attachments->validationRules(),
+        ]);
         $thread = Conversation::query()->whereKey($data['conversation_id'])
-            ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
+            ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id)->whereNull('conversation_participants.left_at'))
             ->with(['participants', 'shipment'])->firstOrFail();
         $recipient = $thread->participants->first(fn (User $participant): bool => (int) $participant->id !== (int) $request->user()->id);
         abort_unless($recipient, 409, 'The conversation has no other participant.');
-        $message = $service->send($request->user(), (int) $recipient->id, trim($data['body']), [
-            'type' => $thread->type, 'order_id' => $thread->order_id,
-            'seller_order_id' => $thread->seller_order_id, 'shipment_id' => $thread->shipment_id,
-        ], $thread);
+        $attachmentPath = null;
+        try {
+            if ($request->hasFile('attachment')) {
+                $attachmentPath = $attachments->store($request->file('attachment'));
+            }
+            $message = $service->send($request->user(), (int) $recipient->id, $data['body'], [
+                'type' => $thread->type, 'order_id' => $thread->order_id,
+                'seller_order_id' => $thread->seller_order_id, 'shipment_id' => $thread->shipment_id,
+            ], $thread, $attachmentPath);
+        } catch (\Throwable $exception) {
+            $attachments->delete($attachmentPath);
+            throw $exception;
+        }
 
-        return response()->json(['success' => true, 'data' => [
-            'id' => (string) $message->id, 'conversation_id' => (string) $message->conversation_id,
-            'body' => $message->body, 'sent_at' => $message->sent_at?->toIso8601String(), 'from_rider' => true,
-        ]], 201);
+        return response()->json(['success' => true, 'data' => $service->messagePayload($message) + ['from_rider' => true]], 201);
     }
 
     private function rider(Request $request): RiderProfile
@@ -465,7 +479,7 @@ class RiderApiController extends Controller
     private function ownedPickupBatch(Request $request, int $tripId): RiderLocalTrip
     {
         abort_unless(app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady(), 503, 'Seller pickup batch workflow is unavailable until its additive schema migration is installed.');
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
 
         return RiderLocalTrip::query()
             ->where('rider_profile_id', $rider->id)
@@ -526,8 +540,16 @@ class RiderApiController extends Controller
 
     private function assertAssignment(Request $request, RiderAssignment $assignment, string $type): void
     {
-        $rider = $this->rider($request);
+        $rider = $this->localRider($request);
         abort_unless((int) $assignment->rider_profile_id === (int) $rider->id && $assignment->assignment_type === $type, 403, 'This assignment does not belong to the rider.');
+    }
+
+    private function localRider(Request $request): RiderProfile
+    {
+        $rider = $this->rider($request);
+        abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403, 'Local Rider access is required.');
+
+        return $rider;
     }
 
     private function assignmentRelations(): array
@@ -582,7 +604,7 @@ class RiderApiController extends Controller
 
     private function assignmentImage(RiderAssignment $assignment): ?string
     {
-        $images = $assignment->shipment?->sellerOrder?->items?->first()?->product?->images ?? collect();
+        $images = $assignment->shipment?->orderItem?->product?->images ?? collect();
         $path = $images->firstWhere('is_primary', true)?->file_path ?? $images->first()?->file_path;
         return $path ? Storage::url($path) : null;
     }

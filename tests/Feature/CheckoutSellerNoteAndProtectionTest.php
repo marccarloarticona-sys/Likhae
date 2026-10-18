@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
@@ -19,6 +20,7 @@ use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Fulfillment\ShipmentWorkflowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -30,8 +32,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        config(['services.psgc.local_first' => false, 'services.psgc.token' => null]);
+        config(['services.psgc.local_first' => false, 'services.psgc.token' => 'checkout-test-token']);
         Http::fake([
+            'https://classification.psa.gov.ph/psgc/*' => Http::response([
+                ['code' => 'B-NOTE', 'name' => 'Note Barangay'],
+            ]),
             'https://psgc.cloud/api/v2/*' => Http::response([
                 ['code' => 'B-NOTE', 'name' => 'Note Barangay'],
             ]),
@@ -71,6 +76,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]])
             ->get(route('buyer.checkout'))
             ->assertOk()
+            ->assertSee('E-Wallet')
+            ->assertSee('Coming Soon')
+            ->assertSee('0 / 200')
+            ->assertSee('Delivery fee: &#8369;50.00 per seller parcel', false)
             ->assertSee('one seller shipment')
             ->assertSee('Line total');
         $checkoutDocument = new \DOMDocument;
@@ -79,25 +88,31 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
 
         $this->assertSame(2, $checkoutXpath->query('//section[@data-seller-card]')->length);
         $this->assertSame(2, $checkoutXpath->query('//section[@data-seller-card]//article')->length);
+        $codInput = $checkoutXpath->query('//input[@name="payment_method" and @value="COD"]')->item(0);
+        $walletInput = $checkoutXpath->query('//input[@type="radio" and @disabled]')->item(0);
+        $this->assertNotNull($codInput);
+        $this->assertTrue($codInput->hasAttribute('required'));
+        $this->assertNotNull($walletInput);
+        $this->assertFalse($walletInput->hasAttribute('name'));
 
         $fixture['itemA']->productVariant()->update(['stock' => 0]);
         $unavailableCart = $this->actingAs($fixture['buyer'])
             ->get(route('buyer.cart'))
             ->assertOk()
-            ->assertSee('Only 0 available.');
+            ->assertSee('Unavailable');
         $unavailableDocument = new \DOMDocument;
         @$unavailableDocument->loadHTML($unavailableCart->getContent());
         $unavailableXpath = new \DOMXPath($unavailableDocument);
         $checkoutButton = $unavailableXpath->query('//button[@data-place-order]')->item(0);
 
         $this->assertNotNull($checkoutButton);
-        $this->assertTrue($checkoutButton->hasAttribute('disabled'));
+        $this->assertFalse($checkoutButton->hasAttribute('disabled'), 'Available cart items may still proceed without the unavailable item.');
     }
 
     public function test_preview_keeps_voucher_and_one_shipping_fee_scoped_to_each_seller_group(): void
     {
         $fixture = $this->checkoutFixture();
-        Voucher::query()->create([
+        $voucher = Voucher::query()->create([
             'seller_profile_id' => $fixture['sellerA']->id,
             'code' => 'SELLERA10',
             'name' => 'Seller A ten percent off',
@@ -105,6 +120,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_value' => 10,
             'minimum_order_amount' => 0,
             'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
         ]);
 
         $preview = app(CheckoutService::class)->preview(
@@ -124,6 +143,84 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $sellerAGroup['shipping_fee']);
         $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
         $this->assertEquals(100.00, $preview['shipping_total']);
+    }
+
+    public function test_collected_seller_voucher_redeems_once_on_order_and_claim_survives_cancellation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'SELLERCLAIMONCE',
+            'name' => 'Collected seller voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'usage_limit' => 1,
+            'per_user_limit' => 1,
+            'is_active' => true,
+        ]);
+        $checkoutKey = 'c62bb9fa-7850-4f1d-a740-863a6cf14988';
+        $checkout = app(CheckoutService::class);
+        try {
+            $checkout->placeOrder(
+                $fixture['buyer'],
+                $fixture['address'],
+                [$fixture['itemA']->id],
+                'COD',
+                $voucher->code,
+                null,
+                [],
+                [],
+                $checkoutKey,
+            );
+            $this->fail('Checkout must reject an uncollected Seller voucher.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('Collect this Seller voucher', (string) $exception->errors()['voucher_code'][0]);
+        }
+        $this->assertDatabaseCount('orders', 0);
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id));
+
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
+        ]);
+
+        $order = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            $voucher->code,
+            null,
+            [],
+            [],
+            $checkoutKey,
+        );
+        $replay = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            $voucher->code,
+            null,
+            [],
+            [],
+            $checkoutKey,
+        );
+
+        $this->assertSame($order->id, $replay->id);
+        $this->assertSame(1, SellerOrder::query()->where('voucher_id', $voucher->id)->count());
+        $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id, (int) $fixture['buyer']->id));
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $voucher->id, (int) $fixture['buyer']->id));
+        $this->assertDatabaseHas('buyer_voucher_claims', [
+            'buyer_user_id' => $fixture['buyer']->id,
+            'voucher_id' => $voucher->id,
+        ]);
     }
 
     public function test_checkout_renders_a_blocked_notice_when_a_cart_product_has_no_seller(): void
@@ -169,11 +266,13 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->get(route('buyer.checkout'))
             ->assertOk()
             ->assertSee('Add Product Protection')
-            ->assertSee('PHP 3.00 per unit');
+            ->assertSee('&#8369;3.00 per unit', false);
 
         $response = $this->actingAs($fixture['buyer'])
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]])
             ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000010',
+                'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
                 'protection_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
@@ -219,11 +318,13 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $sellerBResponse->assertOk()->assertSee('Separate Seller B instruction 42');
     }
 
-    public function test_checkout_rejects_notes_for_other_sellers_and_notes_over_500_characters(): void
+    public function test_checkout_rejects_notes_for_other_sellers_and_notes_over_200_characters(): void
     {
         $fixture = $this->checkoutFixture();
         $session = ['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]];
         $payload = [
+            'checkout_attempt_key' => '00000000-0000-4000-8000-000000000011',
+            'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
             'address_id' => $fixture['address']->id,
             'payment_method' => 'COD',
         ];
@@ -238,11 +339,105 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->actingAs($fixture['buyer'])
             ->from(route('buyer.checkout'))
             ->withSession($session)
-            ->post(route('buyer.order.store'), $payload + ['seller_notes' => [$fixture['sellerA']->id => str_repeat('x', 501)]])
+            ->post(route('buyer.order.store'), $payload + ['seller_notes' => [$fixture['sellerA']->id => str_repeat('x', 201)]])
             ->assertRedirect(route('buyer.checkout'))
             ->assertSessionHasErrors('seller_notes.'.$fixture['sellerA']->id);
 
         $this->assertDatabaseCount('orders', 0);
+    }
+
+    public function test_checkout_accepts_a_200_character_seller_note(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $note = str_repeat('x', 200);
+
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id]])
+            ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000021',
+                'cart_item_ids' => [$fixture['itemA']->id],
+                'address_id' => $fixture['address']->id,
+                'payment_method' => 'COD',
+                'seller_notes' => [$fixture['sellerA']->id => $note],
+            ])
+            ->assertRedirect();
+
+        $this->assertSame($note, SellerOrder::query()->sole()->buyer_note);
+    }
+
+    public function test_unserviceable_address_disables_checkout_and_is_rejected_before_order_creation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $fixture['address']->update(['municipality_code' => 'M-OTHER']);
+        $session = ['checkout_cart_item_ids' => [$fixture['itemA']->id]];
+
+        $unserviceableCheckout = $this->actingAs($fixture['buyer'])
+            ->withSession($session)
+            ->get(route('buyer.checkout'))
+            ->assertOk()
+            ->assertSee('Delivery is not available for this address yet');
+        $document = new \DOMDocument;
+        @$document->loadHTML($unserviceableCheckout->getContent());
+        $xpath = new \DOMXPath($document);
+        $placeOrderButton = $xpath->query('//button[@data-place-order-submit]')->item(0);
+        $this->assertNotNull($placeOrderButton);
+        $this->assertTrue($placeOrderButton->hasAttribute('disabled'));
+
+        $response = $this->actingAs($fixture['buyer'])
+            ->from(route('buyer.checkout'))
+            ->withSession($session)
+            ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000022',
+                'cart_item_ids' => [$fixture['itemA']->id],
+                'address_id' => $fixture['address']->id,
+                'payment_method' => 'COD',
+            ])
+            ->assertRedirect(route('buyer.checkout'))
+            ->assertSessionHasErrors('address_id');
+
+        $this->assertDatabaseCount('orders', 0);
+        $this->assertSame(5, (int) $fixture['itemA']->productVariant()->value('stock'));
+    }
+
+    public function test_price_change_requires_a_second_checkout_submission(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $session = ['checkout_cart_item_ids' => [$fixture['itemA']->id]];
+        $checkout = $this->actingAs($fixture['buyer'])
+            ->withSession($session)
+            ->get(route('buyer.checkout'))
+            ->assertOk();
+        $document = new \DOMDocument;
+        @$document->loadHTML($checkout->getContent());
+        $xpath = new \DOMXPath($document);
+        $attemptKey = $xpath->query('//input[@name="checkout_attempt_key"]')->item(0)?->getAttribute('value');
+        $this->assertNotEmpty($attemptKey);
+
+        $fixture['itemA']->productVariant()->update(['price' => 125]);
+        $payload = [
+            'checkout_attempt_key' => $attemptKey,
+            'cart_item_ids' => [$fixture['itemA']->id],
+            'address_id' => $fixture['address']->id,
+            'payment_method' => 'COD',
+        ];
+
+        $this->actingAs($fixture['buyer'])
+            ->from(route('buyer.checkout'))
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect(route('buyer.checkout'))
+            ->assertSessionHasErrors('price_changed');
+        $this->assertDatabaseCount('orders', 0);
+        $this->assertSame(5, (int) $fixture['itemA']->productVariant()->value('stock'));
+
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.checkout'))
+            ->assertOk()
+            ->assertSee('updated prices and total are shown below');
+
+        $this->actingAs($fixture['buyer'])
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect();
+        $this->assertDatabaseCount('orders', 1);
     }
 
     public function test_a_checkout_without_notes_saves_null_for_each_seller_order(): void
@@ -252,6 +447,8 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->actingAs($fixture['buyer'])
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]])
             ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000012',
+                'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
             ])
@@ -267,6 +464,182 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $sellerOrderB = SellerOrder::query()->where('seller_profile_id', $fixture['sellerB']->id)->with('items')->sole();
         $this->assertSame([$fixture['productA']->id], $sellerOrderA->items->pluck('product_id')->all());
         $this->assertSame([$fixture['productB']->id], $sellerOrderB->items->pluck('product_id')->all());
+    }
+
+    public function test_place_order_with_multiple_matching_hubs_creates_an_unrouted_parcel_for_manual_review(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $secondCenter = $fixture['center']->replicate();
+        $secondCenter->owner_user_id = User::factory()->create(['account_type' => User::TYPE_LOGISTICS])->id;
+        $secondCenter->code = 'NOTE-CENTER-SECOND';
+        $secondCenter->save();
+        $secondArea = ServiceArea::create([
+            'logistics_center_id' => $secondCenter->id,
+            'code' => 'NOTE-AREA-SECOND',
+            'name' => 'Second Note Area',
+            'is_active' => true,
+        ]);
+        ServiceAreaLocation::create([
+            'service_area_id' => $secondArea->id,
+            'province_code' => 'P-NOTE',
+            'province_name' => 'Note Province',
+            'municipality_code' => 'M-NOTE',
+            'municipality_name' => 'Note Municipality',
+            'barangay_code' => 'B-NOTE',
+            'barangay_name' => 'Note Barangay',
+        ]);
+        $itemIds = [$fixture['itemA']->id];
+
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $itemIds])
+            ->get(route('buyer.checkout'))
+            ->assertOk()
+            ->assertSee('Delivery details may need confirmation after your order is placed.')
+            ->assertSee('Place Order');
+
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $itemIds])
+            ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000016',
+                'cart_item_ids' => $itemIds,
+                'address_id' => $fixture['address']->id,
+                'payment_method' => 'COD',
+            ])
+            ->assertRedirect();
+
+        $order = Order::query()->with('sellerOrders.shipments.events')->sole();
+        $shipment = $order->sellerOrders->sole()->shipments->sole();
+        $this->assertNull($shipment->logistics_center_id);
+        $this->assertNull($shipment->service_area_id);
+        $this->assertSame('PLACED', $shipment->current_status);
+        $this->assertStringContainsString('ROUTING_REVIEW_REQUIRED', (string) $shipment->events->first()->notes);
+    }
+
+    public function test_browser_checkout_replay_returns_the_same_order_without_repeating_financial_or_stock_effects(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $fixture['itemA']->update(['quantity' => 2]);
+        $fixture['itemB']->update(['quantity' => 2]);
+        $itemIds = [$fixture['itemA']->id, $fixture['itemB']->id];
+        $attemptKey = '00000000-0000-4000-8000-000000000013';
+        $payload = [
+            'checkout_attempt_key' => $attemptKey,
+            'cart_item_ids' => $itemIds,
+            'address_id' => $fixture['address']->id,
+            'payment_method' => 'COD',
+        ];
+
+        $firstResponse = $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $itemIds])
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect();
+        $order = Order::query()->sole();
+
+        $this->actingAs($fixture['buyer'])
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect(route('buyer.orders.success', ['order' => $order->order_number]));
+
+        $this->assertDatabaseCount('orders', 1);
+        $this->assertDatabaseCount('seller_orders', 2);
+        $this->assertDatabaseCount('order_items', 2);
+        $this->assertDatabaseCount('shipments', 2);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertDatabaseCount('cod_collections', 2);
+        $this->assertSame(3, (int) $fixture['itemA']->productVariant()->value('stock'));
+        $this->assertSame(3, (int) $fixture['itemB']->productVariant()->value('stock'));
+        $this->assertSame(route('buyer.orders.success', ['order' => $order->order_number]), $firstResponse->headers->get('Location'));
+    }
+
+    public function test_one_seller_order_keeps_each_distinct_product_line_in_its_own_parcel_and_waybill(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $fixture['itemA']->update(['quantity' => 2]);
+        $secondProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['subcategory']->id,
+            'name' => 'Second seller parcel product',
+            'slug' => 'second-seller-parcel-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $secondVariant = ProductVariant::query()->create([
+            'product_id' => $secondProduct->id,
+            'sku' => 'SKU-A-SECOND',
+            'price' => 50,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $secondItem = CartItem::query()->create([
+            'cart_id' => $fixture['itemA']->cart_id,
+            'product_variant_id' => $secondVariant->id,
+            'quantity' => 2,
+        ]);
+        $itemIds = [$fixture['itemA']->id, $secondItem->id];
+
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $itemIds])
+            ->post(route('buyer.order.store'), [
+                'checkout_attempt_key' => '00000000-0000-4000-8000-000000000015',
+                'cart_item_ids' => $itemIds,
+                'address_id' => $fixture['address']->id,
+                'payment_method' => 'COD',
+            ])
+            ->assertRedirect();
+
+        $sellerOrder = SellerOrder::query()
+            ->where('seller_profile_id', $fixture['sellerA']->id)
+            ->with('items.shipment')
+            ->sole();
+        $this->assertCount(2, $sellerOrder->items);
+        $this->assertSame([2, 2], $sellerOrder->items->pluck('quantity')->sort()->values()->all());
+        $shipments = $sellerOrder->items->map->shipment;
+        $this->assertCount(2, $shipments);
+        $this->assertSame(2, $shipments->pluck('tracking_number')->unique()->count());
+        $this->assertSame(2, $shipments->pluck('order_item_id')->unique()->count());
+
+        $workflow = app(ShipmentWorkflowService::class);
+        $workflow->sellerTransition($sellerOrder, 'confirm', $fixture['sellerUserA']);
+        $workflow->sellerTransition($sellerOrder, 'prepare', $fixture['sellerUserA']);
+        $workflow->sellerTransition($sellerOrder, 'pack', $fixture['sellerUserA']);
+        $workflow->sellerTransition($sellerOrder, 'ready', $fixture['sellerUserA']);
+
+        $this->assertDatabaseCount('waybills', 2);
+        $this->assertSame(2, $shipments->sum(fn ($shipment) => $shipment->fresh()->waybills()->count()));
+        $this->assertDatabaseCount('order_items', 2);
+        $this->assertDatabaseCount('shipments', 2);
+    }
+
+    public function test_another_buyer_cannot_reuse_a_checkout_attempt_key(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $itemIds = [$fixture['itemA']->id, $fixture['itemB']->id];
+        $payload = [
+            'checkout_attempt_key' => '00000000-0000-4000-8000-000000000014',
+            'cart_item_ids' => $itemIds,
+            'address_id' => $fixture['address']->id,
+            'payment_method' => 'COD',
+        ];
+
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $itemIds])
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect();
+
+        $otherBuyer = User::factory()->create([
+            'account_type' => User::TYPE_BUYER,
+            'status' => User::STATUS_ACTIVE,
+            'email_verified_at' => now(),
+        ]);
+        $this->actingAs($otherBuyer)
+            ->from(route('buyer.checkout'))
+            ->post(route('buyer.order.store'), $payload)
+            ->assertRedirect(route('buyer.checkout'))
+            ->assertSessionHasErrors('checkout_attempt_key');
+
+        $this->assertDatabaseCount('orders', 1);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertDatabaseCount('cod_collections', 2);
     }
 
     public function test_inactive_and_out_of_date_rules_are_not_eligible(): void

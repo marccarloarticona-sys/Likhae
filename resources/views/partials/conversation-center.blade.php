@@ -4,7 +4,7 @@
     $activeConversation = $messageConversations->firstWhere('id', $selectedConversationId) ?: $messageConversations->first();
     $activeOther = $activeConversation?->participants?->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
     $activeOtherName = $activeOther?->name ?: 'Conversation';
-    $activeOtherAvatar = 'https://ui-avatars.com/api/?name='.urlencode($activeOtherName).'&background=561C17&color=fff';
+    $activeOtherAvatar = asset('images/defaults/profile-avatar.svg');
     $activeStreamUrl = $activeConversation && filled($streamRoute ?? null)
         ? $streamRoute.(str_contains($streamRoute, '?') ? '&' : '?').'conversation='.$activeConversation->id
         : null;
@@ -19,6 +19,8 @@
     @media (min-width: 1024px) { .lk-unified-messages .lk-messages-sidebar { border-right: 1px solid var(--msg-border); border-bottom: 0; } }
     .lk-unified-messages .lk-messages-sidebar-head,.lk-unified-messages .lk-chat-head,.lk-unified-messages .lk-chat-form { border-color: var(--msg-border); background: rgba(255,253,249,.92); }
     .lk-unified-messages .lk-chat-head,.lk-unified-messages .lk-chat-form { flex: 0 0 auto; }
+    .lk-unified-messages .lk-message-context { padding: 10px 16px; border-bottom: 1px solid var(--msg-border); background: var(--msg-card); color: var(--msg-text); font-size: 11px; line-height: 1.5; }
+    .lk-unified-messages .lk-message-context strong { font-weight: 900; }
     .lk-unified-messages .lk-messages-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px; border-bottom: 1px solid var(--msg-border); }
     .lk-unified-messages .lk-messages-sidebar-head h2 { margin: 0; color: var(--msg-text); font-size: 14px; font-weight: 900; }
     .lk-unified-messages .lk-conversation-list { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -30,6 +32,7 @@
     .lk-unified-messages .lk-conversation-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .lk-unified-messages .lk-conversation-name { overflow: hidden; color: var(--msg-text); font-size: 12px; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
     .lk-unified-messages .lk-conversation-time { color: var(--msg-muted-2); font-size: 10px; font-weight: 600; white-space: nowrap; }
+    .lk-unified-messages .lk-conversation-unread { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; padding: 0 5px; border-radius: 999px; background: var(--msg-maroon); color: #fff; font-size: 10px; font-weight: 900; }
     .lk-unified-messages .lk-conversation-preview { overflow: hidden; margin: 4px 0 0; color: var(--msg-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
     .lk-unified-messages .lk-messages-empty { padding: 42px 20px; color: var(--msg-muted); font-size: 12px; text-align: center; }
     .lk-unified-messages .lk-chat-area { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--msg-soft); }
@@ -47,7 +50,7 @@
     .lk-unified-messages .lk-message-row { display: flex; max-width: 82%; align-items: flex-start; gap: 10px; margin-top: 14px; }
     .lk-unified-messages .lk-message-row.is-mine { justify-content: flex-end; margin-left: auto; }
     .lk-unified-messages .lk-message-small-avatar { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 999px; object-fit: cover; }
-    .lk-unified-messages .lk-message-bubble { padding: 13px 14px; border: 1px solid var(--msg-border); border-radius: 18px; border-top-left-radius: 6px; background: var(--msg-card); color: var(--msg-text); box-shadow: 0 8px 20px rgba(86,28,23,.055); font-size: 12px; line-height: 1.65; }
+    .lk-unified-messages .lk-message-bubble { padding: 13px 14px; border: 1px solid var(--msg-border); border-radius: 18px; border-top-left-radius: 6px; background: var(--msg-card); color: var(--msg-text); box-shadow: 0 8px 20px rgba(86,28,23,.055); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
     .lk-unified-messages .lk-message-row.is-mine .lk-message-bubble { border-color: var(--msg-maroon); border-top-left-radius: 18px; border-top-right-radius: 6px; background: linear-gradient(135deg,var(--msg-maroon),var(--msg-maroon-2)); color: #fff; }
     .lk-unified-messages .lk-message-time { display: block; margin-top: 6px; color: var(--msg-muted-2); font-size: 10px; font-weight: 600; }
     .lk-unified-messages .lk-message-row.is-mine .lk-message-time { color: #E8C8B2; text-align: right; }
@@ -55,6 +58,10 @@
     .lk-unified-messages .lk-chat-input { min-width: 0; flex: 1; min-height: 42px; padding: 0 15px; border: 1px solid var(--msg-border); border-radius: 14px; background: var(--msg-card); color: var(--msg-text); font-size: 12px; outline: none; }
     .lk-unified-messages .lk-chat-input:focus { border-color: #C19771; box-shadow: 0 0 0 4px rgba(86,28,23,.08); }
     .lk-unified-messages .lk-chat-send { min-height: 42px; padding: 0 16px; border: 0; border-radius: 14px; background: var(--msg-maroon); color: #fff; font-size: 12px; font-weight: 800; cursor: pointer; }
+    .lk-unified-messages .lk-message-attachment { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 11px; border: 1px solid var(--msg-border); border-radius: 12px; background: var(--msg-card); color: var(--msg-text); font-size: 11px; font-weight: 800; cursor: pointer; }
+    .lk-unified-messages .lk-message-attachment input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+    .lk-unified-messages [data-attachment-preview] { display: block; max-width: 76px; max-height: 54px; border-radius: 8px; object-fit: cover; }
+    .lk-unified-messages [data-attachment-preview][hidden] { display: none; }
     .lk-unified-messages .lk-chat-empty-state { display: flex; flex: 1; align-items: center; justify-content: center; flex-direction: column; padding: 42px 24px; text-align: center; color: var(--msg-muted); }
     .lk-unified-messages .lk-chat-empty-state svg { width: 58px; height: 58px; margin-bottom: 14px; color: #C19771; }
     .lk-unified-messages .lk-chat-empty-state h3 { margin: 0; color: var(--msg-text); font-size: 16px; font-weight: 900; }
@@ -89,14 +96,15 @@
                     @php
                         $other = $conversation->participants->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
                         $name = $other?->name ?: 'Conversation';
-                        $avatar = 'https://ui-avatars.com/api/?name='.urlencode($name).'&background=561C17&color=fff';
+                        $avatar = asset('images/defaults/profile-avatar.svg');
                         $isActive = (int) $conversation->id === (int) ($activeConversation?->id);
                     @endphp
                     <a href="{{ url()->current().'?conversation='.$conversation->id }}" class="lk-conversation-item {{ $isActive ? 'is-active' : '' }}">
                         <img class="lk-chat-avatar" src="{{ $avatar }}" alt="{{ $name }}">
                         <div class="lk-conversation-copy">
-                            <div class="lk-conversation-top"><strong class="lk-conversation-name">{{ $name }}</strong><span class="lk-conversation-time">{{ $conversation->updated_at?->diffForHumans() }}</span></div>
+                            <div class="lk-conversation-top"><strong class="lk-conversation-name">{{ $name }}</strong><span class="lk-conversation-time">{{ $conversation->latestMessage?->sent_at?->diffForHumans() ?? $conversation->updated_at?->diffForHumans() }}</span></div>
                             <p class="lk-conversation-preview">{{ $conversation->latestMessage?->body ?: 'Start a conversation.' }}</p>
+                            @if(($conversation->unread_count ?? 0) > 0)<span class="lk-conversation-unread" data-conversation-unread aria-label="{{ $conversation->unread_count }} unread messages">{{ $conversation->unread_count }}</span>@endif
                         </div>
                     </a>
                 @empty
@@ -111,25 +119,36 @@
                 <div class="lk-chat-head">
                     <div class="lk-chat-user"><img class="lk-chat-avatar" src="{{ $activeOtherAvatar }}" alt="{{ $activeOtherName }}"><div class="lk-chat-user-copy"><strong>{{ $activeOtherName }}</strong><span class="lk-chat-status" data-message-connection-status><span class="lk-chat-status-dot"></span>Live conversation</span></div></div>
                 </div>
-                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
+                @if(!empty($messageContext))
+                    <div class="lk-message-context" aria-label="{{ $messageContext['heading'] }}">
+                        <strong>{{ $messageContext['heading'] }}</strong>
+                        @if(isset($messageContext['tracking']))<span> · {{ $messageContext['tracking'] }} · {{ $messageContext['stage'] }}</span>@endif
+                        @if(isset($messageContext['order_number']))<span> · {{ $messageContext['order_number'] }} · {{ $messageContext['status'] }}</span>@endif
+                        @if(!empty($messageContext['seller']))<span> · Seller: {{ $messageContext['seller'] }}</span>@endif
+                        @if(!empty($messageContext['buyer']))<span> · Recipient: {{ $messageContext['buyer'] }}</span>@endif
+                        @if(!empty($messageContext['rider']))<span> · Assigned rider: {{ $messageContext['rider'] }}</span>@endif
+                        @if(!empty($messageContext['items']))<div>Items: {{ implode(', ', $messageContext['items']) }}</div>@endif
+                    </div>
+                @endif
+                <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" @if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif @if(filled($messageReadRouteTemplate ?? null)) data-read-url="{{ str_replace('__conversation__', (string) $activeConversation->id, $messageReadRouteTemplate) }}" @endif>
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($activeMessages as $message)
                         @php($fromMe = (int) $message->sender_user_id === (int) auth()->id())
                         <div class="lk-message-row {{ $fromMe ? 'is-mine' : '' }}" data-message-id="{{ $message->id }}">
                             @unless($fromMe)<img class="lk-message-small-avatar" src="{{ $activeOtherAvatar }}" alt="{{ $activeOtherName }}">@endunless
-                            <div><div class="lk-message-bubble">{{ $message->body }}</div><span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span></div>
+                            <div><div class="lk-message-bubble">{{ $message->body }}</div>@if(($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) && filled($message->attachment_path))<img data-message-attachment="true" class="mt-2 max-h-64 max-w-full rounded-lg object-contain" src="{{ route('messages.attachments.show', $message->id) }}" alt="Image attachment" loading="lazy">@endif<span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span></div>
                         </div>
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message.</div>
                     @endforelse
                 </div>
-                <form method="POST" action="{{ $sendRoute }}" class="lk-chat-form" data-live-message-form>@csrf<input type="hidden" name="recipient_user_id" value="{{ $activeOther->id }}"><input type="hidden" name="conversation_id" value="{{ $activeConversation->id }}"><input class="lk-chat-input" name="body" required maxlength="5000" autocomplete="off" placeholder="Type your message to {{ $activeOtherName }}..."><button class="lk-chat-send" type="submit">Send</button></form>
+                <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-chat-form" data-live-message-form>@csrf<input type="hidden" name="recipient_user_id" value="{{ $activeOther->id }}"><input type="hidden" name="conversation_id" value="{{ $activeConversation->id }}"><input class="lk-chat-input" name="body" required maxlength="1000" data-message-body autocomplete="off" placeholder="Type your message to {{ $activeOtherName }}..."><span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>@if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false)<label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img data-attachment-preview hidden alt="Selected attachment preview"></label>@endif<button class="lk-chat-send" type="submit">Send</button></form>
             @else
                 <div class="lk-chat-empty-state">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 13h5"/></svg>
                     <h3>No conversation selected</h3>
                     <p>Choose a recipient to start a conversation.</p>
-                    <form method="POST" action="{{ $sendRoute }}" class="lk-compose-form">@csrf<select name="recipient_user_id" required><option value="">Select recipient</option>@foreach($contacts ?? [] as $contact)<option value="{{ $contact->id }}">{{ $contact->name }} — {{ str($contact->account_type)->headline() }}</option>@endforeach</select><textarea name="body" required maxlength="5000" rows="4" placeholder="Type your message"></textarea><button class="lk-chat-send" type="submit">Send Message</button></form>
+                    <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-compose-form">@csrf<select name="recipient_user_id" required><option value="">Select recipient</option>@foreach($contacts ?? [] as $contact)<option value="{{ $contact->id }}">{{ $contact->name }} ({{ str($contact->account_type)->headline() }})</option>@endforeach</select><textarea name="body" required maxlength="1000" data-message-body rows="4" placeholder="Type your message">{{ old('body') }}</textarea><span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>@if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false)<label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img data-attachment-preview hidden alt="Selected attachment preview"></label>@endif<button class="lk-chat-send" type="submit">Send Message</button></form>
                 </div>
             @endif
         </main>
@@ -138,4 +157,24 @@
 
 <script>
 document.querySelectorAll('[data-message-thread]').forEach((thread) => { thread.scrollTop = thread.scrollHeight; });
+document.querySelectorAll('[data-message-body]').forEach((input) => {
+    const counter = input.closest('form')?.querySelector('[data-message-count]');
+    const updateCount = () => { if (counter) counter.textContent = String([...input.value].length); };
+    input.addEventListener('input', updateCount);
+    updateCount();
+});
+document.querySelectorAll('[data-message-attachment-input]').forEach((input) => input.addEventListener('change', () => {
+    const preview = input.closest('form')?.querySelector('[data-attachment-preview]');
+    const file = input.files?.[0];
+    if (!preview) return;
+    if (!file) {
+        preview.hidden = true;
+        preview.removeAttribute('src');
+        return;
+    }
+    if (preview.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+    preview.dataset.previewUrl = URL.createObjectURL(file);
+    preview.src = preview.dataset.previewUrl;
+    preview.hidden = false;
+}));
 </script>

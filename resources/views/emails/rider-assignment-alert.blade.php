@@ -2,7 +2,7 @@
 
 <p><strong>{{ $title }}</strong></p>
 
-<p>{{ $message }}</p>
+<p>{{ $body }}</p>
 
 <p>Open your rider dashboard to review the parcel details and next steps.</p>
 

@@ -28,6 +28,16 @@ const reconcilePendingMessage = (thread, payload) => {
 
     pending.dataset.messageId = String(payload.id);
     pending.dataset.messagePending = 'false';
+    if (thread.dataset.attachmentsEnabled === 'true' && payload.attachment_url
+        && !pending.querySelector('[data-message-attachment="true"]')) {
+        const image = document.createElement('img');
+        image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
+        image.dataset.messageAttachment = 'true';
+        image.src = payload.attachment_url;
+        image.alt = 'Image attachment';
+        image.loading = 'lazy';
+        pending.querySelector('.lk-message-bubble')?.after(image);
+    }
     pending.querySelector('.lk-message-time').textContent = formatMessageTime(payload);
     thread.dataset.lastMessageId = String(payload.id);
     return true;
@@ -45,14 +55,7 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
 
     const currentUserId = String(thread.dataset.currentUserId || '');
     const isMine = String(payload.sender_id || '') === currentUserId;
-    const previousRow = [...thread.querySelectorAll('[data-message-id]')].pop();
-    const previousBody = previousRow?.querySelector('.lk-message-bubble')?.textContent?.trim();
     const isBuyer = Boolean(thread.closest('.lk-messages-page'));
-    const previousIsMine = isBuyer
-        ? previousRow?.classList.contains('is-buyer')
-        : previousRow?.classList.contains('is-mine');
-    if (!pending && previousRow && previousBody === String(payload.body || '').trim()
-        && previousIsMine === isMine) return;
     const otherAvatar = thread.dataset.otherAvatar || thread.dataset.sellerAvatar || '';
     const otherName = thread.dataset.otherName || thread.dataset.sellerName || 'User';
 
@@ -77,10 +80,20 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     const bubble = document.createElement('div');
     bubble.className = 'lk-message-bubble';
     bubble.textContent = payload.body || '';
+    wrapper.appendChild(bubble);
+    if (thread.dataset.attachmentsEnabled === 'true' && payload.attachment_url) {
+        const image = document.createElement('img');
+        image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
+        image.dataset.messageAttachment = 'true';
+        image.src = payload.attachment_url;
+        image.alt = 'Image attachment';
+        image.loading = 'lazy';
+        wrapper.appendChild(image);
+    }
     const time = document.createElement('span');
     time.className = 'lk-message-time';
     time.textContent = pending ? 'Sending…' : formatMessageTime(payload);
-    wrapper.append(bubble, time);
+    wrapper.appendChild(time);
     row.appendChild(wrapper);
     thread.appendChild(row);
     thread.scrollTop = thread.scrollHeight;
@@ -93,6 +106,51 @@ const setConnectionStatus = (thread, message, error = false) => {
     status.lastChild.textContent = message;
     status.classList.toggle('is-error', error);
     dot?.classList.toggle('is-error', error);
+};
+
+const markConversationRead = async (thread) => {
+    const readUrl = thread.dataset.readUrl;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (!readUrl || !csrfToken) return;
+    if (thread.dataset.readRequestInFlight === 'true') {
+        thread.dataset.readRequestPending = 'true';
+        return;
+    }
+
+    thread.dataset.readRequestInFlight = 'true';
+    try {
+        const response = await fetch(readUrl, {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken,
+            },
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        if (!response.ok) throw new Error(`Read state update failed with status ${response.status}.`);
+    } catch (error) {
+        setConnectionStatus(thread, error?.message || 'Read state could not be updated.', true);
+    } finally {
+        thread.dataset.readRequestInFlight = 'false';
+        if (thread.dataset.readRequestPending === 'true') {
+            delete thread.dataset.readRequestPending;
+            markConversationRead(thread);
+        }
+    }
+};
+
+const acknowledgeIncomingMessage = (thread, payload) => {
+    const senderId = String(payload?.sender_id || payload?.sender_user_id || '');
+    const currentUserId = String(thread.dataset.currentUserId || '');
+    const messageId = Number(payload?.id || 0);
+    if (!senderId || senderId === currentUserId || messageId < 1) return;
+
+    const lastAcknowledgedId = Number(thread.dataset.lastAcknowledgedMessageId || 0);
+    if (messageId <= lastAcknowledgedId) return;
+    thread.dataset.lastAcknowledgedMessageId = String(messageId);
+    markConversationRead(thread);
 };
 
 const subscribeToThread = (thread) => {
@@ -109,7 +167,10 @@ const subscribeToThread = (thread) => {
     if (window.Echo && thread.dataset.realtimeSubscribed !== 'true') {
         thread.dataset.realtimeSubscribed = 'true';
         window.Echo.private(`conversations.${conversationId}`)
-            .listen('.message.sent', (payload) => appendRealtimeMessage(thread, payload));
+            .listen('.message.sent', (payload) => {
+                appendRealtimeMessage(thread, payload);
+                acknowledgeIncomingMessage(thread, payload);
+            });
     }
 
     const connection = window.Echo?.connector?.pusher?.connection;
@@ -150,6 +211,7 @@ const subscribeToThread = (thread) => {
                 ...message,
                 sender_id: message.sender_id ?? message.sender_user_id,
             }));
+            payload.messages.forEach((message) => acknowledgeIncomingMessage(thread, message));
             setConnectionStatus(thread, 'Fallback polling active', true);
         } catch (_) {
             // The next fallback attempt will retry.
@@ -176,6 +238,7 @@ const subscribeToUserMessages = () => {
             const activeThread = document.querySelector('.lk-chat-stream[data-message-thread]');
             if (activeThread && String(activeThread.dataset.conversationId) === String(payload.conversation_id)) {
                 appendRealtimeMessage(activeThread, payload);
+                acknowledgeIncomingMessage(activeThread, payload);
                 window.likhaePlayNotificationSound?.('MESSAGE');
                 return;
             }
@@ -199,11 +262,17 @@ const bindLiveSend = (form) => {
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (form.dataset.sending === 'true') return;
         const input = form.querySelector('input[name="body"], textarea[name="body"]');
+        const attachmentInput = form.querySelector('input[name="attachment"]');
+        const submittedAttachment = attachmentInput?.files?.[0] || null;
         const thread = form.closest('.lk-chat-area')?.querySelector('.lk-chat-stream[data-message-thread]');
         const body = input?.value.trim();
         if (!body || !thread) return;
 
+        form.dataset.sending = 'true';
+        const submitButton = form.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const formData = new FormData(form);
         appendRealtimeMessage(thread, {
@@ -211,9 +280,6 @@ const bindLiveSend = (form) => {
             sender_id: thread.dataset.currentUserId,
             body,
         }, { pending: true });
-        input.value = '';
-        input.focus();
-
         let timeout = null;
         try {
             const controller = new AbortController();
@@ -233,12 +299,32 @@ const bindLiveSend = (form) => {
             }
 
             appendRealtimeMessage(thread, payload.message);
+            if (input?.value.trim() === body) {
+                input.value = '';
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+            }
+            const currentAttachment = attachmentInput?.files?.[0] || null;
+            if (submittedAttachment && currentAttachment
+                && currentAttachment.name === submittedAttachment.name
+                && currentAttachment.size === submittedAttachment.size
+                && currentAttachment.lastModified === submittedAttachment.lastModified) {
+                attachmentInput.value = '';
+                const preview = form.querySelector('[data-attachment-preview]');
+                if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+                if (preview) {
+                    delete preview.dataset.previewUrl;
+                    preview.hidden = true;
+                    preview.removeAttribute('src');
+                }
+            }
             setConnectionStatus(thread, 'Message sent');
         } catch (error) {
             removePendingMessage(thread, pendingId);
             setConnectionStatus(thread, error?.message || 'Message could not be sent.', true);
         } finally {
             if (timeout !== null) window.clearTimeout(timeout);
+            form.dataset.sending = 'false';
+            if (submitButton) submitButton.disabled = false;
         }
     });
 };

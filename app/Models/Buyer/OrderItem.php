@@ -5,6 +5,7 @@ namespace App\Models\Buyer;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
+use App\Models\Logistics\Shipment;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -51,6 +52,11 @@ class OrderItem extends Model
     public function sellerOrder(): BelongsTo
     {
         return $this->belongsTo(SellerOrder::class);
+    }
+
+    public function shipment(): HasOne
+    {
+        return $this->hasOne(Shipment::class);
     }
 
     public function product(): BelongsTo

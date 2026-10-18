@@ -595,6 +595,54 @@
         background: var(--lk-maroon-dark) !important;
     }
 
+    .lk-platform-events-empty {
+        padding: 28px clamp(20px, 3vw, 38px);
+        border: 1px solid var(--lk-border);
+        border-radius: 22px;
+        background:
+            radial-gradient(circle at 94% 12%, rgba(193, 151, 113, 0.2), transparent 28%),
+            linear-gradient(135deg, #FFFDF9 0%, #F6EFE7 64%, #EFE7DE 100%);
+        box-shadow: 0 12px 32px rgba(86, 28, 23, 0.07);
+    }
+
+    .lk-platform-events-empty h3 {
+        margin: 5px 0 0;
+        color: var(--lk-text);
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: clamp(26px, 3vw, 36px);
+        font-weight: 400;
+        line-height: 1.05;
+    }
+
+    .lk-platform-events-empty p {
+        max-width: 620px;
+        margin: 8px 0 0;
+        color: var(--lk-muted);
+        font-size: 12px;
+        line-height: 1.7;
+    }
+
+    .lk-platform-events-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .lk-platform-events-grid.is-single-event { grid-template-columns: minmax(0, 1fr); }
+    .lk-event-card { position: relative; overflow: hidden; display: grid; gap: 20px; padding: clamp(22px, 3vw, 34px); border: 0; border-radius: 24px; background: radial-gradient(circle at 86% 18%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-card__top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .lk-event-card__eyebrow { color: #E9C7A5; font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .lk-event-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 11px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .lk-event-status.is-active { background: #E8F3EA; color: #256F4A; }
+    .lk-event-status.is-upcoming { background: #F8EDD9; color: #8A5A12; }
+    .lk-event-card__hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 "Instrument Serif", Georgia, serif; letter-spacing: -.025em; }
+    .lk-event-card__offer { min-width: 170px; padding: 13px 24px; border: 1px solid rgba(233,199,165,.5); border-radius: 18px; background: rgba(255,248,242,.1); text-align: center; }
+    .lk-event-card__offer strong { display: block; color: #FFF8F2; font-size: clamp(34px, 4vw, 48px); font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+    .lk-event-card__offer span { display: block; margin-top: 5px; color: #E9C7A5; font-size: 10px; font-weight: 900; letter-spacing: .22em; }
+    .lk-event-card__details { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(150px, .8fr) minmax(300px, 1.8fr); gap: 18px; margin: 0; }
+    .lk-event-card__details > div { padding-top: 13px; border-top: 1px solid rgba(255,248,242,.2); }
+    .lk-event-card__details dt { color: #E9C7A5; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .lk-event-card__details dd { margin: 5px 0 0; color: #FFF8F2; font-size: 14px; font-weight: 700; line-height: 1.5; }
+    .lk-event-card__footer { display: flex; justify-content: flex-end; }
+    .lk-event-card__action { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; padding: 0 20px; border-radius: 999px; background: #E9C7A5; color: #3E130F; font-size: 12px; font-weight: 900; text-decoration: none; transition: transform .18s ease, background .18s ease; }
+    .lk-event-card__action:hover { transform: translateY(-1px); background: #F3D9BD; }
+
     /* =====================================================
        DARK MODE SAFE OVERRIDE
     ====================================================== */
@@ -604,6 +652,35 @@
     html.dark .lk-page {
         background: #171210 !important;
         color: #FFF8F2 !important;
+    }
+
+    html.dark .lk-platform-events-empty {
+        border-color: #49342B;
+        background:
+            radial-gradient(circle at 94% 12%, rgba(193, 151, 113, 0.1), transparent 28%),
+            linear-gradient(135deg, #241A17 0%, #211815 64%, #1E1714 100%);
+    }
+
+    html.dark .lk-platform-events-empty h3 {
+        color: #FFF8F2;
+    }
+
+    html.dark .lk-platform-events-empty p {
+        color: #C8B7AD;
+    }
+
+    @media (max-width: 700px) {
+        .lk-platform-events-grid { grid-template-columns: minmax(0, 1fr); }
+        .lk-event-card__details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .lk-event-card__validity { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 520px) {
+        .lk-event-card__hero { align-items: flex-start; flex-direction: column; gap: 16px; }
+        .lk-event-card__offer { min-width: 0; }
+        .lk-event-card__details { grid-template-columns: minmax(0, 1fr); }
+        .lk-event-card__validity { grid-column: 1; }
+        .lk-event-card__footer { justify-content: flex-start; }
     }
 
     html.dark .lk-section-head h2,
@@ -737,43 +814,43 @@
     $categories = [
         [
             'name' => 'Fashion',
-            'slug' => 'fashion',
+            'slug' => 'womens-apparel',
             'icon' => '<path d="M8 4h8l4 4-3 3-2-2v11H9V9l-2 2-3-3 4-4Z"/>',
         ],
         [
             'name' => 'Electronics',
-            'slug' => 'electronics',
+            'slug' => 'electronics-and-gadgets',
             'icon' => '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M10 17h4"/>',
         ],
         [
             'name' => 'Home',
-            'slug' => 'home',
+            'slug' => 'home-and-garden',
             'icon' => '<path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
         ],
         [
             'name' => 'Books',
-            'slug' => 'books',
+            'slug' => 'books-and-media',
             'icon' => '<path d="M4 5a3 3 0 0 1 3-2h5v17H7a3 3 0 0 0-3 2V5Z"/><path d="M20 5a3 3 0 0 0-3-2h-5v17h5a3 3 0 0 1 3 2V5Z"/>',
         ],
         [
             'name' => 'Beauty',
-            'slug' => 'beauty',
+            'slug' => 'health-and-beauty',
             'icon' => '<path d="M9 3h6v5l3 4v9H6v-9l3-4V3Z"/><path d="M9 8h6M9 14h6"/>',
         ],
         [
             'name' => 'Sports',
-            'slug' => 'sports',
+            'slug' => 'sports-and-outdoors',
             'icon' => '<circle cx="12" cy="12" r="9"/><path d="M5 7c4 2 10 2 14 0M5 17c4-2 10-2 14 0M12 3c-3 5-3 13 0 18"/>',
         ],
         [
             'name' => 'Toys',
-            'slug' => 'toys',
+            'slug' => 'kids-and-baby-toys',
             'icon' => '<path d="M8 9V6a4 4 0 0 1 8 0v3"/><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M9 14h6M12 11v6"/>',
         ],
         [
-            'name' => 'Automotive',
-            'slug' => 'automotive',
-            'icon' => '<path d="m5 11 2-5h10l2 5"/><rect x="3" y="11" width="18" height="7" rx="2"/><circle cx="7" cy="18" r="1.5"/><circle cx="17" cy="18" r="1.5"/>',
+            'name' => 'Handmade Goods',
+            'slug' => 'handmade-goods',
+            'icon' => '<path d="M4 7h16v13H4z"/><path d="M8 7V4h8v3M8 12h8M8 16h5"/>',
         ],
     ];
 @endphp
@@ -817,7 +894,7 @@
                 </div>
 
                 <div>
-                    <strong>My Orders</strong>
+                    <strong>My Purchases</strong>
                     <small>Track and review</small>
                 </div>
             </a>
@@ -877,7 +954,7 @@
             </a>
 
             <a
-                href="{{ route('buyer.products', ['focus' => 'deals']) }}"
+                href="{{ route('buyer.rewards') }}"
                 class="lk-quick-card"
             >
                 <div class="lk-quick-icon">
@@ -900,7 +977,7 @@
 
                 <div>
                     <strong>Vouchers</strong>
-                    <small>Deals and rewards</small>
+                    <small>Available vouchers</small>
                 </div>
             </a>
         </div>
@@ -971,7 +1048,7 @@
             </div>
 
             <a
-                href="{{ route('buyer.products', ['sort' => 'featured']) }}"
+                href="{{ route('buyer.products') }}"
                 class="lk-text-link"
             >
                 See All
@@ -1024,50 +1101,96 @@
         <div class="lk-deal-banner">
             <div>
                 <span class="lk-kicker">
-                    Limited Offers
+                    Current Discounts
                 </span>
 
                 <h2 id="flash-picks-heading">
-                    Flash Picks
+                    Current Deals
                 </h2>
 
                 <p>
-                    Premium finds with limited-time prices.
+                    Browse products with current seller discounts.
                 </p>
             </div>
 
-            <div
-                class="lk-countdown"
-                aria-label="Six hours, twenty-four minutes, and eighteen seconds remaining"
-                data-flash-countdown
-            >
-                <div>
-                    <b data-countdown-hours>06</b>
-                    <small>Hours</small>
-                </div>
-
-                <span aria-hidden="true">:</span>
-
-                <div>
-                    <b data-countdown-minutes>24</b>
-                    <small>Minutes</small>
-                </div>
-
-                <span aria-hidden="true">:</span>
-
-                <div>
-                    <b data-countdown-seconds>18</b>
-                    <small>Seconds</small>
-                </div>
-            </div>
-
             <a
-                href="{{ route('buyer.products', ['sort' => 'best-selling']) }}"
+                href="{{ route('buyer.flash-deals') }}"
                 class="lk-btn lk-btn-gold"
             >
                 Shop Deals
             </a>
         </div>
+    </section>
+
+    {{-- Current discounted products --}}
+    <section
+        class="lk-section"
+        aria-labelledby="discounted-products-heading"
+    >
+        <div class="lk-section-head">
+            <div>
+                <span class="lk-kicker">Seller Discounts</span>
+
+                <h2 id="discounted-products-heading">
+                    Deals For You
+                </h2>
+
+                <p>
+                    Available products with a current variant discount.
+                </p>
+            </div>
+
+            <a
+                href="{{ route('buyer.flash-deals') }}"
+                class="lk-text-link"
+            >
+                See All
+                <span aria-hidden="true">→</span>
+            </a>
+        </div>
+
+        @if ($dealProducts->isNotEmpty())
+            <div class="lk-product-grid">
+                @foreach ($dealProducts as $product)
+                    <x-buyer.product-card :product="$product" deal />
+                @endforeach
+            </div>
+        @else
+            <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
+                <h3 class="text-sm font-semibold text-stone-900">
+                    No discounted products are available right now
+                </h3>
+
+                <p class="mt-1 text-xs text-stone-500">
+                    Check back later for current seller discounts.
+                </p>
+            </div>
+        @endif
+    </section>
+
+    <section class="lk-section" aria-labelledby="platform-events-heading">
+        <div class="lk-section-head">
+            <div>
+                <span class="lk-kicker">LIKHAE Marketplace</span>
+                <h2 id="platform-events-heading">Platform Events</h2>
+                <p>Marketplace-wide campaigns and events.</p>
+            </div>
+            <a class="lk-text-link" href="{{ route('buyer.platform-events.index') }}">View Offers <span aria-hidden="true">→</span></a>
+        </div>
+
+        @if ($platformCampaigns->isNotEmpty())
+            <div class="lk-platform-events-grid {{ $platformCampaigns->count() === 1 ? 'is-single-event' : '' }}">
+                @foreach ($platformCampaigns as $campaign)
+                    @include('Buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
+                @endforeach
+            </div>
+        @else
+            <div class="lk-platform-events-empty" role="status">
+                <span class="lk-kicker">Platform Events</span>
+                <h3>No scheduled events right now</h3>
+                <p>When a marketplace-wide event is scheduled, its dates and details will appear here.</p>
+            </div>
+        @endif
     </section>
 
     {{-- Recommended products --}}

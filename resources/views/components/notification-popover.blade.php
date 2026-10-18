@@ -3,7 +3,9 @@
     $recentNotifications = $notificationUser
         ? $notificationUser->notifications()->latest()->limit(8)->get()
         : collect();
-    $unreadNotifications = $recentNotifications->whereNull('read_at')->count();
+    $unreadNotifications = $notificationUser
+        ? $notificationUser->notifications()->whereNull('read_at')->count()
+        : 0;
     $notificationSoundKey = match (strtoupper((string) $notificationUser?->account_type)) {
         'SELLER' => 'seller_notification_sounds',
         'ADMIN' => 'admin_notification_sounds',
@@ -27,7 +29,7 @@
     <div class="lk-notification-popover__head">
         <div>
             <strong>Notifications</strong>
-            <span>{{ $unreadNotifications ? $unreadNotifications.' unread' : 'You are all caught up' }}</span>
+            <span data-notification-unread-label>{{ $unreadNotifications ? $unreadNotifications.' unread' : 'You are all caught up' }}</span>
         </div>
         <div class="lk-notification-popover__actions">
             @if($unreadNotifications)
@@ -47,18 +49,20 @@
 
     <div class="lk-notification-popover__list" data-notification-list>
         @forelse($recentNotifications as $notification)
-            <a
-                href="{{ $notification->action_url ?: route('notifications.index') }}"
-                class="lk-notification-popover__item {{ is_null($notification->read_at) ? 'is-unread' : '' }}"
-                data-notification-item
-            >
+            @php($isSellerNotification = $notificationUser?->isAccountType(\App\Models\User::TYPE_SELLER))
+            @if($isSellerNotification)
+                <form method="POST" action="{{ route('seller.notifications.open', $notification) }}" class="lk-notification-popover__form">@csrf
+                <button type="submit" class="lk-notification-popover__item {{ is_null($notification->read_at) ? 'is-unread' : '' }}" data-notification-item>
+            @else
+                <a href="{{ $notification->action_url ?: route('notifications.index') }}" class="lk-notification-popover__item {{ is_null($notification->read_at) ? 'is-unread' : '' }}" data-notification-item>
+            @endif
                 <span class="lk-notification-popover__dot" aria-hidden="true"></span>
                 <span class="lk-notification-popover__copy">
                     <strong>{{ $notification->title }}</strong>
                     @if($notification->message)<span>{{ \Illuminate\Support\Str::limit($notification->message, 98) }}</span>@endif
                     <small>{{ optional($notification->created_at)->diffForHumans() }}</small>
                 </span>
-            </a>
+            @if($isSellerNotification)</button></form>@else</a>@endif
         @empty
             <div class="lk-notification-popover__empty">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>
@@ -114,7 +118,9 @@
         .lk-notification-popover__search input { width: 100%; border: 0; outline: 0; background: transparent; padding: 10px 0; color: var(--notification-text); font: inherit; font-size: 12px; }
         .lk-notification-popover__search input::placeholder { color: var(--notification-muted); }
         .lk-notification-popover__list { max-height: min(57vh, 430px); overflow-y: auto; padding: 2px 0 8px; }
+        .lk-notification-popover__form { margin: 0; }
         .lk-notification-popover__item { position: relative; display: flex; gap: 9px; padding: 11px 13px; color: inherit; text-decoration: none; transition: background .15s ease; }
+        button.lk-notification-popover__item { width: 100%; border: 0; background: transparent; text-align: left; font: inherit; cursor: pointer; }
         .lk-notification-popover__item:hover { background: var(--notification-hover); }
         .lk-notification-popover__item.is-unread { background: var(--notification-unread); }
         .lk-notification-popover__item.is-unread:hover { background: var(--notification-hover); }

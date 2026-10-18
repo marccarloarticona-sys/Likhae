@@ -8,10 +8,16 @@ use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\User;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class CartService
 {
+    public function __construct(
+        private readonly PurchaseLimitService $purchaseLimits,
+        private readonly BuyerProductAvailabilityService $productAvailability,
+    ) {}
+
     public function activeCart(User $buyer): Cart
     {
         return Cart::query()->firstOrCreate(
@@ -36,52 +42,140 @@ class CartService
 
     public function add(User $buyer, Product $product, int $variantId, int $quantity): CartItem
     {
-        $variant = ProductVariant::query()
-            ->where('product_id', $product->id)
-            ->where('is_active', true)
-            ->whereKey($variantId)
-            ->firstOrFail();
+        return DB::transaction(function () use ($buyer, $product, $variantId, $quantity): CartItem {
+            $cart = $this->activeCart($buyer);
+            $lockedCarts = Cart::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->where('status', Cart::STATUS_ACTIVE)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $cart = $lockedCarts->firstWhere('id', $cart->id) ?? $cart;
 
-        if ($variant->stock < $quantity) {
-            throw ValidationException::withMessages([
-                'quantity' => 'Requested quantity exceeds available stock.',
-            ]);
-        }
+            // Keep the same cart -> variant -> product lock order as checkout.
+            $variant = ProductVariant::query()
+                ->where('product_id', $product->id)
+                ->where('is_active', true)
+                ->whereKey($variantId)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $lockedProduct = Product::query()
+                ->with('sellerProfile')
+                ->whereKey($product->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        $cart = $this->activeCart($buyer);
+            $availability = $this->productAvailability->inspect(
+                $variant,
+                $lockedProduct,
+                $lockedProduct->sellerProfile,
+                $lockedProduct->sellerProfile?->user,
+                $quantity,
+            );
+            if (! $availability['available']) {
+                throw ValidationException::withMessages([
+                    'product_variant_id' => $availability['message'],
+                ]);
+            }
 
-        $item = $cart->items()->firstOrNew([
-            'product_variant_id' => $variant->id,
-        ]);
+            $item = $cart->items()->where('product_variant_id', $variant->id)->lockForUpdate()->first();
+            if (! $item) {
+                $item = $cart->items()->make(['product_variant_id' => $variant->id]);
+            }
+            $existingProductQuantity = $this->purchaseLimits->cartQuantity(
+                $buyer,
+                (int) $lockedProduct->id,
+                lockForUpdate: true,
+            );
+            $this->purchaseLimits->assertWithinLimit(
+                $buyer,
+                $lockedProduct,
+                $quantity,
+                $existingProductQuantity,
+                'quantity',
+                lockHistoricalRows: true,
+            );
 
-        $newQuantity = (int) $item->quantity + $quantity;
+            $newQuantity = (int) $item->quantity + $quantity;
+            if ($newQuantity > $variant->stock) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'Your cart quantity exceeds available stock.',
+                ]);
+            }
 
-        if ($newQuantity > $variant->stock) {
-            throw ValidationException::withMessages([
-                'quantity' => 'Your cart quantity exceeds available stock.',
-            ]);
-        }
+            $item->quantity = $newQuantity;
+            $item->save();
 
-        $item->quantity = $newQuantity;
-        $item->save();
-
-        return $item;
+            return $item;
+        }, attempts: 3);
     }
 
     public function update(User $buyer, CartItem $item, int $quantity): CartItem
     {
         $this->ensureOwner($buyer, $item);
-        $item->loadMissing('productVariant');
 
-        if ($quantity > (int) $item->productVariant->stock) {
-            throw ValidationException::withMessages([
-                'quantity' => 'Requested quantity exceeds available stock.',
-            ]);
-        }
+        return DB::transaction(function () use ($buyer, $item, $quantity): CartItem {
+            $lockedCarts = Cart::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->where('status', Cart::STATUS_ACTIVE)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $lockedItem = CartItem::query()
+                ->whereKey($item->id)
+                ->whereIn('cart_id', $lockedCarts->pluck('id'))
+                ->lockForUpdate()
+                ->first();
+            abort_unless($lockedItem, 403);
 
-        $item->update(['quantity' => $quantity]);
+            $variant = ProductVariant::query()
+                ->whereKey($lockedItem->product_variant_id)
+                ->where('is_active', true)
+                ->lockForUpdate()
+                ->first();
+            if (! $variant) {
+                throw ValidationException::withMessages([
+                    'quantity' => 'This cart item is no longer available. Remove it from your cart.',
+                ]);
+            }
 
-        return $item;
+            $product = Product::query()
+                ->with('sellerProfile')
+                ->whereKey($variant->product_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $availability = $this->productAvailability->inspect(
+                $variant,
+                $product,
+                $product->sellerProfile,
+                $product->sellerProfile?->user,
+                $quantity,
+            );
+            if (! $availability['available']) {
+                throw ValidationException::withMessages([
+                    'quantity' => $availability['message'],
+                ]);
+            }
+
+            $existingProductQuantity = $this->purchaseLimits->cartQuantity(
+                $buyer,
+                (int) $product->id,
+                (int) $lockedItem->id,
+                lockForUpdate: true,
+            );
+            $this->purchaseLimits->assertWithinLimit(
+                $buyer,
+                $product,
+                $quantity,
+                $existingProductQuantity,
+                'quantity',
+                lockHistoricalRows: true,
+            );
+
+            $lockedItem->update(['quantity' => $quantity]);
+
+            return $lockedItem;
+        }, attempts: 3);
     }
 
     public function remove(User $buyer, CartItem $item): void

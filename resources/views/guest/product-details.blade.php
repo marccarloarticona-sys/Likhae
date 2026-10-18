@@ -8,7 +8,7 @@
     $name = (string) data_get($product, 'name', 'Product');
     $category = (string) data_get($product, 'category.name', 'Local Find');
     $seller = (string) data_get($product, 'seller.business_name', 'LIKHAE Seller');
-    $sellerAvatar = data_get($product, 'seller_avatar', 'https://ui-avatars.com/api/?name='.urlencode($seller).'&background=7f1d1d&color=fff');
+    $sellerAvatar = data_get($product, 'seller.avatar_path', data_get($product, 'seller_avatar'));
     $images = collect(data_get($product, 'images', []))->pluck('url')->filter()->values();
     if ($images->isEmpty()) $images = collect([data_get($product, 'primary_image.url')])->filter();
     $related = collect($relatedProducts ?? [])->take(4);
@@ -41,6 +41,9 @@
                 <span class="rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-red-800">{{ $category }}</span>
             </div>
             <h1 class="mt-3 text-2xl font-bold leading-tight text-stone-950 sm:text-3xl">{{ $name }}</h1>
+            @if(data_get($product, 'purchase_limit_per_buyer') !== null)
+                <p class="mt-2 text-sm font-semibold text-stone-700">Purchase limit: {{ (int) data_get($product, 'purchase_limit_per_buyer') }} per Buyer</p>
+            @endif
 
             <div class="mt-5 rounded-xl border border-red-100 bg-red-50 p-4">
                 <strong class="block text-sm text-red-950">Login to view price and purchase</strong>
@@ -55,7 +58,7 @@
     </section>
 
     <section class="mt-5 flex flex-col gap-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center">
-        <img class="h-16 w-16 rounded-xl object-cover" src="{{ $sellerAvatar }}" alt="{{ $seller }}">
+        <x-shared.profile-image :path="$sellerAvatar" role="seller" class="h-16 w-16 rounded-xl object-cover" :alt="$seller" />
         <div class="min-w-0 flex-1"><span class="text-[10px] font-bold uppercase tracking-widest text-red-800">Official seller</span><h2 class="truncate text-lg font-bold text-stone-900">{{ $seller }}</h2><p class="text-xs text-stone-500">{{ data_get($product, 'location', 'Philippines') }}</p></div>
     </section>
 

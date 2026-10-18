@@ -238,7 +238,41 @@ class SellerVariantInventoryTest extends TestCase
         $this->assertDatabaseHas('product_variants', ['id' => $large->id, 'stock' => 3]);
     }
 
-    public function test_inventory_uses_pdf_preview_and_product_catalog_csv_export_stays_available(): void
+    public function test_inventory_server_filters_paginate_products_and_keep_global_variant_totals(): void
+    {
+        $tailProduct = $this->product('Inventory Pagination Tail');
+        $tailVariant = $this->variant($tailProduct, 'INV-PAGINATION-TAIL', 1);
+        for ($index = 0; $index < 21; $index++) {
+            $product = $this->product('Inventory Pagination '.$index);
+            $this->variant($product, 'INV-PAGINATION-'.$index, 11);
+        }
+
+        $firstPage = $this->actingAs($this->seller)
+            ->get(route('seller.products', ['mode' => 'inventory']))
+            ->assertOk()
+            ->assertDontSee($tailVariant->sku);
+        $this->assertSame(20, count($firstPage->viewData('inventoryPage')->items()));
+        $this->assertGreaterThanOrEqual(22, $firstPage->viewData('inventoryPage')->total());
+
+        $secondPage = $this->get(route('seller.products', ['mode' => 'inventory', 'page' => 2]))
+            ->assertOk()
+            ->assertSee($tailVariant->sku);
+        $this->assertLessThanOrEqual(20, count($secondPage->viewData('inventoryPage')->items()));
+
+        $filtered = $this->get(route('seller.products', [
+            'mode' => 'inventory',
+            'search' => $tailVariant->sku,
+            'status' => 'low',
+        ]))->assertOk()->assertSee($tailVariant->sku);
+        $this->assertSame(1, $filtered->viewData('inventoryPage')->total());
+        $allActiveVariants = ProductVariant::query()
+            ->where('is_active', true)
+            ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $this->seller->sellerProfile->id))
+            ->count();
+        $this->assertSame($allActiveVariants, $filtered->viewData('inventoryStats')['total']);
+    }
+
+    public function test_inventory_and_product_catalog_exports_are_pdf(): void
     {
         $this->actingAs($this->seller)
             ->get(route('seller.products', ['mode' => 'inventory']))
@@ -247,10 +281,9 @@ class SellerVariantInventoryTest extends TestCase
             ->assertDontSee('Export Inventory CSV')
             ->assertSee(route('seller.products.inventory.preview'), false);
 
-        $productCatalogCsv = $this->actingAs($this->seller)->get(route('seller.products.export'));
-        $productCatalogCsv->assertOk();
-        $catalogRows = array_map('str_getcsv', preg_split('/\R+/', trim($productCatalogCsv->streamedContent())) ?: []);
-        $this->assertSame(['ID', 'Product', 'Category', 'Minimum Price', 'Total Stock', 'Status'], $catalogRows[0]);
+        $productCatalogPdf = $this->actingAs($this->seller)->get(route('seller.products.export'));
+        $productCatalogPdf->assertOk()->assertHeader('content-type', 'application/pdf')->assertDownload();
+        $this->assertStringStartsWith('%PDF-1.4', $productCatalogPdf->getContent());
     }
 
     public function test_filtered_inventory_preview_is_html_and_download_generates_grouped_pdf(): void

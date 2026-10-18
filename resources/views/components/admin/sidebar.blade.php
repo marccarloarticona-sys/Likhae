@@ -220,6 +220,13 @@
                     ],
                 ],
                 [
+                    'key' => 'marketing',
+                    'label' => 'Platform Marketing',
+                    'route' => 'admin.marketing',
+                    'icon' => 'finance',
+                    'active' => ['admin.marketing', 'admin.marketing.*'],
+                ],
+                [
                     'key' => 'categories',
                     'label' => 'Categories',
                     'route' => 'admin.categories',
@@ -264,6 +271,13 @@
                         'admin.finance',
                         'admin.payments',
                     ],
+                ],
+                [
+                    'key' => 'shipping-rate-requests',
+                    'label' => 'Shipping Rate Requests',
+                    'route' => 'admin.shipping-rate-requests',
+                    'icon' => 'finance',
+                    'active' => ['admin.shipping-rate-requests', 'admin.shipping-rate-requests.*'],
                 ],
                 [
                     'key' => 'protection-rules',
@@ -423,6 +437,7 @@
             ]],
             ['label' => 'Communication & Reports', 'items' => [
                 ['key' => 'reports', 'label' => 'Reports', 'route' => 'logistics.reports', 'icon' => 'reports', 'active' => ['logistics.reports', 'logistics.reports.*']],
+                ['key' => 'shipping-rate', 'label' => 'Shipping Rate', 'route' => 'logistics.shipping-rate', 'icon' => 'finance', 'active' => ['logistics.shipping-rate', 'logistics.shipping-rate-requests.*']],
                 ['key' => 'messages', 'label' => 'Messages', 'route' => 'logistics.messages', 'icon' => 'messages', 'count' => $sidebarCounts['messages'] ?? 0, 'active' => ['logistics.messages', 'logistics.messages.*']],
                 ['key' => 'notifications', 'label' => 'Notifications', 'route' => 'notifications.index', 'icon' => 'notifications', 'count' => $notificationCount, 'active' => ['notifications.index']],
             ]],

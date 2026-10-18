@@ -1319,6 +1319,18 @@ select.is-invalid {
     position: relative;
 }
 
+.upload-box .register-inline-error {
+    display: block;
+    margin-top: 6px;
+    color: #b42318;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.upload-box input[aria-invalid="true"] + .upload-box__label {
+    border-color: #b42318;
+}
+
 
 .upload-box input {
     position: absolute;

@@ -34,7 +34,7 @@ class FinancialAllocationService
             return null;
         }
 
-        $shipment->loadMissing('sellerOrder.items', 'sellerOrder.order', 'destinationLogisticsCenter', 'logisticsCenter');
+        $shipment->loadMissing('sellerOrder.items', 'sellerOrder.shipments.riderAssignments', 'sellerOrder.order', 'destinationLogisticsCenter', 'logisticsCenter');
         $sellerOrder = $shipment->sellerOrder;
         $items = $sellerOrder?->items ?? collect();
         if (! $sellerOrder?->order || $items->isEmpty() || $items->contains(fn ($item): bool => $item->original_unit_price === null)) {
@@ -42,19 +42,26 @@ class FinancialAllocationService
             return null;
         }
 
+        if ($sellerOrder->shipments->isNotEmpty()
+            && $sellerOrder->shipments->contains(fn (Shipment $parcel): bool => ! in_array($parcel->current_status, ['DELIVERED', 'COMPLETED'], true))) {
+            // The order-level financial allocation is finalized once, after
+            // every item parcel has been delivered and its COD is recorded.
+            return null;
+        }
+
         $allocation = DB::transaction(function () use ($shipment, $sellerOrder, $items): ShipmentFinancialAllocation {
             $allocation = ShipmentFinancialAllocation::query()->firstOrCreate(
-                ['shipment_id' => $shipment->id],
-                $this->attributes($shipment, $sellerOrder, $items),
+                ['seller_order_id' => $sellerOrder->id],
+                ['shipment_id' => $shipment->id] + $this->attributes($shipment, $sellerOrder, $items),
             );
             $this->provisionSettlementRows($allocation, $shipment, $sellerOrder);
 
             return $allocation->refresh();
         });
 
-        $shipment->loadMissing('riderAssignments');
-        foreach ($shipment->riderAssignments->whereIn('assignment_type', ['PICKUP', 'DELIVERY']) as $assignment) {
-            $this->syncRiderParticipant($shipment, (int) $assignment->rider_profile_id, $assignment->assignment_type, $assignment->id);
+        $pool = $allocation->riderPool()->with('participants')->first();
+        if ($pool) {
+            $this->allocateCompletedRiderLegs($pool, $sellerOrder);
         }
 
         return $allocation;
@@ -78,6 +85,12 @@ class FinancialAllocationService
     /** @return array<string, string|null> */
     private function attributes(Shipment $shipment, $sellerOrder, $items): array
     {
+        $rateVersion = null;
+        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
+            $sellerOrder->loadMissing('shippingRateVersion');
+            $rateVersion = $sellerOrder->shippingRateVersion;
+        }
+        $riderPoolPercentage = $rateVersion?->rider_pool_percentage ?? ShippingRatePolicyService::DEFAULT_RIDER_PERCENTAGE;
         $calculation = FinancialRules::allocation(
             $items->map(fn ($item): array => [
                 'original_unit_price' => $item->original_unit_price,
@@ -86,6 +99,7 @@ class FinancialAllocationService
             ])->all(),
             $sellerOrder->voucher_discount,
             $sellerOrder->shipping_fee,
+            (string) $riderPoolPercentage,
         );
 
         $attributes = [
@@ -111,6 +125,69 @@ class FinancialAllocationService
         }
 
         return $attributes;
+    }
+
+    private function allocateCompletedRiderLegs(RiderEarningPool $pool, $sellerOrder): void
+    {
+        $rateVersion = null;
+        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
+            $sellerOrder->loadMissing('shippingRateVersion');
+            $rateVersion = $sellerOrder->shippingRateVersion;
+        }
+
+        $completedRidersByRole = ['PICKUP' => [], 'HUB_TO_HUB' => [], 'DELIVERY' => []];
+        $representativeAssignments = [];
+        foreach ($sellerOrder->shipments->flatMap->riderAssignments as $assignment) {
+            if ($assignment->status !== 'COMPLETED' || ! $assignment->rider_profile_id) {
+                continue;
+            }
+
+            // The current assignment model has PICKUP and DELIVERY only.
+            // Its configured future Hub weight is excluded from the active
+            // denominator until an authoritative completed Hub leg exists.
+            $role = match ($assignment->assignment_type) {
+                'PICKUP' => 'PICKUP',
+                'DELIVERY' => 'DELIVERY',
+                default => null,
+            };
+            if ($role === null) {
+                continue;
+            }
+
+            $riderId = (int) $assignment->rider_profile_id;
+            $completedRidersByRole[$role][] = $riderId;
+            $representativeAssignments[$role][$riderId] ??= (int) $assignment->id;
+        }
+
+        $distribution = FinancialRules::riderLegDistribution(
+            FinancialRules::cents((string) $pool->total_amount),
+            $completedRidersByRole,
+            [
+                'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
+                'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
+                'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
+            ],
+        );
+
+        foreach ($distribution['participants'] as $participantData) {
+            $assignmentId = $representativeAssignments[$participantData['participant_role']][$participantData['rider_profile_id']] ?? null;
+            $participant = $pool->participants()->firstOrNew([
+                'rider_profile_id' => $participantData['rider_profile_id'],
+                'participant_role' => $participantData['participant_role'],
+            ]);
+            if (! $participant->exists
+                || ($participant->share_amount === null && $participant->status === 'PENDING')) {
+                $participant->forceFill([
+                    'rider_assignment_id' => $assignmentId,
+                    'share_amount' => FinancialRules::amount($participantData['share_cents']),
+                    'status' => 'PENDING',
+                ])->save();
+            }
+        }
+
+        $pool->forceFill([
+            'unresolved_share_amount' => FinancialRules::amount($distribution['unresolved_cents']),
+        ])->save();
     }
 
     private function provisionSettlementRows(ShipmentFinancialAllocation $allocation, Shipment $shipment, $sellerOrder): void
@@ -206,7 +283,7 @@ class FinancialAllocationService
         // allocation. Link that existing immutable entry once the allocation
         // is available without creating a second collection entry.
         FinancialLedgerEntry::query()
-            ->where('shipment_id', $shipment->id)
+            ->where('seller_order_id', $sellerOrder->id)
             ->where('entry_type', 'COD_COLLECTED')
             ->whereNull('shipment_financial_allocation_id')
             ->update(['shipment_financial_allocation_id' => $allocation->id]);

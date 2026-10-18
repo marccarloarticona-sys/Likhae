@@ -2,6 +2,7 @@
 
 namespace App\Models\Seller;
 
+use App\Models\Buyer\BuyerVoucherClaim;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -10,6 +11,7 @@ class Voucher extends Model
 {
     protected $fillable = [
         'seller_profile_id',
+        'platform_code_key',
         'code',
         'name',
         'discount_type',
@@ -43,5 +45,10 @@ class Voucher extends Model
     public function sellerOrders(): HasMany
     {
         return $this->hasMany(SellerOrder::class);
+    }
+
+    public function buyerClaims(): HasMany
+    {
+        return $this->hasMany(BuyerVoucherClaim::class);
     }
 }

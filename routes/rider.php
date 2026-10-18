@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Rider\RiderController;
 use App\Http\Controllers\Rider\RiderPickupBatchController;
+use App\Http\Controllers\Rider\RiderParcelScanController;
 use App\Http\Controllers\Rider\RiderRemittanceController;
 use App\Http\Controllers\Rider\RiderShipmentController;
 use App\Http\Controllers\Rider\RiderTripController;
@@ -33,6 +34,7 @@ Route::prefix('rider')
 
         Route::get('/', fn () => redirect()->route('rider.dashboard'))->name('home');
         Route::get('/dashboard', [RiderController::class, 'dashboard'])->name('dashboard');
+        Route::get('/scan', [RiderParcelScanController::class, 'resolve'])->name('scan');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'rider')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'rider')->name('settings.update');
 
@@ -40,6 +42,7 @@ Route::prefix('rider')
             Route::get('/shipments', [RiderShipmentController::class, 'index'])->name('shipments');
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');
+            Route::post('/trips/{trip}/accept', [RiderTripController::class, 'accept'])->name('trips.accept');
             Route::post('/trips/{trip}/load', [RiderTripController::class, 'load'])->name('trips.load');
             Route::post('/trips/{trip}/start', [RiderTripController::class, 'start'])->name('trips.start');
             Route::post('/assignments/{assignment}/location', [RiderShipmentController::class, 'updateLocation'])->name('assignments.location');
@@ -58,6 +61,7 @@ Route::prefix('rider')
             Route::post('/pickups/batches/{trip}/finish', [RiderPickupBatchController::class, 'finish'])->name('pickups.batches.finish');
             Route::get('/pickups/{assignment}', [RiderController::class, 'pickupShow'])->name('pickups.show');
             Route::get('/deliveries', [RiderController::class, 'deliveries'])->name('deliveries');
+            Route::get('/deliveries/{assignment}/scan', [RiderParcelScanController::class, 'verifyDelivery'])->name('deliveries.scan');
             Route::get('/deliveries/{assignment}', [RiderController::class, 'deliveryShow'])->name('deliveries.show');
             Route::get('/history', [RiderController::class, 'history'])->name('history');
         });
@@ -66,6 +70,7 @@ Route::prefix('rider')
             Route::get('/transfers', [RiderTransferController::class, 'index'])->name('transfers');
             Route::get('/transfers/{manifest}', [RiderTransferController::class, 'show'])->name('transfers.show');
             Route::post('/transfers/{manifest}/accept', [RiderTransferController::class, 'accept'])->name('transfers.accept');
+            Route::post('/transfers/{manifest}/decline', [RiderTransferController::class, 'decline'])->name('transfers.decline');
             Route::post('/transfers/{manifest}/start', [RiderTransferController::class, 'start'])->name('transfers.start');
         });
 

@@ -42,7 +42,19 @@ class RiderDashboardTest extends TestCase
             ->assertOk()
             ->assertSee('Pending pickups')
             ->assertSee('Pending deliveries')
+            ->assertSee('Parcel Scanner')
+            ->assertSee('data-parcel-scanner', false)
+            ->assertSee('data-scanner-start', false)
             ->assertSee('Earnings')
             ->assertSee('No rider parcels found yet.');
+
+        $this->actingAs($riderUser)
+            ->get(route('rider.scan', [
+                'return_to' => 'dashboard',
+                'tracking' => 'UNASSIGNED-TRACKING-TEST',
+                'scan_method' => 'MANUAL',
+            ]))
+            ->assertRedirect(route('rider.dashboard'))
+            ->assertSessionHasErrors(['tracking' => 'Tracking number does not match an active job assigned to your account.']);
     }
 }

@@ -15,6 +15,13 @@ class LogisticsCenter extends Model
 {
     protected $table = 'logistics_centers';
 
+    /**
+     * Legacy per-center fee retained for old records only. GLOBAL approved
+     * shipping_rate_versions are authoritative for new Checkout pricing.
+     * FUTURE SHIPPING PRICING may use location, distance, parcel weight,
+     * parcel dimensions, or service level; that capability is not implemented.
+     */
+
     protected $fillable = [
         'owner_user_id',
         'address_id',
@@ -24,7 +31,6 @@ class LogisticsCenter extends Model
         'dti_registration_number',
         'tin',
         'status',
-        'shipping_fee',
         'approved_by_user_id',
         'approved_at',
     ];

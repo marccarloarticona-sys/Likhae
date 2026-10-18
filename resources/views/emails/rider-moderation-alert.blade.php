@@ -4,7 +4,7 @@
 
 <p>Your rider account has been updated by the logistics team.</p>
 
-<p>{{ $message }}</p>
+<p>{{ $body }}</p>
 
 @if($actionUrl)
     <p><a href="{{ url($actionUrl) }}">{{ $actionLabel }}</a></p>

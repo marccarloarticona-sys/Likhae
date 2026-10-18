@@ -18,16 +18,36 @@ class SellerReportPdfService
         $this->newPage($report, false);
         $this->text(42, 684, 'BUSINESS INTELLIGENCE', 8, 'FDF5F1', 'F2');
         $this->text(42, 658, $report['title'], 21, 'FFFFFF', 'F2');
-        $this->text(42, 639, $report['scope'].' | '.$report['range_label'], 9, 'F7EDEA');
-        $this->text(42, 619, 'Generated '.$report['generated_at'], 8, 'DAB9B0');
+        $this->text(42, 639, 'Seller: '.$this->truncate($report['seller_name'] ?? 'Seller', 70), 9, 'F7EDEA');
+        $this->text(42, 622, $this->truncate($report['scope'], 72), 9, 'F7EDEA');
+        $this->text(42, 606, $report['range_label'], 9, 'F7EDEA');
+        $this->text(42, 590, 'Generated '.$report['generated_at'].(empty($report['timezone']) ? '' : ' ('.$report['timezone'].')'), 8, '80675A');
 
         $this->sectionHeading('Performance at a glance', $report);
         $summary = $report['summary'];
-        $this->metricCard(42, $this->cursorY - 48, 'Gross sales', $this->money($summary['gross']));
-        $this->metricCard(180, $this->cursorY - 48, 'Net earnings', $this->money($summary['net']));
-        $this->metricCard(318, $this->cursorY - 48, 'Orders', (string) $summary['orders']);
-        $this->metricCard(456, $this->cursorY - 48, 'Completion', $summary['completion_rate'].'%');
+        $this->metricCard(42, $this->cursorY - 48, 'Gross sales', $this->money($summary['gross']), 100);
+        $this->metricCard(148, $this->cursorY - 48, 'Commission', $this->money($summary['commission'] ?? 0), 100);
+        $this->metricCard(254, $this->cursorY - 48, 'Net sales', $this->money($summary['net']), 100);
+        $this->metricCard(360, $this->cursorY - 48, 'Recognized orders', (string) ($summary['financial_orders'] ?? $summary['orders']), 100);
+        $this->metricCard(466, $this->cursorY - 48, 'Completion', $summary['completion_rate'].'%', 100);
         $this->cursorY -= 78;
+
+        $this->sectionHeading('Settlement ledger', $report);
+        if ($summary['finance_schema_ready'] ?? false) {
+            $this->text(42, $this->cursorY, 'Order-level settlement records for recognized orders in this report scope.', 8, '80675A');
+            $this->cursorY -= 16;
+            $this->text(42, $this->cursorY, 'Pending / review: '.$this->money($summary['pending_balance']).'   Authorized: '.$this->money($summary['authorized_balance']), 8, '4D3329');
+            $this->cursorY -= 14;
+            $this->text(42, $this->cursorY, 'Paid: '.$this->money($summary['paid_balance']).'   Outstanding: '.$this->money($summary['outstanding_balance']), 8, '4D3329');
+            $this->cursorY -= 14;
+            $this->text(42, $this->cursorY, 'Seller payable: '.$this->money($summary['seller_payable']).'   Discounts: '.$this->money($summary['discounts']), 8, '4D3329');
+            $this->cursorY -= 14;
+            $this->text(42, $this->cursorY, 'Posted seller refund adjustments: '.$this->money($summary['seller_refund_adjustment']).'   Commission reversals: '.$this->money($summary['commission_refund_reversal']), 8, '4D3329');
+            $this->cursorY -= 22;
+        } else {
+            $this->text(42, $this->cursorY, 'Settlement figures are unavailable until the finance schema is installed.', 8, '80675A');
+            $this->cursorY -= 24;
+        }
 
         $this->sectionHeading('Catalog performance mix', $report);
         $mix = $report['performance_counts'];
@@ -58,8 +78,8 @@ class SellerReportPdfService
         }
         $this->cursorY -= 4;
         $this->ensureSpace(30, $report);
-        $this->text(42, $this->cursorY, 'Method: product revenue and units use completed orders in the selected date range. Gross sales includes all orders created in range.', 7, '80675A');
-        $this->text(42, $this->cursorY - 12, 'High and low labels compare products in this report scope. Products without completed sales are shown separately.', 7, '80675A');
+        $this->text(42, $this->cursorY, 'Method: gross sales and commission use recognized ledger records and historic order item prices. Net sales = Gross Sales - Commission.', 7, '80675A');
+        $this->text(42, $this->cursorY - 12, 'Shipping and Additional Care are excluded. Order activity uses order dates; refund adjustments use posted dates.', 7, '80675A');
 
         return $this->compile();
     }
@@ -88,32 +108,36 @@ class SellerReportPdfService
         $this->cursorY -= 17;
     }
 
-    private function metricCard(float $x, float $y, string $label, string $value): void
+    private function metricCard(float $x, float $y, string $label, string $value, float $width = 124): void
     {
-        $this->fillRect($x, $y, 124, 55, 'FAF3EC');
+        $this->fillRect($x, $y, $width, 55, 'FAF3EC');
         $this->text($x + 10, $y + 39, strtoupper($label), 6.5, '9A6558', 'F2');
-        $this->text($x + 10, $y + 19, $value, 13, '4D1712', 'F2');
+        $this->text($x + 10, $y + 19, $value, 9, '4D1712', 'F2');
     }
 
     private function tableHeader(): void
     {
         $this->fillRect(42, $this->cursorY - 3, 528, 19, 'F3E4DE');
-        $this->text(51, $this->cursorY + 4, 'PRODUCT', 7, '641F19', 'F2');
-        $this->text(292, $this->cursorY + 4, 'TIER', 7, '641F19', 'F2');
-        $this->text(360, $this->cursorY + 4, 'UNITS', 7, '641F19', 'F2');
-        $this->text(422, $this->cursorY + 4, 'ORDERS', 7, '641F19', 'F2');
-        $this->text(487, $this->cursorY + 4, 'REVENUE', 7, '641F19', 'F2');
+        $this->text(51, $this->cursorY + 4, 'PRODUCT', 6.5, '641F19', 'F2');
+        $this->text(237, $this->cursorY + 4, 'TIER', 6.5, '641F19', 'F2');
+        $this->text(295, $this->cursorY + 4, 'UNITS', 6.5, '641F19', 'F2');
+        $this->text(345, $this->cursorY + 4, 'ORDERS', 6.5, '641F19', 'F2');
+        $this->text(390, $this->cursorY + 4, 'GROSS', 6.5, '641F19', 'F2');
+        $this->text(445, $this->cursorY + 4, 'COMMISSION', 6.5, '641F19', 'F2');
+        $this->text(505, $this->cursorY + 4, 'NET', 6.5, '641F19', 'F2');
         $this->cursorY -= 24;
     }
 
     private function productRow(array $product): void
     {
         $this->line(42, $this->cursorY - 3, 570, $this->cursorY - 3, 'E8D8C8');
-        $this->text(51, $this->cursorY + 4, $this->truncate($product['name'], 38), 8.5, '4D3329', 'F2');
-        $this->text(292, $this->cursorY + 4, strtoupper(str_replace('_', ' ', $product['tier'])), 7, $this->tierColor($product['tier']), 'F2');
-        $this->text(370, $this->cursorY + 4, (string) $product['units'], 8.5, '4D3329');
-        $this->text(433, $this->cursorY + 4, (string) $product['orders'], 8.5, '4D3329');
-        $this->text(487, $this->cursorY + 4, $this->money($product['revenue']), 8.5, '4D3329', 'F2');
+        $this->text(51, $this->cursorY + 4, $this->truncate($product['name'], 28), 8, '4D3329', 'F2');
+        $this->text(237, $this->cursorY + 4, strtoupper(str_replace('_', ' ', $product['tier'])), 6.5, $this->tierColor($product['tier']), 'F2');
+        $this->text(301, $this->cursorY + 4, (string) $product['units'], 8, '4D3329');
+        $this->text(352, $this->cursorY + 4, (string) $product['orders'], 8, '4D3329');
+        $this->text(390, $this->cursorY + 4, $this->money($product['gross'] ?? $product['revenue'] ?? 0), 7.5, '4D3329', 'F2');
+        $this->text(445, $this->cursorY + 4, $this->money($product['commission'] ?? 0), 7, '4D3329', 'F2');
+        $this->text(505, $this->cursorY + 4, $this->money($product['net'] ?? (($product['gross'] ?? $product['revenue'] ?? 0) - ($product['commission'] ?? 0))), 7.5, '4D3329', 'F2');
         $this->cursorY -= 24;
     }
 

@@ -11,9 +11,13 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Communication\Conversation;
+use App\Models\Logistics\Shipment;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\Communication\ConversationService;
+use App\Services\Communication\ConversationMessageSender;
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationContextPresenter;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
@@ -25,6 +29,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
@@ -49,13 +54,15 @@ class RiderController extends Controller
             : (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count();
         $riderStats = [
             ['label' => 'Pending pickups', 'value' => $pendingPickupCount],
-            ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count()],
+            ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
+                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
+                ->count()],
             ['label' => 'In progress', 'value' => (clone $assignments)->where('status', 'IN_PROGRESS')->count()],
             ['label' => 'COD unremitted', 'value' => 'PHP '.number_format($finance['unremitted_cash'], 2)],
         ];
         $recentAssignments = (clone $assignments)
             ->delivery()
-            ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address'])
+            ->with(['shipment.orderItem.product.images', 'shipment.sellerOrder.order.address'])
             ->latest()
             ->limit(8)
             ->get();
@@ -63,7 +70,7 @@ class RiderController extends Controller
             $shipment = $assignment->shipment;
             $sellerOrder = $shipment?->sellerOrder;
             $address = $sellerOrder?->order?->address;
-            $images = $sellerOrder?->items?->first()?->product?->images ?? collect();
+            $images = $shipment?->orderItem?->product?->images ?? collect();
             $imagePath = $images->firstWhere('is_primary', true)?->file_path ?? $images->first()?->file_path;
 
             return [
@@ -160,6 +167,7 @@ class RiderController extends Controller
             ->where('rider_profile_id', $rider->id)
             ->delivery()
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
             ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user'])
             ->latest()
             ->paginate(15);
@@ -179,8 +187,12 @@ class RiderController extends Controller
         });
         $deliveryQuery = RiderAssignment::query()->where('rider_profile_id', $rider->id)->delivery();
         $deliveryStats = [
-            'active' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])->count(),
-            'assigned' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count(),
+            'active' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
+                ->count(),
+            'assigned' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
+                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
+                ->count(),
             'out_for_delivery' => (clone $deliveryQuery)->where('status', 'IN_PROGRESS')->whereHas('shipment', fn ($query) => $query->where('current_status', 'OUT_FOR_DELIVERY'))->count(),
             'delivered_today' => (clone $deliveryQuery)->where('status', 'COMPLETED')->whereDate('completed_at', today())->count(),
             'failed_today' => (clone $deliveryQuery)->whereHas('deliveryAttempts', fn ($query) => $query->whereDate('attempted_at', today())->whereIn('status', ['FAILED', 'RESCHEDULED', 'RETURNED']))->count(),
@@ -201,6 +213,9 @@ class RiderController extends Controller
         $parcel = [
             'tracking' => $shipment->tracking_number,
             'status' => $assignment->status,
+            'offer_expired' => $assignment->status === 'ASSIGNED'
+                && $assignment->assigned_at
+                && $assignment->assigned_at->lte($this->offerCutoff()),
             'status_label' => str($assignment->status)->replace('_', ' ')->upper()->toString(),
             'shipment_status' => $shipment->current_status,
             'shipment_status_label' => str($shipment->current_status)->replace('_', ' ')->upper()->toString(),
@@ -222,20 +237,32 @@ class RiderController extends Controller
     {
         $rider = $this->rider($request);
         $financeSchema = app(FinanceSchemaReadiness::class);
+        $filters = $this->dateRange($request);
+        $from = filled($filters['from']) ? \Illuminate\Support\Carbon::parse($filters['from'])->startOfDay() : null;
+        $to = filled($filters['to']) ? \Illuminate\Support\Carbon::parse($filters['to'])->endOfDay() : null;
+        $weekStart = now()->startOfWeek();
+        $today = today();
 
         if ($financeSchema->step7Ready()) {
-            $earnings = RiderEarningPoolParticipant::query()
-                ->where('rider_profile_id', $rider->id)
+            $participantBase = RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id);
+            $filteredParticipants = clone $participantBase;
+            if ($from) $filteredParticipants->whereRaw('COALESCE(approved_at, created_at) >= ?', [$from]);
+            if ($to) $filteredParticipants->whereRaw('COALESCE(approved_at, created_at) <= ?', [$to]);
+
+            $earnings = (clone $filteredParticipants)
                 ->with(['pool.shipment', 'assignment.shipment'])
                 ->latest()
-                ->paginate(15);
+                ->paginate(15)
+                ->withQueryString();
             $earningsRows = $earnings->getCollection()->map(fn (RiderEarningPoolParticipant $participant): array => [
-                'date' => $participant->created_at?->format('M d, Y') ?? 'Date unavailable',
+                'date' => ($participant->approved_at ?? $participant->created_at)?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
                 'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
                 'status' => str($participant->status)->headline(),
             ]);
-            $earningsTotal = (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->sum('share_amount');
+            $earningsTotal = (float) (clone $filteredParticipants)->sum('share_amount');
+            $dailyEarnings = (float) (clone $participantBase)->whereRaw('DATE(COALESCE(approved_at, created_at)) = ?', [$today->toDateString()])->sum('share_amount');
+            $weeklyEarnings = (float) (clone $participantBase)->whereRaw('COALESCE(approved_at, created_at) BETWEEN ? AND ?', [$weekStart, now()])->sum('share_amount');
             $poolSummary = [
                 'schema_ready' => true,
                 'unallocated' => (float) RiderEarningPool::query()->whereHas('participants', fn ($query) => $query->where('rider_profile_id', $rider->id))->sum('unresolved_share_amount'),
@@ -243,52 +270,82 @@ class RiderController extends Controller
                 'paid' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAID')->sum('share_amount'),
             ];
         } else {
-            $earnings = $rider->earnings()->with('riderAssignment.shipment')->latest()->paginate(15);
+            $legacyBase = $rider->earnings();
+            $filteredLegacy = clone $legacyBase;
+            if ($from) $filteredLegacy->whereRaw('COALESCE(earned_at, created_at) >= ?', [$from]);
+            if ($to) $filteredLegacy->whereRaw('COALESCE(earned_at, created_at) <= ?', [$to]);
+            $earnings = (clone $filteredLegacy)->with('riderAssignment.shipment')->latest()->paginate(15)->withQueryString();
             $earningsRows = $earnings->getCollection()->map(fn ($earning): array => [
                 'date' => $earning->earned_at?->format('M d, Y') ?? $earning->created_at?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
                 'amount' => 'PHP '.number_format((float) $earning->amount, 2),
                 'status' => str($earning->status)->headline(),
             ]);
-            $earningsTotal = (float) $rider->earnings()->sum('amount');
+            $earningsTotal = (float) (clone $filteredLegacy)->sum('amount');
+            $dailyEarnings = (float) (clone $legacyBase)->whereRaw('DATE(COALESCE(earned_at, created_at)) = ?', [$today->toDateString()])->sum('amount');
+            $weeklyEarnings = (float) (clone $legacyBase)->whereRaw('COALESCE(earned_at, created_at) BETWEEN ? AND ?', [$weekStart, now()])->sum('amount');
             $poolSummary = ['schema_ready' => false, 'unallocated' => 0.0, 'accrued' => $earningsTotal, 'paid' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount')];
         }
         $earningsNotice = 'Cash held and rider earnings are separate. Cross-hub pool shares remain pending until policy approval.';
         $financeSummary = $this->financeSummary($rider, $financeSchema);
 
-        return view('Rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary'));
+        return view('Rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary', 'filters', 'dailyEarnings', 'weeklyEarnings'));
     }
 
     public function history(Request $request): View
     {
         $rider = $this->rider($request);
+        $filters = $this->dateRange($request);
+        $from = filled($filters['from']) ? \Illuminate\Support\Carbon::parse($filters['from'])->startOfDay() : null;
+        $to = filled($filters['to']) ? \Illuminate\Support\Carbon::parse($filters['to'])->endOfDay() : null;
 
-        $assignments = RiderAssignment::query()
+        $assignmentQuery = RiderAssignment::query()
             ->where('rider_profile_id', $rider->id)
             ->where(function ($query): void {
                 $query->whereIn('status', ['COMPLETED', 'REJECTED', 'CANCELLED'])
                     ->orWhereHas('deliveryAttempts');
             })
-            ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'deliveryAttempts'])
-            ->latest()
-            ->paginate(15);
-        $history = $assignments->getCollection()->map(function (RiderAssignment $assignment): array {
+            ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'deliveryAttempts', 'earning']);
+        if ($from || $to) {
+            $assignmentQuery->where(function ($query) use ($from, $to): void {
+                $query->where(function ($dates) use ($from, $to): void {
+                    if ($from) $dates->whereRaw('COALESCE(completed_at, cancelled_at, updated_at, created_at) >= ?', [$from]);
+                    if ($to) $dates->whereRaw('COALESCE(completed_at, cancelled_at, updated_at, created_at) <= ?', [$to]);
+                })->orWhereHas('deliveryAttempts', function ($attempts) use ($from, $to): void {
+                    if ($from) $attempts->where('attempted_at', '>=', $from);
+                    if ($to) $attempts->where('attempted_at', '<=', $to);
+                });
+            });
+        }
+        $assignments = $assignmentQuery->latest()->paginate(15)->withQueryString();
+        $poolShares = app(FinanceSchemaReadiness::class)->step7Ready()
+            ? RiderEarningPoolParticipant::query()
+                ->whereIn('rider_assignment_id', $assignments->getCollection()->modelKeys())
+                ->get()
+                ->keyBy('rider_assignment_id')
+            : collect();
+        $history = $assignments->getCollection()->map(function (RiderAssignment $assignment) use ($poolShares): array {
             $shipment = $assignment->shipment;
             $attempt = $assignment->deliveryAttempts->sortByDesc('attempt_number')->first();
+            $poolShare = $poolShares->get($assignment->id);
 
             return [
                 'image' => $this->assignmentImage($assignment),
                 'tracking' => $shipment?->tracking_number ?? 'Tracking unavailable',
                 'buyer' => $shipment?->sellerOrder?->order?->address?->recipient_name ?? 'Buyer unavailable',
+                'job_type' => str($assignment->assignment_type)->headline()->toString(),
                 'status_label' => $attempt
                     ? str($attempt->status)->headline()
                     : str($shipment?->current_status ?? $assignment->status)->headline(),
                 'updated' => ($attempt?->attempted_at ?? $assignment->completed_at ?? $assignment->updated_at)?->format('M d, Y g:i A') ?? 'Date unavailable',
                 'failure_reason' => $attempt?->failure_reason,
+                'earning' => $poolShare?->share_amount !== null
+                    ? 'PHP '.number_format((float) $poolShare->share_amount, 2)
+                    : ($assignment->earning ? 'PHP '.number_format((float) $assignment->earning->amount, 2) : 'Pending allocation'),
             ];
         });
 
-        return view('Rider.history.index', compact('rider', 'history', 'assignments'));
+        return view('Rider.history.index', compact('rider', 'history', 'assignments', 'filters'));
     }
 
     public function profile(Request $request): View
@@ -362,16 +419,53 @@ class RiderController extends Controller
         return back()->with('status', 'Account password updated.');
     }
 
-    public function messages(Request $request, ConversationService $conversationService): View
+    public function messages(Request $request, ConversationService $conversationService): View|RedirectResponse
     {
+        $shipmentId = $request->integer('shipment_id');
+        if ($shipmentId > 0) {
+            $riderProfile = $request->user()->riderProfile;
+            $shipment = Shipment::query()
+                ->with(['sellerOrder.order'])
+                ->whereKey($shipmentId)
+                ->whereHas('riderAssignments', fn ($assignment) => $assignment
+                    ->where('rider_profile_id', $riderProfile?->id)
+                    ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED']))
+                ->firstOrFail();
+            $buyerId = (int) $shipment->sellerOrder?->order?->buyer_user_id;
+            abort_unless($buyerId > 0, 404);
+            if ($request->integer('recipient_user_id') > 0) {
+                abort_unless($request->integer('recipient_user_id') === $buyerId, 403);
+            }
+
+            $conversation = $conversationService->start($request->user(), $buyerId, [
+                'type' => 'SHIPMENT_DELIVERY',
+                'order_id' => $shipment->sellerOrder?->order_id,
+                'seller_order_id' => $shipment->seller_order_id,
+                'shipment_id' => $shipment->id,
+            ]);
+
+            return redirect()->route('rider.messages', ['conversation' => $conversation->id]);
+        }
+
         $conversations = $conversationService->workspaceThreads(
             $request->user(),
             $request->integer('conversation') ?: null,
         );
+        $contacts = User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)
+            ->orderBy('first_name')->limit(100)
+            ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
+        $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
+            ->filterRecipients($request->user(), $contacts);
 
         return view('Rider.messages', [
             'conversations' => $conversations,
-            'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
+            'contacts' => $contacts,
+            'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
+            'messageContext' => app(ConversationContextPresenter::class)->forUser(
+                $request->user(),
+                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+            ),
         ]);
     }
 
@@ -387,26 +481,14 @@ class RiderController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function sendMessage(Request $request, ConversationService $conversationService): JsonResponse|RedirectResponse
+    public function sendMessage(Request $request, ConversationService $conversationService, ConversationMessageSender $sender): JsonResponse|RedirectResponse
     {
-        $data = $request->validate([
+        $recipientData = $request->validate([
             'recipient_user_id' => ['required', 'integer', 'exists:users,id'],
-            'conversation_id' => ['nullable', 'integer', 'exists:conversations,id'],
-            'body' => ['required', 'string', 'max:5000'],
         ]);
-
-        $context = [];
-        $conversation = null;
-        if (! empty($data['conversation_id'])) {
-            $conversation = Conversation::query()
-                ->whereKey((int) $data['conversation_id'])
-                ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id))
-                ->whereHas('participants', fn ($query) => $query->where('users.id', (int) $data['recipient_user_id']))
-                ->firstOrFail();
-            $context = $conversationService->contextFor($conversation);
-        }
-
-        $message = $conversationService->send($request->user(), (int) $data['recipient_user_id'], trim($data['body']), $context, $conversation);
+        $data = $recipientData + $sender->validate($request);
+        $recipient = User::query()->whereKey($data['recipient_user_id'])->where('status', User::STATUS_ACTIVE)->firstOrFail();
+        $message = $sender->send($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -416,6 +498,28 @@ class RiderController extends Controller
         }
 
         return back()->with('status', 'Message sent.');
+    }
+
+    private function offerCutoff(): \Illuminate\Support\Carbon
+    {
+        return now()->subMinutes(max(1, (int) config('rider.assignment_offer_minutes', 15)));
+    }
+
+    /** @return array{from: string, to: string} */
+    private function dateRange(Request $request): array
+    {
+        $filters = $request->validate([
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d'],
+        ]);
+        $from = (string) ($filters['from'] ?? '');
+        $to = (string) ($filters['to'] ?? '');
+
+        if ($from !== '' && $to !== '' && $to < $from) {
+            throw ValidationException::withMessages(['to' => 'The end date must be on or after the start date.']);
+        }
+
+        return ['from' => $from, 'to' => $to];
     }
 
     private function rider(Request $request)
@@ -447,8 +551,7 @@ class RiderController extends Controller
 
     private function assignmentImage(RiderAssignment $assignment): string
     {
-        $items = $assignment->shipment?->sellerOrder?->items ?? collect();
-        $images = $items->first()?->product?->images ?? collect();
+        $images = $assignment->shipment?->orderItem?->product?->images ?? collect();
         $imagePath = $images->firstWhere('is_primary', true)?->file_path ?? $images->first()?->file_path;
 
         return $imagePath ? Storage::url($imagePath) : asset('images/product-placeholder.svg');

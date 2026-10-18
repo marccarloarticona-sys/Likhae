@@ -11,6 +11,8 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPickupRequestShipment;
+use App\Models\Buyer\OrderItem;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -37,6 +39,7 @@ class Shipment extends Model
 
     protected $fillable = [
         'seller_order_id',
+        'order_item_id',
         'tracking_number',
         'logistics_center_id',
         'origin_logistics_center_id',
@@ -72,6 +75,11 @@ class Shipment extends Model
         return $this->belongsTo(SellerOrder::class);
     }
 
+    public function orderItem(): BelongsTo
+    {
+        return $this->belongsTo(OrderItem::class);
+    }
+
     public function logisticsCenter(): BelongsTo
     {
         return $this->belongsTo(LogisticsCenter::class);
@@ -103,9 +111,19 @@ class Shipment extends Model
         return $this->hasMany(PickupRequest::class);
     }
 
+    public function sellerPickupMemberships(): HasMany
+    {
+        return $this->hasMany(SellerPickupRequestShipment::class, 'shipment_id');
+    }
+
     public function riderAssignments(): HasMany
     {
         return $this->hasMany(RiderAssignment::class);
+    }
+
+    public function latestRiderAssignment(): HasOne
+    {
+        return $this->hasOne(RiderAssignment::class)->latestOfMany();
     }
 
     public function waybills(): HasMany
@@ -128,6 +146,11 @@ class Shipment extends Model
         return $this->hasMany(ShipmentEvent::class)
             ->orderBy('occurred_at')
             ->orderBy('id');
+    }
+
+    public function latestEvent(): HasOne
+    {
+        return $this->hasOne(ShipmentEvent::class)->latestOfMany();
     }
 
     public function deliveryAttempts(): HasMany

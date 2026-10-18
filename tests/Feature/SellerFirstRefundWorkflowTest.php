@@ -25,7 +25,7 @@ class SellerFirstRefundWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_buyer_request_is_gcash_seller_scoped_and_not_an_admin_dispute(): void
+    public function test_buyer_request_uses_cash_seller_scope_and_does_not_create_an_admin_dispute(): void
     {
         [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
 
@@ -34,24 +34,48 @@ class SellerFirstRefundWorkflowTest extends TestCase
         $response->assertStatus(200);
         $request = ReturnRefundRequest::query()->firstOrFail();
         $sellerRequest = SellerReturnRefundRequest::query()->firstOrFail();
-        $this->assertSame('09171234567', $request->gcash_mobile);
-        $this->assertSame('GCASH_TRANSFER', $request->refund_method);
+        $this->assertSame('CASH', $request->refund_method);
+        $this->assertNull($request->gcash_mobile);
+        $this->assertNull($request->gcash_recipient_name);
         $this->assertNull($request->dispute_id);
         $this->assertSame(0, Dispute::query()->count());
         $this->assertSame($sellerUser->sellerProfile->id, $sellerRequest->seller_profile_id);
-        $this->assertNotSame('09171234567', DB::table('return_refund_requests')->value('gcash_mobile'));
+        $this->assertNull(DB::table('return_refund_requests')->value('gcash_mobile'));
         $this->assertDatabaseHas('notifications', ['user_id' => $sellerUser->id, 'reference_id' => $sellerRequest->id]);
     }
 
-    public function test_invalid_gcash_number_is_rejected_server_side(): void
+    public function test_return_form_disables_gcash_and_requires_cash_acknowledgement(): void
     {
         [$buyer, , $order, $item] = $this->createDeliveredOrder();
-        $payload = $this->requestPayload($item);
-        $payload['gcash_mobile'] = '0912345';
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.return-refund.form', $order))
+            ->assertOk()
+            ->assertSee('GCash')
+            ->assertSee('Coming Soon')
+            ->assertSee('disabled', false);
 
+        $payload = $this->requestPayload($item);
+        unset($payload['confirm_cash']);
         $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)
-            ->assertSessionHasErrors('gcash_mobile');
+            ->assertSessionHasErrors('confirm_cash');
         $this->assertSame(0, ReturnRefundRequest::query()->count());
+    }
+
+    public function test_manipulated_gcash_fields_cannot_change_the_cash_refund_method(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item) + [
+            'refund_method' => 'GCASH_TRANSFER',
+            'gcash_recipient_name' => 'Forged Account',
+            'gcash_mobile' => '09171234567',
+        ];
+
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertStatus(200);
+
+        $request = ReturnRefundRequest::query()->firstOrFail();
+        $this->assertSame('CASH', $request->refund_method);
+        $this->assertNull($request->gcash_mobile);
+        $this->assertNull($request->gcash_recipient_name);
     }
 
     public function test_responsible_seller_can_open_parent_scoped_buyer_evidence(): void
@@ -84,9 +108,8 @@ class SellerFirstRefundWorkflowTest extends TestCase
             ->assertSee('protected-evidence', false);
     }
 
-    public function test_seller_can_approve_report_payment_and_buyer_can_confirm(): void
+    public function test_seller_can_approve_cash_request_without_a_fake_online_payout(): void
     {
-        Storage::fake('local');
         [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
         $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
         $sellerRequest = SellerReturnRefundRequest::query()->firstOrFail();
@@ -97,17 +120,21 @@ class SellerFirstRefundWorkflowTest extends TestCase
 
         $this->actingAs($sellerUser)->post(route('seller.orders.refunds.payout', $sellerRequest), [
             'amount_sent' => '899.75',
-            'transaction_reference' => 'GCASH-REF-123',
+            'transaction_reference' => 'FORGED-ONLINE-REF',
             'sent_at' => now()->subMinute()->format('Y-m-d\\TH:i'),
-            'proof' => UploadedFile::fake()->image('gcash-proof.png', 900, 600),
-        ])->assertRedirect();
-        $sellerRequest->refresh();
-        $this->assertSame(SellerReturnRefundRequest::STATUS_REFUND_SENT, $sellerRequest->status);
-        $this->assertSame(1, $sellerRequest->payouts()->count());
-        $this->assertNotSame('GCASH-REF-123', DB::table('refund_payouts')->value('transaction_reference'));
+        ])->assertStatus(409);
+        $this->assertSame(0, $sellerRequest->payouts()->count());
 
-        $this->actingAs($buyer)->post(route('buyer.returns.confirm', $sellerRequest), ['confirm_receipt' => 1])->assertRedirect();
-        $this->assertSame(SellerReturnRefundRequest::STATUS_CONFIRMED, $sellerRequest->fresh()->status);
+        $this->actingAs($sellerUser)
+            ->get(route('seller.orders.refunds.show', $sellerRequest))
+            ->assertOk()
+            ->assertSee('Cash refund obligation')
+            ->assertSee('New COD refunds stay cash-only');
+        $this->actingAs($buyer)
+            ->get(route('buyer.returns.show', $sellerRequest))
+            ->assertOk()
+            ->assertSee('Cash');
+        $this->assertSame(SellerReturnRefundRequest::STATUS_APPROVED, $sellerRequest->fresh()->status);
     }
 
     public function test_another_seller_cannot_open_the_refund_request(): void
@@ -160,7 +187,8 @@ class SellerFirstRefundWorkflowTest extends TestCase
         $this->actingAs($buyer)
             ->get(route('buyer.returns.show', $sellerRequest))
             ->assertOk()
-            ->assertSee('Payment report');
+            ->assertSee('Cash only')
+            ->assertSee('New COD refunds are cash-only');
 
         $this->actingAs($sellerUser)
             ->get(route('seller.orders', ['status' => 'returns']))
@@ -189,7 +217,8 @@ class SellerFirstRefundWorkflowTest extends TestCase
         $this->actingAs($buyer)
             ->get(route('buyer.returns.show', $sellerRequest))
             ->assertOk()
-            ->assertSee('Payment report');
+            ->assertSee('Cash only')
+            ->assertSee('New COD refunds are cash-only');
         $this->actingAs($sellerUser)
             ->get(route('seller.orders.refunds.show', $sellerRequest))
             ->assertOk()
@@ -298,9 +327,7 @@ class SellerFirstRefundWorkflowTest extends TestCase
             'quantities' => [$item->id => 1],
             'description' => 'The item arrived with a visible scratch on the front panel.',
             'buyer_email' => 'buyer@example.test',
-            'gcash_recipient_name' => 'Receiving Account',
-            'gcash_mobile' => '+639171234567',
-            'confirm_gcash' => 1,
+            'confirm_cash' => 1,
             'confirm_request' => 1,
         ];
     }

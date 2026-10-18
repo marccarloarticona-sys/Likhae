@@ -8,10 +8,14 @@ use App\Models\Buyer\OrderAddress;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Logistics\Shipment;
+use App\Models\Seller\ProductVariant;
+use App\Models\Seller\Product;
 use App\Models\Admin\CommissionTransaction;
 use App\Models\Admin\Dispute;
 use App\Models\Admin\DisputeEvidence;
 use App\Models\Admin\Notification;
+use App\Models\Admin\AuditLog;
 use App\Models\Admin\PlatformSetting;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Buyer\ReturnRefundRequestItem;
@@ -20,12 +24,15 @@ use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
+use App\Services\AccountNotificationService;
 use App\Services\RiderRatingService;
 use App\Services\ReviewImageService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Maps\MapDataService;
 use App\Services\Marketplace\BuyerOrderActionService;
+use App\Services\Marketplace\BuyerOrderTabService;
+use App\Services\Marketplace\CartService;
 use App\Support\AddressCoordinateValidator;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
@@ -41,6 +48,8 @@ use Illuminate\Support\Str;
 
 class BuyerOrderController extends Controller
 {
+    private const REVIEW_TEXT_EDIT_EVENT = 'buyer.review.text.updated';
+
     public function __construct(private readonly ImageOptimizationService $images) {}
 
     public function success(Request $request): View
@@ -49,7 +58,7 @@ class BuyerOrderController extends Controller
         if ($request->filled('order')) {
             $order = $request->user()
                 ->orders()
-                ->with(['sellerOrders.items.product', 'sellerOrders.shipment', 'address', 'payments'])
+                ->with(['sellerOrders.items.product', 'sellerOrders.shipments.orderItem', 'address', 'payments'])
                 ->where('order_number', $request->query('order'))
                 ->first();
         }
@@ -57,77 +66,45 @@ class BuyerOrderController extends Controller
         return view('Buyer.orders', [
             'mode' => 'success',
             'selectedOrder' => $order,
-            'orders' => $request->user()->orders()->with(['sellerOrders.shipment', 'payments'])->latest()->paginate(10),
+            'orders' => $request->user()->orders()->with(['sellerOrders.shipments', 'payments'])->latest()->paginate(10),
         ]);
     }
 
-    public function index(Request $request, ShipmentWorkflowService $workflow, BuyerOrderActionService $actions): View
+    public function index(Request $request, ShipmentWorkflowService $workflow, BuyerOrderActionService $actions, BuyerOrderTabService $tabs): View
     {
-        $filter = strtoupper((string) $request->query('status', ''));
+        $filter = $tabs->normalize($request->query('status', 'ALL'));
         $returnRefundReady = $this->returnRefundStorageReady();
         $buyerOrders = $request->user()->orders();
-        $deliveredShipmentStatuses = ['DELIVERED', 'COMPLETED'];
-        $orderStatusCounts = (clone $buyerOrders)
-            ->selectRaw('status, COUNT(*) as total')
-            ->groupBy('status')
-            ->pluck('total', 'status')
-            ->map(fn ($count): int => (int) $count);
+        $orderStatusCounts = collect($tabs->counts(clone $buyerOrders->getQuery(), $returnRefundReady));
 
-        $orderStatusCounts->put(
-            'PROCESSING',
-            (clone $buyerOrders)
-                ->where('status', 'PROCESSING')
-                ->where(function ($query) use ($deliveredShipmentStatuses): void {
-                    $query
-                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                        ->orWhereHas('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
-                })
-                ->count(),
-        );
-        $orderStatusCounts->put(
-            'DELIVERED',
-            (clone $buyerOrders)
-                ->where('status', 'PROCESSING')
-                ->whereHas('sellerOrders')
-                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                ->whereDoesntHave('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses))
-                ->count(),
-        );
-        $orderStatusCounts->put('ALL', (clone $buyerOrders)->count());
-        $orderStatusCounts->put(
-            'RETURNS',
-            $returnRefundReady ? (clone $buyerOrders)->whereHas('returnRefundRequests')->count() : 0
-        );
-
+        $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
         $orderQuery = $request->user()
             ->orders()
-            ->with(['sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'payments', 'disputes']);
+            ->getQuery()
+            ->with([
+                'sellerOrders.sellerProfile',
+                'sellerOrders.items.shipment.transferLegs' => $transferLegsWithArrival,
+                'sellerOrders.items.product.images',
+                'sellerOrders.items.review',
+                'sellerOrders.shipments.orderItem',
+                'sellerOrders.shipments.events',
+                'sellerOrders.shipments.logisticsCenter',
+                'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
+                'payments',
+                'disputes',
+            ]);
 
         if ($returnRefundReady) {
-            $orderQuery->with('returnRefundRequests');
+            $orderQuery->with([
+                'returnRefundRequests.sellerRequests.sellerProfile',
+                'returnRefundRequests.sellerRequests.sellerOrder.sellerProfile',
+                'returnRefundRequests.sellerRequests.sellerOrder.items.product.images',
+                'returnRefundRequests.sellerRequests.items.orderItem.product.images',
+                'returnRefundRequests.sellerRequests.payouts',
+            ]);
         }
 
-        if ($filter === 'RETURNS') {
-            $returnRefundReady
-                ? $orderQuery->whereHas('returnRefundRequests')
-                : $orderQuery->whereRaw('1 = 0');
-        } elseif ($filter === 'DELIVERED') {
-            $orderQuery
-                ->where('status', 'PROCESSING')
-                ->whereHas('sellerOrders')
-                ->whereDoesntHave('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                ->whereDoesntHave('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
-        } elseif ($filter === 'PROCESSING') {
-            $orderQuery
-                ->where('status', 'PROCESSING')
-                ->where(function ($query) use ($deliveredShipmentStatuses): void {
-                    $query
-                        ->whereHas('sellerOrders', fn ($sellerOrderQuery) => $sellerOrderQuery->whereDoesntHave('shipment'))
-                        ->orWhereHas('sellerOrders.shipment', fn ($shipmentQuery) => $shipmentQuery->whereNotIn('current_status', $deliveredShipmentStatuses));
-                });
-        } elseif (in_array($filter, ['PLACED', 'COMPLETED', 'CANCELLED'], true)) {
-            $orderQuery->where('status', $filter);
-        }
+        $orderQuery = $tabs->apply($orderQuery, $filter, $returnRefundReady);
 
         $orders = $orderQuery
             ->latest()
@@ -138,42 +115,75 @@ class BuyerOrderController extends Controller
         $orderActionStates = $orders->getCollection()->mapWithKeys(
             fn (Order $order): array => [$order->id => $actions->state($order, $returnRefundReady)]
         );
+        $orderTabKeys = $orders->getCollection()->mapWithKeys(
+            fn (Order $order): array => [$order->id => $tabs->forOrder($order, $returnRefundReady)]
+        );
+        $sellerOrderTabKeys = $orders->getCollection()->flatMap(function (Order $order) use ($tabs): array {
+            return $order->sellerOrders->mapWithKeys(fn (SellerOrder $sellerOrder): array => [
+                (int) $sellerOrder->id => $tabs->forSellerOrder($order, $sellerOrder),
+            ])->all();
+        });
 
         return view('Buyer.orders', [
             'mode' => 'index',
+            'filter' => $filter,
             'orders' => $orders,
             'selectedOrder' => null,
             'returnRefundReady' => $returnRefundReady,
             'orderStatusCounts' => $orderStatusCounts,
             'orderActionStates' => $orderActionStates,
+            'orderTabKeys' => $orderTabKeys,
+            'sellerOrderTabKeys' => $sellerOrderTabKeys,
         ]);
     }
 
-    public function stream(Request $request): JsonResponse
+    public function stream(Request $request, BuyerOrderActionService $actions): JsonResponse
     {
         $ids = collect($request->query('ids', []))
             ->map(fn ($id): int => (int) $id)
             ->filter()
             ->values();
+        $detailOrderId = $request->integer('detail_order_id');
+        if (! $ids->contains($detailOrderId)) {
+            $detailOrderId = 0;
+        }
 
         $orders = $request->user()->orders()
             ->select(['id', 'status', 'updated_at'])
             ->when($ids->isNotEmpty(), fn ($query) => $query->whereIn('id', $ids))
             ->with([
-                'sellerOrders' => fn ($query) => $query->select(['id', 'order_id']),
-                'sellerOrders.shipment' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at']),
+                'sellerOrders' => fn ($query) => $query->select(['id', 'order_id', 'status']),
+                'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at', 'logistics_center_id']),
+                'sellerOrders.shipments.logisticsCenter:id,business_name',
+                'sellerOrders.shipments.transferLegs' => function ($query): void {
+                    $query->select(['id', 'shipment_id', 'origin_logistics_center_id', 'destination_logistics_center_id', 'status', 'updated_at']);
+                    $this->withTransferArrivalScan($query);
+                },
+                ...($detailOrderId > 0 ? ['sellerOrders.shipments.events'] : []),
             ])
             ->get()
             ->sortBy('id')
             ->values();
         $snapshot = $this->realtimeOrderSnapshot($orders);
+        $detailOrder = $detailOrderId > 0 ? $orders->firstWhere('id', $detailOrderId) : null;
+        $detailState = $detailOrder
+            ? $actions->state($detailOrder, $actions->returnRefundStorageReady())
+            : null;
+        $detailActions = $detailState ? [
+            'can_confirm_received' => (bool) $detailState['can_confirm_received'],
+            'can_request_return' => (bool) $detailState['can_request_return'],
+            'auto_confirm_at' => $detailState['auto_confirm_at']?->toIso8601String(),
+            'auto_confirm_label' => $detailState['auto_confirm_at']?->timezone('Asia/Manila')->format('M j, Y g:i A'),
+            'completed' => $detailOrder->status === 'COMPLETED',
+        ] : null;
 
         return response()->json([
-            'version' => sha1($snapshot->toJson()),
+            'version' => sha1($snapshot->toJson().json_encode($detailActions)),
             'orders' => $snapshot->map(fn (array $order): array => [
                 'id' => $order['id'],
                 'status' => $order['status'],
                 'shipments' => $order['shipments'],
+                'actions' => (int) $order['id'] === $detailOrderId ? $detailActions : null,
             ])->values(),
         ]);
     }
@@ -182,41 +192,129 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
-        $orderRelations = ['sellerOrders.sellerProfile.user', 'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipment.events', 'sellerOrders.shipment.deliveryAttempts', 'sellerOrders.shipment.riderAssignments.riderProfile.user', 'sellerOrders.shipment.riderAssignments.liveLocation', 'sellerOrders.shipment.logisticsCenter.address', 'address', 'payments', 'disputes'];
+        $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
+        $orderRelations = [
+            'sellerOrders.sellerProfile.user', 'sellerOrders.voucher',
+            'sellerOrders.items.shipment.transferLegs' => $transferLegsWithArrival,
+            'sellerOrders.items.review', 'sellerOrders.items.product.images', 'sellerOrders.shipments.orderItem',
+            'sellerOrders.shipments.events',
+            'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
+            'sellerOrders.shipments.deliveryAttempts', 'sellerOrders.shipments.riderAssignments.riderProfile.user',
+            'sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.logisticsCenter.address',
+            'address', 'payments', 'disputes',
+        ];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
             $orderRelations[] = 'returnRefundRequests';
         }
         $selectedOrder = $order->load($orderRelations);
         $selectedOrderActionState = $actions->state($selectedOrder, $this->returnRefundStorageReady());
-        $riderRatingsByShipment = $selectedOrder->sellerOrders->mapWithKeys(function ($sellerOrder): array {
-            $shipment = $sellerOrder->shipment;
-            $assignment = $shipment?->riderAssignments
+        $riderRatingsByShipment = $selectedOrder->sellerOrders->flatMap->shipments->mapWithKeys(function ($shipment): array {
+            $assignment = $shipment->riderAssignments
                 ->where('assignment_type', 'DELIVERY')
                 ->sortByDesc('id')
                 ->first();
-            $review = $assignment
-                ? $sellerOrder->items->first(fn ($item) => (int) $item->review?->rider_profile_id === (int) $assignment->rider_profile_id)?->review
-                : null;
+            $review = $shipment->orderItem?->review;
 
-            return $shipment && $assignment
-                ? [$shipment->id => (int) ($review?->rider_rating ?? 0)]
-                : [];
+            return $assignment ? [$shipment->id => (int) ($review?->rider_rating ?? 0)] : [];
         });
-        $reviewImagesById = $reviewImages->urlsFor($selectedOrder->sellerOrders->flatMap->items->pluck('review')->filter());
-        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->map->shipment->filter(), includeSeller: true);
+        $reviewPhotosById = $reviewImages->photoUrlsFor($selectedOrder->sellerOrders->flatMap->items->pluck('review')->filter());
+        $reviews = $selectedOrder->sellerOrders->flatMap->items->pluck('review')->filter();
+        $reviewIds = $reviews->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $editedReviewIds = $reviewIds === []
+            ? []
+            : AuditLog::query()
+                ->where('event', self::REVIEW_TEXT_EDIT_EVENT)
+                ->where('auditable_type', Review::class)
+                ->whereIn('auditable_id', $reviewIds)
+                ->pluck('auditable_id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
+        $reviewTextEditAvailableById = $reviews->mapWithKeys(function (Review $review) use ($editedReviewIds): array {
+            $deadline = $review->created_at?->copy()->addDays(30);
+
+            return [(int) $review->id => $deadline !== null
+                && now()->lessThanOrEqualTo($deadline)
+                && ! in_array((int) $review->id, $editedReviewIds, true)];
+        })->all();
+        $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->flatMap->shipments, includeSeller: true);
         $deliveryPinRequired = $this->canConfirmDeliveryPin($selectedOrder, $selectedOrder->address);
 
         return view('Buyer.orders', [
             'mode' => 'show',
             'selectedOrder' => $selectedOrder,
             'riderRatingsByShipment' => $riderRatingsByShipment,
-            'reviewImagesById' => $reviewImagesById,
+            'reviewPhotosById' => $reviewPhotosById,
+            'reviewTextEditAvailableById' => $reviewTextEditAvailableById,
             'mapMarkers' => $mapMarkers,
             'deliveryPinRequired' => $deliveryPinRequired,
             'selectedOrderActionState' => $selectedOrderActionState,
-            'orders' => $request->user()->orders()->with(['sellerOrders.shipment'])->latest()->paginate(10),
+            'orders' => $request->user()->orders()->with(['sellerOrders.shipments'])->latest()->paginate(10),
         ]);
+    }
+
+    public function buyAgain(Request $request, Order $order, SellerOrder $sellerOrder, CartService $cartService): RedirectResponse
+    {
+        abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
+        abort_unless((int) $sellerOrder->order_id === (int) $order->id, 404);
+
+        $sellerOrder->loadMissing('items.product.sellerProfile.user', 'items.productVariant');
+        $purchasableItems = $sellerOrder->items->filter(function (OrderItem $item): bool {
+            $product = $item->product;
+            $variant = $item->productVariant;
+            $seller = $product?->sellerProfile;
+
+            return $product instanceof Product
+                && $variant instanceof ProductVariant
+                && (int) $variant->product_id === (int) $product->id
+                && $variant->is_active
+                && $variant->stock > 0
+                && $product->status === 'ACTIVE'
+                && $seller?->status === 'ACTIVE'
+                && $seller?->user?->status === User::STATUS_ACTIVE
+                && ! $seller->vacation_mode;
+        });
+
+        if ($purchasableItems->isEmpty()) {
+            return back()->with('buyer_notice', 'These items are no longer available to buy again.');
+        }
+
+        $cart = $cartService->activeCart($request->user());
+        $cartQuantities = $cart->items()->pluck('quantity', 'product_variant_id')->all();
+        $plannedQuantities = [];
+        $itemsToAdd = [];
+
+        foreach ($purchasableItems as $item) {
+            $variant = $item->productVariant;
+            $variantId = (int) $variant->id;
+            $alreadyInCart = (int) ($cartQuantities[$variantId] ?? 0);
+            $alreadyPlanned = (int) ($plannedQuantities[$variantId] ?? 0);
+            $available = max(0, (int) $variant->stock - $alreadyInCart - $alreadyPlanned);
+            $quantity = min((int) $item->quantity, $available);
+
+            if ($quantity < 1) {
+                continue;
+            }
+
+            $plannedQuantities[$variantId] = $alreadyPlanned + $quantity;
+            $itemsToAdd[] = [$item->product, $variantId, $quantity];
+        }
+
+        if ($itemsToAdd === []) {
+            return back()->with('buyer_notice', 'The items are unavailable or your cart already has the available stock.');
+        }
+
+        DB::transaction(function () use ($cartService, $request, $itemsToAdd): void {
+            foreach ($itemsToAdd as [$product, $variantId, $quantity]) {
+                $cartService->add($request->user(), $product, $variantId, $quantity);
+            }
+        });
+
+        $message = count($itemsToAdd) === $purchasableItems->count()
+            ? 'Available items were added to your cart.'
+            : 'Available items were added to your cart; some items could not be added.';
+
+        return redirect()->route('buyer.cart')->with('buyer_notice', $message);
     }
 
     public function confirmDeliveryPin(Request $request, Order $order): RedirectResponse
@@ -254,10 +352,10 @@ class BuyerOrderController extends Controller
             return false;
         }
 
-        $order->loadMissing('sellerOrders.shipment');
+        $order->loadMissing('sellerOrders.shipments');
 
-        return ! $order->sellerOrders->contains(fn ($sellerOrder): bool => in_array(
-            $sellerOrder->shipment?->current_status,
+        return ! $order->sellerOrders->flatMap->shipments->contains(fn ($shipment): bool => in_array(
+            $shipment->current_status,
             ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'],
             true,
         ));
@@ -305,56 +403,136 @@ class BuyerOrderController extends Controller
     public function cancel(Request $request, Order $order): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
-        abort_unless(in_array($order->status, ['PLACED', 'PROCESSING'], true), 409, 'This order can no longer be cancelled.');
-        $order->loadMissing('sellerOrders.shipment');
-        abort_if(
-            $order->sellerOrders->contains(fn ($sellerOrder): bool => in_array($sellerOrder->shipment?->current_status, [
-                'PICKED_UP',
-                'AT_SORTING_CENTER',
-                'SORTED',
-                'ASSIGNED_TO_RIDER',
-                'OUT_FOR_DELIVERY',
-                'DELIVERED',
-                'COMPLETED',
-            ], true)),
-            409,
-            'An order can no longer be cancelled after a parcel has been picked up.'
-        );
-
+        $order->loadMissing('sellerOrders.shipments', 'payments');
+        if ($order->status !== 'CANCELLED') {
+            abort_unless(in_array($order->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true), 409, 'This order can no longer be cancelled.');
+            abort_if($order->payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID'), 409, 'A paid online order must use the approved refund workflow before cancellation.');
+            $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
+            abort_if($activeSellerOrders->isEmpty(), 409, 'This order has no remaining cancellable seller orders.');
+            abort_if(
+                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => ! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)
+                    || $sellerOrder->shipments->contains(fn ($shipment): bool => ! in_array($shipment->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true))),
+                409,
+                'Buyer cancellation is unavailable once a seller order or parcel is Ready for Pickup or later.'
+            );
+        }
+        $request->merge([
+            'reason_details' => is_string($request->input('reason_details')) ? trim($request->input('reason_details')) : $request->input('reason_details'),
+        ]);
         $data = $request->validate([
-            'reason' => ['nullable', 'string', 'max:500'],
+            'reason' => ['required', 'string', Rule::in(['CHANGED_MIND', 'ORDERED_BY_MISTAKE', 'DELIVERY_TIMING', 'OTHER'])],
+            'reason_details' => ['required_if:reason,OTHER', 'nullable', 'string', 'max:480'],
         ]);
+        $reasonLabels = [
+            'CHANGED_MIND' => 'Changed my mind',
+            'ORDERED_BY_MISTAKE' => 'Ordered by mistake',
+            'DELIVERY_TIMING' => 'Delivery timing no longer works',
+            'OTHER' => 'Other: '.trim((string) ($data['reason_details'] ?? '')),
+        ];
+        $reason = $reasonLabels[$data['reason']];
 
-        $order->update([
-            'status' => 'CANCELLED',
-            'payment_status' => 'CANCELLED',
-            'cancelled_at' => now(),
-            'cancellation_reason' => $data['reason'] ?? 'Cancelled by buyer.',
-        ]);
+        $alreadyCancelled = DB::transaction(function () use ($order, $request, $reason): bool {
+            // Lock seller orders first so repeated buyer/seller cancellation
+            // requests serialize before inventory is adjusted.
+            $sellerOrders = SellerOrder::query()
+                ->where('order_id', $order->id)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
 
-        foreach ($order->sellerOrders as $sellerOrder) {
-            $sellerOrder->update(['status' => 'CANCELLED']);
-            if ($sellerOrder->shipment) {
-                $sellerOrder->shipment->update(['current_status' => 'RETURNED']);
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            abort_unless((int) $lockedOrder->buyer_user_id === (int) $request->user()->id, 403);
+
+            if ($lockedOrder->status === 'CANCELLED') {
+                return true;
+            }
+            abort_unless(in_array($lockedOrder->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true), 409, 'This order can no longer be cancelled.');
+            abort_if(
+                $lockedOrder->payments()->where('method', 'ONLINE')->where('status', 'PAID')->exists(),
+                409,
+                'A paid online order must use the approved refund workflow before cancellation.'
+            );
+
+            $activeSellerOrders = $sellerOrders->where('status', '!=', 'CANCELLED')->values();
+            abort_if($activeSellerOrders->isEmpty(), 409, 'This order has no remaining cancellable seller orders.');
+            $allowedSellerStatuses = ['PLACED', 'CONFIRMED', 'PREPARING'];
+            abort_if(
+                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => ! in_array($sellerOrder->status, $allowedSellerStatuses, true)),
+                409,
+                'Buyer cancellation is unavailable once a seller order is Ready for Pickup or later.'
+            );
+
+            $sellerOrderIds = $activeSellerOrders->pluck('id')->map(fn ($id): int => (int) $id)->all();
+            $shipments = Shipment::query()
+                ->whereIn('seller_order_id', $sellerOrderIds)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $allowedShipmentStatuses = ['PLACED', 'CONFIRMED', 'PREPARING'];
+            abort_if(
+                $shipments->contains(fn (Shipment $shipment): bool => ! in_array($shipment->current_status, $allowedShipmentStatuses, true)),
+                409,
+                'Buyer cancellation is unavailable once a parcel is Ready for Pickup or later.'
+            );
+
+            $items = OrderItem::query()
+                ->whereIn('seller_order_id', $sellerOrderIds)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            abort_if($items->isEmpty() || $items->contains(fn (OrderItem $item): bool => ! $item->product_variant_id), 409, 'A purchased variant is unavailable, so inventory cannot be restored safely.');
+
+            $quantityByVariant = $items->groupBy('product_variant_id')
+                ->map(fn ($variantItems): int => (int) $variantItems->sum('quantity'));
+            $variants = ProductVariant::query()
+                ->whereIn('id', $quantityByVariant->keys()->all())
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            abort_if($variants->count() !== $quantityByVariant->count(), 409, 'A purchased variant is unavailable, so inventory cannot be restored safely.');
+
+            foreach ($quantityByVariant as $variantId => $quantity) {
+                $variants->get($variantId)->increment('stock', $quantity);
+            }
+
+            $cancelledAt = now();
+            foreach ($activeSellerOrders as $sellerOrder) {
+                $sellerOrder->update(['status' => 'CANCELLED']);
+            }
+            foreach ($shipments as $shipment) {
                 ShipmentEvent::query()->create([
-                    'shipment_id' => $sellerOrder->shipment->id,
-                    'status' => 'RETURNED',
+                    'shipment_id' => $shipment->id,
+                    'status' => $shipment->current_status,
                     'actor_user_id' => $request->user()->id,
-                    'notes' => 'Order cancelled by buyer before fulfillment.',
-                    'occurred_at' => now(),
+                    'notes' => 'BUYER_ORDER_CANCELLED: '.$reason,
+                    'occurred_at' => $cancelledAt,
                 ]);
             }
-        }
+
+            $allSellerOrdersCancelled = $sellerOrders->every(fn (SellerOrder $sellerOrder): bool => $sellerOrder->status === 'CANCELLED');
+            $lockedOrder->update([
+                'status' => $allSellerOrdersCancelled ? 'CANCELLED' : 'PARTIALLY_CANCELLED',
+                'payment_status' => $allSellerOrdersCancelled ? 'CANCELLED' : $lockedOrder->payment_status,
+                'cancelled_at' => $allSellerOrdersCancelled ? $cancelledAt : $lockedOrder->cancelled_at,
+                'cancellation_reason' => $reason,
+            ]);
+
+            return false;
+        }, attempts: 3);
+
+        $order->refresh();
 
         if ($request->expectsJson()) {
             return response()->json([
                 'success' => true,
                 'order_number' => $order->order_number,
-                'status' => 'CANCELLED',
+                'status' => $order->status,
+                'already_cancelled' => $alreadyCancelled,
             ]);
         }
 
-        return back()->with('buyer_notice', 'Order cancelled.');
+        return back()->with('buyer_notice', $alreadyCancelled ? 'This order was already cancelled.' : 'Order cancelled. Your eligible stock and voucher usage have been restored.');
     }
 
     public function received(Request $request, Order $order, BuyerOrderActionService $actions): RedirectResponse|JsonResponse
@@ -364,14 +542,8 @@ class BuyerOrderController extends Controller
             'confirm_receipt' => ['required', 'accepted'],
         ]);
 
-        DB::transaction(function () use ($request, $order, $actions): void {
-            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
-            $state = $actions->state($lockedOrder, $this->returnRefundStorageReady());
-            abort_if($state['active_dispute'], 409, 'Resolve the active return/refund request before confirming receipt.');
-            abort_unless($state['can_confirm_received'], 409, 'Receipt can only be confirmed once, after every parcel has been delivered.');
-            $completed = $actions->completeReceipt($lockedOrder, $request->user(), 'Buyer confirmed receipt.');
-            abort_unless($completed, 409, 'This order can no longer be completed.');
-        });
+        $completed = $actions->confirmReceipt($order, $request->user(), $actions->returnRefundStorageReady());
+        abort_unless($completed, 409, 'Receipt can only be confirmed after every parcel has been delivered and any active return/refund request is resolved.');
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -397,7 +569,7 @@ class BuyerOrderController extends Controller
         }
 
         return view('Buyer.return-refund', [
-            'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipment.events', 'payments']),
+            'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipments.events', 'payments']),
             'issues' => $this->returnRefundIssues(),
             'refundMethods' => $this->refundMethods($order),
             'deliveredAt' => $deliveredAt,
@@ -601,18 +773,18 @@ class BuyerOrderController extends Controller
 
     private function returnRefundEligibility(Order $order): array
     {
-        $order->loadMissing('sellerOrders.shipment.events');
+        $order->loadMissing('sellerOrders.shipments.events');
         abort_unless(in_array($order->status, ['PROCESSING', 'COMPLETED'], true), 409, 'This order is no longer eligible for return or refund.');
         abort_unless(
             $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                    && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true)),
+                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipments->isNotEmpty()
+                    && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true))),
             409,
             'Return or refund can only be requested after delivery.'
         );
 
         $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment->events)
+            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
         $deadline = $deliveredAt?->copy()->addDays(5);
@@ -686,18 +858,18 @@ class BuyerOrderController extends Controller
     private function returnRefundLegacy(Request $request, Order $order): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
-        $order->loadMissing('sellerOrders.shipment.events');
+        $order->loadMissing('sellerOrders.shipments.events');
         abort_unless(in_array($order->status, ['PROCESSING', 'COMPLETED'], true), 409, 'This order is no longer eligible for return or refund.');
         abort_unless(
             $order->sellerOrders->isNotEmpty()
-                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipment
-                    && in_array($sellerOrder->shipment->current_status, ['DELIVERED', 'COMPLETED'], true)),
+                && $order->sellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->shipments->isNotEmpty()
+                    && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true))),
             409,
             'Return or refund can only be requested after delivery.'
         );
 
         $deliveredAt = $order->sellerOrders
-            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipment->events)
+            ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
         abort_unless($deliveredAt && now()->lte($deliveredAt->copy()->addDays(5)), 409, 'The five-day return and refund window has expired.');
@@ -785,21 +957,74 @@ class BuyerOrderController extends Controller
         return back()->with('buyer_notice', $existing ? 'Your return/refund request is already under review.' : 'Your return/refund request was submitted for review.');
     }
 
-    public function review(Request $request, OrderItem $item, RiderRatingService $riderRatings, ReviewImageService $reviewImages): RedirectResponse|JsonResponse
+    public function review(
+        Request $request,
+        OrderItem $item,
+        RiderRatingService $riderRatings,
+        ReviewImageService $reviewImages,
+        AccountNotificationService $notifications,
+    ): RedirectResponse|JsonResponse
     {
-        $item->loadMissing('review', 'sellerOrder.order', 'sellerOrder.shipment.riderAssignments.riderProfile');
+        $item->loadMissing('review', 'sellerOrder.order', 'shipment.riderAssignments.riderProfile');
         abort_unless((int) $item->sellerOrder->order->buyer_user_id === (int) $request->user()->id, 403);
         abort_unless($item->sellerOrder->order->status === 'COMPLETED', 409, 'You can review after completing the order.');
+
+        if (is_string($request->input('comment'))) {
+            $comment = $request->input('comment');
+            $normalizedComment = preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $comment);
+            $request->merge(['comment' => $normalizedComment ?? trim($comment)]);
+        }
+
+        $validReviewImage = function (string $attribute, mixed $value, \Closure $fail): void {
+            if (! $value instanceof UploadedFile) {
+                return;
+            }
+
+            $path = $value->getRealPath();
+            $imageInfo = $path ? @getimagesize($path) : false;
+            $extension = strtolower($value->getClientOriginalExtension());
+            $allowedExtensions = match ($imageInfo[2] ?? null) {
+                IMAGETYPE_JPEG => ['jpg', 'jpeg'],
+                IMAGETYPE_PNG => ['png'],
+                IMAGETYPE_WEBP => ['webp'],
+                default => [],
+            };
+            $decodable = true;
+            if ($imageInfo && function_exists('imagecreatefromstring')) {
+                $contents = $path ? @file_get_contents($path) : false;
+                $decoded = is_string($contents) ? @imagecreatefromstring($contents) : false;
+                $decodable = $decoded !== false;
+                if ($decoded !== false) {
+                    imagedestroy($decoded);
+                }
+            }
+
+            if (! $imageInfo || ! $decodable || ! in_array($extension, $allowedExtensions, true)) {
+                $fail('Each review photo must be a readable JPG, PNG, or WebP image with a matching extension.');
+            }
+        };
 
         $data = $request->validate([
             'rating' => ['nullable', 'integer', 'min:1', 'max:5'],
             'rider_rating' => ['nullable', 'integer', 'min:1', 'max:5'],
             'rider_comment' => ['nullable', 'string', 'max:2000'],
-            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
-            'comment' => ['nullable', 'string', 'max:2000'],
+            'image' => ['nullable', 'bail', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'mimetypes:image/jpeg,image/png,image/webp', 'extensions:jpg,jpeg,png,webp', 'max:5120', $validReviewImage],
+            'images' => ['nullable', 'array', 'max:5', function (string $attribute, mixed $value, \Closure $fail) use ($request): void {
+                $count = (is_array($value) ? count($value) : 0) + ($request->hasFile('image') ? 1 : 0);
+                if ($count > 5) {
+                    $fail('You can upload up to 5 review photos.');
+                }
+            }],
+            'images.*' => ['bail', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'mimetypes:image/jpeg,image/png,image/webp', 'extensions:jpg,jpeg,png,webp', 'max:5120', $validReviewImage],
+            'comment' => ['nullable', 'string', 'max:500'],
         ]);
 
-        if ($item->review && (filled($data['rating'] ?? null) || filled($data['rider_rating'] ?? null) || $request->hasFile('image'))) {
+        $imageFiles = array_values(array_filter(array_merge(
+            $data['images'] ?? [],
+            isset($data['image']) ? [$data['image']] : [],
+        )));
+
+        if ($item->review && (filled($data['rating'] ?? null) || filled($data['rider_rating'] ?? null) || $imageFiles !== [])) {
             if ($request->expectsJson()) {
                 abort(409, 'Submitted ratings and photos are locked. You can still edit the review text.');
             }
@@ -807,7 +1032,7 @@ class BuyerOrderController extends Controller
             return back()->withErrors(['rating' => 'Submitted ratings and photos are locked. You can still edit the review text.'])->withInput();
         }
 
-        if ($request->hasFile('image') && ! filled($data['rating'] ?? null)) {
+        if ($imageFiles !== [] && ! filled($data['rating'] ?? null)) {
             if ($request->expectsJson()) {
                 abort(422, 'Choose a product rating to attach a photo.');
             }
@@ -823,7 +1048,10 @@ class BuyerOrderController extends Controller
             return back()->withErrors(['rating' => 'Choose a product rating or a rider rating.'])->withInput();
         }
 
-        $review = Review::query()->firstOrNew(['order_item_id' => $item->id]);
+        $existingReview = $item->review;
+        $createsProductReview = $existingReview === null && filled($data['rating'] ?? null);
+        $previousReviewComment = $existingReview?->comment;
+        $review = $existingReview ?? Review::query()->make(['order_item_id' => $item->id]);
         $review->buyer_user_id = $request->user()->id;
         $review->status = 'PUBLISHED';
 
@@ -837,8 +1065,11 @@ class BuyerOrderController extends Controller
             $review->rider_comment = $data['rider_comment'] ?? $review->rider_comment;
         }
 
+        $reviewCommentChanged = $existingReview !== null && $review->comment !== $previousReviewComment;
+        $requestedReviewComment = $review->comment;
+
         if (filled($data['rider_rating'] ?? null)) {
-            $assignment = $item->sellerOrder->shipment?->riderAssignments
+            $assignment = $item->shipment?->riderAssignments
                 ->where('assignment_type', 'DELIVERY')
                 ->sortByDesc('id')
                 ->first();
@@ -852,10 +1083,69 @@ class BuyerOrderController extends Controller
             );
         }
 
-        $review->save();
+        try {
+            DB::transaction(function () use ($review, $existingReview, $createsProductReview, $reviewCommentChanged, $previousReviewComment, $requestedReviewComment, $imageFiles, $reviewImages, $notifications, $request, $item): void {
+                if ($existingReview !== null && $reviewCommentChanged) {
+                    $lockedReview = Review::query()->whereKey($existingReview->id)->lockForUpdate()->firstOrFail();
+                    abort_unless((int) $lockedReview->order_item_id === (int) $item->id
+                        && (int) $lockedReview->buyer_user_id === (int) $request->user()->id, 403);
 
-        if ($request->hasFile('image')) {
-            $reviewImages->store($review, $request->file('image'), $request->user(), $request);
+                    if (AuditLog::query()
+                        ->where('event', self::REVIEW_TEXT_EDIT_EVENT)
+                        ->where('auditable_type', Review::class)
+                        ->where('auditable_id', $lockedReview->id)
+                        ->exists()) {
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'comment' => 'Review text can only be edited once.',
+                        ]);
+                    }
+
+                    $deadline = $lockedReview->created_at?->copy()->addDays(30);
+                    if ($deadline === null || now()->greaterThan($deadline)) {
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'comment' => 'Review text can only be edited within 30 days of submission.',
+                        ]);
+                    }
+
+                    if ($lockedReview->comment !== $previousReviewComment) {
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'comment' => 'This review changed in another request. Refresh the page before editing it.',
+                        ]);
+                    }
+
+                    $lockedReview->comment = $requestedReviewComment;
+                    $lockedReview->rider_comment = $review->rider_comment;
+                    $lockedReview->save();
+
+                    AuditLog::query()->create([
+                        'actor_user_id' => $request->user()->id,
+                        'event' => self::REVIEW_TEXT_EDIT_EVENT,
+                        'auditable_type' => Review::class,
+                        'auditable_id' => $lockedReview->id,
+                        'old_values' => ['comment' => $previousReviewComment],
+                        'new_values' => ['comment' => $requestedReviewComment],
+                        'ip_address' => $request->ip(),
+                        'user_agent' => $request->userAgent(),
+                        'created_at' => now(),
+                    ]);
+                } else {
+                    $review->save();
+                }
+
+                if ($imageFiles !== []) {
+                    $reviewImages->storeMany($review, $imageFiles, $request->user(), $request);
+                }
+
+                if ($createsProductReview) {
+                    $notifications->reviewSubmitted($review);
+                }
+            });
+        } catch (\RuntimeException $exception) {
+            report($exception);
+
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => 'The review could not be saved. Please try again.'], 503)
+                : back()->withErrors(['images' => 'The review could not be saved. Please try again.'])->withInput();
         }
 
         if ($request->expectsJson()) {
@@ -877,16 +1167,49 @@ class BuyerOrderController extends Controller
                 'status' => (string) $order->status,
                 'updated_at' => $order->updated_at?->toIso8601String(),
                 'shipments' => $order->sellerOrders
-                    ->map(fn (SellerOrder $sellerOrder): ?array => $sellerOrder->shipment ? [
-                        'id' => (int) $sellerOrder->shipment->id,
-                        'status' => (string) $sellerOrder->shipment->current_status,
-                        'updated_at' => $sellerOrder->shipment->updated_at?->toIso8601String(),
-                    ] : null)
-                    ->filter()
+                    ->flatMap(fn (SellerOrder $sellerOrder) => $sellerOrder->shipments->map(fn ($shipment): array => [
+                        'id' => (int) $shipment->id,
+                        'status' => (string) $shipment->current_status,
+                        'updated_at' => $shipment->updated_at?->toIso8601String(),
+                        'current_center_name' => $shipment->logisticsCenter?->business_name,
+                        'events' => $shipment->relationLoaded('events')
+                            ? $shipment->events->sortBy('occurred_at')->values()->map(fn ($event): array => [
+                                'id' => (int) $event->id,
+                                'status' => (string) $event->status,
+                                'cancelled' => str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
+                                    || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:'),
+                                'auto_received' => str_starts_with((string) $event->notes, BuyerOrderActionService::AUTOMATIC_RECEIPT_NOTE),
+                                'occurred_at' => $event->occurred_at?->toIso8601String(),
+                                'display_time' => $event->occurred_at?->timezone('Asia/Manila')->format('M j, Y g:i A'),
+                            ])->all()
+                            : null,
+                        'transfer_legs' => $shipment->transferLegs->map(fn ($leg): array => [
+                            'id' => (int) $leg->id,
+                            'status' => (string) $leg->status,
+                            'updated_at' => $leg->updated_at?->toIso8601String(),
+                            'origin_center_name' => $leg->originLogisticsCenter?->business_name,
+                            'destination_center_name' => $leg->destinationLogisticsCenter?->business_name,
+                            'arrival_scanned_at' => $leg->arrival_scanned_at,
+                        ])->values()->all(),
+                    ]))
                     ->sortBy('id')
                     ->values()
                     ->all(),
             ])
             ->values();
+    }
+
+    private function withTransferArrivalScan($query)
+    {
+        return $query
+            ->withMax([
+                'scans as arrival_scanned_at' => fn ($scans) => $scans
+                    ->where('scan_type', 'TRANSFER_ARRIVAL')
+                    ->where('result', 'SUCCESS'),
+            ], 'scanned_at')
+            ->with([
+                'originLogisticsCenter:id,business_name',
+                'destinationLogisticsCenter:id,business_name',
+            ]);
     }
 }

@@ -20,7 +20,7 @@ class BuyerAiController extends Controller
         'messages' => ['title' => 'Messages', 'features' => ['view existing buyer messages', 'contact a seller or support']],
         'account' => ['title' => 'Account', 'features' => ['update profile', 'manage addresses', 'change password', 'view reviews']],
         'wishlist' => ['title' => 'Wishlist', 'features' => ['view saved products', 'remove saved products', 'add saved products to cart']],
-        'rewards' => ['title' => 'Rewards & Vouchers', 'features' => ['view vouchers', 'view points', 'view cashback']],
+        'rewards' => ['title' => 'Rewards & Vouchers', 'features' => ['view vouchers', 'view points', 'view voucher history']],
         'buyer' => ['title' => 'Buyer portal', 'features' => ['browse products', 'view cart', 'view orders', 'manage your account']],
     ];
 
@@ -38,27 +38,28 @@ class BuyerAiController extends Controller
         // Live account questions bypass the model so a model can never invent
         // delivery data or select another buyer's order.
         if ($this->isLiveOrderQuestion($message)) {
-            return response()->json($this->answerOrderQuestion($request, $message));
+            return response()->json($this->answerOrderQuestion($request, $message) + ['mode' => 'live-data']);
         }
 
         if ($this->isNotificationCountQuestion($message)) {
-            return response()->json(['reply' => $this->notificationCountAnswer($request)]);
+            return response()->json(['reply' => $this->notificationCountAnswer($request), 'mode' => 'live-data']);
         }
 
         if ($reply = $this->buyerPortalAnswer($request, $message)) {
-            return response()->json(['reply' => $reply]);
+            return response()->json(['reply' => $reply, 'mode' => 'local-help']);
         }
 
         $context = self::PAGE_CONTEXTS[$page];
         // Common Buyer guidance is deterministic and remains available even
         // when Gemini is down or has not been configured yet.
         if ($this->hasLocalHelpAnswer($message) || ! $gemini->configured()) {
-            return response()->json(['reply' => $this->localHelp($message, $context)]);
+            return response()->json(['reply' => $this->localHelp($message, $context), 'mode' => 'local-help']);
         }
 
         try {
             return response()->json([
                 'reply' => $gemini->generate($this->systemInstruction(), $this->generalPrompt($message, $context)),
+                'mode' => 'ai',
             ]);
         } catch (Throwable) {
             report('LIKHAE Buyer AI request failed.');
@@ -182,7 +183,7 @@ class BuyerAiController extends Controller
         }
 
         if (preg_match('/\b(reward|points|cashback)\b/', $question)) {
-            return 'Open Rewards from your Buyer navigation to review vouchers, points, and cashback activity.';
+            return 'Open Rewards from your Buyer navigation to review available vouchers, voucher history, and reward points.';
         }
 
         $statusExplanations = [
@@ -210,7 +211,7 @@ class BuyerAiController extends Controller
     private function answerOrderQuestion(Request $request, string $message): array
     {
         $orders = $request->user()->orders()
-            ->with('sellerOrders.shipment')
+            ->with('sellerOrders.shipments')
             ->latest('placed_at')
             ->latest('id')
             ->get();
@@ -250,7 +251,7 @@ class BuyerAiController extends Controller
 
     private function describeOrder(Order $order, string $question): string
     {
-        $statuses = $order->sellerOrders->pluck('shipment.current_status')->filter()->unique()->values();
+        $statuses = $order->sellerOrders->flatMap->shipments->pluck('current_status')->filter()->unique()->values();
         if ($statuses->isEmpty()) {
             return "Your order {$order->order_number} is ".str($order->status)->headline().'. I cannot verify a parcel location for it yet.';
         }
@@ -289,7 +290,7 @@ class BuyerAiController extends Controller
 
     private function orderSummary(Order $order): string
     {
-        $statuses = $order->sellerOrders->pluck('shipment.current_status')->filter()->unique()->values();
+        $statuses = $order->sellerOrders->flatMap->shipments->pluck('current_status')->filter()->unique()->values();
         $status = $statuses->count() === 1 ? str($statuses->first())->headline() : str($order->status)->headline();
 
         return "{$order->order_number} ({$status})";

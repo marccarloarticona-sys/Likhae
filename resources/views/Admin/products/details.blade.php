@@ -41,6 +41,7 @@
     $hasImages = $gallery->isNotEmpty();
     $skus = $variants->pluck('sku')->filter()->unique()->implode(', ');
     $complianceCases = $product->complianceCases->sortByDesc(fn ($case) => $case->created_at?->timestamp ?? 0)->values();
+    $moderationScans = $moderationScans ?? collect();
     $backQuery = collect($backQuery)->filter(fn ($value): bool => filled($value))->all();
 @endphp
 
@@ -132,6 +133,91 @@
                 <p class="ad-product-moderation-note">This product is suspended and unavailable to buyers. Resolve the compliance case before reinstating it.</p>
             </section>
         @endif
+
+        <section class="ad-card ad-card-body" aria-labelledby="ai-moderation-title">
+            <div class="ad-card-head" style="padding:0 0 12px;border-bottom:1px solid var(--ad-border);">
+                <div><span class="ad-overline">Cloudflare Workers AI</span><h2 id="ai-moderation-title">Product AI moderation</h2><p>AI findings are review signals only. A human Admin decision is required for a final policy outcome.</p></div>
+                <span class="ad-status {{ $moderationHealth['status'] === 'HEALTHY' ? 'is-clear' : ($moderationHealth['status'] === 'DEGRADED' ? 'is-pending' : 'is-unknown') }}">{{ $moderationHealth['status'] }}</span>
+            </div>
+            <div style="padding-top:14px;">
+                @if(! $moderationHealth['table_ready'])
+                    <p class="ad-product-moderation-note">Scan storage is not available yet. Apply the product moderation migration before using scan history and review actions.</p>
+                @elseif(! $moderationHealth['enabled'])
+                    <p class="ad-product-moderation-note">Cloudflare Workers AI moderation is disabled or its server credentials are not configured. No seller listing data is being sent to a model.</p>
+                @endif
+
+                @if($moderationHealth['enabled'] && $moderationHealth['table_ready'] && in_array($product->status, ['ACTIVE', 'SUSPENDED'], true))
+                    <form method="POST" action="{{ route('admin.products.ai.rescan', $product) }}" style="margin:0 0 18px;">
+                        @csrf
+                        <button class="ad-btn ad-btn-secondary" type="submit">Queue manual rescan</button>
+                    </form>
+                @endif
+
+                @if($moderationScans->isEmpty())
+                    <p class="ad-product-moderation-note">No scan records are available for this product.</p>
+                @else
+                    <div class="ad-compliance-list">
+                        @foreach($moderationScans as $scan)
+                            @php
+                                $categoryLabels = collect($scan->detected_categories ?? [])->map(fn ($category) => config('product_moderation.categories.'.$category, config('product_moderation.image_categories.'.$category, str($category)->replace('_', ' ')->headline())))->implode(', ');
+                                $detections = collect($scan->object_detections ?? [])->flatMap(fn ($result) => (array) ($result['detections'] ?? []))->pluck('label')->filter()->unique()->implode(', ');
+                            @endphp
+                            <article class="ad-compliance-case" style="margin:12px 0;">
+                                <div class="ad-compliance-case-head">
+                                    <div><strong>Scan #{{ $scan->id }} · {{ str($scan->overall_risk ?: $scan->scan_status)->replace('_', ' ')->headline() }}</strong><p>{{ $scan->scanned_at?->format('M d, Y H:i') ?: 'Not completed' }} · {{ $scan->is_automatic ? 'Automatic' : 'Admin requested' }}</p></div>
+                                    @if($scan->held_at)<span class="ad-status is-pending">AI listing hold</span>@endif
+                                </div>
+                                <dl class="ad-product-detail-meta" style="margin:12px 0;">
+                                    <div><dt>Overall risk</dt><dd>{{ $scan->overall_risk ?: 'Unknown' }}</dd></div>
+                                    <div><dt>Human decision</dt><dd>{{ str($scan->decision_status)->replace('_', ' ')->headline() }}</dd></div>
+                                    <div><dt>Appeal status</dt><dd>{{ str($scan->appeal_status)->replace('_', ' ')->headline() }}</dd></div>
+                                    <div><dt>Models</dt><dd>{{ collect($scan->model_versions ?? [])->filter()->implode(', ') ?: 'Not recorded' }}</dd></div>
+                                </dl>
+                                @if($categoryLabels)<p><strong>Possible categories:</strong> {{ $categoryLabels }}</p>@endif
+                                @if($detections)<p><strong>Object detector labels:</strong> {{ $detections }}</p>@endif
+                                @foreach(['Text' => $scan->text_findings, 'Image' => $scan->image_findings] as $signalName => $findings)
+                                    @if($findings && ! empty($findings['category_probabilities']))
+                                        @php $topSignal = collect($findings['category_probabilities'])->sortDesc()->first(); $topCategory = collect($findings['category_probabilities'])->sortDesc()->keys()->first(); @endphp
+                                        <p><strong>{{ $signalName }} signal:</strong> {{ config('product_moderation.categories.'.$topCategory, config('product_moderation.image_categories.'.$topCategory, str($topCategory)->replace('_', ' ')->headline())) }} ({{ number_format((float) $topSignal * 100, 1) }}% model score)</p>
+                                    @endif
+                                @endforeach
+                                @if($scan->evidence_summary)<p>{{ $scan->evidence_summary }}</p>@endif
+                                @if($scan->failure_code)<p class="ad-product-moderation-note">Scan status: {{ $scan->failure_code }}</p>@endif
+                                @if($scan->decision_reason)<p><strong>Admin decision note:</strong> {!! nl2br(e($scan->decision_reason)) !!}</p>@endif
+
+                                @if($scan->appeal_status === 'APPEAL_SUBMITTED')
+                                    <div class="ad-card ad-card-body" style="margin:12px 0;">
+                                        <h3>Seller appeal</h3>
+                                        <p><strong>Submitted:</strong> {{ $scan->appeal_submitted_at?->format('M d, Y H:i') ?: 'Date unavailable' }}</p>
+                                        <p>{!! nl2br(e($scan->appeal_explanation)) !!}</p>
+                                        @if($scan->appeal_evidence_path)
+                                            <p><a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.products.ai.appeals.evidence', [$product, $scan]) }}">Download private evidence</a></p>
+                                        @endif
+                                        <form method="POST" action="{{ route('admin.products.ai.appeals.review', [$product, $scan]) }}">
+                                            @csrf
+                                            <label class="ad-field"><span>Appeal decision</span><select name="decision" required><option value="APPROVED">Approve appeal / clear AI decision</option><option value="DENIED">Deny appeal / keep current decision</option><option value="REQUEST_CLARIFICATION">Request clarification</option></select></label>
+                                            <label class="ad-field"><span>Reason sent to Seller</span><textarea name="reason" required minlength="10" maxlength="2000" placeholder="Explain the evidence reviewed and the outcome.">{{ old('reason') }}</textarea></label>
+                                            <button class="ad-btn ad-btn-primary" type="submit">Record appeal decision</button>
+                                        </form>
+                                    </div>
+                                @elseif($scan->appeal_status === 'APPEAL_UNDER_REVIEW')
+                                    <p>Admin requested clarification. Awaiting Seller response.</p>
+                                @elseif($scan->decision_status === 'PENDING' && $scan->scan_status === 'COMPLETE')
+                                    <form method="POST" action="{{ route('admin.products.ai.review', [$product, $scan]) }}" style="margin-top:14px;">
+                                        @csrf
+                                        <label class="ad-field"><span>Human review outcome</span><select name="decision" required><option value="FALSE_POSITIVE">False positive / clear AI flag</option><option value="REQUEST_SELLER_EDIT">Request Seller edit</option><option value="CONFIRMED_POLICY_VIOLATION">Confirm policy violation</option></select></label>
+                                        <label class="ad-field"><span>Review reason</span><textarea name="reason" required minlength="10" maxlength="2000" placeholder="Record the evidence and policy basis for this decision.">{{ old('reason') }}</textarea></label>
+                                        <button class="ad-btn ad-btn-primary" type="submit">Save human decision</button>
+                                    </form>
+                                @elseif($scan->appeal_decision_reason)
+                                    <p><strong>Appeal decision note:</strong> {!! nl2br(e($scan->appeal_decision_reason)) !!}</p>
+                                @endif
+                            </article>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+        </section>
 
         <div class="ad-product-detail-grid">
             <section class="ad-card ad-card-body ad-product-gallery" aria-label="Product images">
@@ -251,6 +337,21 @@
                                         <strong>Moderation history</strong>
                                         @foreach($case->actions as $action)
                                             <span>{{ $action->performed_at?->format('M d, Y H:i') ?? 'Not provided' }} · {{ str($action->action_type)->replace('_', ' ')->headline() }} · {{ $action->performedBy?->name ?: 'System' }}{{ $action->reason ? ' — '.$action->reason : '' }}</span>
+                                        @endforeach
+                                    </div>
+                                @endif
+                                @if($case->responses->isNotEmpty())
+                                    <div class="ad-compliance-actions">
+                                        <strong>Seller corrections and responses</strong>
+                                        @foreach($case->responses as $response)
+                                            <div style="padding:8px 0;border-top:1px solid var(--ad-border);">
+                                                <span><strong>Submitted {{ $response->submitted_at?->format('M d, Y H:i') ?? 'Date unavailable' }}</strong></span>
+                                                <p><strong>Explanation:</strong> {!! nl2br(e($response->explanation)) !!}</p>
+                                                <p><strong>Corrective action:</strong> {!! nl2br(e($response->corrective_action)) !!}</p>
+                                                @if($response->evidence_path)
+                                                    <a class="ad-link" href="{{ route('admin.compliance.responses.evidence', [$case, $response]) }}">Download Seller evidence</a>
+                                                @endif
+                                            </div>
                                         @endforeach
                                     </div>
                                 @endif

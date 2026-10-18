@@ -48,6 +48,12 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI', '/auth/google/callback'),
     ],
 
+    /* Server-only Workers AI credentials. Never expose these through Vite. */
+    'cloudflare' => [
+        'account_id' => env('CLOUDFLARE_ACCOUNT_ID'),
+        'ai_token' => env('CLOUDFLARE_AI_API_TOKEN'),
+    ],
+
     /* The key is intentionally server-only. Do not expose this value to Vite. */
     'gemini' => [
         'key' => env('GEMINI_API_KEY'),

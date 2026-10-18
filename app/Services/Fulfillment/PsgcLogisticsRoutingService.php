@@ -4,11 +4,11 @@ namespace App\Services\Fulfillment;
 
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Buyer\Address;
+use App\Models\Buyer\OrderAddress;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Seller\SellerProfile;
 use Illuminate\Validation\ValidationException;
-use Illuminate\Support\Facades\Log;
 
 final class PsgcLogisticsRoutingService
 {
@@ -18,7 +18,7 @@ final class PsgcLogisticsRoutingService
      *
      * @return array{origin: LogisticsCenter, destination: LogisticsCenter, destination_area: ServiceAreaLocation}
      */
-    public function resolve(SellerProfile $seller, Address $destination): array
+    public function resolve(SellerProfile $seller, Address|OrderAddress $destination): array
     {
         $sellerAddress = $seller->businessAddress;
         $this->assertCompleteAddress($sellerAddress, 'seller pickup');
@@ -51,13 +51,39 @@ final class PsgcLogisticsRoutingService
         ];
     }
 
-    private function uniqueCenterForMunicipality(string $provinceCode, string $municipalityCode, string $purpose, ?Address $coverageAddress = null): LogisticsCenter
+    /** Resolve a parcel after an authorized administrator selects both hubs. */
+    public function resolveWithCenters(SellerProfile $seller, Address|OrderAddress $destination, int $originCenterId, int $destinationCenterId): array
+    {
+        $sellerAddress = $seller->businessAddress;
+        $this->assertCompleteAddress($sellerAddress, 'seller pickup');
+        $this->assertCompleteAddress($destination, 'buyer delivery');
+        $this->assertBarangayBelongsToMunicipality($sellerAddress->municipality_code, $sellerAddress->barangay_code, 'seller pickup');
+        $this->assertBarangayBelongsToMunicipality($destination->municipality_code, $destination->barangay_code, 'buyer delivery');
+
+        $origin = $this->selectedCenterForMunicipality($originCenterId, $sellerAddress, 'seller pickup');
+        $destinationCenter = $this->selectedCenterForMunicipality($destinationCenterId, $destination, 'buyer delivery');
+
+        return [
+            'origin' => $origin,
+            'destination' => $destinationCenter,
+            'origin_coverage' => $this->coverageForAddress($origin, $sellerAddress, 'seller pickup'),
+            'destination_area' => $this->coverageForAddress($destinationCenter, $destination, 'buyer delivery'),
+        ];
+    }
+
+    private function uniqueCenterForMunicipality(string $provinceCode, string $municipalityCode, string $purpose, Address|OrderAddress $coverageAddress): LogisticsCenter
     {
         $centers = LogisticsCenter::query()
             ->approvedActive()
             ->whereHas('address', fn ($query) => $query
                 ->where('province_code', trim($provinceCode))
                 ->where('municipality_code', trim($municipalityCode)))
+            ->whereHas('serviceAreas', fn ($query) => $query
+                ->where('is_active', true)
+                ->whereHas('locations', fn ($locationQuery) => $locationQuery
+                    ->where('province_code', trim((string) $coverageAddress->province_code))
+                    ->where('municipality_code', trim((string) $coverageAddress->municipality_code))
+                    ->where('barangay_code', trim((string) $coverageAddress->barangay_code))))
             ->orderBy('id')
             ->get();
 
@@ -68,25 +94,6 @@ final class PsgcLogisticsRoutingService
         }
 
         if ($centers->count() !== 1) {
-            if (config('likhae.allow_ambiguous_routing', false) && $coverageAddress) {
-                $coveredCenter = $centers->first(function (LogisticsCenter $center) use ($coverageAddress): bool {
-                    return $this->hasSingleCoverageForAddress($center, $coverageAddress);
-                });
-
-                if ($coveredCenter) {
-                    Log::warning('Temporary ambiguous PSGC routing fallback selected a covered logistics hub.', [
-                        'purpose' => $purpose,
-                        'province_code' => $provinceCode,
-                        'municipality_code' => $municipalityCode,
-                        'barangay_code' => $coverageAddress->barangay_code,
-                        'selected_logistics_center_id' => $coveredCenter->id,
-                        'candidate_logistics_center_ids' => $centers->pluck('id')->values()->all(),
-                    ]);
-
-                    return $coveredCenter;
-                }
-            }
-
             throw ValidationException::withMessages([
                 'address_id' => "Routing is ambiguous: multiple active logistics hubs match the {$purpose} municipality PSGC.",
             ]);
@@ -95,19 +102,23 @@ final class PsgcLogisticsRoutingService
         return $centers->first();
     }
 
-    private function hasSingleCoverageForAddress(LogisticsCenter $center, Address $address): bool
+    private function selectedCenterForMunicipality(int $centerId, Address|OrderAddress $address, string $purpose): LogisticsCenter
     {
-        return ServiceAreaLocation::query()
+        $center = LogisticsCenter::query()->approvedActive()->whereKey($centerId)->whereHas('address', fn ($query) => $query
             ->where('province_code', trim((string) $address->province_code))
-            ->where('municipality_code', trim((string) $address->municipality_code))
-            ->where('barangay_code', trim((string) $address->barangay_code))
-            ->whereHas('serviceArea', fn ($query) => $query
-                ->where('logistics_center_id', $center->id)
-                ->where('is_active', true))
-            ->count() === 1;
+            ->where('municipality_code', trim((string) $address->municipality_code)))
+            ->first();
+
+        if (! $center) {
+            throw ValidationException::withMessages([
+                'address_id' => "The selected {$purpose} hub is not active, approved, or authorized for this municipality PSGC.",
+            ]);
+        }
+
+        return $center;
     }
 
-    private function coverageForAddress(LogisticsCenter $center, Address $address, string $purpose): ServiceAreaLocation
+    private function coverageForAddress(LogisticsCenter $center, Address|OrderAddress $address, string $purpose): ServiceAreaLocation
     {
         $locations = ServiceAreaLocation::query()
             ->where('province_code', trim((string) $address->province_code))
@@ -134,7 +145,7 @@ final class PsgcLogisticsRoutingService
         return $locations->first();
     }
 
-    private function assertCompleteAddress(?Address $address, string $purpose): void
+    private function assertCompleteAddress(Address|OrderAddress|null $address, string $purpose): void
     {
         if (! $address
             || blank($address->province_code)

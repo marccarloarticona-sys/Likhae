@@ -1,14 +1,19 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminCashRefundController;
 use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\AdminFinanceController;
+use App\Http\Controllers\Admin\AdminMarketingController;
 use App\Http\Controllers\Admin\AdminOnboardingController;
 use App\Http\Controllers\Admin\AdminOperationsController;
-use App\Http\Controllers\Admin\AdminFinanceController;
+use App\Http\Controllers\Admin\AdminProductModerationController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
-use App\Http\Controllers\Admin\AdminCashRefundController;
+use App\Http\Controllers\Admin\AdminShippingRateController;
+use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Controllers\Admin\AdminUserController;
-use App\Http\Middleware\EnsureWorkspaceRole;
+use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
 use App\Http\Controllers\WorkspaceSettingsController;
+use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('admin')
@@ -16,6 +21,8 @@ Route::prefix('admin')
     ->middleware(['auth', 'verified', EnsureWorkspaceRole::class.':admin'])
     ->group(function () {
         Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
+        Route::get('/routing-review', [AdminRoutingReviewController::class, 'index'])->name('routing-review');
+        Route::post('/routing-review/{shipment}/resolve', [AdminRoutingReviewController::class, 'resolve'])->name('routing-review.resolve');
 
         /*
         |--------------------------------------------------------------------------
@@ -49,6 +56,12 @@ Route::prefix('admin')
         Route::post('/users/{user}/reactivate', [AdminUserController::class, 'reactivate'])->name('users.reactivate');
 
         Route::get('/products', [AdminOperationsController::class, 'products'])->name('products');
+        Route::get('/marketing', [AdminMarketingController::class, 'index'])->name('marketing');
+        Route::post('/marketing/campaigns', [AdminMarketingController::class, 'storeCampaign'])->name('marketing.campaigns.store');
+        Route::patch('/marketing/campaigns/{voucher}', [AdminMarketingController::class, 'updateCampaign'])->name('marketing.campaigns.update');
+        Route::patch('/marketing/campaigns/{voucher}/toggle', [AdminMarketingController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
+        Route::post('/marketing/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('marketing.announcements.store');
+        Route::patch('/marketing/announcements/{announcement}/toggle', [AdminMarketingController::class, 'toggleAnnouncement'])->name('marketing.announcements.toggle');
         Route::get('/compliance', [AdminOperationsController::class, 'compliance'])->name('compliance');
         Route::get('/compliance-export', [AdminOperationsController::class, 'exportCompliance'])->name('compliance.export');
         Route::get('/compliance/{case}', [AdminOperationsController::class, 'showComplianceCase'])->name('compliance.show');
@@ -57,6 +70,14 @@ Route::prefix('admin')
         Route::patch('/compliance/{case}', [AdminOperationsController::class, 'updateComplianceCase'])->name('compliance.update');
         Route::get('/complaints', [AdminOperationsController::class, 'complaints'])->name('complaints');
         Route::get('/finance', [AdminOperationsController::class, 'finance'])->name('finance');
+        Route::get('/shipping-rate-requests', [AdminShippingRateController::class, 'index'])->name('shipping-rate-requests');
+        Route::post('/shipping-rate-requests/initialize-global-rate', [AdminShippingRateController::class, 'initializeGlobalRate'])->name('shipping-rate-requests.initialize');
+        Route::get('/shipping-rate-requests/{shippingRateRequest}', [AdminShippingRateController::class, 'show'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.show');
+        Route::post('/shipping-rate-requests/{shippingRateRequest}/approve', [AdminShippingRateController::class, 'approve'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.approve');
+        Route::post('/shipping-rate-requests/{shippingRateRequest}/reject', [AdminShippingRateController::class, 'reject'])
+            ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.reject');
         Route::get('/protection-rules', [AdminProtectionRuleController::class, 'index'])->name('protection-rules');
         Route::post('/protection-rules', [AdminProtectionRuleController::class, 'store'])->name('protection-rules.store');
         Route::patch('/protection-rules/{protectionRule}', [AdminProtectionRuleController::class, 'update'])->name('protection-rules.update');
@@ -68,13 +89,32 @@ Route::prefix('admin')
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [AdminOperationsController::class, 'messageStream'])->name('messages.stream');
         Route::get('/settings', [AdminOperationsController::class, 'settings'])->name('settings');
-        Route::get('/system-settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'admin')->name('system-settings');
+        Route::get('/system-settings', [SystemSettingsMonitoringController::class, 'show'])
+            ->defaults('workspace', 'admin')->middleware('throttle:20,1')->name('system-settings');
+        Route::get('/system-settings/errors', [SystemSettingsMonitoringController::class, 'errors'])
+            ->middleware('throttle:20,1')->name('system-settings.errors');
+        Route::get('/system-settings/logs', [SystemSettingsMonitoringController::class, 'logs'])
+            ->middleware('throttle:20,1')->name('system-settings.logs');
+        Route::get('/system-settings/audit-logs', [SystemSettingsMonitoringController::class, 'auditLogs'])
+            ->middleware('throttle:20,1')->name('system-settings.audit-logs');
+        Route::post('/system-settings/storage/refresh', [SystemSettingsMonitoringController::class, 'refreshStorage'])
+            ->middleware('throttle:1,1')->name('system-settings.storage.refresh');
+        Route::patch('/system-settings/product-moderation', [SystemSettingsMonitoringController::class, 'updateProductModeration'])
+            ->middleware('throttle:10,1')->name('system-settings.product-moderation.update');
         Route::put('/system-settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'admin')->name('system-settings.update');
         Route::get('/account', [AdminOperationsController::class, 'account'])->name('account');
         Route::get('/notifications', [AdminOperationsController::class, 'notifications'])->name('notifications');
         Route::post('/notifications/read-all', [AdminOperationsController::class, 'markNotificationsRead'])->name('notifications.read-all');
 
         Route::post('/products/{product}/moderate', [AdminOperationsController::class, 'moderateProduct'])->name('products.moderate');
+        Route::post('/products/{product}/ai/rescan', [AdminProductModerationController::class, 'rescan'])
+            ->middleware('throttle:5,1')->name('products.ai.rescan');
+        Route::post('/products/{product}/ai/scans/{scan}/review', [AdminProductModerationController::class, 'review'])
+            ->middleware('throttle:10,1')->name('products.ai.review');
+        Route::post('/products/{product}/ai/scans/{scan}/appeal-review', [AdminProductModerationController::class, 'reviewAppeal'])
+            ->middleware('throttle:10,1')->name('products.ai.appeals.review');
+        Route::get('/products/{product}/ai/scans/{scan}/appeal-evidence', [AdminProductModerationController::class, 'appealEvidence'])
+            ->middleware('throttle:20,1')->name('products.ai.appeals.evidence');
         Route::post('/products/{product}/warn', [AdminOperationsController::class, 'warnProduct'])->name('products.warn');
         Route::post('/categories', [AdminOperationsController::class, 'storeCategory'])->name('categories.store');
         Route::patch('/categories/{category}/status', [AdminOperationsController::class, 'updateCategoryStatus'])->name('categories.status');
@@ -93,7 +133,7 @@ Route::prefix('admin')
         Route::get('/finance-export', [AdminOperationsController::class, 'exportFinance'])->name('finance.export');
         Route::get('/reports-export', [AdminOperationsController::class, 'exportReport'])->name('reports.export');
         Route::post('/messages/send', [AdminOperationsController::class, 'sendMessage'])->name('messages.send');
-        Route::post('/announcements', [AdminOperationsController::class, 'storeAnnouncement'])->name('announcements.store');
+        Route::post('/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('announcements.store');
         Route::patch('/settings', [AdminOperationsController::class, 'updateSettings'])->name('settings.update');
         Route::post('/policies', [AdminOperationsController::class, 'storePolicy'])->name('policies.store');
         Route::patch('/policies/{policy}', [AdminOperationsController::class, 'updatePolicy'])->name('policies.update');

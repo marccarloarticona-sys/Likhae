@@ -7,6 +7,7 @@ use App\Models\Rider\RiderLocalTrip;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Maps\MapDataService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -40,11 +41,12 @@ class RiderPickupBatchController extends Controller
     public function show(Request $request, int $trip): View
     {
         $pickup = $this->ownedBatch($request, $trip)
-            ->load(['seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
+            ->load(['seller.user', 'seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
 
         $items = $pickup->items;
         $total = $items->count();
-        $collected = $items->filter(fn ($item): bool => $item->riderAssignment?->status === 'COMPLETED')->count();
+        $collectedAssignmentIds = app(SellerPickupBatchService::class)->collectedAssignmentIds($pickup);
+        $collected = $collectedAssignmentIds->count();
         $resolved = $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
         $pickupFinished = $pickup->status === RiderLocalTrip::IN_PROGRESS && $resolved;
         $address = $pickup->seller?->businessAddress;
@@ -58,7 +60,9 @@ class RiderPickupBatchController extends Controller
             : collect([
                 app(MapDataService::class)->addressMarker($address, 'pickup-seller-'.$pickup->id, 'Seller pickup address'),
                 app(MapDataService::class)->centerMarker($pickup->logisticsCenter),
-            ])->filter()->values()->all();
+            ])->filter()->map(fn (array $marker): array => array_merge($marker, [
+                'target_kind' => $marker['kind'] === 'center' ? 'logistics' : 'seller',
+            ]))->values()->all();
 
         return view('Rider.pickups.show', [
             'pickup' => $pickup,
@@ -66,6 +70,7 @@ class RiderPickupBatchController extends Controller
             'items' => $items,
             'total' => $total,
             'collected' => $collected,
+            'collectedAssignmentIds' => $collectedAssignmentIds,
             'resolved' => $resolved,
             'pickupFinished' => $pickupFinished,
             'navigationTargetKind' => $pickup->status === RiderLocalTrip::EN_ROUTE_TO_HUB ? 'logistics' : 'seller',
@@ -93,7 +98,7 @@ class RiderPickupBatchController extends Controller
         return $this->run($request, $trip, fn (RiderLocalTrip $batch) => $batches->start($request->user(), $batch), 'Pickup started. Scan each seller waybill separately.');
     }
 
-    public function scan(Request $request, int $trip, SellerPickupBatchService $batches): RedirectResponse
+    public function scan(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse|RedirectResponse
     {
         $data = $request->validate([
             'scanned_code' => ['required', 'string', 'max:150'],
@@ -103,10 +108,30 @@ class RiderPickupBatchController extends Controller
         try {
             $result = $batches->scan($request->user(), $batch, $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
         } catch (RuntimeException $exception) {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+            }
+
             return back()->withErrors(['scanned_code' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', $result['already_verified'] ? 'Parcel already verified.' : 'Parcel verified and collected.');
+        if ($request->expectsJson()) {
+            $batch = $batch->fresh()->load('items.riderAssignment.shipment');
+            $collectedCount = $batches->collectedAssignmentIds($batch)->count();
+
+            return response()->json([
+                'success' => true,
+                'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
+                'tracking' => $result['assignment']->shipment?->tracking_number,
+                'assignment_id' => $result['assignment']->id,
+                'already_verified' => $result['already_verified'],
+                'collected_count' => $collectedCount,
+                'total_count' => $batch->items->count(),
+                'clear_input' => true,
+            ]);
+        }
+
+        return back()->with('status', $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.');
     }
 
     public function notCollected(Request $request, int $trip, SellerPickupBatchService $batches): RedirectResponse

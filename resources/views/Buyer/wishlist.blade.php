@@ -840,6 +840,7 @@
                     >
                         <x-buyer.product-card
                             :product="$product"
+                            catalog-listing
                         />
                     </div>
                 @endforeach

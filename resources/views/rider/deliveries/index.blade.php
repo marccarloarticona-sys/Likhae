@@ -7,6 +7,9 @@
     @if(session('status'))
         <div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>
     @endif
+    @error('tracking')
+        <div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">{{ $message }}</div>
+    @enderror
 
     <section class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -16,6 +19,15 @@
         </div>
         <span class="rounded-full bg-primary-soft px-5 py-3 text-sm font-semibold text-primary">{{ number_format($deliveryStats['active']) }} Active Deliveries</span>
     </section>
+
+    <x-parcel-scanner
+        :action="route('rider.scan', ['return_to' => 'deliveries'])"
+        :tracking="old('tracking', request('tracking', ''))"
+        :method="request('scan_method', 'MANUAL')"
+        title="Scan Waybill"
+        description="Find a delivery assigned to your rider account. A scan never marks the parcel delivered."
+        button="Find Assigned Delivery"
+    />
 
     <section class="grid gap-5 md:grid-cols-4">
         <div class="rounded-3xl border border-line bg-surface p-6"><p class="text-sm text-muted">Assigned</p><h2 class="mt-3 text-4xl font-bold text-ink">{{ $deliveryStats['assigned'] }}</h2></div>

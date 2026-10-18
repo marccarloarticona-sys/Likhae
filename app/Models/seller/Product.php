@@ -3,6 +3,7 @@
 namespace App\Models\Seller;
 
 use App\Models\Admin\SellerComplianceCase;
+use App\Models\Admin\ProductModerationScan;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
 use Illuminate\Database\Eloquent\Builder;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -24,6 +26,7 @@ class Product extends Model
         'slug',
         'description',
         'status',
+        'purchase_limit_per_buyer',
         'published_at',
         'archived_at',
     ];
@@ -33,6 +36,7 @@ class Product extends Model
         return [
             'published_at' => 'datetime',
             'archived_at' => 'datetime',
+            'purchase_limit_per_buyer' => 'integer',
         ];
     }
 
@@ -82,6 +86,16 @@ class Product extends Model
     public function complianceCases(): HasMany
     {
         return $this->hasMany(SellerComplianceCase::class);
+    }
+
+    public function moderationScans(): HasMany
+    {
+        return $this->hasMany(ProductModerationScan::class);
+    }
+
+    public function latestModerationScan(): HasOne
+    {
+        return $this->hasOne(ProductModerationScan::class)->latestOfMany();
     }
 
     public function scopeVisible(Builder $query): Builder

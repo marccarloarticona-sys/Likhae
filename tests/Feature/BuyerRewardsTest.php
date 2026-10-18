@@ -33,12 +33,19 @@ class BuyerRewardsTest extends TestCase
             ->get(route('buyer.rewards'))
             ->assertOk()
             ->assertSee('Rewards &amp; Vouchers', escape: false)
-            ->assertSee('REWARD10');
+            ->assertSee('REWARD10')
+            ->assertSee('Seller vouchers')
+            ->assertSee('Claim');
 
-        foreach (['points' => 'Reward Points', 'cashback' => 'Cashback'] as $tab => $heading) {
+        foreach (['points' => 'Reward Points'] as $tab => $heading) {
             $this->get(route('buyer.rewards', ['tab' => $tab]))
                 ->assertOk()
                 ->assertSee($heading);
         }
+
+        $this->get(route('buyer.rewards', ['tab' => 'cashback']))
+            ->assertOk()
+            ->assertSee('My Vouchers')
+            ->assertDontSee('Cashback');
     }
 }

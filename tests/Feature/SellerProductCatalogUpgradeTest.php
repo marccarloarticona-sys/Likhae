@@ -164,6 +164,271 @@ class SellerProductCatalogUpgradeTest extends TestCase
         $this->assertDatabaseMissing('products', ['name' => 'Invalid Fixed Discount']);
     }
 
+    public function test_unknown_product_discount_type_is_rejected(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+
+        $this->actingAs($seller)->post(route('seller.products.store'), [
+            'product_type' => 'single',
+            'name' => 'Tampered Discount Type',
+            'category_id' => $category->id,
+            'price' => 100,
+            'stock' => 1,
+            'discount_type' => 'arbitrary',
+            'discount_value' => 10,
+            'listing_status' => 'draft',
+        ])->assertSessionHasErrors('discount_type');
+
+        $this->assertDatabaseMissing('products', ['name' => 'Tampered Discount Type']);
+    }
+
+    public function test_failed_product_update_does_not_delete_existing_image_files(): void
+    {
+        Storage::fake('public');
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $category->id,
+            'name' => 'Image Rollback Product',
+            'slug' => 'image-rollback-product',
+            'status' => 'DRAFT',
+        ]);
+        $variant = $product->variants()->create([
+            'sku' => 'IMAGE-ROLLBACK-OWN',
+            'price' => 100,
+            'stock' => 2,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $path = 'sellers/'.$seller->sellerProfile->id.'/products/'.$product->id.'/old.webp';
+        Storage::disk('public')->put($path, 'old image');
+        $image = $product->images()->create([
+            'file_path' => $path,
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
+        $otherProduct = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $category->id,
+            'name' => 'SKU Conflict Product',
+            'slug' => 'sku-conflict-product',
+            'status' => 'DRAFT',
+        ]);
+        $otherProduct->variants()->create([
+            'sku' => 'IMAGE-ROLLBACK-CONFLICT',
+            'price' => 100,
+            'stock' => 1,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($seller)->put(route('seller.products.update', $product), [
+            'product_type' => 'single',
+            'name' => $product->name,
+            'category_id' => $category->id,
+            'price' => 100,
+            'stock' => 2,
+            'sku' => 'IMAGE-ROLLBACK-CONFLICT',
+            'single_variant_id' => $variant->id,
+            'delete_image_ids' => [$image->id],
+            'listing_status' => 'draft',
+        ])->assertSessionHasErrors('variants');
+
+        Storage::disk('public')->assertExists($path);
+        $this->assertDatabaseHas('product_images', ['id' => $image->id, 'product_id' => $product->id]);
+        $this->assertDatabaseHas('products', ['id' => $product->id, 'name' => 'Image Rollback Product']);
+    }
+
+    public function test_product_image_upload_rejects_spoofed_files(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $base = [
+            'product_type' => 'single',
+            'category_id' => $category->id,
+            'price' => 100,
+            'stock' => 1,
+            'listing_status' => 'draft',
+        ];
+
+        $this->actingAs($seller)->post(route('seller.products.store'), $base + [
+            'name' => 'Spoofed Product Image',
+            'image' => UploadedFile::fake()->createWithContent('spoofed.jpg', 'not an image')->mimeType('text/plain'),
+        ])->assertSessionHasErrors('image');
+
+        $this->assertDatabaseMissing('products', ['name' => 'Spoofed Product Image']);
+    }
+
+    public function test_product_image_upload_rejects_oversized_files(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+
+        $this->actingAs($seller)->post(route('seller.products.store'), [
+            'product_type' => 'single',
+            'category_id' => $category->id,
+            'price' => 100,
+            'stock' => 1,
+            'listing_status' => 'draft',
+            'name' => 'Oversized Product Image',
+            'image' => UploadedFile::fake()->image('oversized.png')->size(5121),
+        ])->assertSessionHasErrors('image');
+
+        $this->assertDatabaseMissing('products', ['name' => 'Oversized Product Image']);
+    }
+
+    public function test_seller_cannot_republish_an_admin_suspended_product(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $category->id,
+            'name' => 'Suspended Product Correction',
+            'slug' => 'suspended-product-correction',
+            'status' => 'SUSPENDED',
+        ]);
+        $variant = $product->variants()->create([
+            'sku' => 'SUSPENDED-PRODUCT-SKU',
+            'price' => 100,
+            'stock' => 2,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($seller)->put(route('seller.products.update', $product), [
+            'product_type' => 'single',
+            'name' => 'Suspended Product Correction Updated',
+            'category_id' => $category->id,
+            'price' => 100,
+            'stock' => 2,
+            'sku' => $variant->sku,
+            'single_variant_id' => $variant->id,
+            'listing_status' => 'active',
+        ])->assertRedirect()->assertSessionHas('product_saved.status', 'SUSPENDED');
+
+        $this->assertSame('SUSPENDED', $product->fresh()->status);
+        $this->assertSame('Suspended Product Correction Updated', $product->fresh()->name);
+    }
+
+    public function test_category_rules_allow_active_business_subcategories_and_preserve_only_existing_unavailable_assignments(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $otherSeller = User::query()->where('email', 'backstreetclub@likhae.online')->sole();
+        $businessCategory = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $activeSubcategory = Category::query()->create([
+            'parent_id' => $businessCategory->id,
+            'name' => 'Approved Active Child',
+            'slug' => 'approved-active-child',
+            'is_active' => true,
+        ]);
+        $inactiveSubcategory = Category::query()->create([
+            'parent_id' => $businessCategory->id,
+            'name' => 'Approved Inactive Child',
+            'slug' => 'approved-inactive-child',
+            'is_active' => false,
+        ]);
+        $archivedSubcategory = Category::query()->create([
+            'parent_id' => $businessCategory->id,
+            'name' => 'Approved Archived Child',
+            'slug' => 'approved-archived-child',
+            'is_active' => true,
+            'archived_at' => now(),
+        ]);
+        $unrelatedCategory = Category::query()->create([
+            'name' => 'Unrelated Active Category',
+            'slug' => 'unrelated-active-category',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($seller)->post(route('seller.products.store'), [
+            'product_type' => 'single',
+            'name' => 'Approved Child Product',
+            'category_id' => $activeSubcategory->id,
+            'seller_profile_id' => $otherSeller->sellerProfile->id,
+            'price' => 100,
+            'stock' => 1,
+            'listing_status' => 'draft',
+        ])->assertRedirect();
+
+        $approvedProduct = Product::query()->where('name', 'Approved Child Product')->sole();
+        $this->assertSame($seller->sellerProfile->id, (int) $approvedProduct->seller_profile_id);
+        $this->assertSame($activeSubcategory->id, (int) $approvedProduct->category_id);
+
+        foreach ([$inactiveSubcategory, $archivedSubcategory, $unrelatedCategory] as $index => $category) {
+            $name = 'Rejected Category Product '.$index;
+            $this->actingAs($seller)->post(route('seller.products.store'), [
+                'product_type' => 'single',
+                'name' => $name,
+                'category_id' => $category->id,
+                'price' => 100,
+                'stock' => 1,
+                'listing_status' => 'draft',
+            ])->assertSessionHasErrors('category_id');
+            $this->assertDatabaseMissing('products', ['name' => $name]);
+        }
+
+        $historicalProduct = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $archivedSubcategory->id,
+            'name' => 'Historical Archived Category Product',
+            'slug' => 'historical-archived-category-product',
+            'status' => 'DRAFT',
+        ]);
+        $variant = $historicalProduct->variants()->create([
+            'sku' => 'HISTORICAL-ARCHIVED-CATEGORY-SKU',
+            'price' => 100,
+            'stock' => 1,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($seller)->put(route('seller.products.update', $historicalProduct), [
+            'product_type' => 'single',
+            'name' => 'Historical Product Correction',
+            'category_id' => $archivedSubcategory->id,
+            'price' => 100,
+            'stock' => 1,
+            'sku' => $variant->sku,
+            'single_variant_id' => $variant->id,
+            'listing_status' => 'draft',
+        ])->assertRedirect();
+
+        $this->assertSame('Historical Product Correction', $historicalProduct->fresh()->name);
+        $this->assertSame($archivedSubcategory->id, (int) $historicalProduct->fresh()->category_id);
+    }
+
+    public function test_duplicate_variant_combinations_are_rejected_atomically(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+
+        $this->actingAs($seller)->post(route('seller.products.store'), [
+            'product_type' => 'variations',
+            'name' => 'Duplicate Combination Product',
+            'category_id' => $category->id,
+            'listing_status' => 'draft',
+            'options' => [
+                ['name' => 'Color', 'values' => 'Red, Blue'],
+            ],
+            'variants' => [
+                ['sku' => 'DUPLICATE-COMBINATION-1', 'values' => 'Red', 'price' => 100, 'stock' => 1],
+                ['sku' => 'DUPLICATE-COMBINATION-2', 'values' => 'Red', 'price' => 100, 'stock' => 1],
+            ],
+        ])->assertSessionHasErrors('variants');
+
+        $this->assertDatabaseMissing('products', ['name' => 'Duplicate Combination Product']);
+    }
+
     public function test_required_image_assignment_scenario_reloads_without_duplicate_files(): void
     {
         Storage::fake('public');

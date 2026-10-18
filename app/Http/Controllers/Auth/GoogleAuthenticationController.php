@@ -28,6 +28,12 @@ class GoogleAuthenticationController extends Controller
 
     public function callback(Request $request): RedirectResponse
     {
+        $mobileAuth = $request->session()->pull('google_mobile_auth');
+        if (is_array($mobileAuth)) {
+            return app(MobileGoogleAuthenticationController::class)
+                ->callback($request, $mobileAuth);
+        }
+
         if (! $this->isConfigured()) {
             return redirect()->route('login')->withErrors([
                 'email' => 'Google sign-in is not configured yet. Please use your email and password.',

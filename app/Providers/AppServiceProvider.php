@@ -16,10 +16,18 @@ use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
+use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\AccountNotificationService;
+use App\Services\Buyer\BuyerStoreNotificationService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Moderation\CloudflareProductModerationProvider;
+use App\Services\Moderation\FallbackProductModerationProvider;
+use App\Services\Moderation\GeminiProductModerationProvider;
+use App\Services\Moderation\ProductModerationProvider;
 use App\Policies\LogisticsCenterPolicy;
 use App\Policies\RiderProfilePolicy;
 use App\Policies\SellerProfilePolicy;
@@ -36,6 +44,18 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->bind(ProductModerationProvider::class, function ($app): ProductModerationProvider {
+            $primary = strtolower((string) config('product_moderation.provider')) === 'gemini'
+                ? $app->make(GeminiProductModerationProvider::class)
+                : $app->make(CloudflareProductModerationProvider::class);
+            $fallback = strtolower((string) config('product_moderation.fallback.provider')) === 'cloudflare'
+                ? $app->make(CloudflareProductModerationProvider::class)
+                : $app->make(GeminiProductModerationProvider::class);
+
+            return $fallback::class === $primary::class
+                ? $primary
+                : new FallbackProductModerationProvider($primary, $fallback);
+        });
     }
 
     public function boot(): void
@@ -89,6 +109,7 @@ class AppServiceProvider extends ServiceProvider
         // Keep notification records in step with every core workflow change,
         // regardless of whether it came from a web page or an API endpoint.
         $accountNotifications = app(AccountNotificationService::class);
+        $buyerStoreNotifications = app(BuyerStoreNotificationService::class);
         Order::created(fn (Order $order) => $accountNotifications->orderPlaced($order));
         Order::updated(function (Order $order) use ($accountNotifications): void {
             if ($order->wasChanged('status')) {
@@ -114,6 +135,13 @@ class AppServiceProvider extends ServiceProvider
         });
         Review::created(fn (Review $review) => $accountNotifications->reviewSubmitted($review));
         RiderEarning::created(fn (RiderEarning $earning) => $accountNotifications->riderEarningCreated($earning));
+        ProductVariant::created(fn (ProductVariant $variant) => $buyerStoreNotifications->variantCreated($variant));
+        ProductVariant::updated(fn (ProductVariant $variant) => $buyerStoreNotifications->variantUpdated($variant));
+        Product::updated(function (Product $product) use ($buyerStoreNotifications): void {
+            if ($product->wasChanged('status') && strtoupper((string) $product->status) === 'ACTIVE') {
+                $buyerStoreNotifications->productActivated($product);
+            }
+        });
 
         // Force HTTPS URLs when behind Cloudflare or other SSL terminator
         if (config('app.env') === 'production') {
@@ -349,8 +377,15 @@ class AppServiceProvider extends ServiceProvider
 
                     $counts['incoming'] = (clone $centerShipments)->where('current_status', 'PICKED_UP')->count();
                     $counts['sorting'] = (clone $centerShipments)->where('current_status', 'AT_SORTING_CENTER')->count();
-                    $counts['assignments'] = (clone $centerShipments)
-                        ->where('current_status', 'SORTED')
+                    $assignmentShipments = (clone $centerShipments)->where('current_status', 'SORTED');
+                    if (app(LogisticsSchemaReadiness::class)->automaticRoutingReady()) {
+                        $assignmentShipments->where(fn ($route) => $route
+                            ->whereNull('origin_logistics_center_id')
+                            ->orWhereNull('destination_logistics_center_id')
+                            ->orWhereColumn('origin_logistics_center_id', 'destination_logistics_center_id')
+                            ->orWhereColumn('logistics_center_id', 'destination_logistics_center_id'));
+                    }
+                    $counts['assignments'] = $assignmentShipments
                         ->whereDoesntHave('riderAssignments', fn ($query) => $query
                             ->where('assignment_type', 'DELIVERY')
                             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))

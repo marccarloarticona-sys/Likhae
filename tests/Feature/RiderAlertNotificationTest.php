@@ -10,13 +10,13 @@ use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\AccountNotificationService;
-use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class RiderAlertNotificationTest extends TestCase
 {
-    use DatabaseMigrations;
+    use RefreshDatabase;
 
     public function test_moderation_alert_is_saved_and_emailed_even_after_account_suspension(): void
     {

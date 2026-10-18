@@ -51,7 +51,7 @@ class RiderMobileApiTest extends TestCase
         $this->getJson(route('api.v1.rider.earnings.index'))
             ->assertOk()
             ->assertJsonPath('data.items', [])
-            ->assertJsonPath('data.notice', 'Recorded earnings from completed pickup and delivery assignments.');
+            ->assertJsonPath('data.notice', 'Rider pool shares remain pending until an authorized allocation and payout decision; COD remittance is separate.');
 
         $this->getJson(route('api.v1.rider.profile.show'))
             ->assertOk()

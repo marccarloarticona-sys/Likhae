@@ -9,7 +9,7 @@ final class RiderVehicleType
     public const VAN = 'van';
     public const CLOSED_VAN = 'closed_van';
     public const TRUCK = 'truck';
-    public const LEGACY_CAR = 'car';
+    public const CAR = 'car';
 
     public const ROLE_LOCAL_BARANGAY = 'LOCAL_BARANGAY';
     public const ROLE_INTER_LOGISTICS = 'INTER_LOGISTICS';
@@ -25,7 +25,7 @@ final class RiderVehicleType
             self::VAN => 'Van',
             self::CLOSED_VAN => 'Closed Van',
             self::TRUCK => 'Truck',
-            self::LEGACY_CAR => 'Car (legacy)',
+            self::CAR => 'Car (4-wheel inter-hub)',
         ];
     }
 
@@ -41,12 +41,17 @@ final class RiderVehicleType
         return [self::MOTORCYCLE, self::TRICYCLE];
     }
 
+    /** @return list<string> */
+    public static function interLogisticsValues(): array
+    {
+        return [self::VAN, self::CLOSED_VAN, self::TRUCK, self::CAR];
+    }
+
     public static function role(?string $vehicleType): string
     {
         return match (self::normalize($vehicleType)) {
             self::MOTORCYCLE, self::TRICYCLE => self::ROLE_LOCAL_BARANGAY,
-            self::VAN, self::CLOSED_VAN, self::TRUCK => self::ROLE_INTER_LOGISTICS,
-            self::LEGACY_CAR => self::ROLE_LEGACY,
+            self::VAN, self::CLOSED_VAN, self::TRUCK, self::CAR => self::ROLE_INTER_LOGISTICS,
             default => self::ROLE_UNCLASSIFIED,
         };
     }
@@ -67,6 +72,7 @@ final class RiderVehicleType
             self::VAN => 50,
             self::CLOSED_VAN => 75,
             self::TRUCK => 100,
+            self::CAR => 10,
             default => 0,
         };
     }

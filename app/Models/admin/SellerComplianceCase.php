@@ -55,4 +55,9 @@ class SellerComplianceCase extends Model
     {
         return $this->hasMany(SellerComplianceResponse::class)->latest('submitted_at');
     }
+
+    public function moderationScans(): HasMany
+    {
+        return $this->hasMany(ProductModerationScan::class, 'seller_compliance_case_id')->latest('id');
+    }
 }

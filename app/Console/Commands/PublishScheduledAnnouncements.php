@@ -3,8 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Admin\Announcement;
-use App\Models\Admin\Notification;
-use App\Models\User;
+use App\Services\Notifications\AnnouncementNotificationPublisher;
 use Illuminate\Console\Command;
 
 class PublishScheduledAnnouncements extends Command
@@ -13,7 +12,7 @@ class PublishScheduledAnnouncements extends Command
 
     protected $description = 'Publish active announcements to users when their publish time arrives.';
 
-    public function handle(): int
+    public function handle(AnnouncementNotificationPublisher $publisher): int
     {
         $announcements = Announcement::query()
             ->where('is_active', true)
@@ -25,29 +24,11 @@ class PublishScheduledAnnouncements extends Command
             ->get();
 
         $count = 0;
-
         foreach ($announcements as $announcement) {
-            User::query()->where('status', 'ACTIVE')->chunkById(100, function ($users) use ($announcement, &$count): void {
-                foreach ($users as $user) {
-                    Notification::firstOrCreate(
-                        [
-                            'user_id' => $user->id,
-                            'type' => 'ANNOUNCEMENT',
-                            'reference_type' => Announcement::class,
-                            'reference_id' => $announcement->id,
-                        ],
-                        [
-                            'title' => $announcement->title,
-                            'message' => str($announcement->body)->limit(250)->toString(),
-                            'action_url' => route('home'),
-                        ],
-                    );
-                    $count++;
-                }
-            });
+            $count += $publisher->publish($announcement);
         }
 
-        $this->info("Announcement notifications checked: {$count}");
+        $this->info("Announcement notifications delivered: {$count}");
 
         return self::SUCCESS;
     }

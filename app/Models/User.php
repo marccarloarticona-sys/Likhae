@@ -6,6 +6,7 @@ use App\Models\Admin\AuditLog;
 use App\Models\Admin\Notification;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Buyer\Address;
+use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Cart;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\WishlistItem;
@@ -19,10 +20,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Notifications\Notifiable;
 
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmailContract
 {
     public const TYPE_BUYER = 'BUYER';
 
@@ -58,7 +61,7 @@ class User extends Authenticatable
     ];
 
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasFactory, Notifiable, MustVerifyEmailTrait;
 
     protected $fillable = [
         'account_type',
@@ -212,6 +215,11 @@ class User extends Authenticatable
     public function orders(): HasMany
     {
         return $this->hasMany(Order::class, 'buyer_user_id');
+    }
+
+    public function buyerVoucherClaims(): HasMany
+    {
+        return $this->hasMany(BuyerVoucherClaim::class, 'buyer_user_id');
     }
 
     public function conversations(): BelongsToMany

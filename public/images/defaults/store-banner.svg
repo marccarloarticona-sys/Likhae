@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-label="Default store banner">
+  <defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#f3e8dc"/><stop offset="1" stop-color="#d8bca5"/></linearGradient></defs>
+  <rect width="1200" height="360" fill="url(#bg)"/>
+  <circle cx="170" cy="80" r="190" fill="#c9a68b" opacity=".28"/>
+  <circle cx="1060" cy="330" r="250" fill="#9a493d" opacity=".12"/>
+  <path d="M0 285c190-85 354 65 544-12s350-82 656-8v95H0z" fill="#fffaf4" opacity=".55"/>
+</svg>

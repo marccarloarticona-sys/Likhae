@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Default store logo">
+  <rect width="128" height="128" rx="22" fill="#f3e8dc"/>
+  <path d="M23 48h82l-7-23H30z" fill="#9a493d"/>
+  <path d="M29 51v51h70V51" fill="#fffaf4" stroke="#7d4d3c" stroke-width="5"/>
+  <path d="M51 102V71h26v31" fill="#d8bca5" stroke="#7d4d3c" stroke-width="4"/>
+  <path d="M19 48c0 9 7 15 15 15s15-6 15-15m0 0c0 9 7 15 15 15s15-6 15-15m0 0c0 9 7 15 15 15s15-6 15-15" fill="none" stroke="#7d4d3c" stroke-width="4"/>
+</svg>

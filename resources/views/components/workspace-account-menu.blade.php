@@ -13,11 +13,6 @@
         ->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))
         ->implode('') ?: 'LK';
     $accountPhoto = data_get($accountUser, 'profile_photo_path');
-    $accountPhotoUrl = $accountPhoto
-        ? (\Illuminate\Support\Str::startsWith($accountPhoto, ['http://', 'https://'])
-            ? $accountPhoto
-            : '/storage/'.ltrim($accountPhoto, '/'))
-        : null;
 @endphp
 
 @once
@@ -69,7 +64,7 @@
 
 <details class="workspace-account {{ $compact ? 'workspace-account--compact' : '' }}">
     <summary class="workspace-account__trigger" aria-label="{{ $accountName }}, {{ $label }}">
-        <span class="workspace-account__avatar" aria-hidden="true">@if($accountPhotoUrl)<img src="{{ $accountPhotoUrl }}" alt="">@else{{ $accountInitials }}@endif</span>
+        <span class="workspace-account__avatar" aria-hidden="true"><x-shared.profile-image :path="$accountPhoto" role="buyer" alt="" /></span>
         <span class="workspace-account__copy">
             <strong>{{ $accountName }}</strong>
             <small>{{ $label }}</small>

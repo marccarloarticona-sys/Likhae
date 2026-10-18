@@ -19,6 +19,7 @@
         'pageTitle' => $pageTitle ?: $pageContext['title'],
     ];
     $aiResponseSound = (bool) data_get(auth()->user()?->notification_preferences, $workspace.'_ai_response_sound', false);
+    $aiConfigured = app(\App\Services\Ai\GeminiService::class)->configured();
 @endphp
 
 <script>window.LIKHAE_WORKSPACE_AI_CONFIG = @json($clientConfig);</script>
@@ -28,6 +29,7 @@
     data-workspace="{{ $workspace }}"
     data-chat-url="{{ $chatUrl ?: route($workspace . '.ai.chat') }}"
     data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}"
+    data-ai-configured="{{ $aiConfigured ? '1' : '0' }}"
 >
     <button
         class="likhae-workspace-ai-head"

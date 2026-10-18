@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Logistics\Shipment;
 use App\Models\User;
+use App\Services\Fulfillment\LogisticsShipmentQuery;
 
 class ShipmentPolicy
 {
@@ -30,7 +31,14 @@ class ShipmentPolicy
         }
 
         if ($user->isAccountType(User::TYPE_LOGISTICS)) {
-            return $shipment->logisticsCenter?->owner_user_id === $user->id;
+            $center = $user->logisticsCenter;
+
+            return $user->isActive()
+                && $center !== null
+                && $center->status === 'ACTIVE'
+                && $center->approved_by_user_id !== null
+                && $center->approved_at !== null
+                && app(LogisticsShipmentQuery::class)->visibleTo($center)->whereKey($shipment->id)->exists();
         }
 
         if ($user->isAccountType(User::TYPE_RIDER)) {

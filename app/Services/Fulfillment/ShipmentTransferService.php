@@ -93,12 +93,27 @@ final class ShipmentTransferService
     {
         return $this->transitionWithScan($leg, $actor, $scannedCode, ShipmentTransferLeg::READY, ShipmentTransferLeg::RELEASED, 'TRANSFER_RELEASE', function (ShipmentTransferLeg $locked, User $user): void {
             $locked->update(['released_by_user_id' => $user->id, 'released_at' => now()]);
-        }, false, $scanMethod);
+        }, $scanMethod);
     }
 
-    public function depart(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
+    public function depart(ShipmentTransferLeg $leg, User $actor): ShipmentTransferLeg
     {
-        return $this->transitionWithScan($leg, $actor, $scannedCode, ShipmentTransferLeg::RELEASED, ShipmentTransferLeg::IN_TRANSIT, 'TRANSFER_DEPARTURE', null, true);
+        $this->assertReady();
+
+        return DB::transaction(function () use ($leg, $actor): ShipmentTransferLeg {
+            $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
+            $this->assertOriginTransporter($actor, (int) $locked->origin_logistics_center_id);
+            if ($locked->status === ShipmentTransferLeg::IN_TRANSIT) {
+                return $locked;
+            }
+            if ($locked->status !== ShipmentTransferLeg::RELEASED) {
+                throw new RuntimeException('Only a released transfer leg can depart.');
+            }
+
+            $locked->update(['status' => ShipmentTransferLeg::IN_TRANSIT]);
+
+            return $locked->refresh();
+        });
     }
 
     public function recordArrival(ShipmentTransferLeg $leg, User $actor, string $scannedCode): ShipmentTransferLeg
@@ -157,17 +172,13 @@ final class ShipmentTransferService
         });
     }
 
-    private function transitionWithScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $from, string $to, string $scanType, ?callable $beforeReturn = null, bool $allowInterDriver = false, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
+    private function transitionWithScan(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $from, string $to, string $scanType, ?callable $beforeReturn = null, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         $this->assertReady();
 
         return DB::transaction(function () use ($leg, $actor, $scannedCode, $from, $to, $scanType, $beforeReturn, $scanMethod): ShipmentTransferLeg {
             $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
-            if ($allowInterDriver) {
-                $this->assertOriginTransporter($actor, (int) $locked->origin_logistics_center_id);
-            } else {
-                $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
-            }
+            $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
             if ($locked->status === $to) {
                 return $locked;
             }
@@ -190,13 +201,9 @@ final class ShipmentTransferService
         if ($code === '') {
             throw new RuntimeException('A shipment tracking number is required for a transfer custody scan.');
         }
-        $trackingNumber = (string) $leg->shipment()->value('tracking_number');
-        if ($trackingNumber === '' || ! hash_equals($trackingNumber, $code)) {
-            throw new RuntimeException('The scanned parcel code does not match this transfer shipment.');
-        }
-        $scanMethod = strtoupper(trim($scanMethod));
-        if (! in_array($scanMethod, ['QR', 'BARCODE', 'MANUAL'], true)) {
-            throw new RuntimeException('Choose QR, barcode, or manual tracking entry for the custody scan.');
+        $expected = (string) Shipment::query()->whereKey($leg->shipment_id)->value('tracking_number');
+        if ($expected === '' || strtoupper($code) !== strtoupper(trim($expected))) {
+            throw new RuntimeException('The scanned barcode does not match the shipment assigned to this transfer leg.');
         }
 
         $existing = ParcelScan::query()
@@ -219,7 +226,7 @@ final class ShipmentTransferService
             'rider_assignment_id' => null,
             'transfer_leg_id' => $leg->id,
             'scan_type' => $scanType,
-            'scan_method' => $scanMethod,
+            'scan_method' => in_array(strtoupper($scanMethod), ['QR', 'BARCODE'], true) ? strtoupper($scanMethod) : 'MANUAL',
             'scanned_code' => $code,
             'result' => 'SUCCESS',
             'notes' => 'Transfer custody scan.',
@@ -246,7 +253,9 @@ final class ShipmentTransferService
 
     private function assertActorAtCenter(User $actor, int $centerId): void
     {
-        if ((int) $actor->logisticsCenter?->id !== $centerId) {
+        if ($actor->account_type !== User::TYPE_LOGISTICS
+            || $actor->status !== User::STATUS_ACTIVE
+            || (int) $actor->logisticsCenter?->id !== $centerId) {
             throw new RuntimeException('The authenticated user is not authorized for this logistics center.');
         }
     }
