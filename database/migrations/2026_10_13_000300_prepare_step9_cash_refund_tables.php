@@ -22,7 +22,7 @@ return new class extends Migration
                 $table->string('transfer_reference', 120)->nullable();
                 $table->string('location_label', 255)->nullable();
                 $table->foreignId('actor_user_id')->nullable()->constrained('users')->nullOnDelete();
-                $table->timestamp('occurred_at');
+                $table->dateTime('occurred_at');
                 $table->text('notes')->nullable();
                 $table->json('metadata')->nullable();
                 $table->timestamps();
@@ -47,8 +47,10 @@ return new class extends Migration
                 $table->string('identifier_result', 120)->nullable();
                 $table->json('evidence_metadata')->nullable();
                 $table->string('inventory_disposition', 30);
-                $table->timestamp('received_at');
-                $table->timestamp('inspected_at');
+                // Use DATETIME for required event times so MySQL does not
+                // apply implicit defaults to non-null TIMESTAMP columns.
+                $table->dateTime('received_at');
+                $table->dateTime('inspected_at');
                 $table->text('notes')->nullable();
                 $table->timestamp('restocked_at')->nullable();
                 $table->foreignId('restocked_by_user_id')->nullable()->constrained('users')->nullOnDelete();
