@@ -54,7 +54,7 @@
             @if($managedAccount && in_array($status, ['active', 'suspended'], true))
                 @php($suspended = $status === 'suspended')
                 <p>{{ $suspended ? 'Reactivate this account to let the user sign in again.' : 'Suspending this account blocks sign-in and access to its workspace.' }}</p>
-                <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" @if(!$suspended) data-confirm-tone="danger" @endif>
+                <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}" @if(!$suspended) data-confirm-tone="danger" @endif>
                     @csrf
                     <label class="ad-field">
                         <span>{{ $suspended ? 'Reason for reactivation' : 'Reason for suspension' }}</span>
@@ -84,7 +84,7 @@
         <header class="ad-card-head"><div><h2>Account Warnings</h2><p>Documented warnings remain separate from suspension decisions.</p></div></header>
         <div class="ad-card-body">
             @if($managedAccount)
-                <form method="POST" action="{{ route('admin.users.warnings.store', $user) }}">
+                <form method="POST" action="{{ route('admin.users.warnings.store', $user) }}" data-confirm-title="Issue account warning?" data-confirm-message="Send this documented warning and corrective action to {{ $user->name }}?" data-confirm-label="Issue warning">
                     @csrf
                     <div class="ad-form-grid">
                         <label class="ad-field">

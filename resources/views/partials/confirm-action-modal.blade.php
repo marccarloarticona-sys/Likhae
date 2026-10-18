@@ -133,6 +133,38 @@
             .lk-confirm-actions { flex-direction: column-reverse; }
             .lk-confirm-actions button { width: 100%; }
         }
+        .lk-confirm-dialog {
+            width: min(420px, calc(100% - 28px)); max-height: calc(100dvh - 28px); border-radius: 24px;
+            background: radial-gradient(ellipse 42% 75% at -8% -28%,rgba(208,177,151,.17) 0 65%,transparent 66%), radial-gradient(ellipse 48% 76% at 112% 128%,rgba(208,177,151,.16) 0 65%,transparent 66%), linear-gradient(145deg,var(--lk-modal-paper,#fffaf3),var(--lk-modal-cream,#fbf5ec));
+            box-shadow: 0 38px 110px rgba(35,20,17,.3);
+        }
+        .lk-confirm-dialog::before { height: 0; }
+        .lk-confirm-card { padding: 25px 26px 24px; }
+        .lk-confirm-heading { gap: 11px; }
+        .lk-confirm-icon { width: 50px; height: 50px; flex-basis: 50px; border-radius: 50%; color: var(--lk-modal-ink,#4b211b); background: linear-gradient(145deg,rgba(255,255,255,.76),rgba(247,235,220,.8)); box-shadow: 0 0 0 7px rgba(213,190,168,.13),0 7px 16px rgba(86,47,33,.1); }
+        .lk-confirm-icon svg { width: 23px; height: 23px; }
+        .lk-confirm-eyebrow { gap: 9px; color: var(--lk-modal-muted,#927260); font-size: 9px; letter-spacing: .2em; }
+        .lk-confirm-eyebrow::before,.lk-confirm-eyebrow::after { width: clamp(24px,6vw,58px); height: 1px; background: var(--lk-modal-accent,#b98e70); content: ""; }
+        .lk-confirm-eyebrow i { display: none; }
+        .lk-confirm-title-wrap { display: grid; gap: 10px; }
+        .lk-confirm-card h2 { margin-top: 0; color: var(--lk-modal-ink,#4b211b); font-family: "Playfair Display",Georgia,"Times New Roman",serif; font-size: clamp(30px,4vw,38px); font-weight: 600; letter-spacing: -.045em; line-height: 1.08; }
+        .lk-confirm-card > p { max-width: 52ch; margin-top: 8px; color: var(--lk-modal-muted,#927260); font-size: 14px; line-height: 1.5; }
+        .lk-confirm-card > .lk-confirm-details { padding: 15px 18px; border-color: var(--lk-modal-line,#e8d6c5); border-radius: 16px; color: var(--lk-modal-ink,#4b211b); background: rgba(255,250,243,.72); font-size: 14px; }
+        .lk-confirm-actions { gap: 10px; margin-top: 18px; padding-top: 0; border: 0; }
+        .lk-confirm-actions button { min-width: min(140px,42%); min-height: 44px; padding: 10px 16px; border-radius: 999px; font-size: 13px; }
+        .lk-confirm-cancel { border-color: var(--lk-modal-accent,#b98e70) !important; color: var(--lk-modal-ink,#4b211b); background: transparent; }
+        .lk-confirm-accept { color: #fffaf6; background: linear-gradient(110deg,#56231d,#70352c); box-shadow: 0 12px 25px rgba(86,35,29,.18) !important; }
+        .lk-confirm-accept svg { width: 18px; height: 18px; }
+        .lk-confirm-dialog::backdrop { background: rgba(53,35,27,.42); backdrop-filter: blur(8px) saturate(.8); }
+        @media (max-width: 600px) {
+            .lk-confirm-dialog { width: calc(100% - 24px); border-radius: 25px; }
+            .lk-confirm-card { padding: 25px 18px 20px; }
+            .lk-confirm-icon { width: 50px; height: 50px; flex-basis: 50px; }
+            .lk-confirm-icon svg { width: 23px; height: 23px; }
+            .lk-confirm-eyebrow { gap: 6px; font-size: 8px; letter-spacing: .16em; }
+            .lk-confirm-actions { flex-direction: column-reverse; gap: 8px; margin-top: 16px; }
+            .lk-confirm-actions button { width: 100%; min-width: 0; min-height: 44px; font-size: 13px; }
+        }
         @media (prefers-reduced-motion: reduce) {
             .lk-confirm-actions button { transition: none; }
             .lk-confirm-actions button:hover { transform: none; }

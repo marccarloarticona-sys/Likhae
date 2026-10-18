@@ -73,11 +73,11 @@
                 @endif
             </div>
             @if(in_array($product->status, ['ACTIVE', 'SUSPENDED'], true))
-                <form class="ad-product-moderation-form" method="POST" action="{{ route('admin.products.moderate', ['product' => $product->id]) }}" data-confirm-title="Apply moderation change?" data-confirm-message="This will update the product's marketplace availability." data-confirm-label="Apply change">
+                <form class="ad-product-moderation-form" method="POST" action="{{ route('admin.products.moderate', ['product' => $product->id]) }}" data-product-moderation-form data-confirm-title="Apply moderation change?" data-confirm-message="This will update the product's marketplace availability." data-confirm-label="Apply change">
                     @csrf
                     <label class="ad-field">
                         <span>Moderation status</span>
-                        <select name="status" aria-label="Moderation status for {{ $product->name }}">
+                        <select name="status" data-product-moderation-status aria-label="Moderation status for {{ $product->name }}">
                             @foreach(['ACTIVE', 'SUSPENDED'] as $moderationStatus)
                                 <option value="{{ $moderationStatus }}" @selected($product->status === $moderationStatus)>{{ str($moderationStatus)->replace('_', ' ')->headline() }}</option>
                             @endforeach
@@ -261,4 +261,32 @@
             </div>
         </section>
     </div>
+@push('scripts')
+<script>
+(() => {
+    const form = document.querySelector('[data-product-moderation-form]');
+    const status = form?.querySelector('[data-product-moderation-status]');
+    if (!form || !status) return;
+    const productName = @json($product->name);
+
+    const syncConfirmation = () => {
+        const suspended = status.value === 'SUSPENDED';
+        form.dataset.confirmTitle = suspended ? 'Suspend product?' : 'Reinstate product?';
+        form.dataset.confirmMessage = suspended
+            ? 'This listing will be unavailable to buyers. Confirm the moderation reason before suspending it.'
+            : 'This listing will become available to buyers again. Confirm the moderation reason before reinstating it.';
+        form.dataset.confirmLabel = suspended ? 'Suspend product' : 'Reinstate product';
+        form.dataset.confirmDetails = `Product: ${productName} | Status: ${suspended ? 'Suspended' : 'Active'}`;
+        const reason = form.querySelector('input[name="reason"]')?.value.trim();
+        if (reason) form.dataset.confirmDetails += `\nReason: ${reason}`;
+        if (suspended) form.dataset.confirmTone = 'danger';
+        else delete form.dataset.confirmTone;
+    };
+
+    status.addEventListener('change', syncConfirmation);
+    form.querySelector('input[name="reason"]')?.addEventListener('input', syncConfirmation);
+    syncConfirmation();
+})();
+</script>
+@endpush
 @endsection

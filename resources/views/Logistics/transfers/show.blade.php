@@ -19,9 +19,9 @@
     <section class="rounded-xl border border-line bg-surface p-5">
         <div class="flex flex-wrap gap-2">
             @if($manifest->status === 'DRAFT')
-                <form method="POST" action="{{ route('logistics.transfers.seal', $manifest) }}">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Seal Manifest</button></form>
+                <form method="POST" action="{{ route('logistics.transfers.seal', $manifest) }}" data-confirm-title="Seal transfer manifest?" data-confirm-message="Lock the parcel list and transfer details for this inter-hub manifest?" data-confirm-label="Seal manifest">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Seal Manifest</button></form>
             @elseif($manifest->status === 'SEALED')
-                <form method="POST" action="{{ route('logistics.transfers.release', $manifest) }}" class="grid w-full gap-4 rounded-lg border border-line p-4">@csrf
+                <form method="POST" action="{{ route('logistics.transfers.release', $manifest) }}" class="grid w-full gap-4 rounded-lg border border-line p-4" data-confirm-title="Release manifest custody?" data-confirm-message="Confirm the scanned parcels and transfer physical custody from the origin hub to the assigned rider." data-confirm-label="Release custody">@csrf
                     <div><h2 class="text-[12px] font-semibold text-ink">Sender handover scan</h2><p class="mt-1 text-[10px] text-muted">Scan or manually enter every parcel tracking number before the origin hub releases custody.</p></div>
                     @foreach($manifest->items as $item)
                         <div class="grid gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(14rem,1fr)] sm:items-start">
@@ -32,12 +32,12 @@
                     <button class="justify-self-start rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Confirm sender handover and release</button>
                 </form>
             @elseif($manifest->status === 'RELEASED')
-                <form method="POST" action="{{ route('logistics.transfers.depart', $manifest) }}">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Dispatch / Depart</button></form>
+                <form method="POST" action="{{ route('logistics.transfers.depart', $manifest) }}" data-confirm-title="Dispatch this transfer?" data-confirm-message="Record that the rider and manifest have departed the origin hub." data-confirm-label="Dispatch transfer">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Dispatch / Depart</button></form>
             @elseif($manifest->status === 'IN_TRANSIT')
-                <form method="POST" action="{{ route('logistics.transfers.arrive', $manifest) }}">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Record Arrival</button></form>
+                <form method="POST" action="{{ route('logistics.transfers.arrive', $manifest) }}" data-confirm-title="Record transfer arrival?" data-confirm-message="Mark this manifest as arrived at its destination hub. Individual parcel intake scans will still be required." data-confirm-label="Record arrival">@csrf<button class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Record Arrival</button></form>
             @endif
             @if(in_array($manifest->status, ['DRAFT','SEALED']))
-                <form method="POST" action="{{ route('logistics.transfers.cancel', $manifest) }}" class="flex gap-2">@csrf<input name="reason" required placeholder="Cancellation reason" class="rounded-lg border border-line px-3 py-3 text-[10px]"><button class="rounded-lg border border-red-300 px-4 py-3 text-[10px] font-semibold text-red-700">Cancel</button></form>
+                <form method="POST" action="{{ route('logistics.transfers.cancel', $manifest) }}" class="flex gap-2" data-confirm-title="Cancel transfer manifest?" data-confirm-message="Cancel this manifest and keep its parcels out of the inter-hub transfer flow?" data-confirm-label="Cancel manifest" data-confirm-tone="danger">@csrf<input name="reason" required placeholder="Cancellation reason" class="rounded-lg border border-line px-3 py-3 text-[10px]"><button class="rounded-lg border border-red-300 px-4 py-3 text-[10px] font-semibold text-red-700">Cancel</button></form>
             @endif
         </div>
 
@@ -73,7 +73,7 @@
                     <td class="px-2 py-3">{{ $item->status }}</td>
                     <td class="px-2 py-3">
                         @if(in_array($manifest->status, ['ARRIVED','PARTIAL','EXCEPTION']) && $item->status === 'EXPECTED')
-                            <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" class="grid min-w-56 gap-2">@csrf
+                            <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" class="grid min-w-56 gap-2" data-confirm-title="Record parcel intake?" data-confirm-message="Save the selected custody outcome for this parcel at the destination hub?" data-confirm-label="Confirm intake">@csrf
                                 <select name="outcome" class="rounded border border-line px-2 py-2"><option value="RECEIVED">Received</option><option value="DAMAGED">Damaged</option><option value="MISSING">Missing</option></select>
                                 <x-parcel-scan-input name="scanned_code" method-name="scan_method" :id="'receive-'.$item->id" :required="false" />
                                 <input name="notes" placeholder="Notes for damage or missing parcel" class="rounded border border-line px-2 py-2">

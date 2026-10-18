@@ -1,0 +1,230 @@
+/* Shared LIKHAE modal treatment: warm ivory surfaces, soft depth, and rounded actions. */
+:root {
+    --lk-modal-cream: #fbf5ec;
+    --lk-modal-paper: #fffaf3;
+    --lk-modal-ink: #4b211b;
+    --lk-modal-muted: #927260;
+    --lk-modal-line: #e8d6c5;
+    --lk-modal-accent: #b98e70;
+    --lk-modal-brand: #61261f;
+}
+
+html.dark {
+    --lk-modal-cream: #241b18;
+    --lk-modal-paper: #2d211d;
+    --lk-modal-ink: #f6e9de;
+    --lk-modal-muted: #c2a99a;
+    --lk-modal-line: #513b32;
+    --lk-modal-accent: #c69a7e;
+    --lk-modal-brand: #78372f;
+}
+
+.lk-confirm-dialog {
+    width: min(420px, calc(100% - 28px));
+    max-height: calc(100dvh - 40px);
+    border-color: var(--lk-modal-line);
+    border-radius: 34px;
+    color: var(--lk-modal-ink);
+    background:
+        radial-gradient(ellipse 42% 75% at -8% -28%, rgba(208, 177, 151, .17) 0 65%, transparent 66%),
+        radial-gradient(ellipse 48% 76% at 112% 128%, rgba(208, 177, 151, .16) 0 65%, transparent 66%),
+        linear-gradient(145deg, var(--lk-modal-paper), var(--lk-modal-cream));
+    box-shadow: 0 38px 110px rgba(35, 20, 17, .3);
+}
+
+.lk-confirm-dialog::before { height: 0; }
+.lk-confirm-dialog::backdrop,
+.lk-auth-dialog::backdrop,
+.lk-order-modal::backdrop,
+.sl-image-assignment-dialog::backdrop,
+.sl-product-save-dialog::backdrop {
+    background: rgba(53, 35, 27, .42);
+    backdrop-filter: blur(8px) saturate(.8);
+}
+
+.lk-confirm-card { padding: 25px 26px 24px; }
+.lk-confirm-heading { gap: 11px; }
+.lk-confirm-icon {
+    width: 50px;
+    height: 50px;
+    flex-basis: 50px;
+    border-radius: 50%;
+    color: var(--lk-modal-ink);
+    background: linear-gradient(145deg, rgba(255,255,255,.76), rgba(247,235,220,.8));
+    box-shadow: 0 0 0 12px rgba(213, 190, 168, .13), 0 12px 30px rgba(86, 47, 33, .1);
+}
+.lk-confirm-icon svg { width: 23px; height: 23px; }
+.lk-confirm-eyebrow {
+    gap: 9px;
+    color: var(--lk-modal-muted);
+    font-size: 9px;
+    letter-spacing: .2em;
+}
+.lk-confirm-eyebrow::before,
+.lk-confirm-eyebrow::after {
+    width: clamp(24px, 6vw, 58px);
+    height: 1px;
+    background: var(--lk-modal-accent);
+    content: "";
+}
+.lk-confirm-eyebrow i { display: none; }
+.lk-confirm-title-wrap { display: grid; gap: 10px; }
+.lk-confirm-card h2 {
+    margin-top: 0;
+    color: var(--lk-modal-ink);
+    font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+    font-size: clamp(30px, 4vw, 38px);
+    font-weight: 600;
+    letter-spacing: -.045em;
+    line-height: 1.08;
+}
+.lk-confirm-card > p {
+    max-width: 52ch;
+    margin-top: 8px;
+    color: var(--lk-modal-muted);
+    font-size: 14px;
+    line-height: 1.55;
+}
+.lk-confirm-card > .lk-confirm-details {
+    padding: 15px 18px;
+    border-color: var(--lk-modal-line);
+    border-radius: 16px;
+    color: var(--lk-modal-ink);
+    background: rgba(255, 250, 243, .72);
+    font-size: 14px;
+}
+.lk-confirm-actions {
+    gap: 16px;
+    margin-top: 18px;
+    padding-top: 0;
+    border: 0;
+}
+.lk-confirm-actions button {
+    min-width: min(140px, 42%);
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    box-shadow: none;
+}
+.lk-confirm-cancel {
+    border-color: var(--lk-modal-accent) !important;
+    color: var(--lk-modal-ink);
+    background: transparent;
+}
+.lk-confirm-accept {
+    color: #fffaf6;
+    background: linear-gradient(110deg, #56231d, #70352c);
+    box-shadow: 0 12px 25px rgba(86, 35, 29, .18) !important;
+}
+.lk-confirm-accept svg { width: 22px; height: 22px; }
+
+.lk-auth-dialog,
+.lk-order-modal,
+.sl-image-assignment-dialog,
+.sl-product-save-dialog {
+    border: 1px solid var(--lk-modal-line);
+    border-radius: 28px;
+    color: var(--lk-modal-ink);
+    background:
+        radial-gradient(ellipse 60% 80% at 0 0, rgba(208, 177, 151, .13), transparent 72%),
+        radial-gradient(ellipse 55% 70% at 100% 100%, rgba(208, 177, 151, .12), transparent 72%),
+        linear-gradient(145deg, var(--lk-modal-paper), var(--lk-modal-cream));
+    box-shadow: 0 30px 90px rgba(35, 20, 17, .27);
+}
+.lk-auth-dialog-card,
+.lk-order-modal-card {
+    border-color: var(--lk-modal-line);
+    border-radius: 27px;
+    color: var(--lk-modal-ink);
+    background: transparent;
+    box-shadow: none;
+}
+.lk-auth-dialog h2,
+.lk-order-modal-card h2 { color: var(--lk-modal-ink); font-family: "Playfair Display", Georgia, serif; }
+.lk-auth-dialog p,
+.lk-order-modal-card p { color: var(--lk-modal-muted); }
+.lk-auth-dialog-close { border-radius: 50%; color: var(--lk-modal-muted); background: rgba(255,255,255,.52); }
+
+.sl-modal {
+    background: rgba(53, 35, 27, .42);
+    backdrop-filter: blur(8px) saturate(.8);
+}
+.sl-modal[hidden] { display: none !important; }
+.sl-modal-dialog,
+.sl-image-assignment-dialog {
+    border-color: var(--lk-modal-line);
+    border-radius: 28px;
+    color: var(--lk-modal-ink);
+    background:
+        radial-gradient(ellipse 54% 78% at 0 0, rgba(208, 177, 151, .13), transparent 72%),
+        radial-gradient(ellipse 48% 66% at 100% 100%, rgba(208, 177, 151, .1), transparent 72%),
+        var(--lk-modal-paper);
+    box-shadow: 0 32px 90px rgba(35, 20, 17, .28);
+}
+.sl-modal-dialog > header,
+.sl-image-assignment-dialog header { border-color: var(--lk-modal-line); }
+.sl-modal-dialog h2 { color: var(--lk-modal-ink); font-family: "Playfair Display", Georgia, serif; font-size: 25px; }
+.sl-modal-dialog form > footer,
+.sl-image-assignment-dialog footer { border-color: var(--lk-modal-line); }
+.sl-modal-dialog .sl-btn,
+.sl-image-assignment-dialog .sl-btn { min-height: 44px; border-radius: 999px; }
+
+.ad-category-modal {
+    background: rgba(53, 35, 27, .42);
+    backdrop-filter: blur(8px) saturate(.8);
+}
+.ad-category-modal .ad-modal-content {
+    position: relative;
+    overflow: hidden;
+    border-color: var(--lk-modal-line);
+    border-radius: 28px;
+    color: var(--lk-modal-ink);
+    background:
+        radial-gradient(ellipse 62% 75% at 0 0, rgba(208, 177, 151, .14), transparent 70%),
+        radial-gradient(ellipse 50% 72% at 100% 100%, rgba(208, 177, 151, .11), transparent 70%),
+        var(--lk-modal-paper);
+    box-shadow: 0 32px 90px rgba(35, 20, 17, .28);
+}
+.ad-category-modal .ad-modal-content h3 { color: var(--lk-modal-ink); font-family: "Playfair Display", Georgia, serif; font-size: 26px; }
+.ad-category-modal .ad-btn-bar .ad-btn { min-height: 42px; border-radius: 999px; }
+
+.lk-global-error-backdrop {
+    background: rgba(53, 35, 27, .42) !important;
+    backdrop-filter: blur(8px) saturate(.8);
+}
+.lk-global-error-card {
+    border-color: var(--lk-modal-line) !important;
+    border-radius: 28px !important;
+    color: var(--lk-modal-ink) !important;
+    background:
+        radial-gradient(ellipse 60% 80% at 0 0, rgba(208, 177, 151, .13), transparent 72%),
+        radial-gradient(ellipse 50% 70% at 100% 100%, rgba(208, 177, 151, .1), transparent 72%),
+        var(--lk-modal-paper) !important;
+    box-shadow: 0 32px 90px rgba(35, 20, 17, .28) !important;
+}
+.lk-global-error-card h2 { color: var(--lk-modal-ink); font-family: "Playfair Display", Georgia, serif; }
+.lk-global-error-card p { color: var(--lk-modal-muted) !important; }
+.lk-global-error-close { min-height: 44px; padding-inline: 24px; border-radius: 999px !important; background: var(--lk-modal-brand) !important; }
+
+@media (max-width: 600px) {
+    .lk-confirm-dialog { width: calc(100% - 24px); border-radius: 25px; }
+    .lk-confirm-card { padding: 25px 18px 20px; }
+    .lk-confirm-icon { width: 50px; height: 50px; flex-basis: 50px; }
+    .lk-confirm-icon svg { width: 23px; height: 23px; }
+    .lk-confirm-eyebrow { gap: 6px; font-size: 8px; letter-spacing: .16em; }
+    .lk-confirm-actions { flex-direction: column-reverse; gap: 8px; margin-top: 16px; }
+    .lk-confirm-actions button { width: 100%; min-width: 0; min-height: 44px; font-size: 13px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .lk-confirm-dialog[open],
+    .lk-auth-dialog[open],
+    .lk-order-modal[open],
+    .sl-image-assignment-dialog[open],
+    .sl-product-save-dialog[open] { animation: lk-modal-enter .22s ease-out both; }
+    @keyframes lk-modal-enter {
+        from { opacity: 0; transform: translateY(12px) scale(.985); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+}

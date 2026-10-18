@@ -126,7 +126,7 @@
     <section class="ad-card ad-compliance-decision-card">
         <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h2>Review and resolve</h2><p>Investigation notes remain Admin-only. Product reinstatement follows the authorized moderation workflow.</p></div></header>
         <div class="ad-card-body">
-            <form class="ad-compliance-form" method="POST" action="{{ route('admin.compliance.update', $case) }}">
+            <form class="ad-compliance-form" method="POST" action="{{ route('admin.compliance.update', $case) }}" data-confirm-title="Save compliance decision?" data-confirm-message="Update this case status and record the decision. If product reinstatement is selected, the listing will become available to buyers." data-confirm-label="Save decision">
                 @csrf @method('PATCH')
                 <label><span>Case status</span><select name="status" required>@foreach(['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'CLOSED'] as $caseStatus)<option value="{{ $caseStatus }}" @selected($case->status === $caseStatus)>{{ str($caseStatus)->replace('_', ' ')->headline() }}</option>@endforeach</select></label>
                 <label><span>Investigation note or resolution reason</span><textarea name="note" maxlength="5000" placeholder="Document the decision or next correction requested."></textarea></label>

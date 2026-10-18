@@ -99,11 +99,11 @@
     <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="text-[13px] font-semibold text-ink">Rider Status and Discipline</h2>
         <p class="mt-1 text-[10px] leading-5 text-muted">Warned riders may continue working. Suspended and banned riders lose access and cannot receive new assignments. Add a reason for warnings and restrictions.</p>
-        <form method="POST" action="{{ route('logistics.riders.moderation.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end">
+        <form method="POST" action="{{ route('logistics.riders.moderation.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end" data-rider-moderation-form data-confirm-title="Change rider status?" data-confirm-message="Suspending or banning this rider blocks account access and new assignments. Warnings keep the rider active. Confirm the selected status and reason before saving." data-confirm-label="Save rider status">
             @csrf
             @method('PATCH')
             <label class="text-[10px] font-semibold text-ink">Status
-                <select name="status" required class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-3 text-[10px] font-normal">
+                <select name="status" required data-rider-moderation-status class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-3 text-[10px] font-normal">
                     @foreach(['ACTIVE' => 'Active', 'WARNED' => 'Warned', 'SUSPENDED' => 'Suspended', 'BANNED' => 'Banned'] as $value => $label)
                         <option value="{{ $value }}" @selected($rider->status === $value)>{{ $label }}</option>
                     @endforeach
@@ -183,4 +183,35 @@
     </section>
 
 </div>
+@push('scripts')
+<script>
+(() => {
+    const form = document.querySelector('[data-rider-moderation-form]');
+    const status = form?.querySelector('[data-rider-moderation-status]');
+    if (!form || !status) return;
+    const riderName = @json($rider->user?->name ?? 'Rider');
+
+    const syncConfirmation = () => {
+        const selected = status.value;
+        const config = {
+            ACTIVE: ['Reactivate rider?', 'Restore this rider’s ability to access the workspace and receive assignments?', 'Reactivate', false],
+            WARNED: ['Issue rider warning?', 'Record a warning for this rider. Their account access and assignments will remain active.', 'Save warning', false],
+            SUSPENDED: ['Suspend rider?', 'This rider will lose workspace access and cannot receive new assignments while suspended.', 'Suspend rider', true],
+            BANNED: ['Ban rider?', 'This rider will lose workspace access and cannot receive new assignments. Confirm the ban and documented reason.', 'Ban rider', true],
+        }[selected] || ['Change rider status?', 'Confirm the selected rider status and reason before saving.', 'Save status', false];
+
+        [form.dataset.confirmTitle, form.dataset.confirmMessage, form.dataset.confirmLabel] = config;
+        form.dataset.confirmDetails = `Rider: ${riderName} | Status: ${selected}`;
+        const reason = form.querySelector('textarea[name="reason"]')?.value.trim();
+        if (reason) form.dataset.confirmDetails += `\nReason: ${reason}`;
+        if (config[3]) form.dataset.confirmTone = 'danger';
+        else delete form.dataset.confirmTone;
+    };
+
+    status.addEventListener('change', syncConfirmation);
+    form.querySelector('textarea[name="reason"]')?.addEventListener('input', syncConfirmation);
+    syncConfirmation();
+})();
+</script>
+@endpush
 @endsection

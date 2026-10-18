@@ -15,7 +15,7 @@
             --lk-ed-promo-bg: url("{{ asset('images/hero-marketplace.png') }}");
         }
     </style>
-    @vite(['resources/css/Buyer/buyer.css', 'resources/js/Buyer/buyer.js'])
+    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/modal-refresh.css', 'resources/js/Buyer/buyer.js'])
     @stack('head')
     <script>
         (function () { var theme = localStorage.getItem('likhae-theme'); if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) document.documentElement.classList.add('dark'); })();

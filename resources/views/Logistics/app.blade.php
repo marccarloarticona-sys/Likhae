@@ -62,6 +62,7 @@
 
     @vite([
         'resources/css/logistic/app.css',
+        'resources/css/shared/modal-refresh.css',
         'resources/css/shared/likhae-workspace-ai.css',
         'resources/css/shared/workspace-sidebar.css',
         'resources/css/shared/mapbox.css',

@@ -140,7 +140,7 @@
                 <section class="ad-card">
                     <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h3>Resolve this escalation</h3><p>Choose one accountable outcome. {{ $isCashCase ? 'Cash payout remains blocked until the authorized payer policy is configured.' : 'The Admin does not transfer GCash directly.' }}</p></div></header>
                     <div class="ad-card-body" style="display:grid;gap:14px">
-                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--ad-border)">
+                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--ad-border)" data-confirm-title="Return case to seller?" data-confirm-message="Record this resolution and require the seller to refund the eligible amount to the buyer. Verify the resolution before continuing." data-confirm-label="Return to seller">
                             @csrf
                             @method('PATCH')
                             <input type="hidden" name="status" value="RESOLVED">
@@ -148,7 +148,7 @@
                             <label class="ad-field"><span>Solution: return to Seller and demand refund</span><textarea name="resolution" rows="4" required>Admin reviewed the escalation and requires the Seller to refund the eligible amount to the Buyer via {{ $isCashCase ? 'cash after return custody and inspection' : 'the historical GCash workflow' }}.</textarea></label>
                             <button class="ad-btn ad-btn-primary" type="submit">Return to Seller &amp; Require Refund</button>
                         </form>
-                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px">
+                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px" data-confirm-title="Reject this escalation?" data-confirm-message="Close the buyer's escalation as rejected using the reason entered below?" data-confirm-label="Reject escalation" data-confirm-tone="danger">
                             @csrf
                             @method('PATCH')
                             <input type="hidden" name="status" value="REJECTED">
@@ -162,7 +162,7 @@
                 <section class="ad-card">
                     <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h3>Update dispute</h3><p>Record a status and explanation for this general dispute.</p></div></header>
                     <div class="ad-card-body">
-                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:10px">
+                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:10px" data-confirm-title="Save dispute decision?" data-confirm-message="Record the selected dispute status and resolution for both parties." data-confirm-label="Save decision">
                             @csrf
                             @method('PATCH')
                             <label class="ad-field"><span>Status</span><select name="status">@foreach(['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED'] as $status)<option value="{{ $status }}" @selected($dispute->status === $status)>{{ str($status)->headline() }}</option>@endforeach</select></label>

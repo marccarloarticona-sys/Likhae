@@ -128,7 +128,7 @@
                                 <p class="mt-2 text-xs text-amber-700">Not assignable: this area is not exactly one barangay in the center's canonical municipality.</p>
                             @endif
                         </div>
-                        <form method="POST" action="{{ route('logistics.delivery-areas.toggle', $area) }}">
+                        <form method="POST" action="{{ route('logistics.delivery-areas.toggle', $area) }}" data-confirm-title="{{ $area->is_active ? 'Deactivate delivery area?' : 'Activate delivery area?' }}" data-confirm-message="{{ $area->is_active ? 'Riders will no longer receive new assignments for this delivery area.' : 'This delivery area will become available for new assignments.' }}" data-confirm-label="{{ $area->is_active ? 'Deactivate' : 'Activate' }}" @if($area->is_active) data-confirm-tone="danger" @endif>
                             @csrf
                             @method('PATCH')
                             <button class="border border-line px-3 py-2">{{ $area->is_active ? 'Deactivate' : 'Activate' }}</button>

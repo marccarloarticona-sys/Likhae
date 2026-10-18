@@ -38,7 +38,7 @@
                 </summary>
                 <div class="p-5">
                     @if($pickupSchemaReady)
-                    <form method="POST" action="{{ route('logistics.pickups.assignments.store') }}" data-seller-pickup-form class="space-y-4">
+                    <form method="POST" action="{{ route('logistics.pickups.assignments.store') }}" data-seller-pickup-form class="space-y-4" data-confirm-title="Assign selected pickups?" data-confirm-message="Assign the selected parcels to the chosen rider. The rider will be responsible for collecting them from the seller." data-confirm-label="Assign parcels">
                         @csrf
                         <div class="grid gap-2">
                             @foreach($shipments as $shipment)
@@ -68,7 +68,7 @@
                     </form>
                     <div class="mt-3 flex flex-wrap gap-2">
                         @foreach($shipments as $shipment)
-                            <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}">@csrf<button class="border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign {{ $shipment->tracking_number }}</button></form>
+                            <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}" data-confirm-title="Assign pickup to rider?" data-confirm-message="Assign {{ $shipment->tracking_number }} to an eligible rider for seller pickup?" data-confirm-label="Assign pickup">@csrf<button class="border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign {{ $shipment->tracking_number }}</button></form>
                         @endforeach
                     </div>
                     @else
