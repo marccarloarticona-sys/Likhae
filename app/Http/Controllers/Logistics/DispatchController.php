@@ -90,6 +90,7 @@ class DispatchController extends Controller
 
         $riders = RiderProfile::query()
             ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->where('is_online', true)
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
@@ -379,6 +380,7 @@ class DispatchController extends Controller
 
         $riders = RiderProfile::query()
             ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->where('is_online', true)
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
@@ -569,6 +571,7 @@ class DispatchController extends Controller
         $rider = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
             ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->where('is_online', true)
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)

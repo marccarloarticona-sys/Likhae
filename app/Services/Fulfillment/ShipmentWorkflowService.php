@@ -486,6 +486,9 @@ class ShipmentWorkflowService
                 || $rider->user?->status !== User::STATUS_ACTIVE) {
                 throw new RuntimeException('Only active riders can receive assignments.');
             }
+            if (! $rider->is_online) {
+                throw new RuntimeException('The rider must be online to receive a local assignment.');
+            }
             if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {
                 throw new RuntimeException('Only motorcycle and tricycle riders can receive local pickup and delivery assignments.');
             }

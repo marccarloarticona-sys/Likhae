@@ -196,6 +196,7 @@ class FinalMileDispatchWorkflowTest extends TestCase
             'plate_number' => 'PILA-TRIP-'.uniqid(),
             'drivers_license_number' => 'PILA-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
         foreach ([$sanMiguelArea, $aplayArea] as $area) {
             RiderAreaAssignment::create([

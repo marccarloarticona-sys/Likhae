@@ -27,6 +27,7 @@ class RiderProfile extends Model
         'plate_number',
         'drivers_license_number',
         'status',
+        'is_online',
         'approved_by_user_id',
         'approved_at',
     ];
@@ -35,6 +36,7 @@ class RiderProfile extends Model
     {
         return [
             'approved_at' => 'datetime',
+            'is_online' => 'boolean',
             'approved_parcel_capacity' => 'integer',
             'approved_weight_capacity_kg' => 'decimal:3',
             'approved_volume_capacity_liters' => 'decimal:3',

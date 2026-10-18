@@ -222,6 +222,12 @@ class LogisticsPortalController extends Controller
                 'assignments as active_pickup_assignments_count' => fn ($query) => $query
                     ->where('assignment_type', 'PICKUP')
                     ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']),
+                'assignments as active_assignments_count' => fn ($query) => $query
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']),
+                'assignments as completed_deliveries_today_count' => fn ($query) => $query
+                    ->where('assignment_type', 'DELIVERY')
+                    ->where('status', 'COMPLETED')
+                    ->whereDate('completed_at', today()),
             ])
             ->latest()
             ->orderByDesc('id')
@@ -400,14 +406,20 @@ class LogisticsPortalController extends Controller
 
     public function deactivateRider(Request $request, RiderProfile $rider): RedirectResponse
     {
-        return $this->saveRiderModeration($request, $rider, 'SUSPENDED', 'Rider suspended by the logistics center.');
+        $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        $data = $request->validate(['reason' => ['required', 'string', 'min:10', 'max:1000']]);
+
+        return $this->saveRiderModeration($request, $rider, 'SUSPENDED', trim($data['reason']));
     }
 
     public function moderateRider(Request $request, RiderProfile $rider): RedirectResponse
     {
+        if ($request->has('reason')) {
+            $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        }
         $data = $request->validate([
             'status' => ['required', Rule::in(['ACTIVE', 'WARNED', 'SUSPENDED', 'BANNED'])],
-            'reason' => ['required_unless:status,ACTIVE', 'nullable', 'string', 'max:1000'],
+            'reason' => ['required_unless:status,ACTIVE', 'nullable', 'string', 'min:10', 'max:1000'],
         ]);
 
         return $this->saveRiderModeration(
@@ -432,8 +444,15 @@ class LogisticsPortalController extends Controller
         };
 
         DB::transaction(function () use ($request, $rider, $status, $userStatus, $reason, $oldStatus): void {
-            $rider->update(['status' => $status]);
+            $rider->update([
+                'status' => $status,
+                'is_online' => in_array($status, ['ACTIVE', 'WARNED'], true) ? $rider->is_online : false,
+            ]);
             $rider->user?->update(['status' => $userStatus]);
+
+            if (in_array($status, ['SUSPENDED', 'BANNED'], true)) {
+                $this->releaseUncollectedPickupAssignments($rider);
+            }
 
             AuditLog::create([
                 'actor_user_id' => $request->user()->id,
@@ -451,6 +470,52 @@ class LogisticsPortalController extends Controller
         });
 
         return back()->with('status', 'Rider status updated to '.str($status)->headline().'.');
+    }
+
+    private function releaseUncollectedPickupAssignments(RiderProfile $rider): void
+    {
+        $assignments = $rider->assignments()
+            ->pickup()
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->whereHas('shipment', fn ($query) => $query->where('current_status', 'READY_FOR_PICKUP'))
+            ->with('localTripItems.trip')
+            ->lockForUpdate()
+            ->get();
+
+        $tripIds = [];
+        foreach ($assignments as $assignment) {
+            $assignment->update([
+                'status' => 'CANCELLED',
+                'cancelled_at' => now(),
+                'rejection_reason' => 'Released to the pickup queue because the rider was suspended.',
+            ]);
+
+            foreach ($assignment->localTripItems as $item) {
+                $item->update([
+                    'status' => \App\Models\Rider\RiderLocalTripItem::CANCELLED,
+                    'failure_reason' => 'Rider suspended before pickup was completed.',
+                ]);
+                $tripIds[] = (int) $item->rider_local_trip_id;
+            }
+        }
+
+        foreach (array_unique($tripIds) as $tripId) {
+            $trip = \App\Models\Rider\RiderLocalTrip::query()->with('items')->find($tripId);
+            if (! $trip || $trip->items->contains(fn ($item) => ! in_array($item->status, ['CANCELLED', 'COMPLETED', 'FAILED'], true))) {
+                continue;
+            }
+
+            if ($trip->seller_profile_id && \Illuminate\Support\Facades\Schema::hasTable('seller_pickup_requests')) {
+                \App\Models\Seller\SellerPickupRequest::query()
+                    ->where('rider_local_trip_id', $trip->id)
+                    ->whereIn('status', ['ASSIGNED', 'IN_PROGRESS'])
+                    ->update(['status' => 'REQUESTED', 'rider_local_trip_id' => null]);
+            }
+
+            if (! in_array($trip->status, ['COMPLETED', 'CANCELLED', 'EXCEPTION'], true)) {
+                $trip->update(['status' => 'CANCELLED', 'cancelled_at' => now()]);
+            }
+        }
     }
 
     public function deliveryAreas(Request $request): View

@@ -31,8 +31,9 @@
         ['Plate Number', $rider->plate_number ?: 'Not recorded'],
         ['Delivery Area', $isLocalRider ? ($activeAreas->join(', ') ?: 'Unassigned') : ($isInterLogisticsRider ? 'Not used for hub-to-hub transfers' : 'Not applicable')],
         ['Status', $rider->status ? str($rider->status)->headline() : 'Not recorded'],
-        ['Active Deliveries', $isLocalRider ? $activeAssignments : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
-        ['Active Pickup Parcels', $isLocalRider ? ((int) ($rider->active_pickup_assignments_count ?? 0).' / 10') : ($isInterLogisticsRider ? 'Not applicable to hub-to-hub transfers' : 'Not applicable')],
+        ['Availability', $isLocalRider ? ($rider->is_online ? 'Online' : 'Offline') : ($isInterLogisticsRider ? 'Transfer assignment' : 'Not applicable')],
+        ['Active Jobs', $isLocalRider ? (int) ($rider->active_assignments_count ?? 0) : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
+        ['Deliveries Completed Today', $isLocalRider ? (int) $rider->assignments->where('assignment_type', 'DELIVERY')->where('status', 'COMPLETED')->filter(fn ($assignment) => $assignment->completed_at?->isToday())->count() : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
     ];
 @endphp
 
@@ -134,7 +135,7 @@
                 </select>
             </label>
             <label class="text-[10px] font-semibold text-ink">Reason
-                <textarea name="reason" rows="2" maxlength="1000" class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-[10px] font-normal" placeholder="Required for warn, suspend, or ban"></textarea>
+                <textarea name="reason" rows="2" minlength="10" maxlength="1000" class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-[10px] font-normal" placeholder="At least 10 characters for warn, suspend, or ban"></textarea>
             </label>
             <button type="submit" class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Save Status</button>
         </form>

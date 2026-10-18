@@ -18,6 +18,7 @@
         </include>
     </source>
     <php>
+        <ini name="memory_limit" value="512M"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
@@ -28,7 +29,6 @@
         <env name="DB_PORT" value="3306" force="true"/>
         <env name="DB_DATABASE" value="likhae_test" force="true"/>
         <env name="DB_USERNAME" value="root" force="true"/>
-        <env name="DB_PASSWORD" value="12345678" force="true"/>
         <env name="DB_URL" value="" force="true"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>

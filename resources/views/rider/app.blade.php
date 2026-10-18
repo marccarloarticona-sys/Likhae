@@ -711,7 +711,18 @@
                     </span>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:10px"><button type="button" class="rider-mobile-menu-btn rider-notification-trigger" aria-label="Notifications" aria-controls="notificationPopover" aria-expanded="false" data-notification-toggle><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>@if(($workspaceNotificationCount ?? 0) > 0)<span class="rider-notification-badge">{{ $workspaceNotificationCount }}</span>@endif</button><span class="rider-topbar-status">Rider Online</span><x-workspace-account-menu label="Rider Account" profile-route="rider.profile" /></div>
+                <div style="display:flex;align-items:center;gap:10px"><button type="button" class="rider-mobile-menu-btn rider-notification-trigger" aria-label="Notifications" aria-controls="notificationPopover" aria-expanded="false" data-notification-toggle><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>@if(($workspaceNotificationCount ?? 0) > 0)<span class="rider-notification-badge">{{ $workspaceNotificationCount }}</span>@endif</button>
+                    @php
+                        $workspaceRider = auth()->user()?->riderProfile;
+                    @endphp
+                    @if($workspaceRider && \App\Support\RiderVehicleType::isLocalBarangay($workspaceRider->vehicle_type))
+                        <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:6px">
+                            @csrf @method('PATCH')
+                            <input type="hidden" name="is_online" value="{{ $workspaceRider->is_online ? 0 : 1 }}">
+                            <button type="submit" class="rider-topbar-status" style="cursor:pointer;border-color:{{ $workspaceRider->is_online ? '#CFE8DA' : '#E4DCCB' }};background:{{ $workspaceRider->is_online ? 'var(--ra-success-soft)' : '#F5F1E8' }};color:{{ $workspaceRider->is_online ? 'var(--ra-success)' : '#76684F' }}">{{ $workspaceRider->is_online ? 'Go Offline' : 'Go Online' }}</button>
+                        </form>
+                    @endif
+                    <x-workspace-account-menu label="Rider Account" profile-route="rider.profile" /></div>
             </header>
 
             <div class="rider-content">

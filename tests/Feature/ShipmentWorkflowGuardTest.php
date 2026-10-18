@@ -177,6 +177,20 @@ class ShipmentWorkflowGuardTest extends TestCase
         app(ShipmentWorkflowService::class)->assignRider($shipment, $rider, 'DELIVERY', $centerUser);
     }
 
+    public function test_delivery_assignment_rejects_an_active_rider_who_is_offline(): void
+    {
+        [$center, $centerUser, $shipment] = $this->deliveryAssignmentFixture();
+        $rider = $this->riderFor($center, 'ACTIVE');
+        $rider->update(['is_online' => false]);
+
+        try {
+            app(ShipmentWorkflowService::class)->assignRider($shipment, $rider, 'DELIVERY', $centerUser);
+            $this->fail('An offline rider must not receive a delivery assignment.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('The rider must be online to receive a local assignment.', $exception->getMessage());
+        }
+    }
+
     public function test_delivery_assignment_does_not_trust_a_matching_service_area_id_when_codes_differ(): void
     {
         [$center, $centerUser, $shipment, $area] = $this->deliveryAssignmentFixture();
@@ -227,6 +241,7 @@ class ShipmentWorkflowGuardTest extends TestCase
             'plate_number' => 'PICKUP-'.uniqid(),
             'drivers_license_number' => 'LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
         $sellerOrder = $this->sellerOrder();
         $shipment = Shipment::create([
@@ -308,6 +323,7 @@ class ShipmentWorkflowGuardTest extends TestCase
             'plate_number' => 'DELIVERY-'.uniqid(),
             'drivers_license_number' => 'DELIVERY-LICENSE-'.uniqid(),
             'status' => $status,
+            'is_online' => $status === 'ACTIVE',
         ]);
     }
 

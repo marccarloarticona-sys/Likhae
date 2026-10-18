@@ -31,6 +31,27 @@ return new class extends Migration
             });
         }
 
+        if (! Schema::hasColumn('shipping_rate_change_requests', 'idempotency_key')) {
+            Schema::table('shipping_rate_change_requests', function (Blueprint $table): void {
+                $table->string('idempotency_key', 120)->nullable();
+            });
+        }
+
+        DB::table('shipping_rate_change_requests')
+            ->whereNull('idempotency_key')
+            ->orderBy('id')
+            ->chunkById(500, function ($requests): void {
+                foreach ($requests as $request) {
+                    DB::table('shipping_rate_change_requests')
+                        ->where('id', $request->id)
+                        ->update(['idempotency_key' => 'legacy-'.$request->id]);
+                }
+            });
+
+        Schema::table('shipping_rate_change_requests', function (Blueprint $table): void {
+            $table->string('idempotency_key', 120)->nullable(false)->change();
+        });
+
         $this->ensureForeignKey('shipping_rate_change_requests', 'requesting_logistics_user_id', 'srr_requesting_user_fk', 'users');
         $this->ensureForeignKey('shipping_rate_change_requests', 'reviewed_by_admin_user_id', 'srr_reviewed_admin_fk', 'users');
         $this->ensureIndex('shipping_rate_change_requests', ['idempotency_key'], 'shipping_rate_requests_idempotency_unique', true);

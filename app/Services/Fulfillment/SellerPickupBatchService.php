@@ -71,6 +71,9 @@ final class SellerPickupBatchService
                 || ! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {
                 throw new RuntimeException('Seller pickup assignments require an active or warned motorcycle or tricycle barangay rider.');
             }
+            if (! $rider->is_online) {
+                throw new RuntimeException('The rider must be online to receive a seller pickup assignment.');
+            }
             if ((int) $rider->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('Select a rider assigned to this logistics center.');
             }

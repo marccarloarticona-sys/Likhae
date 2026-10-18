@@ -5,7 +5,7 @@
     "scripts": {
         "clean:hot": "node scripts/clean-vite-hot.mjs",
         "prebuild": "npm run clean:hot",
-        "build": "vite build",
+        "build": "npm run clean:hot && vite build",
         "dev": "vite"
     },
     "devDependencies": {

@@ -77,6 +77,7 @@ class PagsanjanPickupIntakeTest extends TestCase
             'plate_number' => 'PAGSANJAN-PICKUP-'.uniqid(),
             'drivers_license_number' => 'PAGSANJAN-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
         RiderAreaAssignment::create([
             'rider_profile_id' => $rider->id,

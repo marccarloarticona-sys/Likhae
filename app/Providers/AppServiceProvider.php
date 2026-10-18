@@ -143,8 +143,9 @@ class AppServiceProvider extends ServiceProvider
             }
         });
 
-        // Force HTTPS URLs when behind Cloudflare or other SSL terminator
-        if (config('app.env') === 'production') {
+        // Force HTTPS URLs on the public site behind Cloudflare or another SSL terminator.
+        // Local development must keep the scheme of its HTTP request.
+        if (in_array(strtolower((string) request()->getHost()), ['likhae.online', 'www.likhae.online'], true)) {
             URL::forceScheme('https');
         }
 

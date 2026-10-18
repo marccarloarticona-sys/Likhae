@@ -35,6 +35,22 @@ use Illuminate\View\View;
 
 class RiderController extends Controller
 {
+    public function updateAvailability(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['is_online' => ['required', 'boolean']]);
+        $rider = $this->rider($request);
+        abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
+
+        if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true)
+            || $rider->user?->status !== User::STATUS_ACTIVE) {
+            return back()->withErrors(['is_online' => 'Only active riders can change their availability.']);
+        }
+
+        $rider->update(['is_online' => (bool) $data['is_online']]);
+
+        return back()->with('status', $rider->is_online ? 'You are now online and available for assignments.' : 'You are now offline.');
+    }
+
     public function dashboard(Request $request, LogisticsSchemaReadiness $schema): View|RedirectResponse
     {
         $rider = $this->rider($request);

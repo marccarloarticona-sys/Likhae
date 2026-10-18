@@ -39,6 +39,7 @@ Route::prefix('rider')
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'rider')->name('settings.update');
 
         Route::middleware('rider.operational:LOCAL_BARANGAY')->group(function (): void {
+            Route::patch('/availability', [RiderController::class, 'updateAvailability'])->name('availability.update');
             Route::get('/shipments', [RiderShipmentController::class, 'index'])->name('shipments');
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');

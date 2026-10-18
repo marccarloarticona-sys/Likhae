@@ -268,6 +268,7 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'plate_number' => 'E2E-PLATE-'.uniqid(),
             'drivers_license_number' => 'E2E-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
     }
 }

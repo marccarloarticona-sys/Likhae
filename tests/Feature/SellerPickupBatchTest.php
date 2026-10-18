@@ -857,6 +857,7 @@ class SellerPickupBatchTest extends TestCase
             'plate_number' => strtoupper(substr($vehicle, 0, 3)).'-'.uniqid(),
             'drivers_license_number' => 'BATCH-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
         RiderAreaAssignment::create([
             'rider_profile_id' => $rider->id,
