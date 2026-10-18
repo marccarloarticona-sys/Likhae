@@ -22,7 +22,7 @@ final class LogisticsShipmentQuery
         'pending' => ['READY_FOR_PICKUP'],
         'in_transit' => ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'],
         'delivered' => ['DELIVERED', 'COMPLETED'],
-        'failed' => ['DELIVERY_FAILED', 'RETURNED'],
+        'failed' => ['DELIVERY_FAILED', 'RETURNED', 'LOST', 'DAMAGED'],
     ];
 
     public function filters(Request $request, bool $withStatus = false): array

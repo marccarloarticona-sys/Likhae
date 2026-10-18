@@ -116,6 +116,7 @@
                             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--ad-border)"><div><strong>{{ $file->original_name ?: 'Buyer evidence' }}</strong><small>{{ str($file->evidence_type)->headline() }} · {{ $file->mime_type ?: 'Protected file' }}</small></div><a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.disputes.refund-evidence', $file) }}" target="_blank" rel="noopener">Open evidence</a></div>
                         @endforeach
                         @foreach($dispute->evidence as $file)
+                            <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.disputes.evidence', $file) }}" target="_blank" rel="noopener">Open {{ $file->original_name ?: 'dispute evidence' }}</a>
                             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--ad-border)"><div><strong>{{ $file->original_name ?: 'Dispute evidence' }}</strong><small>Dispute attachment · {{ $file->mime_type ?: 'Protected file' }}</small></div><span class="ad-status is-review">Attached to dispute</span></div>
                         @endforeach
                     </div>

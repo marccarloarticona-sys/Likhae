@@ -37,7 +37,11 @@ class RiderController extends Controller
 {
     public function updateAvailability(Request $request): RedirectResponse
     {
-        $data = $request->validate(['is_online' => ['required', 'boolean']]);
+        $data = $request->validate([
+            'is_online' => ['required', 'boolean'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90', 'required_with:longitude'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180', 'required_with:latitude'],
+        ]);
         $rider = $this->rider($request);
         abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
 
@@ -46,9 +50,35 @@ class RiderController extends Controller
             return back()->withErrors(['is_online' => 'Only active riders can change their availability.']);
         }
 
-        $rider->update(['is_online' => (bool) $data['is_online']]);
+        $rider->update([
+            'is_online' => (bool) $data['is_online'],
+            'availability_latitude' => (bool) $data['is_online'] ? ($data['latitude'] ?? null) : null,
+            'availability_longitude' => (bool) $data['is_online'] ? ($data['longitude'] ?? null) : null,
+            'availability_location_updated_at' => (bool) $data['is_online'] && isset($data['latitude'], $data['longitude']) ? now() : null,
+        ]);
 
         return back()->with('status', $rider->is_online ? 'You are now online and available for assignments.' : 'You are now offline.');
+    }
+
+    public function updateAvailabilityLocation(Request $request): JsonResponse|RedirectResponse
+    {
+        $data = $request->validate([
+            'latitude' => ['required', 'numeric', 'between:-90,90'],
+            'longitude' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+        $rider = $this->rider($request);
+        abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
+        abort_unless($rider->is_online && in_array($rider->status, ['ACTIVE', 'WARNED'], true), 409, 'Go online before updating dispatch location.');
+
+        $rider->update([
+            'availability_latitude' => $data['latitude'],
+            'availability_longitude' => $data['longitude'],
+            'availability_location_updated_at' => now(),
+        ]);
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'updated_at' => $rider->availability_location_updated_at?->toIso8601String()])
+            : back()->with('status', 'Your dispatch location was updated.');
     }
 
     public function dashboard(Request $request, LogisticsSchemaReadiness $schema): View|RedirectResponse

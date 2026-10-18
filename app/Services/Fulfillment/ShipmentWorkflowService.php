@@ -37,7 +37,8 @@ use RuntimeException;
 
 class ShipmentWorkflowService
 {
-    public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = 10;
+    public const MAX_ACTIVE_LOCAL_JOBS = 3;
+    public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = self::MAX_ACTIVE_LOCAL_JOBS;
 
     public function __construct(
         private readonly LocalRiderEligibilityService $localRiderEligibility,
@@ -474,10 +475,28 @@ class ShipmentWorkflowService
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
 
+            $priorPickupAssignment = $assignmentType === 'PICKUP'
+                ? $shipment->riderAssignments()
+                    ->where('assignment_type', RiderAssignment::TYPE_PICKUP)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                    ->with('riderProfile.user')
+                    ->lockForUpdate()
+                    ->first()
+                : null;
+            $isPickupReassignment = $priorPickupAssignment !== null;
+
             if ($assignmentType === 'PICKUP') {
                 $sellerOrder = SellerOrder::query()->whereKey($shipment->seller_order_id)->lockForUpdate()->firstOrFail();
                 if ($sellerOrder->status !== 'READY_FOR_PICKUP') {
                     throw new RuntimeException('A pickup rider can only be assigned while the seller order is ready for pickup.');
+                }
+                $this->requireShipmentStatus(
+                    $shipment,
+                    $isPickupReassignment ? ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'] : ['READY_FOR_PICKUP'],
+                    $isPickupReassignment ? 'reassign a pickup rider before collection' : 'assign a pickup rider',
+                );
+                if ($isPickupReassignment && $shipment->scans()->where('scan_type', 'PICKUP_COLLECTED')->where('result', 'SUCCESS')->exists()) {
+                    throw new RuntimeException('A pickup assignment cannot be changed after the seller scan confirms collection.');
                 }
             }
 
@@ -508,7 +527,11 @@ class ShipmentWorkflowService
             $pickupArea = null;
 
             if ($assignmentType === 'PICKUP') {
-                $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'assign a pickup rider');
+                $this->requireShipmentStatus(
+                    $shipment,
+                    $isPickupReassignment ? ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'] : ['READY_FOR_PICKUP'],
+                    $isPickupReassignment ? 'reassign a pickup rider before collection' : 'assign a pickup rider',
+                );
 
                 $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter);
                 if (! $pickupArea) {
@@ -551,16 +574,11 @@ class ShipmentWorkflowService
                     'rejection_reason' => 'Replaced by a newer assignment.',
                 ]);
 
-            if ($assignmentType === 'PICKUP') {
-                $activePickupAssignments = $rider->assignments()
-                    ->where('assignment_type', 'PICKUP')
-                    ->where('shipment_id', '<>', $shipment->id)
-                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
-                    ->count();
-
-                if ($activePickupAssignments >= self::MAX_ACTIVE_PICKUP_ASSIGNMENTS) {
-                    throw new RuntimeException('This rider has reached the 10-parcel active pickup limit.');
-                }
+            $activeLocalJobs = $rider->assignments()
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                ->count();
+            if ($activeLocalJobs >= self::MAX_ACTIVE_LOCAL_JOBS) {
+                throw new RuntimeException('This rider already has the maximum of three active local jobs.');
             }
 
             $assignment = RiderAssignment::create([
@@ -579,10 +597,11 @@ class ShipmentWorkflowService
                 $this->recordEvent($shipment, 'ASSIGNED_TO_RIDER', $assigner, 'Delivery rider assigned.', $assignment);
             } else {
                 app(FinancialAllocationService::class)->syncRiderParticipant($shipment, $assignment->rider_profile_id, 'PICKUP', $assignment->id);
-                $note = $allowPickupAreaOverride
-                    ? 'Pickup rider assigned with coverage override: '.trim((string) $pickupAreaOverrideReason)
-                    : 'Pickup rider assigned.';
-                $this->recordEvent($shipment, $shipment->current_status, $assigner, $note, $assignment);
+                $shipment->update(['current_status' => 'PICKUP_ASSIGNED']);
+                $note = $isPickupReassignment
+                    ? 'Pickup rider reassigned from '.($priorPickupAssignment->riderProfile?->user?->name ?? 'the previous rider').' to '.($rider->user?->name ?? 'the new rider').'.'
+                    : 'Pickup rider assigned.'.($allowPickupAreaOverride ? ' Coverage override: '.trim((string) $pickupAreaOverrideReason) : '');
+                $this->recordEvent($shipment, 'PICKUP_ASSIGNED', $assigner, $note, $assignment);
             }
 
             return $assignment->refresh();
@@ -1182,7 +1201,7 @@ class ShipmentWorkflowService
             throw new RuntimeException('A paid online order must use the approved refund workflow before seller cancellation.');
         }
 
-        $allowedShipmentStatuses = ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'];
+        $allowedShipmentStatuses = ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKUP_ASSIGNED'];
         if ($shipments->isEmpty() || $shipments->contains(fn (Shipment $shipment): bool => ! in_array($shipment->current_status, $allowedShipmentStatuses, true))) {
             throw new RuntimeException('This order can no longer be cancelled after a parcel has entered the delivery network.');
         }
@@ -1388,7 +1407,7 @@ class ShipmentWorkflowService
         $this->requireAssignmentStatus($assignment, ['ACCEPTED'], 'start this assignment');
 
         if ($assignment->assignment_type === 'PICKUP') {
-            $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'start pickup');
+            $this->requireShipmentStatus($shipment, ['PICKUP_ASSIGNED'], 'start pickup');
         } else {
             $this->requireShipmentStatus($shipment, ['ASSIGNED_TO_RIDER', 'DELIVERY_FAILED'], 'start delivery');
         }
@@ -1413,7 +1432,7 @@ class ShipmentWorkflowService
             throw new RuntimeException('This assignment is not a pickup assignment.');
         }
         $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'complete pickup');
-        $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'complete pickup');
+        $this->requireShipmentStatus($shipment, ['PICKUP_ASSIGNED'], 'complete pickup');
 
         $scannedCode = trim((string) ($payload['scanned_code'] ?? ''));
         if ($scannedCode === '' || ! hash_equals($shipment->tracking_number, $scannedCode)) {
@@ -1446,7 +1465,7 @@ class ShipmentWorkflowService
             throw new RuntimeException('This assignment is not a pickup assignment.');
         }
         $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'mark a pickup parcel as not collected');
-        $this->requireShipmentStatus($shipment, ['READY_FOR_PICKUP'], 'mark a pickup parcel as not collected');
+        $this->requireShipmentStatus($shipment, ['PICKUP_ASSIGNED'], 'mark a pickup parcel as not collected');
 
         $reason = trim((string) ($payload['reason'] ?? ''));
         if ($reason === '') {

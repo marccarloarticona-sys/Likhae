@@ -7,7 +7,7 @@
     <header>
         <p class="text-xs font-bold uppercase text-primary">First-mile operations</p>
         <h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Queue</h1>
-        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address and holds 1 to 10 parcels, limited by the selected rider capacity.</p>
+        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address. Riders can hold up to 3 active parcel jobs; oversized selections are assigned up to capacity and the remaining parcels stay in the queue.</p>
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -33,7 +33,7 @@
                         <p class="text-xs font-bold uppercase text-primary">Request #{{ $pickupRequest->id }}</p>
                         <h3 class="mt-1 font-bold text-ink">{{ $pickupRequest->sellerProfile?->business_name ?? 'Seller unavailable' }}</h3>
                         <p class="mt-1 text-sm text-muted">{{ $pickupRequest->pickupAddress?->formatted() ?? 'Pickup address unavailable' }}</p>
-                        <p class="mt-1 text-sm text-muted">{{ $requestParcels->count() }} {{ str('parcel')->plural($requestParcels->count()) }} · {{ $progress['collected'] }} / {{ $progress['total'] }} collected</p>
+                        <p class="mt-1 text-sm text-muted">{{ $progress['total'] }} {{ str('parcel')->plural($progress['total']) }} · {{ $progress['collected'] }} / {{ $progress['total'] }} collected</p>
                     </div>
                     <span class="border border-line px-3 py-2 text-xs font-bold uppercase text-ink">{{ str($pickupRequest->status)->replace('_', ' ')->title() }}</span>
                 </header>
@@ -55,7 +55,7 @@
                     <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf
-                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Eligible Rider with capacity for all {{ $requestParcels->count() }} parcels
+                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online eligible rider for up to {{ $requestParcels->count() }} parcels
                                 <select name="rider_profile_id" required class="min-h-11 border border-line bg-white px-3 text-sm text-ink" @disabled($pickupRequest->eligible_riders->isEmpty())>
                                     <option value="">{{ $pickupRequest->eligible_riders->isEmpty() ? 'No eligible Rider with sufficient capacity' : 'Select a local Rider' }}</option>
                                     @foreach($pickupRequest->eligible_riders as $rider)
@@ -117,13 +117,13 @@
                                 <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
                                     <option value="">{{ $eligibleRiders->isEmpty() ? 'No eligible rider assigned to this pickup barangay' : 'Select motorcycle or tricycle rider' }}</option>
                                     @foreach($eligibleRiders as $rider)
-                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}">{{ $rider->user?->name }} Â· {{ str($rider->vehicle_type)->headline() }} Â· cap {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count) }}</option>
+                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS - (int) $rider->active_assignments_count) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · up to {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS - (int) $rider->active_assignments_count) }} job(s)</option>
                                     @endforeach
                                 </select>
                             </label>
                             <button type="submit" disabled data-pickup-submit class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Assign Selected Parcels</button>
                         </div>
-                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected Â· 1 to the rider's approved capacity, up to 10 parcels.</p>
+                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected · up to 10 per batch. If selected parcels exceed the rider's remaining 3-job limit, the first eligible parcels are assigned and the rest remain waiting.</p>
                     </form>
                     <div class="mt-3 flex flex-wrap gap-2">
                         @foreach($shipments as $shipment)
@@ -156,6 +156,21 @@
                         <span class="font-semibold text-ink">{{ $phase }}</span>
                     </div>
                     <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned Â· {{ $collected }}/{{ $total }} seller scans complete@if($collected > 0) Â· {{ $received }}/{{ $collected }} received at hub@endif</p>
+                    @if($batch->reassignable_riders->isNotEmpty())
+                        <form method="POST" action="{{ route('logistics.pickups.batches.reassign', $batch) }}" class="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-end" data-confirm-title="Reassign pickup batch?" data-confirm-message="Every parcel in this batch is still uncollected. The current rider's jobs will be cancelled and the selected online rider will need to accept the batch." data-confirm-label="Reassign batch">
+                            @csrf
+                            @method('PATCH')
+                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Reassign to an online eligible rider
+                                <select name="rider_profile_id" required class="min-h-10 border border-line bg-white px-3 text-sm text-ink">
+                                    <option value="">Select another rider</option>
+                                    @foreach($batch->reassignable_riders as $candidate)
+                                        <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · {{ $candidate->active_assignments_count }} active job(s)</option>
+                                    @endforeach
+                                </select>
+                            </label>
+                            <button class="min-h-10 border border-primary px-4 py-2 text-sm font-semibold text-primary">Reassign batch</button>
+                        </form>
+                    @endif
                     @if($batch->status === 'EN_ROUTE_TO_HUB')
                         <div class="mt-3 grid gap-2 sm:grid-cols-2">@foreach($collectedItems as $item)<div class="border border-line px-3 py-2 text-sm"><strong>{{ $item->riderAssignment?->shipment?->tracking_number }}</strong><span class="ml-2 text-xs {{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'text-green-700' : 'text-amber-800' }}">{{ $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER' ? 'Received' : 'Expected' }}</span></div>@endforeach</div>
                     @endif
@@ -176,11 +191,9 @@ document.querySelectorAll('[data-seller-pickup-form]').forEach((form) => {
     const submit = form.querySelector('[data-pickup-submit]');
     const update = () => {
         const selected = checks.filter((check) => check.checked).length;
-        const option = rider.options[rider.selectedIndex];
-        const capacity = Math.min(10, Number(option?.dataset.capacity || 0));
-        checks.forEach((check) => { check.disabled = !check.checked && selected >= capacity; });
+        checks.forEach((check) => { check.disabled = !check.checked && selected >= 10; });
         countLabel.textContent = String(selected);
-        submit.disabled = selected < 1 || selected > capacity || !rider.value;
+        submit.disabled = selected < 1 || selected > 10 || !rider.value;
     };
     rider.addEventListener('change', update);
     checks.forEach((check) => check.addEventListener('change', update));

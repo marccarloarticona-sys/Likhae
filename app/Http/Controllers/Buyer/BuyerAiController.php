@@ -188,6 +188,7 @@ class BuyerAiController extends Controller
 
         $statusExplanations = [
             'READY_FOR_PICKUP' => 'READY FOR PICKUP means the seller has prepared the parcel and it is ready for courier pickup.',
+            'PICKUP_ASSIGNED' => 'PICKUP ASSIGNED means a local rider has been assigned and is preparing to collect the parcel from the seller.',
             'AT_SORTING_CENTER' => 'AT SORTING CENTER means the parcel has reached a logistics sorting center and is being prepared for its destination route.',
             'ASSIGNED_TO_RIDER' => 'ASSIGNED TO RIDER means a delivery rider has been assigned. The next update is usually OUT FOR DELIVERY.',
             'OUT_FOR_DELIVERY' => 'OUT FOR DELIVERY means the parcel is with the delivery rider for delivery.',
@@ -265,6 +266,7 @@ class BuyerAiController extends Controller
             'CONFIRMED' => 'has been confirmed by the seller.',
             'PREPARING' => 'is being prepared by the seller.',
             'READY_FOR_PICKUP' => 'is ready for a courier pickup.',
+            'PICKUP_ASSIGNED' => 'has a pickup rider assigned and is waiting for the seller collection scan.',
             'PICKED_UP' => 'has been picked up and is moving through delivery logistics.',
             'AT_SORTING_CENTER' => 'is currently at the sorting center, where it is being sorted for its destination.',
             'SORTED' => 'has been sorted and is waiting for delivery assignment.',

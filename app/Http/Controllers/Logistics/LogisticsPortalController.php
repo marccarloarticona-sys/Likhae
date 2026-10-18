@@ -477,18 +477,31 @@ class LogisticsPortalController extends Controller
         $assignments = $rider->assignments()
             ->pickup()
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
-            ->whereHas('shipment', fn ($query) => $query->where('current_status', 'READY_FOR_PICKUP'))
+            ->whereHas('shipment', fn ($query) => $query->where('current_status', 'PICKUP_ASSIGNED'))
             ->with('localTripItems.trip')
             ->lockForUpdate()
             ->get();
 
         $tripIds = [];
         foreach ($assignments as $assignment) {
+            $shipment = $assignment->shipment;
             $assignment->update([
                 'status' => 'CANCELLED',
                 'cancelled_at' => now(),
                 'rejection_reason' => 'Released to the pickup queue because the rider was suspended.',
             ]);
+
+            if ($shipment?->current_status === 'PICKUP_ASSIGNED') {
+                $shipment->update(['current_status' => 'READY_FOR_PICKUP']);
+                \App\Models\Logistics\ShipmentEvent::create([
+                    'shipment_id' => $shipment->id,
+                    'status' => 'READY_FOR_PICKUP',
+                    'actor_user_id' => auth()->id(),
+                    'logistics_center_id' => $rider->logistics_center_id,
+                    'notes' => 'Pickup assignment released because the rider was suspended; parcel returned to the pickup queue.',
+                    'occurred_at' => now(),
+                ]);
+            }
 
             foreach ($assignment->localTripItems as $item) {
                 $item->update([

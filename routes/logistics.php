@@ -49,6 +49,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/parcels/receive/scan', [DispatchController::class, 'receiveScanned'])->name('parcels.receive.scan');
         Route::post('/parcels/receive/{shipment}/confirm', [DispatchController::class, 'confirmReceive'])->name('parcels.receive.confirm');
         Route::get('/parcels/tracking', [DispatchController::class, 'tracking'])->name('parcels.tracking');
+        Route::post('/parcels/{shipment}/status-override', [DispatchController::class, 'overrideShipmentStatus'])->name('parcels.status-override');
+        Route::post('/parcels/{shipment}/exceptions', [DispatchController::class, 'reportShipmentException'])->name('parcels.exceptions.store');
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
 
         Route::get('/pickups', [DispatchController::class, 'pickups'])->name('pickups');
@@ -57,6 +59,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/pickups/requests/{pickupRequest}/reject', [DispatchController::class, 'rejectSellerPickupRequest'])
             ->whereNumber('pickupRequest')->name('pickups.requests.reject');
         Route::post('/pickups/assignments', [DispatchController::class, 'assignPickupBatch'])->name('pickups.assignments.store');
+        Route::patch('/pickups/batches/{trip}/reassign', [DispatchController::class, 'reassignPickupBatch'])->name('pickups.batches.reassign');
         Route::post('/pickups/{pickupRequest}/approve', [DispatchController::class, 'approvePickup'])->name('pickups.approve');
         Route::post('/pickups/{pickupRequest}/reject', [DispatchController::class, 'rejectPickup'])->name('pickups.reject');
         Route::post('/pickups/{shipment}/auto-assign', [DispatchController::class, 'autoAssignPickup'])->name('pickups.auto-assign');

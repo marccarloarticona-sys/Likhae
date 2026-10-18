@@ -58,7 +58,7 @@
             $shippingEvents = $allShipments->flatMap->events->sortBy('occurred_at');
             $deliveryAssignment = $allShipments->flatMap->riderAssignments->where('assignment_type', 'DELIVERY')->sortByDesc('id')->first();
             $payment = $selectedOrder->payments->first();
-            $shipmentStarted = $allShipments->contains(fn ($shipment) => in_array($shipment->current_status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'DELIVERED', 'COMPLETED', 'RETURNED'], true));
+                $shipmentStarted = $allShipments->contains(fn ($shipment) => in_array($shipment->current_status, ['PICKUP_ASSIGNED', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'DELIVERED', 'COMPLETED', 'RETURNED'], true));
             $currentProgressIndex = $selectedOrder->status === 'COMPLETED' ? 4 : ($detailDelivered ? 3 : ($shipmentStarted ? 2 : ($payment ? 1 : 0)));
             $progressSteps = [
                 ['label' => 'Order placed', 'date' => $selectedOrder->placed_at],
@@ -137,6 +137,7 @@
                     'CONFIRMED' => 'Seller confirmed order',
                     'PREPARING' => 'Preparing parcel',
                     'READY_FOR_PICKUP' => 'Ready for pickup',
+                    'PICKUP_ASSIGNED' => 'Pickup rider assigned',
                     'PICKED_UP' => 'Picked up from seller',
                     'AT_SORTING_CENTER' => 'Arrived at sorting center',
                     'SORTED' => 'Sorted by destination',

@@ -40,6 +40,7 @@ Route::prefix('rider')
 
         Route::middleware('rider.operational:LOCAL_BARANGAY')->group(function (): void {
             Route::patch('/availability', [RiderController::class, 'updateAvailability'])->name('availability.update');
+            Route::post('/availability/location', [RiderController::class, 'updateAvailabilityLocation'])->name('availability.location.update');
             Route::get('/shipments', [RiderShipmentController::class, 'index'])->name('shipments');
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');

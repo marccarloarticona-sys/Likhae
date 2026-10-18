@@ -80,13 +80,19 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame($this->seller->id, $trip->seller_profile_id);
     }
 
-    public function test_02_ten_ready_parcels_fit_one_pickup_assignment(): void
+    public function test_02_ten_parcels_are_partially_assigned_to_the_three_job_limit(): void
     {
         $shipments = $this->readyShipments($this->seller, 10);
-        $trip = $this->createBatch($shipments);
+        $result = app(SellerPickupBatchService::class)->createPartial(
+            $this->centerUser,
+            $this->center,
+            (int) $this->rider->id,
+            array_map(fn (Shipment $shipment): int => (int) $shipment->id, $shipments),
+        );
 
-        $this->assertSame(10, $trip->items->count());
-        $this->assertSame(10, $trip->approved_parcel_capacity);
+        $this->assertSame(3, $result['trip']->items()->count());
+        $this->assertCount(3, $result['assigned_ids']);
+        $this->assertCount(7, $result['skipped_ids']);
     }
 
     public function test_03_server_rejects_eleven_parcels(): void
@@ -200,12 +206,12 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame(1, $shipment->events()->where('status', 'PICKED_UP')->count());
     }
 
-    public function test_13_batch_cannot_finish_while_one_of_seven_parcels_is_unresolved(): void
+    public function test_13_batch_cannot_finish_while_one_of_three_parcels_is_unresolved(): void
     {
-        $shipments = $this->readyShipments($this->seller, 7);
+        $shipments = $this->readyShipments($this->seller, 3);
         [$trip, $riderUser] = $this->startBatch($shipments);
         $service = app(SellerPickupBatchService::class);
-        foreach (array_slice($shipments, 0, 6) as $shipment) {
+        foreach (array_slice($shipments, 0, 2) as $shipment) {
             $service->scan($riderUser, $trip, $shipment->tracking_number, 'BARCODE');
         }
 
@@ -213,9 +219,9 @@ class SellerPickupBatchTest extends TestCase
         $service->finishSellerPickup($riderUser, $trip->fresh());
     }
 
-    public function test_14_scanning_all_seven_parcels_moves_each_to_picked_up(): void
+    public function test_14_scanning_all_three_parcels_moves_each_to_picked_up(): void
     {
-        $shipments = $this->readyShipments($this->seller, 7);
+        $shipments = $this->readyShipments($this->seller, 3);
         [$trip, $riderUser] = $this->startBatch($shipments);
         $service = app(SellerPickupBatchService::class);
         foreach ($shipments as $shipment) {
@@ -534,21 +540,40 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame(5, $pickup->memberships()->count());
     }
 
-    public function test_30_logistics_capacity_assignment_rider_scans_and_seller_progress_are_authoritative(): void
+    public function test_bulk_pickup_assignment_caps_active_jobs_and_returns_skipped_parcels_to_queue(): void
     {
         $shipments = $this->requestReadyShipments($this->seller, 5);
         $pickup = $this->createDurableRequest($this->seller, $shipments);
-        $this->rider->update(['approved_parcel_capacity' => 4]);
 
-        try {
-            app(SellerPickupRequestService::class)->assign($this->centerUser, $this->center, $pickup->id, $this->rider->id);
-            $this->fail('Logistics must not assign more parcels than the Rider approved capacity.');
-        } catch (RuntimeException) {
-            $this->assertDatabaseCount('rider_local_trips', 0);
-            $this->assertDatabaseHas('seller_pickup_requests', ['id' => $pickup->id, 'status' => 'REQUESTED']);
-        }
+        $response = $this->actingAs($this->centerUser)->post(route('logistics.pickups.requests.assign', $pickup), [
+            'rider_profile_id' => $this->rider->id,
+        ]);
+        $response->assertRedirect()->assertSessionHas('status', fn (string $status): bool => str_contains($status, '2 parcel(s) were left'));
 
-        $this->rider->update(['approved_parcel_capacity' => 10]);
+        $pickup->refresh();
+        $trip = $pickup->riderLocalTrip()->firstOrFail();
+        $this->assertSame(3, $trip->items()->count());
+        $this->assertSame(['ASSIGNED', 'REQUESTED'], \App\Models\Seller\SellerPickupRequest::query()
+            ->where('seller_profile_id', $this->seller->id)
+            ->orderBy('id')
+            ->pluck('status')
+            ->all());
+        $this->assertSame(3, $pickup->memberships()->where('active_slot', true)->count());
+        $this->assertSame(2, $pickup->memberships()->whereNull('active_slot')->count());
+        $this->assertSame(2, \App\Models\Seller\SellerPickupRequest::query()
+            ->where('status', 'REQUESTED')
+            ->where('seller_profile_id', $this->seller->id)
+            ->firstOrFail()
+            ->memberships()
+            ->where('active_slot', true)
+            ->count());
+    }
+
+    public function test_30_logistics_capacity_assignment_rider_scans_and_seller_progress_are_authoritative(): void
+    {
+        $shipments = $this->requestReadyShipments($this->seller, 3);
+        $pickup = $this->createDurableRequest($this->seller, $shipments);
+        $this->rider->update(['approved_parcel_capacity' => 3]);
         $this->actingAs($this->centerUser)->post(route('logistics.pickups.requests.assign', $pickup), [
             'rider_profile_id' => $this->rider->id,
         ])->assertRedirect();
@@ -556,7 +581,7 @@ class SellerPickupBatchTest extends TestCase
         $trip = $pickup->riderLocalTrip()->firstOrFail();
         $this->assertSame('ASSIGNED', $pickup->status);
         $this->assertSame($this->seller->id, $trip->seller_profile_id);
-        $this->assertSame(5, $trip->items()->count());
+        $this->assertSame(3, $trip->items()->count());
         $this->assertSame(1, $this->seller->user->notifications()->where('type', 'SELLER_PICKUP_ASSIGNED')->count());
 
         $batchService = app(SellerPickupBatchService::class);
@@ -568,32 +593,32 @@ class SellerPickupBatchTest extends TestCase
 
         $this->actingAs($this->seller->user)
             ->getJson(route('seller.logistics.pickup-requests.progress', $pickup))
-            ->assertOk()->assertJsonPath('collected', 0)->assertJsonPath('total', 5);
+            ->assertOk()->assertJsonPath('collected', 0)->assertJsonPath('total', 3);
 
         $batchService->scan($this->rider->user, $trip, $shipments[0]->tracking_number, 'BARCODE');
         $this->assertDatabaseCount('parcel_scans', 1);
         $progress = $this->actingAs($this->seller->user)
             ->getJson(route('seller.logistics.pickup-requests.progress', $pickup))
-            ->assertOk()->assertJsonPath('collected', 1)->assertJsonPath('total', 5);
+            ->assertOk()->assertJsonPath('collected', 1)->assertJsonPath('total', 3);
         $this->assertSame('Collected', $progress->json('parcels.0.status'));
         $this->actingAs($this->centerUser)->get(route('logistics.pickups'))
-            ->assertOk()->assertSee('1 / 5 collected');
+            ->assertOk()->assertSee('1 / 3 collected');
 
         $duplicate = $batchService->scan($this->rider->user, $trip, $shipments[0]->tracking_number, 'BARCODE');
         $this->assertTrue($duplicate['already_verified']);
         $this->assertDatabaseCount('parcel_scans', 1);
         $this->actingAs($this->seller->user)->getJson(route('seller.logistics.pickup-requests.progress', $pickup))
-            ->assertOk()->assertJsonPath('collected', 1)->assertJsonPath('total', 5);
+            ->assertOk()->assertJsonPath('collected', 1)->assertJsonPath('total', 3);
 
         foreach (array_slice($shipments, 1) as $shipment) {
             $batchService->scan($this->rider->user, $trip, $shipment->tracking_number, 'BARCODE');
         }
         $this->getJson(route('seller.logistics.pickup-requests.progress', $pickup))
-            ->assertOk()->assertJsonPath('collected', 5)->assertJsonPath('total', 5);
+            ->assertOk()->assertJsonPath('collected', 3)->assertJsonPath('total', 3);
         $batchService->finishSellerPickup($this->rider->user, $trip->fresh());
         $this->assertSame('COMPLETED', $pickup->fresh()->status);
         $this->assertSame(0, $pickup->memberships()->where('active_slot', true)->count());
-        $this->assertSame(5, $pickup->memberships()->whereNull('active_slot')->count());
+        $this->assertSame(3, $pickup->memberships()->whereNull('active_slot')->count());
         $this->actingAs($this->newSeller('Pickup Progress Isolation')->user)
             ->getJson(route('seller.logistics.pickup-requests.progress', $pickup))
             ->assertNotFound();
@@ -601,17 +626,17 @@ class SellerPickupBatchTest extends TestCase
 
     public function test_31_partial_pickup_preserves_uncollected_parcels_and_does_not_complete_request(): void
     {
-        $shipments = $this->requestReadyShipments($this->seller, 10);
+        $shipments = $this->requestReadyShipments($this->seller, 3);
         $pickup = $this->createDurableRequest($this->seller, $shipments);
         $trip = app(SellerPickupRequestService::class)->assign($this->centerUser, $this->center, $pickup->id, $this->rider->id)->riderLocalTrip;
         $service = app(SellerPickupBatchService::class);
         $service->accept($this->rider->user, $trip);
         $trip = $service->start($this->rider->user, $trip->fresh());
 
-        foreach (array_slice($shipments, 0, 8) as $shipment) {
+        foreach (array_slice($shipments, 0, 2) as $shipment) {
             $service->scan($this->rider->user, $trip, $shipment->tracking_number, 'BARCODE');
         }
-        foreach ($trip->items()->orderBy('id')->skip(8)->take(2)->get() as $item) {
+        foreach ($trip->items()->orderBy('id')->skip(2)->take(1)->get() as $item) {
             $service->markNotCollected($this->rider->user, $trip, (int) $item->rider_assignment_id, 'Seller parcel was not ready');
         }
         $service->finishSellerPickup($this->rider->user, $trip->fresh());
@@ -619,10 +644,10 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame('PARTIALLY_COLLECTED', $pickup->fresh()->status);
         $this->assertSame(RiderLocalTrip::EN_ROUTE_TO_HUB, $trip->fresh()->status);
         $progress = app(SellerPickupRequestService::class)->progress($pickup->fresh(), (int) $this->seller->id);
-        $this->assertSame(8, $progress['collected']);
-        $this->assertSame(10, $progress['total']);
-        $this->assertCount(2, $progress['parcels']->where('status', 'Not collected'));
-        $this->assertSame(10, $pickup->memberships()->whereNull('active_slot')->count());
+        $this->assertSame(2, $progress['collected']);
+        $this->assertSame(3, $progress['total']);
+        $this->assertCount(1, $progress['parcels']->where('status', 'Not collected'));
+        $this->assertSame(3, $pickup->memberships()->whereNull('active_slot')->count());
     }
 
     public function test_32_seller_cancellation_releases_slot_without_deleting_membership_history(): void

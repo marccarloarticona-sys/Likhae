@@ -22,7 +22,7 @@ final class SellerDashboardOrderStatus
     {
         return [
             'shipments',
-            'shipments as dashboard_ready_shipments_count' => fn (Builder $query) => $query->where('current_status', 'READY_FOR_PICKUP'),
+            'shipments as dashboard_ready_shipments_count' => fn (Builder $query) => $query->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED']),
             'shipments as dashboard_picked_up_shipments_count' => fn (Builder $query) => $query->where('current_status', 'PICKED_UP'),
             'shipments as dashboard_in_transit_shipments_count' => fn (Builder $query) => $query->whereIn('current_status', self::IN_TRANSIT_SHIPMENT_STATUSES),
             'shipments as dashboard_delivered_shipments_count' => fn (Builder $query) => $query->whereIn('current_status', self::DELIVERED_SHIPMENT_STATUSES),

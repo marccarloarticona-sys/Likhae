@@ -24,6 +24,8 @@ use RuntimeException;
 
 final class SellerPickupBatchService
 {
+    public const MAX_ACTIVE_JOBS = ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS;
+
     private const ACTIVE_ASSIGNMENT_STATUSES = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
 
     private const RESOLVED_ASSIGNMENT_STATUSES = ['COMPLETED', 'REJECTED', 'CANCELLED'];
@@ -215,6 +217,132 @@ final class SellerPickupBatchService
             $this->notifications->sellerPickupBatchAssigned($trip);
 
             return $trip;
+        });
+    }
+
+    /** @param list<int> $shipmentIds @return array{trip: RiderLocalTrip, assigned_ids: list<int>, skipped_ids: list<int>} */
+    public function createPartial(User $actor, LogisticsCenter $center, int $riderProfileId, array $shipmentIds, ?int $sellerPickupRequestId = null): array
+    {
+        $ids = array_values(array_map('intval', $shipmentIds));
+        if ($ids === [] || count($ids) !== count(array_unique($ids))) {
+            throw new RuntimeException('Select one or more unique ready parcels for the pickup assignment.');
+        }
+
+        return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $sellerPickupRequestId): array {
+            $rider = RiderProfile::query()->whereKey($riderProfileId)->lockForUpdate()->firstOrFail();
+            if ((int) $rider->logistics_center_id !== (int) $center->id) {
+                throw new RuntimeException('Select a rider assigned to this logistics center.');
+            }
+
+            $activeJobs = $rider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
+            $remainingJobs = max(0, self::MAX_ACTIVE_JOBS - $activeJobs);
+            $approvedCapacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity === null
+                ? null
+                : (int) $rider->approved_parcel_capacity);
+            $assignCount = min(count($ids), $remainingJobs, $approvedCapacity, LocalTripCapacityRules::MAX_PARCELS_PER_TRIP);
+            if ($assignCount < 1) {
+                throw new RuntimeException('This rider has reached the three-active-job limit or has no approved parcel capacity remaining.');
+            }
+
+            $assignedIds = array_slice($ids, 0, $assignCount);
+            $trip = $this->create($actor, $center, $riderProfileId, $assignedIds, false, null, $sellerPickupRequestId);
+
+            return [
+                'trip' => $trip,
+                'assigned_ids' => $assignedIds,
+                'skipped_ids' => array_slice($ids, $assignCount),
+            ];
+        });
+    }
+
+    public function reassign(User $actor, LogisticsCenter $center, RiderLocalTrip $trip, int $newRiderProfileId): RiderLocalTrip
+    {
+        return DB::transaction(function () use ($actor, $center, $trip, $newRiderProfileId): RiderLocalTrip {
+            $trip = $this->lockedPickupTrip($trip);
+            $this->assertCenterActor($actor, $center);
+            if ((int) $trip->logistics_center_id !== (int) $center->id) {
+                throw new RuntimeException('This pickup batch belongs to another logistics center.');
+            }
+            if (! in_array($trip->status, [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS], true)
+                || $trip->items->isEmpty()) {
+                throw new RuntimeException('Only an active, not-yet-collected pickup batch can be reassigned.');
+            }
+
+            $items = $trip->items->sortBy('id')->values();
+            foreach ($items as $item) {
+                $assignment = $item->riderAssignment;
+                $shipment = $assignment?->shipment;
+                if (! $assignment
+                    || ! in_array($assignment->status, self::ACTIVE_ASSIGNMENT_STATUSES, true)
+                    || $shipment?->current_status !== 'PICKUP_ASSIGNED'
+                    || $shipment->scans()->where('scan_type', 'PICKUP_COLLECTED')->where('result', 'SUCCESS')->exists()) {
+                    throw new RuntimeException('A batch can only be reassigned before any parcel is scanned as collected.');
+                }
+            }
+
+            $newRider = RiderProfile::query()
+                ->with(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations'])
+                ->whereKey($newRiderProfileId)
+                ->lockForUpdate()
+                ->firstOrFail();
+            if ((int) $newRider->id === (int) $trip->rider_profile_id) {
+                throw new RuntimeException('Choose a different rider for reassignment.');
+            }
+            if (! in_array($newRider->status, ['ACTIVE', 'WARNED'], true)
+                || $newRider->user?->account_type !== User::TYPE_RIDER
+                || $newRider->user?->status !== User::STATUS_ACTIVE
+                || ! $newRider->is_online
+                || ! RiderVehicleType::isLocalBarangay($newRider->vehicle_type)
+                || (int) $newRider->logistics_center_id !== (int) $center->id) {
+                throw new RuntimeException('Choose an active, online local rider assigned to this logistics center.');
+            }
+            $activeJobs = $newRider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
+            if ($activeJobs + $items->count() > self::MAX_ACTIVE_JOBS) {
+                throw new RuntimeException('The selected rider does not have enough room under the three-active-job limit for this batch.');
+            }
+            if ($items->count() > LocalTripCapacityRules::approvedCapacity($newRider->approved_parcel_capacity === null
+                ? null
+                : (int) $newRider->approved_parcel_capacity)) {
+                throw new RuntimeException('The selected rider does not have enough approved parcel capacity for this batch.');
+            }
+
+            $seller = $trip->seller;
+            $firstShipment = $items->first()->riderAssignment->shipment;
+            if (! $seller || ! $firstShipment || $items->contains(fn ($item): bool => ! $this->workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $newRider))) {
+                throw new RuntimeException('The selected rider is not assigned to the seller pickup area for every parcel in this batch.');
+            }
+            $area = $this->workflow->sellerPickupServiceArea($firstShipment, $center);
+            if (! $area) {
+                throw new RuntimeException('The seller pickup service area is unavailable.');
+            }
+
+            $replacementTrip = $this->trips->createTrip($actor, $newRider, $area, RiderLocalTrip::TYPE_PICKUP, $seller);
+            foreach ($items as $item) {
+                $oldAssignment = $item->riderAssignment;
+                $newAssignment = $this->workflow->assignRider($oldAssignment->shipment, $newRider, RiderAssignment::TYPE_PICKUP, $actor);
+                $item->update([
+                    'status' => RiderLocalTripItem::CANCELLED,
+                    'failure_reason' => 'Pickup batch reassigned to another rider before collection.',
+                ]);
+                $this->trips->addAssignment($actor, $replacementTrip, $newAssignment);
+                $this->notifications->riderAssignmentStatusChanged($oldAssignment->refresh());
+                $this->notifications->riderAssignmentCreated($newAssignment);
+            }
+
+            $trip->update([
+                'status' => RiderLocalTrip::CANCELLED,
+                'cancelled_at' => now(),
+                'exception_notes' => 'Pickup batch reassigned before collection.',
+            ]);
+            SellerPickupRequest::query()
+                ->where('rider_local_trip_id', $trip->id)
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                ->update(['rider_local_trip_id' => $replacementTrip->id, 'status' => 'ASSIGNED']);
+
+            $replacementTrip->load(['seller.businessAddress', 'rider.user', 'items.riderAssignment.shipment']);
+            $this->notifications->sellerPickupBatchAssigned($replacementTrip);
+
+            return $replacementTrip;
         });
     }
 

@@ -3,6 +3,10 @@
 namespace App\Http\Controllers\Logistics;
 
 use App\Http\Controllers\Controller;
+use App\Models\Admin\AuditLog;
+use App\Models\Admin\Dispute;
+use App\Models\Admin\DisputeEvidence;
+use App\Models\Admin\Notification;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\PickupRequest;
 use App\Models\Logistics\ServiceArea;
@@ -12,6 +16,7 @@ use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerPickupRequest;
+use App\Models\User;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
@@ -20,15 +25,23 @@ use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
+use App\Services\RefundProofStorageService;
 use App\Support\RiderVehicleType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class DispatchController extends Controller
 {
+    public const MANUAL_OVERRIDE_STATUSES = [
+        'READY_FOR_PICKUP', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED',
+        'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED',
+    ];
+
     public function index(Request $request): View
     {
         return $this->assignments($request);
@@ -98,8 +111,7 @@ class DispatchController extends Controller
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
             ->where('logistics_center_id', $center->id)
-            ->withCount(['assignments as active_pickup_assignments_count' => fn ($query) => $query
-                ->where('assignment_type', 'PICKUP')
+            ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->orderBy('id')
@@ -119,10 +131,8 @@ class DispatchController extends Controller
                     'shipments' => $sellerRequests->map(fn ($pickup) => $pickup->shipment)->filter()->values(),
                     'eligible_riders' => $firstShipment
                         ? $riders->filter(fn (RiderProfile $rider) =>
-                            (int) $rider->active_pickup_assignments_count < min(
-                                ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS,
-                                (int) $rider->approved_parcel_capacity,
-                            )
+                            (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                            && (int) $rider->approved_parcel_capacity > 0
                             && $workflow->riderCoversSellerPickupArea($firstShipment, $rider))->values()
                         : collect(),
                 ];
@@ -154,11 +164,8 @@ class DispatchController extends Controller
             $count = $shipments->count();
             $pickupRequest->setAttribute('eligible_riders', $riders->filter(fn (RiderProfile $rider): bool =>
                 $count > 0
-                && $count <= min(
-                    10,
-                    (int) $rider->approved_parcel_capacity,
-                    ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS - (int) $rider->active_pickup_assignments_count,
-                )
+                && (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                && (int) $rider->approved_parcel_capacity > 0
                 && $shipments->every(fn (Shipment $shipment): bool => $workflow->riderCoversSellerPickupArea($shipment, $rider)))->values());
             $pickupRequest->setAttribute('progress_payload', app(SellerPickupRequestService::class)
                 ->progress($pickupRequest, (int) $pickupRequest->seller_profile_id));
@@ -177,6 +184,21 @@ class DispatchController extends Controller
         $collectedAssignmentIdsByTrip = app(SellerPickupBatchService::class)->collectedAssignmentIdsByTrip($activePickupBatches);
         $activePickupBatches->each(function (RiderLocalTrip $batch) use ($collectedAssignmentIdsByTrip): void {
             $batch->setAttribute('collected_assignment_ids', $collectedAssignmentIdsByTrip->get((int) $batch->id, collect()));
+        });
+        $activePickupBatches->each(function (RiderLocalTrip $batch) use ($riders, $workflow): void {
+            $items = $batch->items;
+            $canReassign = in_array($batch->status, [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS], true)
+                && $items->isNotEmpty()
+                && $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true)
+                    && $item->riderAssignment?->shipment?->current_status === 'PICKUP_ASSIGNED');
+            $eligible = $canReassign
+                ? $riders->filter(fn (RiderProfile $candidate): bool =>
+                    (int) $candidate->id !== (int) $batch->rider_profile_id
+                    && (int) $candidate->active_assignments_count + $items->count() <= ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                    && $items->count() <= (int) $candidate->approved_parcel_capacity
+                    && $items->every(fn ($item): bool => $workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $candidate)))->values()
+                : collect();
+            $batch->setAttribute('reassignable_riders', $eligible);
         });
 
         $mapShipments = $pickups->map->shipment->filter()
@@ -386,6 +408,8 @@ class DispatchController extends Controller
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
             ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->orderBy('id')
             ->get();
@@ -393,7 +417,8 @@ class DispatchController extends Controller
         $eligibleRidersByShipment = $shipments->getCollection()
             ->mapWithKeys(fn (Shipment $shipment): array => [
                 $shipment->id => $riders
-                    ->filter(fn (RiderProfile $rider): bool => $workflow->riderCoversShipmentDestinationArea($shipment, $rider))
+                    ->filter(fn (RiderProfile $rider): bool => (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                        && $workflow->riderCoversShipmentDestinationArea($shipment, $rider))
                     ->values(),
             ])
             ->all();
@@ -416,19 +441,187 @@ class DispatchController extends Controller
     public function tracking(Request $request, LogisticsShipmentQuery $shipmentQuery): View
     {
         $shipment = null;
+        $trackingResults = collect();
         $tracking = trim((string) $request->query('tracking'));
 
         if ($tracking !== '') {
             $center = $this->center($request);
             abort_unless($center, 403);
-            $shipment = $shipmentQuery->visibleTo($center)
-                ->where('tracking_number', $tracking)
-                ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'events.actor', 'scans', 'deliveryAttempts', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
-                ->first();
+            $trackingResults = $shipmentQuery->visibleTo($center)
+                ->where(function ($query) use ($tracking): void {
+                    $query->where('shipments.tracking_number', $tracking)
+                        ->orWhereHas('sellerOrder', fn ($sellerOrder) => $sellerOrder
+                            ->where('seller_order_number', $tracking)
+                            ->orWhereHas('order', fn ($order) => $order
+                                ->where('order_number', $tracking)
+                                ->orWhere('id', ctype_digit($tracking) ? (int) $tracking : 0)))
+                        ->orWhereHas('sellerOrder.order.buyer', fn ($buyer) => $buyer->where('name', 'like', '%'.$tracking.'%'));
+                })
+                ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'events.actor', 'scans', 'deliveryAttempts', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
+                ->orderByRaw('CASE WHEN shipments.tracking_number = ? THEN 0 ELSE 1 END', [$tracking])
+                ->limit(50)
+                ->get();
+            $shipment = $trackingResults->firstWhere('tracking_number', $tracking)
+                ?? ($trackingResults->count() === 1 ? $trackingResults->first() : null);
         }
 
-        $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, true);
-        return view('Logistics.tracking.index', compact('shipment', 'tracking', 'mapMarkers'));
+        $mapMarkers = app(MapDataService::class)->forShipments($trackingResults, true);
+        return view('Logistics.tracking.index', compact('shipment', 'tracking', 'trackingResults', 'mapMarkers'));
+    }
+
+    public function overrideShipmentStatus(Request $request, Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
+
+        $data = $request->validate([
+            'status' => ['required', 'string', Rule::in(self::MANUAL_OVERRIDE_STATUSES)],
+            'reason' => ['required', 'string', 'min:10', 'max:1000'],
+        ]);
+        $reason = trim($data['reason']);
+        abort_if($reason === '', 422, 'A reason is required for a shipment status override.');
+
+        DB::transaction(function () use ($request, $shipment, $center, $data, $reason): void {
+            $locked = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
+            $oldStatus = $locked->current_status;
+            $newStatus = strtoupper($data['status']);
+            abort_if(in_array($oldStatus, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'A closed or exception shipment cannot be manually overridden.');
+            abort_if($newStatus === 'DELIVERED' && ! in_array($oldStatus, ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'], true), 409, 'Manual delivery confirmation is only allowed for a parcel already out for delivery or awaiting a retry.');
+            abort_if($oldStatus === $newStatus, 422, 'The shipment already has that status.');
+
+            $locked->update(['current_status' => $newStatus]);
+            app(ShipmentWorkflowService::class)->recordEvent(
+                $locked,
+                $newStatus,
+                $request->user(),
+                "MANUAL_OVERRIDE: {$oldStatus} → {$newStatus}. Reason: {$reason}",
+                null,
+                $center,
+            );
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'shipment.status_manual_override',
+                'auditable_type' => Shipment::class,
+                'auditable_id' => $locked->id,
+                'old_values' => ['status' => $oldStatus],
+                'new_values' => ['status' => $newStatus, 'reason' => $reason],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        return back()->with('status', 'Shipment status changed to '.str($data['status'])->headline().'. The override reason was recorded.');
+    }
+
+    public function reportShipmentException(Request $request, Shipment $shipment, LogisticsShipmentQuery $shipmentQuery, RefundProofStorageService $proofs): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
+
+        $data = $request->validate([
+            'exception_type' => ['required', Rule::in(['LOST', 'DAMAGED'])],
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'photo' => ['required_if:exception_type,DAMAGED', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
+        ]);
+        $reason = trim($data['reason']);
+        abort_if($reason === '', 422, 'Please describe the shipment exception.');
+        $type = $data['exception_type'];
+        $storedPhoto = null;
+
+        if ($type === 'DAMAGED') {
+            try {
+                $storedPhoto = $proofs->storeImage($request->file('photo'), 'shipment-exceptions');
+            } catch (\RuntimeException $exception) {
+                return back()->withErrors(['photo' => $exception->getMessage()])->withInput();
+            }
+        }
+
+        try {
+            DB::transaction(function () use ($request, $shipment, $center, $type, $reason, $storedPhoto): void {
+                $locked = Shipment::query()
+                    ->with(['sellerOrder.order.buyer', 'sellerOrder.sellerProfile.user'])
+                    ->lockForUpdate()
+                    ->findOrFail($shipment->id);
+                abort_if(in_array($locked->current_status, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'This shipment is already delivered, closed, or has an exception recorded.');
+
+                $sellerOrder = $locked->sellerOrder;
+                $order = $sellerOrder?->order;
+                $buyer = $order?->buyer;
+                $seller = $sellerOrder?->sellerProfile?->user;
+                abort_unless($order && $buyer && $seller, 409, 'The shipment does not have both buyer and seller accounts for claim notifications.');
+
+                $dispute = Dispute::query()->create([
+                    'dispute_number' => 'SHIP-'.now()->format('Ymd').'-'.Str::upper(Str::random(8)),
+                    'opened_by_user_id' => $request->user()->id,
+                    'order_id' => $order->id,
+                    'seller_order_id' => $sellerOrder->id,
+                    'shipment_id' => $locked->id,
+                    'type' => 'SHIPMENT_'.$type,
+                    'subject' => 'Shipment '.str($type)->lower()->headline().' — '.$locked->tracking_number,
+                    'description' => "Shipment exception reported by logistics.\nTracking: {$locked->tracking_number}\nOrder: {$order->order_number}\nReason: {$reason}",
+                    'status' => 'OPEN',
+                    'opened_at' => now(),
+                ]);
+
+                if ($storedPhoto) {
+                    DisputeEvidence::query()->create([
+                        'dispute_id' => $dispute->id,
+                        'uploaded_by_user_id' => $request->user()->id,
+                        'file_path' => $storedPhoto['path'],
+                        'disk' => $storedPhoto['disk'],
+                        'encrypted' => $storedPhoto['encrypted'],
+                        'original_name' => $storedPhoto['original_name'],
+                        'mime_type' => $storedPhoto['mime'],
+                        'notes' => 'Required shipment damage photo evidence.',
+                    ]);
+                }
+
+                $locked->update(['current_status' => $type]);
+                app(ShipmentWorkflowService::class)->recordEvent(
+                    $locked,
+                    $type,
+                    $request->user(),
+                    "SHIPMENT_EXCEPTION: {$reason}. Claim {$dispute->dispute_number} opened.",
+                    null,
+                    $center,
+                );
+
+                $message = "Shipment {$locked->tracking_number} was reported {$type}. Claim {$dispute->dispute_number} is open for review.";
+                foreach ([$buyer, $seller] as $recipient) {
+                    Notification::query()->create([
+                        'user_id' => $recipient->id,
+                        'type' => 'SHIPMENT_EXCEPTION',
+                        'title' => 'Shipment exception reported',
+                        'message' => $message,
+                        'reference_type' => Dispute::class,
+                        'reference_id' => $dispute->id,
+                        'action_url' => route('tracking.show', $locked->tracking_number),
+                    ]);
+                }
+                User::query()->where('account_type', User::TYPE_ADMIN)
+                    ->where('status', User::STATUS_ACTIVE)->get()
+                    ->each(fn (User $admin) => Notification::query()->create([
+                        'user_id' => $admin->id,
+                        'type' => 'SHIPMENT_EXCEPTION',
+                        'title' => 'Shipment claim requires review',
+                        'message' => "{$type} exception for tracking {$locked->tracking_number}. Claim {$dispute->dispute_number}.",
+                        'reference_type' => Dispute::class,
+                        'reference_id' => $dispute->id,
+                        'action_url' => route('admin.complaints'),
+                    ]));
+            });
+        } catch (\Throwable $exception) {
+            if ($storedPhoto) {
+                \Illuminate\Support\Facades\Storage::disk($storedPhoto['disk'])->delete($storedPhoto['path']);
+            }
+            throw $exception;
+        }
+
+        return back()->with('status', 'Shipment marked '.$type.'. The buyer, seller, and admin team were notified, and a claim was opened.');
     }
 
     public function show(Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): View
@@ -518,12 +711,40 @@ class DispatchController extends Controller
         ]);
 
         try {
-            $trip = $batches->create($request->user(), $center, (int) $data['rider_profile_id'], $data['shipment_ids']);
+            $result = $batches->createPartial($request->user(), $center, (int) $data['rider_profile_id'], $data['shipment_ids']);
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Seller pickup batch #P-'.$trip->id.' assigned with '.$trip->items->count().' parcel(s).');
+        $assignedCount = count($result['assigned_ids']);
+        $skippedCount = count($result['skipped_ids']);
+        $message = 'Seller pickup batch #P-'.$result['trip']->id.' assigned with '.$assignedCount.' parcel(s).';
+        if ($skippedCount > 0) {
+            $message .= ' '.$skippedCount.' parcel(s) were skipped because the rider reached the three-active-job limit.';
+        }
+
+        return back()->with('status', $message);
+    }
+
+    public function reassignPickupBatch(Request $request, RiderLocalTrip $trip, SellerPickupBatchService $batches): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        abort_unless((int) $trip->logistics_center_id === (int) $center->id, 403);
+        $data = $request->validate(['rider_profile_id' => ['required', 'integer', 'exists:rider_profiles,id']]);
+
+        try {
+            $newTrip = $batches->reassign(
+                $request->user(),
+                $center,
+                $trip,
+                (int) $data['rider_profile_id'],
+            );
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Pickup batch reassigned to '.$newTrip->rider?->user?->name.'. The new rider must accept the updated assignment.');
     }
 
     public function assignSellerPickupRequest(Request $request, SellerPickupRequest $pickupRequest, SellerPickupRequestService $pickupRequests): RedirectResponse
@@ -540,7 +761,12 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Seller pickup request #'.$assigned->id.' assigned to trip #'.$assigned->rider_local_trip_id.'.');
+        $message = 'Seller pickup request #'.$assigned->id.' assigned to trip #'.$assigned->rider_local_trip_id.'.';
+        if ((int) $assigned->skipped_count > 0) {
+            $message .= ' '.$assigned->skipped_count.' parcel(s) were left in a new request because of the rider\'s remaining three-job or approved-capacity limit.';
+        }
+
+        return back()->with('status', $message);
     }
 
     public function rejectSellerPickupRequest(Request $request, SellerPickupRequest $pickupRequest, SellerPickupRequestService $pickupRequests): RedirectResponse
@@ -568,32 +794,52 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => 'Seller drop-off parcels are received at the center and cannot be auto-assigned for pickup.']);
         }
 
+        $shipment->loadMissing('sellerOrder.sellerProfile.businessAddress');
+        $sellerAddress = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+        if (! $sellerAddress || ! is_numeric($sellerAddress->latitude) || ! is_numeric($sellerAddress->longitude)) {
+            return back()->withErrors(['rider_profile_id' => 'Auto-assignment needs a confirmed map pin for the seller pickup address.']);
+        }
+
         $rider = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
             ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->where('is_online', true)
+            ->whereNotNull('availability_latitude')
+            ->whereNotNull('availability_longitude')
+            ->where('availability_location_updated_at', '>=', now()->subMinutes(15))
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', \App\Models\User::TYPE_RIDER)
                 ->where('status', \App\Models\User::STATUS_ACTIVE))
-            ->withCount(['assignments as active_pickup_assignments_count' => fn ($query) => $query
-                ->where('assignment_type', 'PICKUP')
+            ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->get()
             ->filter(fn (RiderProfile $candidate): bool =>
-                (int) $candidate->active_pickup_assignments_count < min(
-                    ShipmentWorkflowService::MAX_ACTIVE_PICKUP_ASSIGNMENTS,
-                    (int) $candidate->approved_parcel_capacity,
-                )
+                (int) $candidate->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                && (int) $candidate->approved_parcel_capacity > 0
                 && $workflow->riderCoversSellerPickupArea($shipment, $candidate))
-            ->sortBy('active_pickup_assignments_count')
+            ->map(function (RiderProfile $candidate) use ($sellerAddress): RiderProfile {
+                $candidate->setAttribute('seller_distance_km', $this->distanceKm(
+                    (float) $sellerAddress->latitude,
+                    (float) $sellerAddress->longitude,
+                    (float) $candidate->availability_latitude,
+                    (float) $candidate->availability_longitude,
+                ));
+
+                return $candidate;
+            })
+            ->sortBy(fn (RiderProfile $candidate): string => sprintf('%012.6f-%03d-%012d',
+                (float) $candidate->seller_distance_km,
+                (int) $candidate->active_assignments_count,
+                (int) $candidate->id,
+            ))
             ->first();
 
         if (! $rider) {
-            return back()->withErrors(['rider_profile_id' => 'No eligible rider covers this pickup area and has capacity for another parcel.']);
+            return back()->withErrors(['rider_profile_id' => 'No online rider with a recent location covers this pickup area and has an available job slot.']);
         }
 
         try {
@@ -882,5 +1128,16 @@ class DispatchController extends Controller
         $pickupBelongsToCenter = $pickupCandidates->count() === 1;
 
         abort_unless($areaBelongsToCenter || $pickupBelongsToCenter, 403);
+    }
+
+    private function distanceKm(float $latitudeA, float $longitudeA, float $latitudeB, float $longitudeB): float
+    {
+        $earthRadiusKm = 6371.0088;
+        $latitudeDelta = deg2rad($latitudeB - $latitudeA);
+        $longitudeDelta = deg2rad($longitudeB - $longitudeA);
+        $a = sin($latitudeDelta / 2) ** 2
+            + cos(deg2rad($latitudeA)) * cos(deg2rad($latitudeB)) * sin($longitudeDelta / 2) ** 2;
+
+        return $earthRadiusKm * 2 * atan2(sqrt($a), sqrt(max(0, 1 - $a)));
     }
 }

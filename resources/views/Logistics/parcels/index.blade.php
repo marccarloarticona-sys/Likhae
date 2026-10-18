@@ -5,6 +5,7 @@
     $statusOptions = [
         '' => 'All', 'pending' => 'Pending', 'in_transit' => 'In Transit',
         'delivered' => 'Delivered', 'failed' => 'Failed',
+        'LOST' => 'Lost', 'DAMAGED' => 'Damaged',
         'PICKED_UP' => 'Incoming', 'AT_SORTING_CENTER' => 'For Sorting',
         'SORTED' => 'Sorted', 'ASSIGNED_TO_RIDER' => 'Assigned',
         'OUT_FOR_DELIVERY' => 'Out for Delivery',

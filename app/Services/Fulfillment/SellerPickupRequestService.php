@@ -132,22 +132,43 @@ final class SellerPickupRequestService
                 throw new RuntimeException('The registered Seller pickup address changed. Review the request before assignment.');
             }
 
-            $trip = $this->batches->create(
+            $result = $this->batches->createPartial(
                 $actor,
                 $center,
                 $riderProfileId,
                 $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all(),
-                false,
-                null,
                 (int) $pickupRequest->id,
             );
+            $trip = $result['trip'];
+
+            if ($result['skipped_ids'] !== []) {
+                $skippedMemberships = $memberships->whereIn('shipment_id', $result['skipped_ids'])->values();
+                $skippedRequest = SellerPickupRequest::query()->create([
+                    'seller_profile_id' => $pickupRequest->seller_profile_id,
+                    'pickup_address_id' => $pickupRequest->pickup_address_id,
+                    'status' => 'REQUESTED',
+                ]);
+                foreach ($skippedMemberships as $membership) {
+                    $membership->update(['active_slot' => null]);
+                    SellerPickupRequestShipment::query()->create([
+                        'seller_pickup_request_id' => $skippedRequest->id,
+                        'seller_profile_id' => $membership->seller_profile_id,
+                        'seller_order_id' => $membership->seller_order_id,
+                        'shipment_id' => $membership->shipment_id,
+                        'active_slot' => true,
+                    ]);
+                }
+            }
 
             $pickupRequest->update([
                 'rider_local_trip_id' => $trip->id,
                 'status' => 'ASSIGNED',
             ]);
 
-            return $pickupRequest->fresh(['sellerProfile.user', 'pickupAddress', 'riderLocalTrip.rider.user', 'memberships.shipment.waybills']);
+            $assigned = $pickupRequest->fresh(['sellerProfile.user', 'pickupAddress', 'riderLocalTrip.rider.user', 'memberships.shipment.waybills']);
+            $assigned->setAttribute('skipped_count', count($result['skipped_ids']));
+
+            return $assigned;
         });
     }
 
@@ -201,6 +222,9 @@ final class SellerPickupRequestService
         $assignmentIds = $assignments->pluck('id')->map(fn ($id): int => (int) $id)->values();
         $shipmentByAssignment = $assignments->mapWithKeys(fn ($assignment): array => [(int) $assignment->id => (int) $assignment->shipment_id]);
         $trackingByShipment = $pickupRequest->memberships
+            ->when($trip !== null, fn (Collection $memberships): Collection => $memberships->filter(
+                fn (SellerPickupRequestShipment $membership): bool => $assignments->has((int) $membership->shipment_id),
+            ))
             ->mapWithKeys(fn ($membership): array => [(int) $membership->shipment_id => (string) $membership->shipment?->tracking_number]);
 
         $collected = collect();
@@ -222,6 +246,9 @@ final class SellerPickupRequestService
 
         $parcels = $pickupRequest->memberships
             ->sortBy('shipment_id')
+            ->when($trip !== null, fn (Collection $memberships): Collection => $memberships->filter(
+                fn (SellerPickupRequestShipment $membership): bool => $assignments->has((int) $membership->shipment_id),
+            ))
             ->map(function (SellerPickupRequestShipment $membership) use ($assignments, $collected): array {
                 $shipment = $membership->shipment;
                 $assignment = $assignments->get((int) $membership->shipment_id);

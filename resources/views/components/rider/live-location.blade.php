@@ -17,7 +17,7 @@
                         ->where(function ($assignment): void {
                             $assignment->where(function ($pickup): void {
                                 $pickup->where('assignment_type', RiderAssignment::TYPE_PICKUP)
-                                    ->whereHas('shipment', fn ($shipment) => $shipment->where('current_status', 'READY_FOR_PICKUP'));
+                                    ->whereHas('shipment', fn ($shipment) => $shipment->where('current_status', 'PICKUP_ASSIGNED'));
                             })->orWhere(function ($delivery): void {
                                 $delivery->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
                                     ->whereHas('shipment', fn ($shipment) => $shipment->whereIn('current_status', ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY']));

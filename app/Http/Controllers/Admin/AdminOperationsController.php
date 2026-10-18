@@ -9,6 +9,7 @@ use App\Models\Admin\Announcement;
 use App\Models\Admin\AuditLog;
 use App\Models\Admin\CommissionTransaction;
 use App\Models\Admin\Dispute;
+use App\Models\Admin\DisputeEvidence;
 use App\Models\Admin\Notification;
 use App\Models\Admin\PlatformPolicy;
 use App\Models\Admin\PlatformSetting;
@@ -1436,6 +1437,32 @@ class AdminOperationsController extends Controller
         return response($proofs->read($evidence->disk, $evidence->file_path), 200, [
             'Content-Type' => $evidence->mime_type ?: 'application/octet-stream',
             'Content-Disposition' => 'inline; filename="refund-evidence"',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    public function disputeEvidence(Request $request, DisputeEvidence $evidence, RefundProofStorageService $proofs)
+    {
+        $evidence->load('dispute');
+        abort_unless($evidence->dispute !== null, 404);
+        AuditLog::create([
+            'actor_user_id' => $request->user()->id,
+            'event' => 'DISPUTE_EVIDENCE_VIEWED',
+            'auditable_type' => DisputeEvidence::class,
+            'auditable_id' => $evidence->id,
+            'new_values' => ['scope' => 'admin', 'dispute_id' => $evidence->dispute_id],
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'created_at' => now(),
+        ]);
+
+        $contents = $evidence->encrypted
+            ? $proofs->read($evidence->disk, $evidence->file_path)
+            : Storage::disk($evidence->disk ?: 'public')->get($evidence->file_path);
+
+        return response($contents, 200, [
+            'Content-Type' => $evidence->mime_type ?: 'application/octet-stream',
+            'Content-Disposition' => 'inline; filename="shipment-evidence"',
             'Cache-Control' => 'private, no-store',
         ]);
     }

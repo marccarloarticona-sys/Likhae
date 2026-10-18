@@ -14,10 +14,17 @@ class DisputeEvidence extends Model
         'dispute_id',
         'uploaded_by_user_id',
         'file_path',
+        'disk',
+        'encrypted',
         'original_name',
         'mime_type',
         'notes',
     ];
+
+    protected function casts(): array
+    {
+        return ['encrypted' => 'boolean'];
+    }
 
     public function dispute(): BelongsTo
     {

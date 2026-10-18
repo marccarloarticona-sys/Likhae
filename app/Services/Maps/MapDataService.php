@@ -156,7 +156,7 @@ class MapDataService
         }
 
         if ($viewer->isAccountType(User::TYPE_SELLER)) {
-            return $shipment->current_status === 'READY_FOR_PICKUP'
+            return in_array($shipment->current_status, ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'], true)
                 && (int) $shipment->sellerOrder?->sellerProfile?->user_id === (int) $viewer->id;
         }
 
@@ -361,7 +361,7 @@ class MapDataService
         }
 
         return match ($shipment->current_status) {
-            'READY_FOR_PICKUP' => 'seller',
+            'READY_FOR_PICKUP', 'PICKUP_ASSIGNED' => 'seller',
             'PICKED_UP' => 'logistics',
             'OUT_FOR_DELIVERY' => 'buyer',
             default => null,
@@ -384,6 +384,11 @@ class MapDataService
     private function activeAssignment(Shipment $shipment): ?RiderAssignment
     {
         return match ($shipment->current_status) {
+            'PICKUP_ASSIGNED' => $shipment->riderAssignments
+                ->where('assignment_type', RiderAssignment::TYPE_PICKUP)
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                ->sortByDesc('id')
+                ->first(),
             'READY_FOR_PICKUP' => $shipment->riderAssignments
                 ->where('assignment_type', RiderAssignment::TYPE_PICKUP)
                 ->whereIn('status', ['ACCEPTED', 'IN_PROGRESS'])
@@ -414,7 +419,7 @@ class MapDataService
         }
 
         $phaseVisible = match ($shipment->current_status) {
-            'READY_FOR_PICKUP', 'PICKED_UP' => $assignment->assignment_type === RiderAssignment::TYPE_PICKUP,
+            'READY_FOR_PICKUP', 'PICKUP_ASSIGNED', 'PICKED_UP' => $assignment->assignment_type === RiderAssignment::TYPE_PICKUP,
             'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY' => $assignment->assignment_type === RiderAssignment::TYPE_DELIVERY,
             default => false,
         };
@@ -433,7 +438,7 @@ class MapDataService
         }
 
         if ($viewer->isAccountType('SELLER')) {
-            return $shipment->current_status === 'READY_FOR_PICKUP'
+            return in_array($shipment->current_status, ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'], true)
                 && (int) $shipment->sellerOrder?->sellerProfile?->user_id === (int) $viewer->id;
         }
 
@@ -453,7 +458,7 @@ class MapDataService
         }
 
         if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP
-            && $shipment->current_status === 'READY_FOR_PICKUP'
+            && in_array($shipment->current_status, ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'], true)
             && in_array($assignment->status, ['ACCEPTED', 'IN_PROGRESS'], true)) {
             return true;
         }

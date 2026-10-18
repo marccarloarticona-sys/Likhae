@@ -26,6 +26,7 @@ class Shipment extends Model
         'CONFIRMED',
         'PREPARING',
         'READY_FOR_PICKUP',
+        'PICKUP_ASSIGNED',
         'PICKED_UP',
         'AT_SORTING_CENTER',
         'SORTED',
@@ -35,6 +36,9 @@ class Shipment extends Model
         'COMPLETED',
         'DELIVERY_FAILED',
         'RETURNED',
+        'CANCELLED',
+        'LOST',
+        'DAMAGED',
     ];
 
     protected $fillable = [

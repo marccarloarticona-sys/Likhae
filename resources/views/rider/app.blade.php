@@ -716,10 +716,13 @@
                         $workspaceRider = auth()->user()?->riderProfile;
                     @endphp
                     @if($workspaceRider && \App\Support\RiderVehicleType::isLocalBarangay($workspaceRider->vehicle_type))
-                        <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:6px">
+                        <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:6px" data-rider-availability-form>
                             @csrf @method('PATCH')
                             <input type="hidden" name="is_online" value="{{ $workspaceRider->is_online ? 0 : 1 }}">
+                            <input type="hidden" name="latitude" data-availability-latitude>
+                            <input type="hidden" name="longitude" data-availability-longitude>
                             <button type="submit" class="rider-topbar-status" style="cursor:pointer;border-color:{{ $workspaceRider->is_online ? '#CFE8DA' : '#E4DCCB' }};background:{{ $workspaceRider->is_online ? 'var(--ra-success-soft)' : '#F5F1E8' }};color:{{ $workspaceRider->is_online ? 'var(--ra-success)' : '#76684F' }}">{{ $workspaceRider->is_online ? 'Go Offline' : 'Go Online' }}</button>
+                            <span class="sr-only" data-availability-message aria-live="polite"></span>
                         </form>
                     @endif
                     <x-workspace-account-menu label="Rider Account" profile-route="rider.profile" /></div>
@@ -745,6 +748,57 @@
         <x-workspace.ai-assistant workspace="rider" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
     @endif
     @stack('scripts')
+    @php($availabilityRider = auth()->user()?->riderProfile)
+    @if($availabilityRider && $availabilityRider->is_online && \App\Support\RiderVehicleType::isLocalBarangay($availabilityRider->vehicle_type))
+        <script>
+            (() => {
+                if (!navigator.geolocation) return;
+                const endpoint = @json(route('rider.availability.location.update'));
+                const token = document.querySelector('meta[name="csrf-token"]')?.content;
+                let lastSentAt = 0;
+                navigator.geolocation.watchPosition((position) => {
+                    if (Date.now() - lastSentAt < 60000) return;
+                    lastSentAt = Date.now();
+                    fetch(endpoint, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': token},
+                        body: JSON.stringify({latitude: position.coords.latitude, longitude: position.coords.longitude}),
+                        credentials: 'same-origin',
+                    }).catch(() => {});
+                }, () => {}, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
+            })();
+        </script>
+    @endif
+    <script>
+        (() => {
+            const form = document.querySelector('[data-rider-availability-form]');
+            if (!form) return;
+            const online = form.querySelector('input[name="is_online"]');
+            const latitude = form.querySelector('[data-availability-latitude]');
+            const longitude = form.querySelector('[data-availability-longitude]');
+            const message = form.querySelector('[data-availability-message]');
+            let locationReady = false;
+            form.addEventListener('submit', (event) => {
+                if (online.value !== '1' || locationReady) return;
+                event.preventDefault();
+                if (!navigator.geolocation) {
+                    message.textContent = 'Location access is required to go online for nearby dispatch.';
+                    return;
+                }
+                message.textContent = 'Getting your location…';
+                navigator.geolocation.getCurrentPosition((position) => {
+                    latitude.value = position.coords.latitude;
+                    longitude.value = position.coords.longitude;
+                    locationReady = true;
+                    form.requestSubmit();
+                }, () => {
+                    message.textContent = 'Location was not shared. You can still go online, but nearby auto-assignment needs location access.';
+                    locationReady = true;
+                    form.requestSubmit();
+                }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
+            });
+        })();
+    </script>
 </body>
 
 </html>

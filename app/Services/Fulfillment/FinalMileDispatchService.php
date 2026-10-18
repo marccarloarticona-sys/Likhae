@@ -9,6 +9,7 @@ use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
+use App\Support\LocalTripCapacityRules;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -85,6 +86,13 @@ final class FinalMileDispatchService
                 if (! $trip) {
                     throw new RuntimeException('Choose an open loading trip for this rider or create a new trip.');
                 }
+                if (trim((string) $shipment->destination_province_code) !== trim((string) $trip->province_code)
+                    || trim((string) $shipment->destination_municipality_code) !== trim((string) $trip->municipality_code)
+                    || trim((string) $shipment->destination_barangay_code) !== trim((string) $trip->barangay_code)) {
+                    throw new RuntimeException('The assignment PSGC barangay does not match the trip barangay.');
+                }
+                $loadedCount = $trip->items()->whereIn('status', [RiderLocalTripItem::QUEUED, RiderLocalTripItem::LOADED])->count();
+                LocalTripCapacityRules::assertAvailable((int) $loadedCount, (int) $trip->approved_parcel_capacity);
             } else {
                 if (! $shipment->serviceArea) {
                     throw new RuntimeException('This parcel has no destination service area. Configure its exact PSGC coverage before dispatch.');

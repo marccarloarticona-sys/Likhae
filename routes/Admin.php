@@ -130,6 +130,7 @@ Route::prefix('admin')
         Route::patch('/disputes/{dispute}', [AdminOperationsController::class, 'updateDispute'])->name('disputes.update');
         Route::get('/disputes/payouts/{payout}/proof', [AdminOperationsController::class, 'refundPayoutProof'])->name('disputes.payout-proof');
         Route::get('/disputes/refund-evidence/{evidence}', [AdminOperationsController::class, 'refundEvidence'])->name('disputes.refund-evidence');
+        Route::get('/disputes/evidence/{evidence}', [AdminOperationsController::class, 'disputeEvidence'])->name('disputes.evidence');
         Route::get('/finance-export', [AdminOperationsController::class, 'exportFinance'])->name('finance.export');
         Route::get('/reports-export', [AdminOperationsController::class, 'exportReport'])->name('reports.export');
         Route::post('/messages/send', [AdminOperationsController::class, 'sendMessage'])->name('messages.send');

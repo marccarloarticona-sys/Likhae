@@ -7,6 +7,7 @@
         'CONFIRMED' => 'Seller confirmed order',
         'PREPARING' => 'Preparing parcel',
         'READY_FOR_PICKUP' => 'Ready for pickup',
+        'PICKUP_ASSIGNED' => 'Pickup rider assigned',
         'PICKED_UP' => 'Picked up from seller',
         'AT_SORTING_CENTER' => 'Arrived at sorting center',
         'SORTED' => 'Sorted by destination',

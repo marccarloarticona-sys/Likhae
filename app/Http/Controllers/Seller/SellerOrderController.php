@@ -158,7 +158,7 @@ class SellerOrderController extends Controller
         $statusCounts = $counts->mapWithKeys(fn ($count, $status): array => [$this->statusKey((string) $status) => (int) $count]);
         $statusCounts->put('returns', (int) $refundCounts->sum());
         $readyPickupCount = (clone $ownedOrders)->where('status', 'READY_FOR_PICKUP')->with('shipments')->get()
-            ->sum(fn (SellerOrder $order): int => $order->shipments->where('current_status', 'READY_FOR_PICKUP')->count());
+            ->sum(fn (SellerOrder $order): int => $order->shipments->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'])->count());
 
         return view('Seller.orders', [
             'seller' => $seller,
@@ -363,6 +363,7 @@ class SellerOrderController extends Controller
             $pickupBatch?->status === 'EN_ROUTE_TO_HUB' => 'In transit to logistics',
             $pickupBatch?->status === 'IN_PROGRESS' => 'Pickup in Progress',
             $pickupAssignment && in_array($pickupAssignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true) => 'Pickup scheduled',
+            $parcelStatuses->contains('PICKUP_ASSIGNED') => 'Pickup scheduled',
             $parcelStatuses->contains('READY_FOR_PICKUP') => 'Waiting for Logistics',
             default => null,
         };
@@ -398,7 +399,7 @@ class SellerOrderController extends Controller
                 && $parcel['shipment']?->current_status === 'PREPARING')->values(),
             'unpacked_parcels' => $parcelRows->filter(fn (array $parcel): bool => ! $parcel['packed']
                 && $parcel['shipment']?->current_status === 'PREPARING')->values(),
-            'ready_parcel_count' => $shipments->where('current_status', 'READY_FOR_PICKUP')->count(),
+            'ready_parcel_count' => $shipments->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'])->count(),
             'unresolved_legacy_shipments' => $shipments->whereNull('order_item_id')->values(),
             'has_unresolved_legacy_shipment' => $items->count() > 1
                 && $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),

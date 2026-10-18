@@ -26,6 +26,11 @@ class ShipmentTrackingUpdated implements ShouldBroadcast, ShouldDispatchAfterCom
     public static function fromShipment(Shipment $shipment): self
     {
         $assignment = match ($shipment->current_status) {
+            'PICKUP_ASSIGNED' => $shipment->riderAssignments
+                ->where('assignment_type', 'PICKUP')
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                ->sortByDesc('id')
+                ->first(),
             'READY_FOR_PICKUP' => $shipment->riderAssignments
                 ->where('assignment_type', 'PICKUP')
                 ->whereIn('status', ['ACCEPTED', 'IN_PROGRESS'])
