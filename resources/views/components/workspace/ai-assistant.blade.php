@@ -19,7 +19,6 @@
         'pageTitle' => $pageTitle ?: $pageContext['title'],
     ];
     $aiResponseSound = (bool) data_get(auth()->user()?->notification_preferences, $workspace.'_ai_response_sound', false);
-    $aiConfigured = app(\App\Services\Ai\GeminiService::class)->configured();
 @endphp
 
 <script>window.LIKHAE_WORKSPACE_AI_CONFIG = @json($clientConfig);</script>
@@ -29,7 +28,6 @@
     data-workspace="{{ $workspace }}"
     data-chat-url="{{ $chatUrl ?: route($workspace . '.ai.chat') }}"
     data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}"
-    data-ai-configured="{{ $aiConfigured ? '1' : '0' }}"
 >
     <button
         class="likhae-workspace-ai-head"
@@ -38,7 +36,7 @@
         aria-label="Open {{ $workspaceConfig['assistant_name'] }}"
         aria-controls="likhaeWorkspaceAiWindow"
         aria-expanded="false"
-        title="{{ $workspaceConfig['assistant_name'] }}"
+        title="{{ $workspaceConfig['assistant_name'] }} · Drag to move"
     >
         <img class="likhae-workspace-ai-head-icon" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt="">
         <span class="likhae-workspace-ai-online-dot" aria-hidden="true"></span>

@@ -53,7 +53,7 @@
 <footer class="lk-footer">
     <span>© {{ date('Y') }} LIKHAE Marketplace. Buyer-first shopping experience.</span>
     <nav aria-label="Footer navigation">
-        <a href="{{ route('buyer.orders') }}">My Purchases</a>
+        <a href="{{ route('buyer.orders') }}">My Orders</a>
         <a href="{{ route('buyer.messages') }}">Support</a>
         <a href="{{ route('buyer.account') }}">Account</a>
     </nav>

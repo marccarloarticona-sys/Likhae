@@ -443,23 +443,30 @@ class RiderApiController extends Controller
         }
         $data = $request->validate([
             'conversation_id' => ['required', 'integer'],
-            'body' => ['required', 'string', 'max:1000'],
+            'body' => ['nullable', 'string', 'max:1000'],
             'attachment' => $attachments->validationRules(),
         ]);
+        abort_if(blank($data['body'] ?? null) && ! $request->hasFile('attachment'), 422, 'A message or attachment is required.');
         $thread = Conversation::query()->whereKey($data['conversation_id'])
             ->whereHas('participants', fn ($query) => $query->where('users.id', $request->user()->id)->whereNull('conversation_participants.left_at'))
             ->with(['participants', 'shipment'])->firstOrFail();
         $recipient = $thread->participants->first(fn (User $participant): bool => (int) $participant->id !== (int) $request->user()->id);
         abort_unless($recipient, 409, 'The conversation has no other participant.');
         $attachmentPath = null;
+        $attachmentName = null;
+        $attachmentMime = null;
+        $body = trim((string) ($data['body'] ?? ''));
         try {
             if ($request->hasFile('attachment')) {
-                $attachmentPath = $attachments->store($request->file('attachment'));
+                $file = $request->file('attachment');
+                $attachmentPath = $attachments->store($file);
+                $attachmentName = $attachments->originalName($file);
+                $attachmentMime = $attachments->storedMime($file, $attachmentPath);
             }
-            $message = $service->send($request->user(), (int) $recipient->id, $data['body'], [
+            $message = $service->send($request->user(), (int) $recipient->id, $body, [
                 'type' => $thread->type, 'order_id' => $thread->order_id,
                 'seller_order_id' => $thread->seller_order_id, 'shipment_id' => $thread->shipment_id,
-            ], $thread, $attachmentPath);
+            ], $thread, $attachmentPath, $attachmentName, $attachmentMime);
         } catch (\Throwable $exception) {
             $attachments->delete($attachmentPath);
             throw $exception;

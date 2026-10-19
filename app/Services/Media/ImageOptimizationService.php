@@ -10,6 +10,7 @@ use RuntimeException;
 class ImageOptimizationService
 {
     private const MAX_DIMENSION = 1920;
+    private const MAX_PASSTHROUGH_WEBP_BYTES = 786432;
 
     /**
      * Store a browser-uploaded image as an optimized WebP file when possible.
@@ -20,6 +21,17 @@ class ImageOptimizationService
      */
     public function store(UploadedFile $image, string $directory, string $disk = 'public'): string
     {
+        if (strtolower($image->getClientOriginalExtension()) === 'webp'
+            && (int) $image->getSize() <= self::MAX_PASSTHROUGH_WEBP_BYTES) {
+            $path = $image->getRealPath();
+            $metadata = $path ? @getimagesize($path) : false;
+
+            if (($metadata['mime'] ?? null) === 'image/webp'
+                && max((int) ($metadata[0] ?? 0), (int) ($metadata[1] ?? 0)) <= self::MAX_DIMENSION) {
+                return $this->storeOriginal($image, $directory, $disk);
+            }
+        }
+
         $source = $this->decode($image);
         if (! $source) {
             return $this->storeOriginal($image, $directory, $disk);

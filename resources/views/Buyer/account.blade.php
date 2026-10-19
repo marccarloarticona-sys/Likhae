@@ -19,6 +19,11 @@
     $buyerPhoneDisplay = filled($buyerPhone)
         ? \App\Support\PhilippineMobileNumber::format((string) $buyerPhone)
         : '';
+    $savedAddresses = collect($addresses ?? []);
+    $defaultAddressId = old(
+        'address_id',
+        $savedAddresses->firstWhere('is_default', true)?->id ?? $savedAddresses->first()?->id
+    );
     $buyerBirthday = data_get($user, 'birthday', '');
     $buyerGender = data_get($user, 'sex', '');
 
@@ -389,6 +394,27 @@
                         <p class="mt-2 text-xs font-medium text-stone-600">{{ $addressCount ?? collect($addresses ?? [])->count() }} of {{ $addressLimit ?? 10 }} saved addresses</p>
                     </div>
                     <div class="space-y-4 p-5 sm:p-6">
+                        @if($savedAddresses->isNotEmpty())
+                            <div class="grid gap-4 rounded-2xl border border-red-100 bg-red-50/60 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(300px,1.2fr)] sm:items-center sm:p-5">
+                                <div>
+                                    <h3 class="text-sm font-semibold text-stone-900">Default delivery address</h3>
+                                    <p class="mt-1 text-xs leading-5 text-stone-600">Choose the address to preselect at checkout. You can still choose a different address for each order.</p>
+                                </div>
+                                <form method="POST" action="{{ route('buyer.account.addresses.default') }}" class="flex flex-col gap-2 sm:flex-row sm:items-end">
+                                    @csrf @method('PATCH')
+                                    <label class="grid min-w-0 flex-1 gap-1.5 text-xs font-semibold text-stone-700">
+                                        Choose a saved address
+                                        <select name="address_id" required class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm font-normal text-stone-800 outline-none focus:border-red-800 focus:ring-4 focus:ring-red-100">
+                                            @foreach($savedAddresses as $address)
+                                                <option value="{{ $address->id }}" @selected((string) $defaultAddressId === (string) $address->id)>{{ $address->label ?: 'Address' }} — {{ $address->recipient_name }} — {{ \Illuminate\Support\Str::limit($address->formatted(), 58) }}</option>
+                                            @endforeach
+                                        </select>
+                                    </label>
+                                    <button type="submit" class="shrink-0 rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save default</button>
+                                </form>
+                            </div>
+                        @endif
+
                         @forelse(collect($addresses ?? []) as $address)
                             <article class="rounded-2xl border {{ $address->is_default ? 'border-red-300 bg-red-50/40' : 'border-stone-200 bg-white' }} p-4 sm:p-5">
                                 <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

@@ -874,7 +874,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    My Purchases
+                    My Orders
                 </span>
 
                 <span class="lk-nav-arrow">

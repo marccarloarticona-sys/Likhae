@@ -81,6 +81,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->assertSee('0 / 200')
             ->assertSee('Delivery fee: &#8369;50.00 per seller parcel', false)
             ->assertSee('one seller shipment')
+            ->assertSee('100 points =')
             ->assertSee('Line total');
         $checkoutDocument = new \DOMDocument;
         @$checkoutDocument->loadHTML($checkoutResponse->getContent());
@@ -88,6 +89,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
 
         $this->assertSame(2, $checkoutXpath->query('//section[@data-seller-card]')->length);
         $this->assertSame(2, $checkoutXpath->query('//section[@data-seller-card]//article')->length);
+        $rewardPointsInput = $checkoutXpath->query('//input[@id="checkout-reward-points"]')->item(0);
+        $this->assertNotNull($rewardPointsInput);
+        $this->assertSame('100', $rewardPointsInput->getAttribute('min'));
+        $this->assertSame('100', $rewardPointsInput->getAttribute('step'));
         $codInput = $checkoutXpath->query('//input[@name="payment_method" and @value="COD"]')->item(0);
         $walletInput = $checkoutXpath->query('//input[@type="radio" and @disabled]')->item(0);
         $this->assertNotNull($codInput);
@@ -143,6 +148,64 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $sellerAGroup['shipping_fee']);
         $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
         $this->assertEquals(100.00, $preview['shipping_total']);
+    }
+
+    public function test_reward_points_require_100_minimum_and_each_100_points_discount_one_peso(): void
+    {
+        $fixture = $this->checkoutFixture();
+        foreach ([1, 2] as $index) {
+            Order::query()->create([
+                'order_number' => 'LK-REWARD-'.$index,
+                'buyer_user_id' => $fixture['buyer']->id,
+                'status' => 'COMPLETED',
+                'currency' => 'PHP',
+                'subtotal' => 100,
+                'discount_total' => 0,
+                'shipping_total' => 0,
+                'grand_total' => 100,
+                'payment_status' => 'PAID',
+                'placed_at' => now()->subDays(3 - $index),
+                'completed_at' => now()->subDays(2 - $index),
+            ]);
+        }
+
+        $checkout = app(CheckoutService::class);
+        $this->assertSame(100, app(\App\Services\Marketplace\RewardPointsService::class)->balance($fixture['buyer']));
+
+        try {
+            $checkout->preview(collect([$fixture['itemA']]), [], $fixture['buyer'], rewardPointsToRedeem: 50);
+            $this->fail('Redemption below 100 points must be rejected.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('reward_points', $exception->errors());
+        }
+
+        $preview = $checkout->preview(collect([$fixture['itemA']]), [], $fixture['buyer'], rewardPointsToRedeem: 100);
+        $this->assertSame(100, $preview['reward_points_redeemed']);
+        $this->assertEquals(1.00, $preview['reward_points_discount']);
+        $this->assertEquals(149.00, $preview['grand_total']);
+
+        $order = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            [],
+            null,
+            [],
+            [],
+            '00000000-0000-4000-8000-000000000031',
+            null,
+            100,
+        );
+
+        $sellerOrder = $order->sellerOrders()->sole();
+        $this->assertSame(100, (int) $order->reward_points_redeemed);
+        $this->assertEquals(1.00, $order->reward_points_discount);
+        $this->assertEquals(1.00, $order->discount_total);
+        $this->assertEquals(149.00, $order->grand_total);
+        $this->assertSame(100, (int) $sellerOrder->reward_points_redeemed);
+        $this->assertEquals(1.00, $sellerOrder->reward_points_discount);
+        $this->assertSame(0, app(\App\Services\Marketplace\RewardPointsService::class)->balance($fixture['buyer']));
     }
 
     public function test_collected_seller_voucher_redeems_once_on_order_and_claim_survives_cancellation(): void

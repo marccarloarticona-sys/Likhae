@@ -23,7 +23,7 @@
     $notificationSoundsEnabled = (bool) data_get($notificationUser?->notification_preferences, $notificationSoundKey, true);
 @endphp
 
-<script>window.LIKHAE_NOTIFICATION_SOUND_CONFIG = @json(['userId' => $notificationUser?->id, 'enabled' => $notificationSoundsEnabled]); window.LIKHAE_MESSAGES_URL = @json($messagesUrl);</script>
+<script>window.LIKHAE_NOTIFICATION_SOUND_CONFIG = @json(['userId' => $notificationUser?->id, 'enabled' => $notificationSoundsEnabled]); window.LIKHAE_MESSAGES_URL = @json($messagesUrl); window.LIKHAE_MESSAGE_PRESENCE_URL = @json(route('messages.presence'));</script>
 
 <section id="notificationPopover" class="lk-notification-popover" data-notification-popover hidden aria-label="Notifications">
     <div class="lk-notification-popover__head">

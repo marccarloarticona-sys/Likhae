@@ -1,0 +1,108 @@
+.lk-message-image-frame {
+    position: relative;
+    display: block;
+    width: min(280px, 75vw);
+    max-height: 300px;
+    aspect-ratio: 4 / 3;
+    margin-top: 8px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: #E9DED4;
+}
+
+.lk-message-photo-placeholder {
+    position: absolute;
+    inset: 0;
+    display: block;
+    background: linear-gradient(105deg, #E9DED4 22%, #F8F1EA 42%, #E9DED4 62%);
+    background-size: 220% 100%;
+}
+
+.lk-message-image-frame.is-loading .lk-message-photo-placeholder {
+    animation: lk-message-photo-shimmer 1.35s ease-in-out infinite;
+}
+
+.lk-message-image-frame.is-loaded .lk-message-photo-placeholder {
+    opacity: 0;
+    transition: opacity 180ms ease;
+}
+
+.lk-message-image-frame.is-error .lk-message-photo-placeholder {
+    animation: none;
+    background: #EFE7DE;
+}
+
+.lk-message-image-frame.is-error::after {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #6C4936;
+    content: 'Photo unavailable';
+    font: 600 11px/1.4 system-ui, sans-serif;
+}
+
+.lk-message-image-frame .lk-message-image-attachment {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    border-radius: inherit;
+    object-fit: contain;
+    opacity: 0;
+    transition: opacity 180ms ease;
+}
+
+.lk-message-image-frame.is-loaded .lk-message-image-attachment {
+    opacity: 1;
+}
+
+.lk-chat-send[aria-busy="true"] {
+    cursor: progress;
+}
+
+.lk-chat-send[aria-busy="true"]::after {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-left: 8px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: lk-message-send-spin 700ms linear infinite;
+    content: '';
+    vertical-align: -2px;
+}
+
+@keyframes lk-message-photo-shimmer {
+    to { background-position: -220% 0; }
+}
+
+@keyframes lk-message-send-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lk-message-image-frame.is-loading .lk-message-photo-placeholder,
+    .lk-chat-send[aria-busy="true"]::after {
+        animation: none;
+    }
+}
+
+html.dark .lk-message-image-frame,
+html.dark .lk-message-image-frame.is-error .lk-message-photo-placeholder {
+    background: #3B2E27;
+}
+
+html.dark .lk-message-photo-placeholder {
+    background: linear-gradient(105deg, #3B2E27 22%, #4A3B32 42%, #3B2E27 62%);
+    background-size: 220% 100%;
+}
+
+html.dark .lk-message-image-frame.is-error::after {
+    color: #F5EFE8;
+}

@@ -33,11 +33,20 @@ return new class extends Migration
             });
         }
 
-        if (Schema::hasTable('dispute_evidence') && ! Schema::hasColumn('dispute_evidence', 'disk')) {
-            Schema::table('dispute_evidence', function (Blueprint $table): void {
-                $table->string('disk', 50)->default('public');
-                $table->boolean('encrypted')->default(false);
-            });
+        if (Schema::hasTable('dispute_evidence')) {
+            $addDisk = ! Schema::hasColumn('dispute_evidence', 'disk');
+            $addEncrypted = ! Schema::hasColumn('dispute_evidence', 'encrypted');
+
+            if ($addDisk || $addEncrypted) {
+                Schema::table('dispute_evidence', function (Blueprint $table) use ($addDisk, $addEncrypted): void {
+                    if ($addDisk) {
+                        $table->string('disk', 50)->default('public');
+                    }
+                    if ($addEncrypted) {
+                        $table->boolean('encrypted')->default(false);
+                    }
+                });
+            }
         }
     }
 
@@ -60,10 +69,22 @@ return new class extends Migration
                 $table->enum('status', array_values(array_diff(self::EVENT_STATUSES, ['LOST', 'DAMAGED'])))->change();
             });
         }
-        if (Schema::hasTable('dispute_evidence') && Schema::hasColumn('dispute_evidence', 'disk')) {
-            Schema::table('dispute_evidence', function (Blueprint $table): void {
-                $table->dropColumn(['disk', 'encrypted']);
-            });
+        if (Schema::hasTable('dispute_evidence')) {
+            $dropDisk = Schema::hasColumn('dispute_evidence', 'disk');
+            $dropEncrypted = Schema::hasColumn('dispute_evidence', 'encrypted');
+
+            if ($dropDisk || $dropEncrypted) {
+                Schema::table('dispute_evidence', function (Blueprint $table) use ($dropDisk, $dropEncrypted): void {
+                    $columns = [];
+                    if ($dropDisk) {
+                        $columns[] = 'disk';
+                    }
+                    if ($dropEncrypted) {
+                        $columns[] = 'encrypted';
+                    }
+                    $table->dropColumn($columns);
+                });
+            }
         }
     }
 };

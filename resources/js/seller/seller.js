@@ -150,10 +150,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('keydown', (event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-            const search = select('.sl-header-search input');
-            if (search) { event.preventDefault(); search.focus(); }
-        }
         if (event.key === 'Escape') {
             setMobileSidebar(false);
             closeModal(select('.sl-modal:not([hidden])'));

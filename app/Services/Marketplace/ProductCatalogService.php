@@ -11,10 +11,12 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Buyer\Review;
 use App\Services\ReviewImageService;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ProductCatalogService
 {
@@ -75,12 +77,47 @@ class ProductCatalogService
             $query->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true)->where('stock', '>', 0));
         }
 
-        if ($request->filled('min_price')) {
-            $query->whereHas('variants', fn (Builder $variant) => $variant->where('price', '>=', (float) $request->query('min_price')));
+        $minimumPrice = $request->filled('min_price') ? max(0, (float) $request->query('min_price')) : null;
+        $maximumPrice = $request->filled('max_price') ? max(0, (float) $request->query('max_price')) : null;
+        if ($minimumPrice !== null && $maximumPrice !== null && $minimumPrice > $maximumPrice) {
+            $query->whereRaw('1 = 0');
+        }
+        if ($minimumPrice !== null || $maximumPrice !== null) {
+            $query->whereHas('variants', function (Builder $variant) use ($minimumPrice, $maximumPrice): void {
+                $variant->where('is_active', true)->where('stock', '>', 0);
+                $sellingPrice = $this->variantSellingPriceSql();
+
+                if ($minimumPrice !== null) {
+                    $variant->whereRaw($sellingPrice.' >= CAST(? AS DECIMAL(12, 2))', [$minimumPrice]);
+                }
+                if ($maximumPrice !== null) {
+                    $variant->whereRaw($sellingPrice.' <= CAST(? AS DECIMAL(12, 2))', [$maximumPrice]);
+                }
+            });
         }
 
-        if ((float) $request->query('max_price', 0) > 0) {
-            $query->whereHas('variants', fn (Builder $variant) => $variant->where('price', '<=', (float) $request->query('max_price')));
+        $location = trim((string) $request->query('location', ''));
+        if ($location !== '') {
+            $pattern = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($location)).'%';
+            $query->whereHas('sellerProfile', function (Builder $seller) use ($pattern): void {
+                $seller->whereRaw("LOWER(COALESCE(seller_profiles.location, '')) LIKE ? ESCAPE '!'", [$pattern])
+                    ->orWhereHas('businessAddress', function (Builder $address) use ($pattern): void {
+                        $address->whereRaw("LOWER(COALESCE(addresses.province_name, '')) LIKE ? ESCAPE '!'", [$pattern])
+                            ->orWhereRaw("LOWER(COALESCE(addresses.municipality_name, '')) LIKE ? ESCAPE '!'", [$pattern])
+                            ->orWhereRaw("LOWER(COALESCE(addresses.barangay_name, '')) LIKE ? ESCAPE '!'", [$pattern]);
+                    });
+            });
+        }
+
+        if ($request->boolean('deals') || $request->query('focus') === 'deals') {
+            $query->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false));
+            $query->whereHas('variants', fn (Builder $variant) => $variant
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('price', '>', 0)
+                ->where('discount_value', '>', 0)
+                ->where(fn (Builder $type) => $type->whereNull('discount_type')
+                    ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'")));
         }
 
         $minimumRating = min(5, max(0, (float) $request->query('rating', 0)));
@@ -99,20 +136,36 @@ class ProductCatalogService
         return $query;
     }
 
+    private function variantSellingPriceSql(): string
+    {
+        $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
+        $value = 'COALESCE(product_variants.discount_value, 0)';
+        $price = 'product_variants.price';
+
+        return "CAST(CASE
+            WHEN {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
+            WHEN ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
+            ELSE {$price}
+        END AS DECIMAL(12, 2))";
+    }
+
+    private function variantPriceSubquery(string $aggregate): Builder
+    {
+        $aggregate = $aggregate === 'MAX' ? 'MAX' : 'MIN';
+
+        return ProductVariant::query()
+            ->selectRaw("{$aggregate}({$this->variantSellingPriceSql()})")
+            ->whereColumn('product_variants.product_id', 'products.id')
+            ->where('is_active', true)
+            ->where('stock', '>', 0);
+    }
+
     public function applySort(Builder $query, ?string $sort): Builder
     {
         return match ($sort) {
             'name' => $query->orderBy('name'),
-            'price-low' => $query->orderBy(
-                ProductVariant::selectRaw('MIN(price)')
-                    ->whereColumn('product_variants.product_id', 'products.id')
-                    ->where('is_active', true)
-            ),
-            'price-high' => $query->orderByDesc(
-                ProductVariant::selectRaw('MIN(price)')
-                    ->whereColumn('product_variants.product_id', 'products.id')
-                    ->where('is_active', true)
-            ),
+            'price-low' => $query->orderBy($this->variantPriceSubquery('MIN')),
+            'price-high' => $query->orderByDesc($this->variantPriceSubquery('MAX')),
             'best-rated' => $query->orderByDesc('reviews_avg_rating')->orderByDesc('products.id'),
             'best-selling' => $query->orderByDesc('order_items_sum_quantity')->orderByDesc('products.id'),
             'oldest' => $query->oldest(),
@@ -136,7 +189,7 @@ class ProductCatalogService
     }
 
     /** @return array<string, mixed> */
-    public function productPayload(Product $product, bool $includeDetails = false): array
+    public function productPayload(Product $product, bool $includeDetails = false, bool $dealsMode = false): array
     {
         $product->loadMissing($this->productRelations());
 
@@ -158,7 +211,26 @@ class ProductCatalogService
 
         $primaryImage = $images->firstWhere('is_primary', true) ?: $images->first();
         $activeVariants = $product->variants->where('is_active', true)->values();
-        $minPrice = $activeVariants->min(fn (ProductVariant $variant) => $variant->final_price);
+        $availableVariants = $activeVariants->filter(fn (ProductVariant $variant): bool => (int) $variant->stock > 0)->values();
+        $dealVariant = $availableVariants
+            ->filter(fn (ProductVariant $variant): bool => $variant->discount_amount > 0)
+            ->sortBy(fn (ProductVariant $variant): float => $variant->final_price)
+            ->first();
+        $displayVariant = $dealsMode && $dealVariant
+            ? $dealVariant
+            : $availableVariants->sortBy(fn (ProductVariant $variant): float => $variant->final_price)->first();
+        $seller = $product->sellerProfile;
+        $isCatalogVisible = ! $product->trashed()
+            && $product->status === 'ACTIVE'
+            && $seller?->status === 'ACTIVE'
+            && (bool) ($seller?->store_visibility ?? false)
+            && $seller?->user?->status === 'ACTIVE'
+            && $availableVariants->isNotEmpty();
+        $isAvailable = $isCatalogVisible && ! (bool) ($seller?->vacation_mode ?? false);
+        $currentPrice = $displayVariant?->final_price;
+        $originalPrice = $displayVariant && $displayVariant->discount_amount > 0
+            ? (float) $displayVariant->price
+            : null;
 
         $payload = [
             'id' => $product->id,
@@ -168,13 +240,24 @@ class ProductCatalogService
             'slug' => $product->slug,
             'description' => $includeDetails ? $product->description : str($product->description ?? '')->limit(180)->toString(),
             'status' => $product->status,
+            'is_active' => $product->status === 'ACTIVE',
+            'is_draft' => $product->status === 'DRAFT',
+            'is_deleted' => $product->trashed(),
+            'is_visible' => (bool) $isCatalogVisible,
+            'available' => (bool) $isAvailable,
+            'is_available' => (bool) $isAvailable,
+            'availability_restricted' => ! $isAvailable,
+            'seller_on_vacation' => (bool) ($seller?->vacation_mode ?? false),
             'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
                 ? null
                 : (int) $product->purchase_limit_per_buyer,
             'rating' => (float) ($product->reviews_avg_rating ?? 0),
             'reviews' => (int) ($product->reviews_count ?? 0),
             'sold' => (int) ($product->order_items_sum_quantity ?? 0),
-            'min_price' => $minPrice === null ? null : number_format((float) $minPrice, 2, '.', ''),
+            'price' => $currentPrice === null ? null : number_format((float) $currentPrice, 2, '.', ''),
+            'min_price' => $currentPrice === null ? null : number_format((float) $currentPrice, 2, '.', ''),
+            'original_price' => $originalPrice === null ? null : number_format($originalPrice, 2, '.', ''),
+            'old_price' => $originalPrice === null ? null : number_format($originalPrice, 2, '.', ''),
             'stock' => $activeVariants->sum('stock'),
             'primary_image' => $primaryImage,
             'category' => $product->category ? [
@@ -182,18 +265,25 @@ class ProductCatalogService
                 'name' => $product->category->name,
                 'slug' => $product->category->slug,
             ] : null,
-            'seller' => $product->sellerProfile ? [
-                'id' => $product->sellerProfile->id,
-                'user_id' => $product->sellerProfile->user_id,
-                'business_name' => $product->sellerProfile->business_name,
-                'avatar_path' => $product->sellerProfile->avatar_path,
-                'status' => $product->sellerProfile->status,
+            'seller' => $seller ? [
+                'id' => $seller->id,
+                'user_id' => $seller->user_id,
+                'business_name' => $seller->business_name,
+                'avatar_path' => $seller->avatar_path,
+                'status' => $seller->status,
+                'store_visibility' => (bool) $seller->store_visibility,
+                'vacation_mode' => (bool) $seller->vacation_mode,
+                'is_on_vacation' => (bool) $seller->vacation_mode,
             ] : null,
             'images' => $images,
             'variants' => $activeVariants
                 ->map(fn (ProductVariant $variant): array => $this->variantPayload($variant))
                 ->values(),
         ];
+
+        if ($dealsMode && $dealVariant) {
+            $payload['deal_variant'] = $this->variantPayload($dealVariant);
+        }
 
         if ($includeDetails) {
             $product->loadMissing(['reviews.buyer', 'reviews.orderItem']);
@@ -274,20 +364,34 @@ class ProductCatalogService
 
     public function sellerByRouteKey(string|int $seller): SellerProfile
     {
-        return SellerProfile::query()
+        $query = SellerProfile::query()
             ->active()
-            ->with(['user', 'primaryCategory'])
-            ->where(function (Builder $query) use ($seller): void {
-                if (ctype_digit((string) $seller)) {
-                    $query->whereKey((int) $seller);
-                    return;
-                }
+            ->with(['user', 'primaryCategory']);
 
-                $name = str_replace('-', ' ', (string) $seller);
-                $query->where('business_name', $name)
-                    ->orWhere('business_name', (string) $seller);
-            })
-            ->firstOrFail();
+        if (ctype_digit((string) $seller)) {
+            return $query->whereKey((int) $seller)->firstOrFail();
+        }
+
+        $slug = Str::slug((string) $seller);
+        if ($slug === '') {
+            throw (new ModelNotFoundException())->setModel(SellerProfile::class, [(string) $seller]);
+        }
+
+        $nameParts = array_map(
+            static fn (string $part): string => str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $part),
+            explode('-', $slug),
+        );
+        $pattern = '%'.implode('%', $nameParts).'%';
+        $sellerProfile = $query
+            ->whereRaw("LOWER(business_name) LIKE ? ESCAPE '!'", [$pattern])
+            ->get()
+            ->first(fn (SellerProfile $profile): bool => Str::slug($profile->business_name) === $slug);
+
+        if ($sellerProfile) {
+            return $sellerProfile;
+        }
+
+        throw (new ModelNotFoundException())->setModel(SellerProfile::class, [(string) $seller]);
     }
 
     public function sellerRating(SellerProfile $seller): float

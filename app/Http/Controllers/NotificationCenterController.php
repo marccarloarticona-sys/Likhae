@@ -22,7 +22,9 @@ class NotificationCenterController extends Controller
 
         return view('notifications.index', [
             'layout' => $layout,
+            'unreadCount' => $user->notifications()->whereNull('read_at')->count(),
             'notifications' => $user->notifications()
+                ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])
                 ->latest('created_at')
                 ->latest('id')
                 ->paginate(30),

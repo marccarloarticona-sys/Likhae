@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -53,7 +54,9 @@ class WorkspaceSettingsController extends Controller
         ];
 
         foreach ($this->booleanKeys($config) as $key) {
-            $updated[$key] = $request->boolean($key);
+            $updated[$key] = $key === 'show_online_status' && ! $request->exists($key)
+                ? (bool) ($current[$key] ?? true)
+                : $request->boolean($key);
         }
         foreach ($config['notifications'] as $notification) {
             $key = $notification[0];
@@ -65,6 +68,10 @@ class WorkspaceSettingsController extends Controller
         $request->user()->forceFill([
             'notification_preferences' => array_merge($current, $updated),
         ])->save();
+
+        if (! $updated['show_online_status']) {
+            Cache::store('database')->forget('message-presence:user:'.$request->user()->id);
+        }
 
         return back()->with('status', $config['center'].' settings updated.');
     }
@@ -131,7 +138,7 @@ class WorkspaceSettingsController extends Controller
     /** @return array<string, bool|string> */
     private function defaults(array $config): array
     {
-        $defaults = ['theme' => 'system', 'language' => 'en', $config['sound_key'] => true];
+        $defaults = ['theme' => 'system', 'language' => 'en', $config['sound_key'] => true, 'show_online_status' => true];
         if ($config['show_ai']) {
             $defaults += [$config['ai_key'] => true, $config['ai_sound_key'] => false];
         }
@@ -151,7 +158,7 @@ class WorkspaceSettingsController extends Controller
                 $notificationKeys[] = $notification[0];
             }
         }
-        $keys = array_merge($notificationKeys, [$config['sound_key']]);
+        $keys = array_merge($notificationKeys, [$config['sound_key'], 'show_online_status']);
 
         return $config['show_ai'] ? array_merge($keys, [$config['ai_key'], $config['ai_sound_key']]) : $keys;
     }

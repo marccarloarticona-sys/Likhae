@@ -97,12 +97,18 @@ class SellerEngagementController extends Controller
         ]);
         $data += $sender->validate($request);
         $recipient = \App\Models\User::query()->whereKey($data['recipient_user_id'])->where('status', \App\Models\User::STATUS_ACTIVE)->firstOrFail();
-        $message = $sender->send($request, $data, $recipient, $conversationService);
+        $messages = $sender->sendMany($request, $data, $recipient, $conversationService);
 
         if ($request->expectsJson()) {
+            $messagePayloads = array_map(
+                fn (Message $message): array => $conversationService->messagePayload($message),
+                $messages,
+            );
+
             return response()->json([
                 'success' => true,
-                'message' => $conversationService->messagePayload($message),
+                'message' => $messagePayloads[0] ?? null,
+                'messages' => $messagePayloads,
             ]);
         }
 
@@ -112,11 +118,15 @@ class SellerEngagementController extends Controller
     public function messageAttachment(Request $request, Message $message, MessageAttachmentService $attachments): BinaryFileResponse
     {
         $file = $attachments->authorizedFile($request->user(), $message);
-        $response = response()->file($file['path']);
-        $response->headers->set('Content-Type', $file['mime']);
-        $response->headers->set('Cache-Control', 'private, no-store');
-        $response->headers->set('X-Content-Type-Options', 'nosniff');
-        $response->headers->set('Content-Security-Policy', "default-src 'none'; sandbox");
+        $headers = [
+            'Content-Type' => $file['mime'],
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; sandbox",
+        ];
+        $response = $file['is_image']
+            ? response()->file($file['path'], $headers)
+            : response()->download($file['path'], $file['name'], $headers);
 
         return $response;
     }

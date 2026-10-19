@@ -25,6 +25,7 @@ use App\Services\Fulfillment\PsgcLogisticsRoutingService;
 use App\Services\Fulfillment\ShipmentTransferService;
 use App\Services\Protection\FragileProtectionRuleService;
 use App\Support\AddressCoordinateValidator;
+use App\Support\FinancialRules;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -42,6 +43,7 @@ class CheckoutService
         private readonly PurchaseLimitService $purchaseLimits,
         private readonly ShippingRatePolicyService $shippingRates,
         private readonly BuyerProductAvailabilityService $productAvailability,
+        private readonly RewardPointsService $rewardPoints,
     ) {}
 
     public function automaticRoutingReady(): bool
@@ -253,6 +255,7 @@ class CheckoutService
         ?Address $automaticDestination = null,
         array $protectionItemIds = [],
         bool $lockVoucherUsage = false,
+        int $rewardPointsToRedeem = 0,
     ): array
     {
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
@@ -341,6 +344,8 @@ class CheckoutService
                 'item_subtotal' => 0.0,
                 'voucher' => null,
                 'voucher_discount' => 0.0,
+                'reward_points_redeemed' => 0,
+                'reward_points_discount' => 0.0,
                 'shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'routing_review_required' => $groupNeedsRoutingReview,
@@ -396,21 +401,52 @@ class CheckoutService
             }
         }
 
+        $eligibleSubtotalCents = array_sum(array_map(
+            fn (array $group): int => max(0, FinancialRules::cents($group['item_subtotal']) - FinancialRules::cents($group['voucher_discount'])),
+            $groups,
+        ));
+        if ($rewardPointsToRedeem > 0 && ! $buyer) {
+            throw ValidationException::withMessages([
+                'reward_points' => 'Sign in to redeem reward points.',
+            ]);
+        }
+        if ($buyer) {
+            $this->rewardPoints->assertRedemptionIsValid($buyer, $rewardPointsToRedeem, $eligibleSubtotalCents);
+        } elseif ($rewardPointsToRedeem !== 0) {
+            throw ValidationException::withMessages([
+                'reward_points' => 'Reward points cannot be redeemed for this checkout.',
+            ]);
+        }
+
+        $this->allocateRewardPoints($groups, $rewardPointsToRedeem);
+
         foreach ($groups as &$group) {
             $discount = (float) $group['voucher_discount'];
-            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
+            $rewardDiscount = (float) $group['reward_points_discount'];
+            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount - $rewardDiscount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
             $discountTotal += $discount;
             $shippingTotal += (float) $group['shipping_fee'];
         }
         unset($group);
 
+        $rewardPointsDiscount = round($rewardPointsToRedeem / RewardPointsService::POINTS_PER_PESO, 2);
+        $maximumRedeemablePoints = $buyer
+            ? $this->rewardPoints->maximumRedeemablePoints($buyer, $eligibleSubtotalCents)
+            : 0;
+        $totalDiscount = round($discountTotal + $rewardPointsDiscount, 2);
+
         return [
             'groups' => collect($groups),
             'subtotal' => round($subtotal, 2),
             'discount_total' => round($discountTotal, 2),
+            'total_discount' => $totalDiscount,
+            'reward_points_redeemed' => $rewardPointsToRedeem,
+            'reward_points_discount' => $rewardPointsDiscount,
+            'available_reward_points' => $buyer ? $this->rewardPoints->balance($buyer) : 0,
+            'maximum_redeemable_points' => $maximumRedeemablePoints,
             'shipping_total' => round($shippingTotal, 2),
             'protection_total' => round($protectionTotal, 2),
-            'grand_total' => round($subtotal - $discountTotal + $shippingTotal + $protectionTotal, 2),
+            'grand_total' => round($subtotal - $totalDiscount + $shippingTotal + $protectionTotal, 2),
         ];
     }
 
@@ -425,6 +461,7 @@ class CheckoutService
         array $sellerNotes = [],
         ?string $checkoutAttemptKey = null,
         ?array $expectedPriceSnapshot = null,
+        int $rewardPointsToRedeem = 0,
     ): Order
     {
         if (strtoupper($paymentMethod) !== 'COD') {
@@ -466,6 +503,7 @@ class CheckoutService
             $logisticsCenterId,
             $protectionItemIds,
             $sellerNotes,
+            $rewardPointsToRedeem,
         );
         $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash);
         if ($existing) {
@@ -473,11 +511,15 @@ class CheckoutService
         }
 
         try {
-            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash, $expectedPriceSnapshot): Order {
+            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash, $expectedPriceSnapshot, $rewardPointsToRedeem): Order {
             $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash, true);
             if ($existing) {
                 return $existing;
             }
+
+            // Serialize point redemption across simultaneous checkouts so a
+            // buyer cannot spend the same balance on two orders at once.
+            $lockedBuyer = User::query()->whereKey($buyer->id)->lockForUpdate()->firstOrFail();
 
             // Lock the owning active cart before its selected lines. A second
             // submission then observes the committed deletion/conversion.
@@ -659,11 +701,12 @@ class CheckoutService
             $preview = $this->preview(
                 $items,
                 $voucherCodes,
-                $buyer,
+                $lockedBuyer,
                 $logisticsProvider,
                 $automaticRouting ? $address : null,
                 $protectionItemIds,
                 lockVoucherUsage: true,
+                rewardPointsToRedeem: $rewardPointsToRedeem,
             );
 
             $checkoutAttemptId = DB::table('checkout_attempts')->insertGetId([
@@ -682,7 +725,9 @@ class CheckoutService
                 'status' => 'PLACED',
                 'currency' => 'PHP',
                 'subtotal' => $preview['subtotal'],
-                'discount_total' => $preview['discount_total'],
+                'discount_total' => $preview['total_discount'],
+                'reward_points_redeemed' => $preview['reward_points_redeemed'],
+                'reward_points_discount' => $preview['reward_points_discount'],
                 'shipping_total' => $preview['shipping_total'],
                 'grand_total' => $preview['grand_total'],
                 'payment_status' => 'PENDING',
@@ -734,6 +779,8 @@ class CheckoutService
                     'status' => 'PLACED',
                     'item_subtotal' => $group['item_subtotal'],
                     'voucher_discount' => $group['voucher_discount'],
+                    'reward_points_redeemed' => $group['reward_points_redeemed'],
+                    'reward_points_discount' => $group['reward_points_discount'],
                     'shipping_fee' => $group['shipping_fee'],
                     'grand_total' => $group['grand_total'],
                 ];
@@ -863,6 +910,66 @@ class CheckoutService
         return $sqlState === '40001' || in_array($driverCode, [1205, 1213], true);
     }
 
+    /** @param array<int, array<string, mixed>> $groups */
+    private function allocateRewardPoints(array &$groups, int $rewardPoints): void
+    {
+        $weights = [];
+        foreach ($groups as $sellerId => $group) {
+            $weights[$sellerId] = max(
+                0,
+                FinancialRules::cents($group['item_subtotal']) - FinancialRules::cents($group['voucher_discount']),
+            );
+            $groups[$sellerId]['reward_points_redeemed'] = 0;
+            $groups[$sellerId]['reward_points_discount'] = 0.0;
+        }
+
+        if ($rewardPoints <= 0) {
+            return;
+        }
+
+        $totalWeight = array_sum($weights);
+        if ($totalWeight <= 0 || $rewardPoints > $totalWeight) {
+            throw ValidationException::withMessages([
+                'reward_points' => 'The points discount cannot exceed the eligible product total after vouchers.',
+            ]);
+        }
+
+        $shares = [];
+        $remainders = [];
+        $allocated = 0;
+        foreach ($weights as $sellerId => $weight) {
+            $numerator = $rewardPoints * $weight;
+            $share = intdiv($numerator, $totalWeight);
+            $shares[$sellerId] = $share;
+            $allocated += $share;
+            $remainders[] = [
+                'seller_id' => $sellerId,
+                'remainder' => $numerator % $totalWeight,
+            ];
+        }
+
+        usort($remainders, fn (array $left, array $right): int =>
+            ($right['remainder'] <=> $left['remainder']) ?: ((int) $left['seller_id'] <=> (int) $right['seller_id']));
+        $remaining = $rewardPoints - $allocated;
+        foreach ($remainders as $row) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $sellerId = $row['seller_id'];
+            $capacity = $weights[$sellerId] - $shares[$sellerId];
+            $extra = min($capacity, $remaining);
+            $shares[$sellerId] += $extra;
+            $remaining -= $extra;
+        }
+
+        foreach ($shares as $sellerId => $share) {
+            $groups[$sellerId]['reward_points_redeemed'] = $share;
+            // At the 100:1 rate, one point represents one centavo.
+            $groups[$sellerId]['reward_points_discount'] = round($share / 100, 2);
+        }
+    }
+
     /** @param array<int> $cartItemIds */
     private function checkoutRequestHash(
         int $buyerId,
@@ -873,6 +980,7 @@ class CheckoutService
         ?int $logisticsCenterId,
         array $protectionItemIds,
         array $sellerNotes,
+        int $rewardPointsToRedeem,
     ): string {
         sort($cartItemIds);
         $voucherPayload = is_array($voucherCodes)
@@ -898,6 +1006,7 @@ class CheckoutService
             'logistics_center_id' => $logisticsCenterId,
             'protection_item_ids' => $protectionPayload,
             'seller_notes' => $notePayload,
+            'reward_points_to_redeem' => $rewardPointsToRedeem,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 

@@ -43,7 +43,7 @@ class AccountNotificationService
             $order->buyer,
             'ORDER_'.strtoupper((string) $order->status),
             'Order '.$status,
-            'Your order '.$order->order_number.' is now '.$status.'.',
+            'Your order '.$order->order_number.'.',
             'ORDER_STATUS',
             $order->id,
             '/buyer/orders/'.$order->id,
@@ -85,7 +85,7 @@ class AccountNotificationService
             $sellerOrder->order?->buyer,
             'SELLER_ORDER_'.strtoupper((string) $sellerOrder->status),
             'Order update: '.$status,
-            'Seller order '.$sellerOrder->seller_order_number.' is now '.$status.'.',
+            'Seller order '.$sellerOrder->seller_order_number.'.',
             'SELLER_ORDER_STATUS',
             $sellerOrder->id,
             '/buyer/orders/'.$sellerOrder->order_id,
@@ -95,7 +95,7 @@ class AccountNotificationService
             $sellerOrder->sellerProfile?->user,
             'SELLER_ORDER_STATUS_'.strtoupper((string) $sellerOrder->status),
             'Order status: '.$status,
-            'Order '.$sellerOrder->seller_order_number.' is now '.$status.'.',
+            'Order '.$sellerOrder->seller_order_number.'.',
             'SELLER_ORDER_STATUS_SELLER',
             $sellerOrder->id,
             '/seller/orders',
@@ -106,7 +106,7 @@ class AccountNotificationService
     {
         $shipment->loadMissing('sellerOrder.order.buyer', 'sellerOrder.sellerProfile.user', 'logisticsCenter.owner');
         $status = $this->label($shipment->current_status);
-        $message = 'Parcel '.$shipment->tracking_number.' is now '.$status.'.';
+        $message = 'Parcel '.$shipment->tracking_number.'.';
 
         $this->record($shipment->sellerOrder?->order?->buyer, 'SHIPMENT_'.strtoupper((string) $shipment->current_status), 'Delivery update: '.$status, $message, 'SHIPMENT_STATUS', $shipment->id, '/buyer/orders/'.$shipment->sellerOrder?->order_id);
         $this->record($shipment->sellerOrder?->sellerProfile?->user, 'SELLER_SHIPMENT_'.strtoupper((string) $shipment->current_status), 'Delivery update: '.$status, $message, 'SELLER_SHIPMENT_STATUS', $shipment->id, '/seller/orders');

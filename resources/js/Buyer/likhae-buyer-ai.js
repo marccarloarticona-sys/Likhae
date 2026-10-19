@@ -1,3 +1,5 @@
+import { makeAiWidgetDraggable } from '../shared/ai-widget-drag.js';
+
 (() => {
     const widget = document.querySelector('[data-likhae-buyer-ai]');
     if (!widget) return;
@@ -20,6 +22,7 @@
     let sending = false;
     let enabled = sessionStorage.getItem('likhaeBuyerAiEnabled') === '1';
     let stopResponseSound = () => {};
+    const draggable = makeAiWidgetDraggable(widget, head, windowEl, 'likhae-ai-widget-position:buyer');
 
     const scrollToBottom = () => { messages.scrollTop = messages.scrollHeight; };
     const addBubble = (text, type = 'assistant', options = []) => {
@@ -73,6 +76,7 @@
         head.setAttribute('aria-expanded', String(isOpen));
         sessionStorage.setItem('likhaeBuyerAiOpen', isOpen ? '1' : '0');
         if (isOpen) {
+            draggable.placeWindow();
             addWelcome();
             requestAnimationFrame(() => input.focus());
         }
@@ -80,6 +84,7 @@
 
     const setVisibility = (isVisible) => {
         widget.hidden = !isVisible;
+        if (isVisible) draggable.refresh();
         if (!isVisible) {
             setOpen(false);
             sessionStorage.removeItem('likhaeBuyerAiOpen');

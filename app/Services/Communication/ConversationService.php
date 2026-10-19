@@ -3,6 +3,7 @@
 namespace App\Services\Communication;
 
 use App\Events\MessageSent;
+use App\Events\ConversationRead;
 use App\Models\Communication\Conversation;
 use App\Models\Communication\ConversationParticipant;
 use App\Models\Communication\Message;
@@ -12,14 +13,18 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Throwable;
 use RuntimeException;
 
 class ConversationService
 {
+    /** @var array<string, true>|null */
+    private ?array $messageColumnNames = null;
+
     public function listFor(User $user, bool $includeMessages = true, ?int $limit = null, bool $includeSellerProfiles = false): Collection
     {
-        $relations = ['participants', 'latestMessage.sender'];
+        $relations = ['participants', 'latestMessage'];
         if ($includeSellerProfiles) {
             $relations[] = 'participants.sellerProfile';
         }
@@ -88,19 +93,24 @@ class ConversationService
     /** Load conversation summaries plus only the selected thread's recent messages. */
     public function workspaceThreads(User $user, ?int $selectedConversationId = null): Collection
     {
-        $conversations = $this->listFor($user, false, 100);
+        $conversations = $this->listFor($user, false, 100, true);
         $active = $selectedConversationId
             ? $conversations->firstWhere('id', $selectedConversationId)
             : $conversations->first();
 
         if ($active) {
-            $active->setRelation('messages', $this->messagesFor($user, (int) $active->id));
             $this->markRead($active, $user);
+            $active->setRelation('messages', $this->messagesFor($user, (int) $active->id));
         }
 
         $unreadCounts = $this->unreadCountsFor($user, $conversations);
-        $conversations->each(function (Conversation $conversation) use ($unreadCounts): void {
-            $conversation->setAttribute('unread_count', (int) $unreadCounts->get($conversation->id, 0));
+        $activeConversationId = (int) ($active?->id ?? 0);
+        $conversations->each(function (Conversation $conversation) use ($unreadCounts, $activeConversationId): void {
+            $unreadCount = (int) $unreadCounts->get($conversation->id, 0);
+            if ($activeConversationId > 0 && (int) $conversation->id === $activeConversationId) {
+                $unreadCount = 0;
+            }
+            $conversation->setAttribute('unread_count', $unreadCount);
         });
 
         return $conversations;
@@ -117,9 +127,16 @@ class ConversationService
             ->firstOrFail();
         app(ConversationAuthorizationService::class)->assertCanAccess($user, $conversation);
 
+        $messageColumns = $this->messageColumnNames ??= array_fill_keys(Schema::getColumnListing('messages'), true);
         $columns = ['id', 'conversation_id', 'sender_user_id', 'body', 'sent_at', 'created_at'];
-        if (Schema::hasColumn('messages', 'attachment_path')) {
+        if (isset($messageColumns['attachment_path'])) {
             $columns[] = 'attachment_path';
+        }
+        if (isset($messageColumns['attachment_original_name'])) {
+            $columns[] = 'attachment_original_name';
+        }
+        if (isset($messageColumns['attachment_mime'])) {
+            $columns[] = 'attachment_mime';
         }
 
         $query = Message::query()
@@ -140,11 +157,43 @@ class ConversationService
             'conversation_id' => (string) $message->conversation_id,
             'sender_id' => (string) $message->sender_user_id,
             'sender_user_id' => (string) $message->sender_user_id,
-            'body' => $message->body,
+            'body' => $this->messageBodyForDisplay($message),
             'time' => $sentAt?->diffForHumans() ?? 'Just now',
             'sent_at' => $sentAt?->toIso8601String(),
             'attachment_url' => app(MessageAttachmentService::class)->privateUrl($message),
+            'attachment_name' => app(MessageAttachmentService::class)->originalNameFor($message),
+            'attachment_mime' => app(MessageAttachmentService::class)->mimeFor($message),
         ];
+    }
+
+    public function messageBodyForDisplay(Message $message): string
+    {
+        $body = (string) $message->body;
+        $hasAttachment = filled($message->attachment_path);
+
+        return $hasAttachment && in_array(trim($body), ['[Photo]', '[File]'], true)
+            ? ''
+            : $body;
+    }
+
+    public function messagePreviewFor(?Message $message): string
+    {
+        if (! $message) {
+            return 'Start a conversation.';
+        }
+
+        $body = trim($this->messageBodyForDisplay($message));
+        if ($body !== '') {
+            return $body;
+        }
+
+        if (! filled($message->attachment_path)) {
+            return 'Start a conversation.';
+        }
+
+        return str_starts_with(app(MessageAttachmentService::class)->mimeFor($message), 'image/')
+            ? 'Photo'
+            : 'File';
     }
 
     public function streamPayload(User $user, int $conversationId, ?int $afterId = null): Collection
@@ -160,9 +209,11 @@ class ConversationService
         array $context = [],
         ?Conversation $conversation = null,
         ?string $attachmentPath = null,
+        ?string $attachmentName = null,
+        ?string $attachmentMime = null,
     ): Message
     {
-        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation, $attachmentPath): Message {
+        $message = DB::transaction(function () use ($sender, $recipientUserId, $body, $context, $conversation, $attachmentPath, $attachmentName, $attachmentMime): Message {
             $conversation ??= $this->findOrCreate($sender, $recipientUserId, $context);
             app(ConversationAuthorizationService::class)->assertCanAccess($sender, $conversation);
             $now = now();
@@ -178,6 +229,12 @@ class ConversationService
                     throw new RuntimeException('The message attachment schema has not been deployed.');
                 }
                 $attributes['attachment_path'] = $attachmentPath;
+                if ($attachmentName !== null && Schema::hasColumn('messages', 'attachment_original_name')) {
+                    $attributes['attachment_original_name'] = $attachmentName;
+                }
+                if ($attachmentMime !== null && Schema::hasColumn('messages', 'attachment_mime')) {
+                    $attributes['attachment_mime'] = $attachmentMime;
+                }
             }
             $message = Message::create($attributes);
 
@@ -255,13 +312,55 @@ class ConversationService
         ];
     }
 
-    public function markRead(Conversation $conversation, User $user): void
+    public function markRead(Conversation $conversation, User $user): string
     {
+        $readAt = now();
         ConversationParticipant::query()
             ->where('conversation_id', $conversation->id)
             ->where('user_id', $user->id)
             ->whereNull('left_at')
-            ->update(['last_read_at' => now()]);
+            ->update(['last_read_at' => $readAt]);
+
+        $readAtIso = $readAt->toIso8601String();
+        $broadcast = function () use ($conversation, $user, $readAtIso): void {
+            try {
+                if (! Cache::get('reverb:broadcast-unavailable')) {
+                    ConversationRead::dispatch((int) $conversation->id, (int) $user->id, $readAtIso);
+                }
+            } catch (Throwable $exception) {
+                try {
+                    Cache::put('reverb:broadcast-unavailable', true, now()->addSeconds(30));
+                } catch (Throwable) {
+                    // A cache outage must not affect the saved read receipt.
+                }
+
+                report($exception);
+            }
+        };
+
+        if (app()->runningInConsole() || app()->runningUnitTests()) {
+            $broadcast();
+        } else {
+            app()->terminating($broadcast);
+        }
+
+        return $readAtIso;
+    }
+
+    public function avatarUrlFor(User $user): string
+    {
+        $user->loadMissing('sellerProfile');
+        $path = trim((string) ($user->profile_photo_path ?: $user->sellerProfile?->avatar_path));
+        $fallback = asset('images/defaults/profile-avatar.svg');
+        if ($path === '' || preg_match('~^[a-z][a-z0-9+.-]*:|^[/\\\\]|[?#]|(^|[/\\\\])\\.\\.?([/\\\\]|$)~i', $path)) {
+            return $fallback;
+        }
+
+        $path = str_replace(chr(92), '/', $path);
+
+        return Storage::disk('public')->exists($path)
+            ? Storage::disk('public')->url($path)
+            : $fallback;
     }
 
     private function findOrCreate(User $creator, int $recipientUserId, array $context): Conversation

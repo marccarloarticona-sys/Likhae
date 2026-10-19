@@ -232,7 +232,7 @@ class SellerAccountAndWorkspaceSettingsTest extends TestCase
             ->assertOk()
             ->assertSee('Show AI Assistant')
             ->assertSee('AI Response Sound')
-            ->assertSee('Sound will apply when LIKHAE AI Assistant becomes available.')
+            ->assertSee('Play a subtle sound after an assistant reply.')
             ->assertSee('Notification Sounds')
             ->assertSee('Coming soon')
             ->assertDontSee('name="seller_chat_updates"', false)

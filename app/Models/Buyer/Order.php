@@ -28,6 +28,8 @@ class Order extends Model
         'currency',
         'subtotal',
         'discount_total',
+        'reward_points_redeemed',
+        'reward_points_discount',
         'shipping_total',
         'grand_total',
         'protection_total',
@@ -43,6 +45,8 @@ class Order extends Model
         return [
             'subtotal' => 'decimal:2',
             'discount_total' => 'decimal:2',
+            'reward_points_redeemed' => 'integer',
+            'reward_points_discount' => 'decimal:2',
             'shipping_total' => 'decimal:2',
             'grand_total' => 'decimal:2',
             'protection_total' => 'decimal:2',

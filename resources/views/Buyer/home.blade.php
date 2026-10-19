@@ -773,6 +773,47 @@
             justify-content: center !important;
         }
     }
+
+    .lk-home-page .lk-product-grid.lk-home-product-carousel {
+        display: flex !important;
+        grid-template-columns: none !important;
+        gap: 16px !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        padding: 12px 8px 18px !important;
+        overscroll-behavior-x: contain;
+        scroll-padding-inline: 8px;
+        scroll-snap-type: x mandatory;
+        scrollbar-color: var(--lk-border-strong) transparent;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .lk-home-page .lk-home-product-carousel > .lk-product-card {
+        width: auto !important;
+        min-width: 0 !important;
+        flex: 0 0 clamp(235px, calc((100% - 48px) / 4), 340px);
+        scroll-snap-align: start;
+    }
+
+    .lk-home-page .lk-home-product-carousel:focus-visible {
+        outline: 2px solid var(--lk-tan);
+        outline-offset: 4px;
+    }
+
+    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar {
+        height: 8px;
+    }
+
+    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar-thumb {
+        border: 2px solid var(--lk-bg);
+        border-radius: 999px;
+        background: var(--lk-border-strong);
+    }
 </style>
 @endpush
 
@@ -791,7 +832,7 @@
     }
 
     $featuredProducts = $products->take(4);
-    $recommendedProducts = $products->skip(4)->take(4);
+    $recommendedProducts = $products->skip(4)->take(8);
 
     /*
     |--------------------------------------------------------------------------
@@ -894,7 +935,7 @@
                 </div>
 
                 <div>
-                    <strong>My Purchases</strong>
+                    <strong>My Orders</strong>
                     <small>Track and review</small>
                 </div>
             </a>
@@ -1057,7 +1098,7 @@
         </div>
 
         @if ($featuredProducts->isNotEmpty())
-            <div class="lk-product-grid">
+            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Featured products" tabindex="0">
                 @foreach ($featuredProducts as $product)
                     <x-buyer.product-card :product="$product"/>
                 @endforeach
@@ -1150,7 +1191,7 @@
         </div>
 
         @if ($dealProducts->isNotEmpty())
-            <div class="lk-product-grid">
+            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Current deals" tabindex="0">
                 @foreach ($dealProducts as $product)
                     <x-buyer.product-card :product="$product" deal />
                 @endforeach
@@ -1221,7 +1262,7 @@
         </div>
 
         @if ($recommendedProducts->isNotEmpty())
-            <div class="lk-product-grid">
+            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Recommended products" tabindex="0">
                 @foreach ($recommendedProducts as $product)
                     <x-buyer.product-card :product="$product"/>
                 @endforeach

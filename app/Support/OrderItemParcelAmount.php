@@ -28,7 +28,9 @@ final class OrderItemParcelAmount
         $shareIndex = (int) $targetIndex;
         $lastIndex = count($weights) - 1;
 
-        $discountShares = self::shares(FinancialRules::cents($sellerOrder->voucher_discount), $weights, $totalWeight);
+        $discountCents = FinancialRules::cents($sellerOrder->voucher_discount)
+            + FinancialRules::cents($sellerOrder->reward_points_discount ?? 0);
+        $discountShares = self::shares($discountCents, $weights, $totalWeight);
         $shippingShares = self::shares(FinancialRules::cents($sellerOrder->shipping_fee), $weights, $totalWeight);
 
         $itemProtectionTotal = $items->sum(fn (OrderItem $item): int => max(0, FinancialRules::cents($item->protection_fee ?? 0)));

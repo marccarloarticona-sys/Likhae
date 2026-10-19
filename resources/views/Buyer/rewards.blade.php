@@ -745,7 +745,7 @@
                 </span>
 
                 <div class="lk-points-note">
-                    100 points = PHP 1 checkout discount
+                    100 points = PHP 1 checkout discount &middot; minimum redemption is 100 points
                 </div>
             </article>
 

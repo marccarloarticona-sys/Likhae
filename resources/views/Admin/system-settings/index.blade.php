@@ -89,6 +89,23 @@
             <p class="ad-ops-card-note">Runtime values come from the active application configuration. This check does not establish every application workflow.</p>
         </article>
 
+        <article class="ad-card ad-ops-monitor-card" data-realtime-transport-card
+            data-status-url="{{ route('admin.system-settings.realtime-status') }}"
+            data-server-configured="{{ $realtimeTransport['configured'] ? 'true' : 'false' }}"
+            data-broadcast-unavailable="{{ $realtimeTransport['broadcast_unavailable'] ? 'true' : 'false' }}"
+            data-broadcast-connection="{{ $realtimeTransport['broadcast_connection'] }}">
+            <header>
+                <div><span>Messaging</span><h2>Live Updates</h2></div>
+                <strong class="ad-status ad-ops-status is-pending" data-transport-mode>Checking connection</strong>
+            </header>
+            <dl>
+                <div><dt>Browser WebSocket</dt><dd data-transport-socket>Checking connection</dd></div>
+                <div><dt>Server broadcaster</dt><dd data-transport-server>{{ $realtimeTransport['configured'] ? ($realtimeTransport['broadcast_unavailable'] ? 'Reverb fallback active' : 'Reverb configured') : 'Polling via '.strtoupper($realtimeTransport['broadcast_connection']) }}</dd></div>
+                <div><dt>Last checked</dt><dd data-transport-checked>{{ $showTime($realtimeTransport['checked_at']) }}</dd></div>
+            </dl>
+            <p class="ad-ops-card-note" data-transport-detail role="status">Checking the Reverb connection and server broadcast status.</p>
+        </article>
+
         <article class="ad-card ad-ops-monitor-card">
             <header><div><span>Product safety</span><h2>Product Moderation AI</h2></div><strong class="ad-status ad-ops-status {{ $statusClass($productModerationHealth['status']) }}">{{ $productModerationHealth['status'] }}</strong></header>
             @if(session('status'))<p class="ad-ops-ai-feedback" role="status">{{ session('status') }}</p>@endif

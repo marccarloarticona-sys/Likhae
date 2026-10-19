@@ -36,7 +36,10 @@ class WorkspaceAiController extends Controller
 
         if (! $gemini->configured()) {
             if ($workspace === 'seller') {
-                return response()->json(['reply' => 'Your AI assistant for Seller Center is not available yet.', 'mode' => 'unavailable'], 503);
+                return response()->json([
+                    'reply' => $this->curatedAnswer($message, $config) ?? $this->localHelp($context),
+                    'mode' => 'local-help',
+                ]);
             }
             return response()->json(['reply' => $this->localHelp($context), 'mode' => 'local-help']);
         }
@@ -53,7 +56,10 @@ class WorkspaceAiController extends Controller
             report("LIKHAE {$config['label']} AI request failed.");
 
             if ($workspace === 'seller') {
-                return response()->json(['reply' => 'Your AI assistant for Seller Center is not available yet.', 'mode' => 'unavailable'], 503);
+                return response()->json([
+                    'reply' => $this->curatedAnswer($message, $config) ?? $this->localHelp($context),
+                    'mode' => 'local-help',
+                ]);
             }
 
             return response()->json([

@@ -104,9 +104,12 @@ class Product extends Model
             ->where('status', 'ACTIVE')
             ->whereHas('sellerProfile', function (Builder $seller): void {
                 $seller->where('status', 'ACTIVE')
+                    ->where('store_visibility', true)
                     ->whereHas('user', fn (Builder $user) => $user->where('status', 'ACTIVE'));
             })
-            ->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true));
+            ->whereHas('variants', fn (Builder $variant) => $variant
+                ->where('is_active', true)
+                ->where('stock', '>', 0));
     }
 
     public function scopeActive(Builder $query): Builder

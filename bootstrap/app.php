@@ -8,6 +8,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Exceptions\PostTooLargeException;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -62,6 +63,26 @@ return Application::configure(basePath: dirname(__DIR__))
             return redirect()->back()
                 ->with('upload_error', $message)
                 ->with('show_error_modal', true);
+        });
+
+        $exceptions->render(function (ThrottleRequestsException $exception, Request $request) {
+            if (! $request->routeIs('admin.products.ai.rescan') || $request->expectsJson()) {
+                return null;
+            }
+
+            $product = $request->route('product');
+            if (! $product) {
+                return null;
+            }
+
+            $retryAfter = max(1, (int) ($exception->getHeaders()['Retry-After'] ?? 60));
+            $timeUnit = $retryAfter === 1 ? 'second' : 'seconds';
+
+            return redirect()->route('admin.products.show', ['product' => $product])
+                ->withErrors([
+                    'moderation' => "Too many rescan requests. Please wait {$retryAfter} {$timeUnit} before trying again.",
+                ])
+                ->header('Retry-After', (string) $retryAfter);
         });
     })
     ->create();

@@ -1,3 +1,5 @@
+import { makeAiWidgetDraggable } from './ai-widget-drag.js';
+
 (() => {
     document.querySelectorAll('[data-likhae-workspace-ai]').forEach((widget) => {
         const config = window.LIKHAE_WORKSPACE_AI_CONFIG || {};
@@ -16,10 +18,11 @@
         const workspace = widget.dataset.workspace || config.workspace || 'workspace';
         const enableKey = `likhaeWorkspaceAiEnabled:${workspace}`;
         const openKey = `likhaeWorkspaceAiOpen:${workspace}`;
+        const draggable = makeAiWidgetDraggable(widget, head, windowEl, `likhae-ai-widget-position:${workspace}`);
         let openedOnce = false;
         let sending = false;
         let enabled = sessionStorage.getItem(enableKey) !== '0';
-        let unavailable = workspace === 'seller' && (widget.dataset.aiConfigured !== '1' || sessionStorage.getItem('likhaeSellerAiUnavailable') === '1');
+        let unavailable = false;
 
         const scrollToBottom = () => { messages.scrollTop = messages.scrollHeight; };
 
@@ -92,6 +95,7 @@
             head.setAttribute('aria-expanded', String(isOpen));
             sessionStorage.setItem(openKey, isOpen ? '1' : '0');
             if (isOpen) {
+                draggable.placeWindow();
                 if (unavailable) {
                     showComingSoon();
                     return;
@@ -103,7 +107,6 @@
 
         const showComingSoon = () => {
             unavailable = true;
-            sessionStorage.setItem('likhaeSellerAiUnavailable', '1');
             messages.replaceChildren();
             addBubble('Coming Soon');
             addBubble('Your AI assistant for Seller Center is not available yet.');
@@ -171,7 +174,7 @@
                 if (!response.ok || !payload.reply) throw new Error('Assistant request failed');
                 typing.remove();
                 addBubble(payload.reply, 'assistant', Array.isArray(payload.options) ? payload.options : []);
-                if (payload.mode === 'ai') playResponseSound();
+                if (payload.mode !== 'unavailable') playResponseSound();
             } catch (_) {
                 if (workspace === 'seller') {
                     typing.remove();

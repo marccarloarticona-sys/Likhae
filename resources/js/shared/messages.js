@@ -1,5 +1,102 @@
 import './echo.js';
 import { startRealtimeFallback } from './realtime-fallback.js';
+import '../../css/shared/messages.css';
+
+const MAX_MESSAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const OPTIMIZABLE_MESSAGE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const optimizeMessageImage = async (file) => {
+    if (!OPTIMIZABLE_MESSAGE_IMAGE_TYPES.has(file.type)
+        || typeof window.createImageBitmap !== 'function'
+        || typeof window.File !== 'function') return file;
+
+    let bitmap;
+    try {
+        bitmap = await window.createImageBitmap(file);
+    } catch {
+        return file;
+    }
+
+    try {
+        const width = bitmap.width;
+        const height = bitmap.height;
+        if (Math.max(width, height) <= 1600 && file.size <= 400 * 1024) return file;
+
+        const scale = Math.min(1, 1600 / Math.max(width, height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) return file;
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82));
+        if (!blob || blob.type !== 'image/webp' || blob.size >= file.size) return file;
+
+        const baseName = file.name.replace(/\.[^.]+$/, '').trim() || 'image';
+        return new File([blob], `${baseName}.webp`, {
+            type: 'image/webp',
+            lastModified: file.lastModified,
+        });
+    } finally {
+        bitmap.close?.();
+    }
+};
+
+window.lkOptimizeMessageAttachments = async (files) => {
+    if (files.length > 5) throw new Error('Choose up to 5 files or images per message.');
+
+    const optimized = [];
+    for (const file of files) {
+        const prepared = await optimizeMessageImage(file);
+        if (prepared.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
+            throw new Error(`${file.name} is larger than 5 MB. Choose a smaller file or image.`);
+        }
+        optimized.push(prepared);
+    }
+    return optimized;
+};
+
+const messagePhotoObserver = 'IntersectionObserver' in window
+    ? new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const image = entry.target;
+            const frame = image.closest('[data-message-photo-frame]');
+            if (frame && (image.dataset.src || !image.complete)) frame.classList.add('is-loading');
+            if (!image.getAttribute('src') && image.dataset.src) image.src = image.dataset.src;
+            messagePhotoObserver.unobserve(image);
+        });
+    }, { rootMargin: '120px 0px' })
+    : null;
+
+const bindMessagePhoto = (image) => {
+    if (image.dataset.messagePhotoBound === 'true') return;
+    image.dataset.messagePhotoBound = 'true';
+    const frame = image.closest('[data-message-photo-frame]');
+    if (!frame) return;
+
+    image.addEventListener('load', () => {
+        frame.classList.remove('is-loading', 'is-error');
+        frame.classList.add('is-loaded');
+    }, { once: true });
+    image.addEventListener('error', () => {
+        frame.classList.remove('is-loading', 'is-loaded');
+        frame.classList.add('is-error');
+    }, { once: true });
+
+    if (image.getAttribute('src') && image.complete) {
+        if (image.naturalWidth > 0) frame.classList.add('is-loaded');
+        else frame.classList.add('is-error');
+    } else if (messagePhotoObserver) {
+        messagePhotoObserver.observe(image);
+    } else {
+        frame.classList.add('is-loading');
+        if (image.dataset.src) image.src = image.dataset.src;
+    }
+};
+
+document.querySelectorAll('[data-message-photo]').forEach(bindMessagePhoto);
 
 const formatMessageTime = (payload) => {
     if (payload.time) return payload.time;
@@ -11,14 +108,161 @@ const formatMessageTime = (payload) => {
     return 'Just now';
 };
 
+const createMessageAttachment = (payload) => {
+    if (!payload?.attachment_url) return null;
+
+    const name = String(payload.attachment_name || 'Attached file').slice(0, 180);
+    const mime = String(payload.attachment_mime || '').toLowerCase();
+    const extension = name.split('.').pop()?.toLowerCase() || '';
+    const isImage = ['image/jpeg', 'image/png', 'image/webp'].includes(mime)
+        || (['', 'application/octet-stream'].includes(mime) && ['jpg', 'jpeg', 'png', 'webp'].includes(extension));
+
+    if (isImage) {
+        const frame = document.createElement('span');
+        frame.className = 'lk-message-image-frame';
+        frame.dataset.messageAttachment = 'true';
+        frame.dataset.messagePhotoFrame = 'true';
+        const placeholder = document.createElement('span');
+        placeholder.className = 'lk-message-photo-placeholder';
+        placeholder.setAttribute('aria-hidden', 'true');
+        const image = document.createElement('img');
+        image.className = 'lk-message-image-attachment';
+        image.dataset.messageAttachment = 'true';
+        image.dataset.messagePhoto = 'true';
+        image.alt = `Attached image: ${name}`;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.fetchPriority = 'low';
+        frame.append(placeholder, image);
+        bindMessagePhoto(image);
+        image.dataset.src = payload.attachment_url;
+        return frame;
+    }
+
+    const link = document.createElement('a');
+    link.className = 'lk-message-file';
+    link.dataset.messageAttachment = 'true';
+    link.href = payload.attachment_url;
+    link.download = name;
+    link.setAttribute('aria-label', `Download ${name}`);
+
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('fill', 'none');
+    icon.setAttribute('stroke', 'currentColor');
+    icon.setAttribute('stroke-width', '1.8');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"/><path d="M13 3v7h7M8 15h8M8 18h5"/>';
+    link.appendChild(icon);
+
+    const copy = document.createElement('span');
+    copy.className = 'lk-message-file-copy';
+    const title = document.createElement('strong');
+    title.textContent = name;
+    const type = document.createElement('small');
+    type.textContent = `${extension ? extension.toUpperCase() : 'FILE'} attachment`;
+    copy.append(title, type);
+    link.appendChild(copy);
+
+    const download = document.createElement('span');
+    download.className = 'lk-message-file-download';
+    download.setAttribute('aria-hidden', 'true');
+    download.textContent = '↓';
+    link.appendChild(download);
+    return link;
+};
+
+window.lkCreateMessageAttachment = createMessageAttachment;
+
+const receiptFor = (thread, row) => {
+    let receipt = row.querySelector('[data-message-receipt]');
+    if (receipt) return receipt;
+
+    const time = row.querySelector('.lk-message-time');
+    let meta = time?.parentElement?.classList.contains('lk-message-meta') ? time.parentElement : null;
+    if (!meta) {
+        meta = document.createElement('div');
+        meta.className = 'lk-message-meta';
+        if (time) {
+            time.after(meta);
+            meta.appendChild(time);
+        } else {
+            row.querySelector('.lk-message-bubble')?.after(meta);
+        }
+    }
+
+    receipt = document.createElement('span');
+    receipt.className = 'lk-message-receipt';
+    receipt.dataset.messageReceipt = 'true';
+    const text = document.createElement('span');
+    text.dataset.messageReceiptText = 'true';
+    receipt.appendChild(text);
+    meta.appendChild(receipt);
+    return receipt;
+};
+
+const setMessageReceipt = (thread, row, state) => {
+    const receipt = receiptFor(thread, row);
+    receipt.dataset.receiptState = state;
+    receipt.dataset.messageSentAt = row.dataset.messageSentAt || '';
+
+    let text = receipt.querySelector('[data-message-receipt-text]');
+    if (!text) {
+        text = document.createElement('span');
+        text.dataset.messageReceiptText = 'true';
+        receipt.appendChild(text);
+    }
+    text.textContent = state === 'seen' ? 'Seen'
+        : state === 'delivered' ? 'Delivered'
+            : state === 'sending' ? 'Sending'
+                : 'Sent';
+    receipt.setAttribute(
+        'aria-label',
+        state === 'seen' ? 'Seen by ' + (thread.dataset.otherName || 'recipient') : text.textContent,
+    );
+
+    let avatar = receipt.querySelector('[data-message-receipt-avatar]');
+    if (state === 'seen') {
+        if (!avatar) {
+            avatar = document.createElement('img');
+            avatar.className = 'lk-message-seen-avatar';
+            avatar.dataset.messageReceiptAvatar = 'true';
+            avatar.alt = '';
+            receipt.appendChild(avatar);
+        }
+        avatar.src = thread.dataset.otherAvatar || '';
+        avatar.title = 'Seen by ' + (thread.dataset.otherName || 'recipient');
+    } else {
+        avatar?.remove();
+    }
+};
+
+const updateMessageReceipts = (thread) => {
+    const lastReadAt = Date.parse(thread.dataset.otherLastReadAt || '');
+    const recipientOnline = thread.dataset.otherOnline === 'true';
+    thread.querySelectorAll('.lk-message-row.is-mine, .lk-message-row.is-buyer').forEach((row) => {
+        if (row.dataset.messagePending === 'true') {
+            setMessageReceipt(thread, row, 'sending');
+            return;
+        }
+
+        const sentAt = Date.parse(row.dataset.messageSentAt || row.querySelector('[data-message-receipt]')?.dataset.messageSentAt || '');
+        const wasSeen = Number.isFinite(lastReadAt) && Number.isFinite(sentAt) && sentAt <= lastReadAt;
+        setMessageReceipt(thread, row, wasSeen ? 'seen' : (recipientOnline ? 'delivered' : 'sent'));
+    });
+};
+
 const pendingMessageFor = (thread, payload) => {
     const body = String(payload.body || '').trim();
     const senderId = String(payload.sender_id || payload.sender_user_id || '');
-    if (!body || !senderId) return null;
+    const hasAttachment = Boolean(payload.attachment_url);
+    if ((!body && !hasAttachment) || !senderId) return null;
 
     return [...thread.querySelectorAll('[data-message-pending="true"]')].find((row) => {
         const rowBody = row.querySelector('.lk-message-bubble')?.textContent?.trim() || '';
-        return rowBody === body && String(row.dataset.messageSenderId || '') === senderId;
+        const bodyMatches = rowBody === body;
+        const attachmentMatches = body !== '' || row.dataset.messageAttachmentPending === 'true';
+        return bodyMatches && attachmentMatches && String(row.dataset.messageSenderId || '') === senderId;
     }) || null;
 };
 
@@ -28,17 +272,15 @@ const reconcilePendingMessage = (thread, payload) => {
 
     pending.dataset.messageId = String(payload.id);
     pending.dataset.messagePending = 'false';
+    if (payload.sent_at) pending.dataset.messageSentAt = payload.sent_at;
     if (thread.dataset.attachmentsEnabled === 'true' && payload.attachment_url
         && !pending.querySelector('[data-message-attachment="true"]')) {
-        const image = document.createElement('img');
-        image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
-        image.dataset.messageAttachment = 'true';
-        image.src = payload.attachment_url;
-        image.alt = 'Image attachment';
-        image.loading = 'lazy';
-        pending.querySelector('.lk-message-bubble')?.after(image);
+        const attachment = createMessageAttachment(payload);
+        if (attachment) pending.querySelector('.lk-message-bubble')?.after(attachment);
     }
     pending.querySelector('.lk-message-time').textContent = formatMessageTime(payload);
+    updateMessageReceipts(thread);
+    pollConversationReceipt(thread);
     thread.dataset.lastMessageId = String(payload.id);
     return true;
 };
@@ -66,46 +308,63 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     row.className = `lk-message-row${isMine ? (isBuyer ? ' is-buyer' : ' is-mine') : ''}`;
     row.dataset.messageId = id;
     row.dataset.messageSenderId = String(payload.sender_id || payload.sender_user_id || '');
+    if (payload.sent_at) row.dataset.messageSentAt = payload.sent_at;
+    else if (pending) row.dataset.messageSentAt = new Date().toISOString();
     if (pending) row.dataset.messagePending = 'true';
+    if (pending && payload.attachment_pending) row.dataset.messageAttachmentPending = 'true';
 
     if (!isMine) {
         const avatar = document.createElement('img');
         avatar.className = 'lk-message-small-avatar';
         avatar.src = otherAvatar;
         avatar.alt = otherName;
+        avatar.loading = 'lazy';
+        avatar.decoding = 'async';
         row.appendChild(avatar);
     }
 
     const wrapper = document.createElement('div');
     const bubble = document.createElement('div');
     bubble.className = 'lk-message-bubble';
-    bubble.textContent = payload.body || '';
+    const body = String(payload.body || '').trim();
+    bubble.textContent = body;
+    bubble.hidden = !body || (Boolean(payload.attachment_url) && ['[Photo]', '[File]'].includes(body));
     wrapper.appendChild(bubble);
     if (thread.dataset.attachmentsEnabled === 'true' && payload.attachment_url) {
-        const image = document.createElement('img');
-        image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
-        image.dataset.messageAttachment = 'true';
-        image.src = payload.attachment_url;
-        image.alt = 'Image attachment';
-        image.loading = 'lazy';
-        wrapper.appendChild(image);
+        const attachment = createMessageAttachment(payload);
+        if (attachment) wrapper.appendChild(attachment);
     }
     const time = document.createElement('span');
     time.className = 'lk-message-time';
-    time.textContent = pending ? 'Sending…' : formatMessageTime(payload);
-    wrapper.appendChild(time);
+    time.textContent = pending ? 'Sending' : formatMessageTime(payload);
+    const meta = document.createElement('div');
+    meta.className = 'lk-message-meta';
+    meta.appendChild(time);
+    wrapper.appendChild(meta);
     row.appendChild(wrapper);
     thread.appendChild(row);
+    if (isMine) {
+        updateMessageReceipts(thread);
+        pollConversationReceipt(thread);
+    }
     thread.scrollTop = thread.scrollHeight;
 };
 
 const setConnectionStatus = (thread, message, error = false) => {
-    const status = thread.closest('.lk-chat-area')?.querySelector('[data-message-connection-status]');
+    const feedback = thread.closest('.lk-chat-area')?.querySelector('[data-message-feedback]');
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.hidden = !message;
+    feedback.classList.toggle('is-error', error);
+};
+
+const setPresenceStatus = (thread, online) => {
+    const status = thread.closest('.lk-chat-area')?.querySelector('[data-message-presence-status]');
     if (!status) return;
-    const dot = status.querySelector('.lk-chat-status-dot');
-    status.lastChild.textContent = message;
-    status.classList.toggle('is-error', error);
-    dot?.classList.toggle('is-error', error);
+    status.classList.toggle('is-offline', !online);
+    status.dataset.presence = online ? 'online' : 'offline';
+    const label = status.querySelector('[data-message-presence-label]');
+    if (label) label.textContent = online ? 'Online' : 'Offline';
 };
 
 const markConversationRead = async (thread) => {
@@ -153,6 +412,157 @@ const acknowledgeIncomingMessage = (thread, payload) => {
     markConversationRead(thread);
 };
 
+const setConversationRowPresence = (row, online) => {
+    const dot = row.querySelector('[data-conversation-presence-dot]');
+    if (!dot) return;
+    const label = online ? 'Online' : 'Offline';
+    dot.classList.toggle('is-online', online);
+    dot.setAttribute('aria-label', label);
+    dot.title = label;
+    row.dataset.presence = online ? 'online' : 'offline';
+};
+
+const updateConversationRowsPresence = (conversationId, online) => {
+    document.querySelectorAll('[data-conversation-presence-id]').forEach((row) => {
+        if (String(row.dataset.conversationPresenceId) === String(conversationId)) {
+            setConversationRowPresence(row, online);
+        }
+    });
+};
+
+const pollConversationListPresence = async () => {
+    if (document.hidden) return;
+
+    const activeConversationIds = new Set(
+        [...document.querySelectorAll('.lk-chat-stream[data-conversation-id]')]
+            .map((thread) => String(thread.dataset.conversationId || '')),
+    );
+    const rows = [...document.querySelectorAll('[data-conversation-presence-id][data-presence-url]')]
+        .filter((row) => {
+            if (activeConversationIds.has(String(row.dataset.conversationPresenceId || '')) || !row.getClientRects().length) {
+                return false;
+            }
+
+            const list = row.closest('.lk-conversation-list');
+            if (!list) return false;
+            const rowBounds = row.getBoundingClientRect();
+            const listBounds = list.getBoundingClientRect();
+
+            return rowBounds.bottom > Math.max(0, listBounds.top)
+                && rowBounds.top < Math.min(window.innerHeight, listBounds.bottom)
+                && rowBounds.right > 0
+                && rowBounds.left < window.innerWidth;
+        });
+
+    await Promise.all(rows.map(async (row) => {
+        if (row.dataset.presencePolling === 'true') return;
+        row.dataset.presencePolling = 'true';
+        try {
+            const response = await fetch(row.dataset.presenceUrl, {
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+                cache: 'no-store',
+            });
+            const payload = await response.json();
+            if (response.ok && payload.success === true) {
+                setConversationRowPresence(row, payload.recipient_online === true);
+            }
+        } catch (_) {
+            // Keep the last known presence while the connection retries.
+        } finally {
+            row.dataset.presencePolling = 'false';
+        }
+    }));
+};
+
+const startConversationListPresencePolling = () => {
+    if (!document.querySelector('[data-conversation-presence-id][data-presence-url]')) return;
+    pollConversationListPresence();
+    window.setInterval(pollConversationListPresence, 15000);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') pollConversationListPresence();
+    });
+};
+
+const pollConversationReceipt = async (thread) => {
+    if (document.hidden) return;
+
+    const receiptUrl = thread.dataset.receiptUrl;
+    if (!receiptUrl) return;
+
+    try {
+        const response = await fetch(receiptUrl, {
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.success !== true) return;
+        thread.dataset.otherOnline = payload.recipient_online ? 'true' : 'false';
+        thread.dataset.otherLastReadAt = payload.recipient_read_at || '';
+        setPresenceStatus(thread, payload.recipient_online === true);
+        updateConversationRowsPresence(thread.dataset.conversationId, payload.recipient_online === true);
+        updateMessageReceipts(thread);
+    } catch (_) {
+        // Keep the last known receipt while the connection retries.
+    }
+};
+
+const startPresenceHeartbeat = () => {
+    if (document.body.dataset.messagePresenceBound === 'true') return;
+    const presenceUrl = window.LIKHAE_MESSAGE_PRESENCE_URL || '/messages/presence';
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (!csrfToken) return;
+    document.body.dataset.messagePresenceBound = 'true';
+
+    const touchPresence = () => {
+        if (document.hidden) return;
+
+        fetch(presenceUrl, {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken,
+            },
+            credentials: 'same-origin',
+            cache: 'no-store',
+        }).catch(() => {});
+    };
+
+    touchPresence();
+    window.setInterval(touchPresence, 20000);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') touchPresence();
+    });
+};
+
+const clearAttachmentSelection = (form) => {
+    const attachmentInput = form.querySelector('input[name="attachments[]"], input[name="attachment"]');
+    const preview = form.querySelector('[data-attachment-preview]');
+    const filename = form.querySelector('[data-attachment-filename]');
+    if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+    if (preview) {
+        delete preview.dataset.previewUrl;
+        preview.hidden = true;
+        preview.removeAttribute('src');
+    }
+    if (filename) {
+        filename.hidden = true;
+        filename.textContent = '';
+    }
+    if (attachmentInput) attachmentInput.value = '';
+};
+
+const sameAttachmentSelection = (input, selectedFiles) => {
+    const currentFiles = [...(input?.files || [])];
+    return currentFiles.length === selectedFiles.length && selectedFiles.every((file, index) =>
+        file.name === currentFiles[index].name
+        && file.size === currentFiles[index].size
+        && file.lastModified === currentFiles[index].lastModified,
+    );
+};
+
 const subscribeToThread = (thread) => {
     const conversationId = thread.dataset.conversationId;
     if (!conversationId) return;
@@ -170,20 +580,36 @@ const subscribeToThread = (thread) => {
             .listen('.message.sent', (payload) => {
                 appendRealtimeMessage(thread, payload);
                 acknowledgeIncomingMessage(thread, payload);
+            })
+            .listen('.conversation.read', (payload) => {
+                const readerId = String(payload.reader_user_id || payload.user_id || '');
+                if (readerId !== String(thread.dataset.otherUserId || '') || !payload.read_at) return;
+                thread.dataset.otherLastReadAt = payload.read_at;
+                updateMessageReceipts(thread);
             });
     }
 
     const connection = window.Echo?.connector?.pusher?.connection;
     if (connection && thread.dataset.connectionStatusBound !== 'true') {
         thread.dataset.connectionStatusBound = 'true';
-        connection.bind('connected', () => setConnectionStatus(thread, 'Live conversation'));
+        connection.bind('connected', () => setConnectionStatus(thread, ''));
         connection.bind('disconnected', () => setConnectionStatus(thread, 'Reconnecting; fallback active', true));
         connection.bind('unavailable', () => setConnectionStatus(thread, 'Fallback polling active', true));
         setConnectionStatus(
             thread,
-            connection.state === 'connected' ? 'Live conversation' : 'Connecting; fallback active',
+            connection.state === 'connected' ? '' : 'Connecting; fallback active',
             connection.state !== 'connected',
         );
+    }
+
+    updateMessageReceipts(thread);
+    if (thread.dataset.receiptPollBound !== 'true') {
+        thread.dataset.receiptPollBound = 'true';
+        pollConversationReceipt(thread);
+        window.setInterval(() => pollConversationReceipt(thread), 8000);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') pollConversationReceipt(thread);
+        });
     }
 
     if (thread.dataset.realtimeFallbackBound === 'true' || !thread.dataset.streamUrl) return;
@@ -264,26 +690,48 @@ const bindLiveSend = (form) => {
         event.preventDefault();
         if (form.dataset.sending === 'true') return;
         const input = form.querySelector('input[name="body"], textarea[name="body"]');
-        const attachmentInput = form.querySelector('input[name="attachment"]');
-        const submittedAttachment = attachmentInput?.files?.[0] || null;
+        const attachmentInput = form.querySelector('input[name="attachments[]"], input[name="attachment"]');
+        const submittedAttachments = [...(attachmentInput?.files || [])];
         const thread = form.closest('.lk-chat-area')?.querySelector('.lk-chat-stream[data-message-thread]');
         const body = input?.value.trim();
-        if (!body || !thread) return;
+        if ((!body && !submittedAttachments.length) || !thread) return;
+        if (submittedAttachments.length > 5) {
+            setConnectionStatus(thread, 'Choose up to 5 files or images per message.', true);
+            return;
+        }
 
         form.dataset.sending = 'true';
         const submitButton = form.querySelector('button[type="submit"]');
         if (submitButton) submitButton.disabled = true;
+        submitButton?.setAttribute('aria-busy', 'true');
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const formData = new FormData(form);
-        appendRealtimeMessage(thread, {
-            id: pendingId,
-            sender_id: thread.dataset.currentUserId,
-            body,
-        }, { pending: true });
         let timeout = null;
+        let pendingAdded = false;
         try {
+            const hasImages = submittedAttachments.some((file) => OPTIMIZABLE_MESSAGE_IMAGE_TYPES.has(file.type));
+            if (hasImages) setConnectionStatus(thread, 'Optimizing image attachments…');
+            const preparedAttachments = window.lkOptimizeMessageAttachments
+                ? await window.lkOptimizeMessageAttachments(submittedAttachments)
+                : submittedAttachments;
+
+            const formData = new FormData(form);
+            formData.set('body', body || '');
+            if (attachmentInput?.name) {
+                formData.delete(attachmentInput.name);
+                preparedAttachments.forEach((file) => formData.append(attachmentInput.name, file, file.name));
+            }
+
+            appendRealtimeMessage(thread, {
+                id: pendingId,
+                sender_id: thread.dataset.currentUserId,
+                body: body || '',
+                attachment_pending: submittedAttachments.length > 0,
+            }, { pending: true });
+            pendingAdded = true;
+            if (submittedAttachments.length) setConnectionStatus(thread, 'Sending attachment…');
+
             const controller = new AbortController();
-            timeout = window.setTimeout(() => controller.abort(), 12000);
+            timeout = window.setTimeout(() => controller.abort(), 45000);
             const response = await fetch(form.action, {
                 method: 'POST',
                 headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
@@ -293,38 +741,29 @@ const bindLiveSend = (form) => {
                 body: formData,
             });
             const payload = await response.json().catch(() => ({}));
-            if (!response.ok || !payload.message) {
+            const sentMessages = Array.isArray(payload.messages)
+                ? payload.messages
+                : (payload.message ? [payload.message] : []);
+            if (!response.ok || sentMessages.length === 0) {
                 const validationMessage = payload?.errors ? Object.values(payload.errors).flat()[0] : null;
                 throw new Error(validationMessage || payload?.message || 'Message could not be sent.');
             }
 
-            appendRealtimeMessage(thread, payload.message);
+            sentMessages.forEach((message) => appendRealtimeMessage(thread, message));
             if (input?.value.trim() === body) {
                 input.value = '';
                 input.dispatchEvent(new Event('input', {bubbles: true}));
             }
-            const currentAttachment = attachmentInput?.files?.[0] || null;
-            if (submittedAttachment && currentAttachment
-                && currentAttachment.name === submittedAttachment.name
-                && currentAttachment.size === submittedAttachment.size
-                && currentAttachment.lastModified === submittedAttachment.lastModified) {
-                attachmentInput.value = '';
-                const preview = form.querySelector('[data-attachment-preview]');
-                if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
-                if (preview) {
-                    delete preview.dataset.previewUrl;
-                    preview.hidden = true;
-                    preview.removeAttribute('src');
-                }
-            }
+            if (sameAttachmentSelection(attachmentInput, submittedAttachments)) clearAttachmentSelection(form);
             setConnectionStatus(thread, 'Message sent');
         } catch (error) {
-            removePendingMessage(thread, pendingId);
+            if (pendingAdded) removePendingMessage(thread, pendingId);
             setConnectionStatus(thread, error?.message || 'Message could not be sent.', true);
         } finally {
             if (timeout !== null) window.clearTimeout(timeout);
             form.dataset.sending = 'false';
             if (submitButton) submitButton.disabled = false;
+            submitButton?.removeAttribute('aria-busy');
         }
     });
 };
@@ -332,13 +771,29 @@ const bindLiveSend = (form) => {
 window.lkSubscribeMessageThread = (thread, payload = null) => {
     if (payload?.conversation_id && !thread.dataset.conversationId) {
         thread.dataset.conversationId = String(payload.conversation_id);
+        const readUrlTemplate = thread.dataset.readUrlTemplate;
+        if (!thread.dataset.readUrl && readUrlTemplate) {
+            thread.dataset.readUrl = readUrlTemplate.replace('__conversation__', String(payload.conversation_id));
+        }
+        const receiptUrlTemplate = thread.dataset.receiptUrlTemplate;
+        if (!thread.dataset.receiptUrl && receiptUrlTemplate) {
+            thread.dataset.receiptUrl = receiptUrlTemplate.replace('__conversation__', String(payload.conversation_id));
+        }
     }
 
     subscribeToThread(thread);
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+const initializeMessages = () => {
+    startPresenceHeartbeat();
     document.querySelectorAll('.lk-chat-stream[data-conversation-id]').forEach(subscribeToThread);
+    startConversationListPresencePolling();
     document.querySelectorAll('[data-live-message-form]').forEach(bindLiveSend);
     subscribeToUserMessages();
-});
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeMessages, { once: true });
+} else {
+    initializeMessages();
+}

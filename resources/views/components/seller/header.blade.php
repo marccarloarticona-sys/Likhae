@@ -17,12 +17,6 @@
         </div>
     </div>
 
-    <form class="sl-header-search" action="{{ route('seller.orders') }}" method="GET" role="search">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-        <input type="search" name="q" value="{{ request('q') }}" placeholder="Search orders, products, buyers..." aria-label="Search Seller Center">
-        <kbd>⌘ K</kbd>
-    </form>
-
     <div class="sl-header-actions">
         <a href="{{ route('seller.messages') }}" class="sl-icon-btn sl-header-action" aria-label="Messages">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H8l-4 4z"/><path d="M8 9h8M8 13h5"/></svg>

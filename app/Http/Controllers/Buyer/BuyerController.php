@@ -11,7 +11,6 @@ use App\Models\Buyer\SellerFollower;
 use App\Models\Buyer\WishlistItem;
 use App\Models\Admin\Notification;
 use App\Models\Communication\Conversation;
-use App\Models\Communication\ConversationParticipant;
 use App\Models\Communication\Message;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
@@ -31,6 +30,7 @@ use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\PurchaseLimitService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\RewardPointsService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
@@ -43,6 +43,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -1136,12 +1137,6 @@ class BuyerController extends Controller
         }
 
         $conversations = $this->conversations->listFor($request->user(), false, null, true);
-        if ($conversations->isNotEmpty()) {
-            ConversationParticipant::query()
-                ->where('user_id', $request->user()->id)
-                ->whereIn('conversation_id', $conversations->pluck('id'))
-                ->update(['last_read_at' => now()]);
-        }
         $rows = $conversations->map(function ($conversation) use ($request): array {
             $other = $conversation->participants->first(fn ($participant) => (int) $participant->id !== (int) $request->user()->id);
             $seller = $other?->sellerProfile;
@@ -1157,8 +1152,11 @@ class BuyerController extends Controller
                 'store_key' => $isSeller ? $seller->id : null,
                 'is_seller' => $isSeller,
                 'is_support' => $isSupport,
-                'avatar' => asset('images/defaults/profile-avatar.svg'),
-                'last_message' => $conversation->latestMessage?->body ?: 'Start a conversation.',
+                'avatar' => $other ? $this->conversations->avatarUrlFor($other) : asset('images/defaults/profile-avatar.svg'),
+                'other_last_read_at' => $other?->pivot?->last_read_at
+                    ? \Illuminate\Support\Carbon::parse($other->pivot->last_read_at)->toIso8601String()
+                    : '',
+                'last_message' => $this->conversations->messagePreviewFor($conversation->latestMessage),
                 'time' => $conversation->latestMessage?->sent_at?->diffForHumans() ?? '',
                 'unread' => 0,
                 'messages' => [],
@@ -1167,7 +1165,17 @@ class BuyerController extends Controller
 
         $selectedSlug = (string) $request->query('seller', '');
         $active = $rows->firstWhere('slug', $selectedSlug) ?: $rows->first();
-        $activeConversation = $active ? Conversation::query()->findOrFail($active['conversation_id']) : null;
+        $activeConversation = $active
+            ? $conversations->firstWhere('id', (int) $active['conversation_id'])
+            : null;
+        $activeRecipient = $activeConversation?->participants
+            ?->first(fn ($participant) => (int) $participant->id !== (int) $request->user()->id);
+        $activeRecipientOnline = $activeRecipient
+            && (bool) data_get($activeRecipient->notification_preferences, 'show_online_status', true)
+            && Cache::store('database')->has('message-presence:user:'.$activeRecipient->id);
+        if ($activeConversation) {
+            $this->conversations->markRead($activeConversation, $request->user());
+        }
         $chatMessages = $activeConversation
             ? $this->conversations->messagesFor($request->user(), (int) $activeConversation->id)
             : collect();
@@ -1189,6 +1197,7 @@ class BuyerController extends Controller
             'buyerProducts' => $referenceProduct ? collect([$referenceProduct]) : collect(),
             'conversationRows' => $rows,
             'dbActiveSeller' => null,
+            'activeRecipientOnline' => $activeRecipientOnline,
             'chatMessages' => $chatMessages,
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
             'messageContext' => app(ConversationContextPresenter::class)->forUser($request->user(), $activeConversation),
@@ -1231,17 +1240,18 @@ class BuyerController extends Controller
         $isActiveSeller = $recipient->sellerProfile?->status === 'ACTIVE';
         abort_unless($isActiveSeller || $recipient->isAccountType(User::TYPE_ADMIN), 404);
 
-        $message = $sender->send($request, $data, $recipient, $this->conversations);
+        $messages = $sender->sendMany($request, $data, $recipient, $this->conversations);
 
         if ($request->expectsJson()) {
-            $sentAt = $message->sent_at ?? $message->created_at;
+            $messagePayloads = array_map(fn (Message $message): array => [
+                ...$this->conversations->messagePayload($message),
+                'from_me' => true,
+            ], $messages);
 
             return response()->json([
                 'success' => true,
-                'message' => [
-                    ...$this->conversations->messagePayload($message),
-                    'from_me' => true,
-                ],
+                'message' => $messagePayloads[0] ?? null,
+                'messages' => $messagePayloads,
             ]);
         }
 
@@ -1501,26 +1511,49 @@ class BuyerController extends Controller
             'negative' => false,
         ]))->values();
 
+        $redeemedPointActivities = $orders
+            ->filter(fn ($order): bool => strtoupper((string) $order->status) !== 'CANCELLED')
+            ->map(function ($order): ?array {
+                $redeemedPoints = (int) $order->sellerOrders
+                    ->filter(fn ($sellerOrder): bool => strtoupper((string) $sellerOrder->status) !== 'CANCELLED')
+                    ->sum('reward_points_redeemed');
+
+                return $redeemedPoints > 0 ? [
+                    'label' => 'Reward points redeemed on order '.$order->order_number,
+                    'date' => $order->placed_at?->format('M j, Y'),
+                    'amount' => '-'.number_format($redeemedPoints).' points',
+                    'negative' => true,
+                ] : null;
+            })
+            ->filter()
+            ->values();
+
         return view('Buyer.rewards', [
             'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
             'platformVoucherCards' => $platformVoucherCards,
             'voucherHistory' => $voucherHistory,
-            'pointsBalance' => ($completedOrders->count() * 50) + ($reviews->count() * 20),
-            'pointActivities' => $pointActivities,
+            'pointsBalance' => app(RewardPointsService::class)->balance($buyer),
+            'pointActivities' => $pointActivities->concat($redeemedPointActivities)->values(),
         ]);
     }
 
     public function notifications(Request $request): View
     {
         return view('Buyer.notifications', [
-            'notifications' => $request->user()->notifications()->latest()->paginate(20),
+            'notifications' => $request->user()->notifications()
+                ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])
+                ->latest('created_at')
+                ->latest('id')
+                ->paginate(20),
         ]);
     }
 
     public function notificationStream(Request $request): JsonResponse
     {
         $notifications = $request->user()->notifications()
-            ->latest()
+            ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])
+            ->latest('created_at')
+            ->latest('id')
             ->limit(20)
             ->get(['id', 'type', 'title', 'message', 'action_url', 'read_at', 'created_at', 'updated_at']);
 
@@ -1638,16 +1671,21 @@ class BuyerController extends Controller
         $data = $request->validate([
             'theme' => ['required', Rule::in(['light', 'dark', 'system'])],
             'language' => ['required', Rule::in(['en'])],
+            'show_online_status' => ['sometimes', 'boolean'],
         ]);
 
         $buyerId = $request->user()->getKey();
         DB::transaction(function () use ($request, $data, $buyerId): void {
             $buyer = User::query()->whereKey($buyerId)->lockForUpdate()->firstOrFail();
-            $preferences = array_merge($this->buyerPreferences($buyer), [
+            $currentPreferences = $this->buyerPreferences($buyer);
+            $preferences = array_merge($currentPreferences, [
                 'order_updates' => $request->boolean('order_updates'),
                 'delivery_updates' => $request->boolean('delivery_updates'),
                 'chat_updates' => $request->boolean('chat_updates'),
                 'promotion_updates' => $request->boolean('promotion_updates'),
+                'show_online_status' => $request->exists('show_online_status')
+                    ? $request->boolean('show_online_status')
+                    : $currentPreferences['show_online_status'],
                 'theme' => $data['theme'],
                 'language' => $data['language'],
                 'notification_sounds' => $request->boolean('notification_sounds'),
@@ -1655,6 +1693,10 @@ class BuyerController extends Controller
 
             $buyer->forceFill(['notification_preferences' => $preferences])->save();
         });
+
+        if (! $request->boolean('show_online_status')) {
+            Cache::store('database')->forget('message-presence:user:'.$request->user()->id);
+        }
 
         return back()->with('buyer_notice', 'System settings updated.');
     }
@@ -1728,6 +1770,7 @@ class BuyerController extends Controller
             'delivery_updates' => true,
             'chat_updates' => true,
             'promotion_updates' => true,
+            'show_online_status' => true,
             'ai_assistant_enabled' => true,
             'ai_response_sound' => false,
             'theme' => 'system',
@@ -2099,6 +2142,27 @@ class BuyerController extends Controller
         });
 
         return back()->with('buyer_notice', 'Address saved.');
+    }
+
+    public function setDefaultAddress(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'address_id' => ['required', 'integer'],
+        ]);
+        $buyerId = $request->user()->getKey();
+
+        DB::transaction(function () use ($buyerId, $data): void {
+            $buyer = User::query()->whereKey($buyerId)->lockForUpdate()->firstOrFail();
+            $address = $buyer->addresses()
+                ->whereKey((int) $data['address_id'])
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $buyer->addresses()->whereKeyNot($address->id)->update(['is_default' => false]);
+            $address->forceFill(['is_default' => true])->save();
+        });
+
+        return back()->with('buyer_notice', 'Default delivery address updated.');
     }
 
     public function updateAddress(Request $request, Address $address): RedirectResponse

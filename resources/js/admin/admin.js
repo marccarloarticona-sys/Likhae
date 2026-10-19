@@ -6,6 +6,93 @@ document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
     const shell = one('[data-admin-shell]');
+    const realtimeCard = one('[data-realtime-transport-card]');
+    if (realtimeCard) {
+        const mode = one('[data-transport-mode]', realtimeCard);
+        const socketValue = one('[data-transport-socket]', realtimeCard);
+        const serverValue = one('[data-transport-server]', realtimeCard);
+        const checkedValue = one('[data-transport-checked]', realtimeCard);
+        const detail = one('[data-transport-detail]', realtimeCard);
+        let serverConfigured = realtimeCard.dataset.serverConfigured === 'true';
+        let broadcastUnavailable = realtimeCard.dataset.broadcastUnavailable === 'true';
+        let serverKnown = true;
+        let refreshing = false;
+
+        const labelForSocketState = (state) => ({
+            connected: 'Connected',
+            connecting: 'Connecting',
+            initialized: 'Starting',
+            disconnected: 'Disconnected',
+            unavailable: 'Unavailable',
+            failed: 'Failed',
+        }[state] || 'Not connected');
+        const connection = window.Echo?.connector?.pusher?.connection;
+        let socketState = connection?.state || 'unavailable';
+
+        const update = () => {
+            const live = serverKnown && serverConfigured && !broadcastUnavailable && socketState === 'connected';
+            const fallbackActive = serverKnown && broadcastUnavailable;
+            const driver = realtimeCard.dataset.broadcastConnection || 'reverb';
+
+            mode.textContent = live ? 'Reverb live' : 'Polling fallback';
+            mode.classList.remove('is-clear', 'is-pending', 'is-failed', 'is-unknown', 'is-not-configured');
+            mode.classList.add(live ? 'is-clear' : 'is-pending');
+            socketValue.textContent = labelForSocketState(socketState);
+            serverValue.textContent = !serverConfigured
+                ? `Polling via ${driver.toUpperCase()}`
+                : (fallbackActive ? 'Reverb fallback active' : (serverKnown ? 'Reverb configured' : 'Status unavailable'));
+
+            if (!serverConfigured) {
+                detail.textContent = `The server broadcaster is ${driver.toUpperCase()}; message updates use polling.`;
+            } else if (fallbackActive) {
+                detail.textContent = 'A recent server broadcast failed. Message updates are using polling while Reverb recovers.';
+            } else if (!serverKnown) {
+                detail.textContent = 'The server broadcast status could not be refreshed, so polling is shown as the safe update mode.';
+            } else if (live) {
+                detail.textContent = 'Reverb is connected. Message updates switch to polling automatically if the socket drops.';
+            } else {
+                detail.textContent = `Reverb is ${labelForSocketState(socketState).toLowerCase()}; message updates are using polling while it reconnects.`;
+            }
+        };
+
+        connection?.bind('state_change', (states) => {
+            socketState = states.current;
+            update();
+        });
+        update();
+
+        const refreshServerStatus = async () => {
+            if (refreshing) return;
+            refreshing = true;
+            try {
+                const response = await fetch(realtimeCard.dataset.statusUrl, {
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                });
+                if (!response.ok) throw new Error('Status request failed');
+                const status = await response.json();
+                serverConfigured = status.configured === true;
+                broadcastUnavailable = status.broadcast_unavailable === true;
+                serverKnown = true;
+                realtimeCard.dataset.broadcastConnection = status.broadcast_connection || 'not configured';
+                if (status.checked_at) {
+                    const checkedAt = new Date(status.checked_at);
+                    checkedValue.textContent = Number.isNaN(checkedAt.getTime()) ? 'Not available' : checkedAt.toLocaleString();
+                }
+            } catch (_) {
+                serverKnown = false;
+            } finally {
+                refreshing = false;
+                update();
+            }
+        };
+
+        window.setInterval(refreshServerStatus, 15000);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') refreshServerStatus();
+        });
+    }
     const sidebar = one('[data-admin-sidebar]');
     const mobileMenu = one('[data-admin-mobile-menu]');
     const overlay = one('[data-admin-overlay]');

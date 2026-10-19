@@ -33,7 +33,7 @@ class CheckoutController extends Controller
         }
 
         if ($this->containsVacationSeller($items)) {
-            $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_reward_points']);
 
             return redirect()->route('buyer.cart')->with('buyer_notice', 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.');
         }
@@ -63,6 +63,10 @@ class CheckoutController extends Controller
             'intval',
             (array) old('protection_item_ids', $request->session()->get('checkout_protection_item_ids', [])),
         );
+        $useRewardPoints = (bool) old('use_reward_points', (int) $request->session()->get('checkout_reward_points', 0) > 0);
+        $selectedRewardPoints = $useRewardPoints
+            ? (int) old('reward_points', $request->session()->get('checkout_reward_points', 0))
+            : 0;
         $sellerNotes = old('seller_notes', $request->session()->get('checkout_seller_notes', []));
         $sellerNotes = is_array($sellerNotes) ? $sellerNotes : [];
         $request->session()->forget('checkout_seller_notes');
@@ -77,9 +81,17 @@ class CheckoutController extends Controller
                 null,
                 $automaticRouting ? $previewAddress : null,
                 $selectedProtectionIds,
+                rewardPointsToRedeem: $selectedRewardPoints,
             );
         } catch (ValidationException $exception) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids']);
+            $rewardPointsInvalid = array_key_exists('reward_points', $exception->errors());
+            if ($rewardPointsInvalid) {
+                $selectedRewardPoints = 0;
+                $request->session()->put('checkout_reward_points', 0);
+            }
+            if (! $rewardPointsInvalid) {
+                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids']);
+            }
 
             // Do not redirect back to this same GET action when the preview
             // fails. A persistent routing/protection error would otherwise
@@ -91,8 +103,10 @@ class CheckoutController extends Controller
             if (array_intersect(['address_id', 'latitude', 'longitude', 'logistics_center_id'], array_keys($exception->errors())) !== []) {
                 $previewError = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
             }
-            $voucherCode = '';
-            $selectedProtectionIds = [];
+            if (! $rewardPointsInvalid) {
+                $voucherCode = '';
+                $selectedProtectionIds = [];
+            }
             $checkoutBlocked = array_key_exists('cart', $exception->errors());
             $preview = [
                 'groups' => collect(),
@@ -107,11 +121,12 @@ class CheckoutController extends Controller
                 try {
                     $preview = $this->checkoutService->preview(
                         $items,
-                        '',
+                        $voucherCode,
                         $request->user(),
                         null,
                         null,
-                        [],
+                        $selectedProtectionIds,
+                        rewardPointsToRedeem: 0,
                     );
                 } catch (ValidationException $fallbackException) {
                     $checkoutBlocked = true;
@@ -177,6 +192,7 @@ class CheckoutController extends Controller
             'hasUnavailableStock' => $hasUnavailableStock,
             'automaticRouting' => $automaticRouting,
             'selectedProtectionIds' => $selectedProtectionIds,
+            'selectedRewardPoints' => $selectedRewardPoints,
             'sellerNotes' => $sellerNotes,
             'previewError' => $previewError,
             'checkoutBlocked' => $checkoutBlocked,
@@ -193,7 +209,13 @@ class CheckoutController extends Controller
         $noteData = $request->validate([
             'seller_notes' => ['nullable', 'array'],
             'seller_notes.*' => ['nullable', 'string', 'max:200'],
+            'use_reward_points' => ['nullable', 'boolean'],
+            'reward_points' => ['nullable', 'integer', 'min:0'],
         ]);
+        $requestedRewardPoints = $request->boolean('use_reward_points')
+            ? (int) ($noteData['reward_points'] ?? 0)
+            : 0;
+        $request->session()->put('checkout_reward_points', $requestedRewardPoints);
         $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
         $items = $this->cartService->selectedItems($request->user(), $selectedIds);
         $sellerNotes = $this->checkoutService->normalizeSellerNotes($items, (array) ($noteData['seller_notes'] ?? []));
@@ -224,7 +246,7 @@ class CheckoutController extends Controller
         }
 
         if ($items->isEmpty()) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_reward_points']);
 
             throw ValidationException::withMessages([
                 $errorField => 'Your checkout selection expired. Return to your cart and choose your items again.',
@@ -232,9 +254,11 @@ class CheckoutController extends Controller
         }
 
         try {
-            $this->checkoutService->preview($items, $code, $request->user());
+            $this->checkoutService->preview($items, $code, $request->user(), rewardPointsToRedeem: $requestedRewardPoints);
         } catch (ValidationException $exception) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            if (! array_key_exists('reward_points', $exception->errors())) {
+                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            }
             $errors = $exception->errors();
             if ($errorField !== 'voucher_code' && array_key_exists('voucher_code', $errors)) {
                 throw ValidationException::withMessages([$errorField => $errors['voucher_code']]);
@@ -332,6 +356,7 @@ class CheckoutController extends Controller
         }
 
         $request->session()->put('checkout_cart_item_ids', $ownedIds);
+        $request->session()->forget('checkout_reward_points');
         $request->session()->forget('checkout_seller_notes');
         $request->session()->forget('checkout_price_snapshots');
 
@@ -359,6 +384,8 @@ class CheckoutController extends Controller
             'protection_item_ids.*' => ['integer'],
             'seller_notes' => ['nullable', 'array'],
             'seller_notes.*' => ['nullable', 'string', 'max:200'],
+            'use_reward_points' => ['nullable', 'boolean'],
+            'reward_points' => ['nullable', 'integer', 'min:0'],
         ], [
             'address_id.required' => 'Select a delivery address.',
             'address_id.exists' => 'The selected delivery address is no longer available.',
@@ -402,6 +429,9 @@ class CheckoutController extends Controller
         $voucherCode = $voucherCode !== ''
             ? $voucherCode
             : (count($legacyVoucherCodes) === 1 ? (string) reset($legacyVoucherCodes) : '');
+        $rewardPointsToRedeem = $request->boolean('use_reward_points')
+            ? (int) ($data['reward_points'] ?? 0)
+            : 0;
 
         if ($voucherCode !== '' && $this->isPlatformVoucherCode($voucherCode)) {
             $sessionVoucherCode = mb_strtoupper(trim((string) $request->session()->get('checkout_voucher_code', '')));
@@ -430,6 +460,7 @@ class CheckoutController extends Controller
                 (array) ($data['seller_notes'] ?? []),
                 $data['checkout_attempt_key'],
                 is_array($expectedPriceSnapshot) ? $expectedPriceSnapshot : null,
+                $rewardPointsToRedeem,
             );
         } catch (ValidationException $exception) {
             if (array_key_exists('voucher_code', $exception->errors())) {
@@ -444,7 +475,7 @@ class CheckoutController extends Controller
             throw $exception;
         }
 
-        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids', 'checkout_seller_notes', 'checkout_price_snapshots']);
+        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids', 'checkout_reward_points', 'checkout_seller_notes', 'checkout_price_snapshots']);
 
         return redirect()
             ->route('buyer.orders.success', ['order' => $order->order_number])

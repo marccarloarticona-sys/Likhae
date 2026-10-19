@@ -65,12 +65,16 @@
         'resources/css/shared/modal-refresh.css',
         'resources/css/shared/likhae-workspace-ai.css',
         'resources/css/shared/workspace-sidebar.css',
-        'resources/css/shared/mapbox.css',
         'resources/js/logistic/app.js',
-        'resources/js/shared/likhae-workspace-ai.js',
-        'resources/js/shared/mapbox.js',
-        'resources/js/shared/address-pin.js'
+        'resources/js/shared/likhae-workspace-ai.js'
     ])
+    @unless(request()->routeIs('logistics.messages'))
+        @vite([
+            'resources/css/shared/mapbox.css',
+            'resources/js/shared/mapbox.js',
+            'resources/js/shared/address-pin.js'
+        ])
+    @endunless
 
     @stack('styles')
 

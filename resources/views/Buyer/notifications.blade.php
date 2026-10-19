@@ -21,6 +21,7 @@
         return [
             'id' => $notification->id,
             'type' => $kind,
+            'priority' => strtoupper((string) $notification->type) === 'ANNOUNCEMENT',
             'title' => $notification->title,
             'message' => $notification->message ?? $notification->body,
             'time' => $notification->created_at?->diffForHumans() ?: '',
@@ -43,7 +44,7 @@
         @forelse($visible as $notification)
             <a href="{{ $notification['open_url'] }}" class="flex gap-3 border-b border-stone-100 p-4 transition last:border-0 hover:bg-stone-50 sm:p-5 {{ $notification['unread'] ? 'bg-red-50/40' : '' }}" data-notification-item data-notification-type="{{ $notification['type'] }}">
                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl {{ $notification['unread'] ? 'bg-red-900 text-white' : 'bg-stone-100 text-stone-500' }} text-sm font-bold">{{ $icons[$notification['type']] ?? '•' }}</span>
-                <span class="min-w-0 flex-1"><span class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-stone-900">{{ $notification['title'] }}</strong><time class="text-[10px] text-stone-400">{{ $notification['time'] }}</time></span><span class="mt-1 block text-xs leading-5 text-stone-500">{{ $notification['message'] }}</span></span>
+                <span class="min-w-0 flex-1"><span class="flex flex-wrap items-center justify-between gap-2"><span class="flex min-w-0 flex-wrap items-center gap-2"><strong class="text-sm text-stone-900">{{ $notification['title'] }}</strong>@if($notification['priority'])<span class="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">Priority</span>@endif</span><time class="text-[10px] text-stone-400">{{ $notification['time'] }}</time></span><span class="mt-1 block text-xs leading-5 text-stone-500">{{ $notification['message'] }}</span></span>
                 @if($notification['unread'])<i class="mt-2 h-2 w-2 shrink-0 rounded-full bg-red-800" aria-label="Unread"></i>@endif
             </a>
         @empty

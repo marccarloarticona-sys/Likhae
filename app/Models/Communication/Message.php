@@ -18,6 +18,8 @@ class Message extends Model
         'sender_user_id',
         'body',
         'attachment_path',
+        'attachment_original_name',
+        'attachment_mime',
         'sent_at',
         'edited_at',
     ];

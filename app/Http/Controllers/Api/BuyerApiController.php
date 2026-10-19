@@ -24,6 +24,7 @@ use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\RewardPointsService;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
 use App\Support\BuyerNameRules;
@@ -178,6 +179,7 @@ class BuyerApiController extends Controller
             'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'reward_points' => ['nullable', 'integer', 'min:0'],
         ]);
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
         $items = $cart->selectedItems($request->user(), $ids);
@@ -187,7 +189,15 @@ class BuyerApiController extends Controller
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
             ->all();
-        $order = $checkout->placeOrder($request->user(), $address, $items, $data['payment_method'], $voucherCodes);
+        $rewardPoints = (int) ($data['reward_points'] ?? 0);
+        $order = $checkout->placeOrder(
+            $request->user(),
+            $address,
+            $items,
+            $data['payment_method'],
+            $voucherCodes,
+            rewardPointsToRedeem: $rewardPoints,
+        );
 
         return response()->json([
             'success' => true,
@@ -196,6 +206,8 @@ class BuyerApiController extends Controller
                 'order_number' => $order->order_number,
                 'status' => $order->status,
                 'grand_total' => (float) $order->grand_total,
+                'reward_points_redeemed' => (int) $order->reward_points_redeemed,
+                'reward_points_discount' => (float) $order->reward_points_discount,
             ],
         ], 201);
     }
@@ -549,18 +561,37 @@ class BuyerApiController extends Controller
             'negative' => false,
         ]))->values();
 
+        $redeemedPointActivities = $orders
+            ->filter(fn ($order): bool => strtoupper((string) $order->status) !== 'CANCELLED')
+            ->map(function ($order): ?array {
+                $redeemedPoints = (int) $order->sellerOrders
+                    ->filter(fn ($sellerOrder): bool => strtoupper((string) $sellerOrder->status) !== 'CANCELLED')
+                    ->sum('reward_points_redeemed');
+
+                return $redeemedPoints > 0 ? [
+                    'label' => 'Reward points redeemed on order '.$order->order_number,
+                    'date' => $order->placed_at?->format('M j, Y'),
+                    'amount' => '-'.number_format($redeemedPoints).' points',
+                    'negative' => true,
+                ] : null;
+            })
+            ->filter()
+            ->values();
+
         return response()->json([
             'success' => true,
             'data' => [
                 'active_vouchers' => $activeVouchers,
                 'voucher_history' => $voucherHistory,
-                'points_balance' => ($completedOrders->count() * 50) + ($reviews->count() * 20),
-                'point_activities' => $pointActivities,
+                'points_balance' => app(RewardPointsService::class)->balance($request->user()),
+                'point_activities' => $pointActivities->concat($redeemedPointActivities)->values(),
                 'available_cashback' => 0,
                 'pending_cashback' => 0,
                 'cashback_activities' => [],
                 'points_per_completed_order' => 50,
                 'points_per_review' => 20,
+                'minimum_points_redemption' => RewardPointsService::MINIMUM_REDEMPTION,
+                'points_per_peso' => RewardPointsService::POINTS_PER_PESO,
                 'cashback_rate' => 0,
             ],
         ]);
@@ -650,18 +681,19 @@ class BuyerApiController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $messages->map(function ($message) use ($request, $attachments): array {
+            'data' => $messages->map(function ($message) use ($request, $service, $attachments): array {
                 $attachmentPath = $message->getAttribute('attachment_path');
 
                 return [
                 'id' => (string) $message->id,
                 'conversation_id' => (string) $message->conversation_id,
-                'body' => $message->body,
+                'body' => $service->messageBodyForDisplay($message),
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
                 'from_buyer' => (int) $message->sender_user_id === (int) $request->user()->id,
                 'attachment_url' => $attachments->privateUrl($message),
-                'attachment_name' => $attachmentPath ? basename($attachmentPath) : null,
+                'attachment_name' => $attachments->originalNameFor($message),
+                'attachment_mime' => $attachments->mimeFor($message),
                 ];
             })->values(),
         ]);
@@ -676,20 +708,23 @@ class BuyerApiController extends Controller
             'attachment' => $attachments->validationRules(),
             'order_id' => ['nullable', 'integer', Rule::exists('orders', 'id')->where('buyer_user_id', $request->user()->id)],
         ]);
-        abort_if(blank($data['body'] ?? null) && ! $request->hasFile('attachment'), 422, 'A message or photo attachment is required.');
+        abort_if(blank($data['body'] ?? null) && ! $request->hasFile('attachment'), 422, 'A message or attachment is required.');
         $recipient = SellerProfile::query()
             ->where('status', 'ACTIVE')
             ->whereHas('user', fn ($query) => $query->whereKey($data['recipient_id'])->where('status', 'ACTIVE'))
             ->firstOrFail();
-        $attachmentPath = $request->hasFile('attachment') ? $attachments->store($request->file('attachment')) : null;
+        $attachmentFile = $request->file('attachment');
+        $attachmentPath = $attachmentFile ? $attachments->store($attachmentFile) : null;
         try {
             $message = $service->send(
                 $request->user(),
                 (int) $recipient->user_id,
-                trim((string) ($data['body'] ?? '')) ?: '[Photo]',
+                trim((string) ($data['body'] ?? '')),
                 ['order_id' => $data['order_id'] ?? null],
                 null,
                 $attachmentPath,
+                $attachmentFile ? $attachments->originalName($attachmentFile) : null,
+                $attachmentPath && $attachmentFile ? $attachments->storedMime($attachmentFile, $attachmentPath) : null,
             );
         } catch (\Throwable $exception) {
             $attachments->delete($attachmentPath);
@@ -701,12 +736,13 @@ class BuyerApiController extends Controller
             'data' => [
                 'id' => (string) $message->id,
                 'conversation_id' => (string) $message->conversation_id,
-                'body' => $message->body,
+                'body' => $service->messageBodyForDisplay($message),
                 'sender_user_id' => $message->sender_user_id,
                 'sent_at' => $message->sent_at?->toIso8601String(),
                 'from_buyer' => true,
                 'attachment_url' => $attachments->privateUrl($message),
-                'attachment_name' => $request->file('attachment')?->getClientOriginalName(),
+                'attachment_name' => $attachments->originalNameFor($message),
+                'attachment_mime' => $attachments->mimeFor($message),
             ],
         ], 201);
     }

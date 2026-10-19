@@ -91,6 +91,8 @@ Route::prefix('admin')
         Route::get('/settings', [AdminOperationsController::class, 'settings'])->name('settings');
         Route::get('/system-settings', [SystemSettingsMonitoringController::class, 'show'])
             ->defaults('workspace', 'admin')->middleware('throttle:20,1')->name('system-settings');
+        Route::get('/system-settings/realtime-status', [SystemSettingsMonitoringController::class, 'realtimeTransportStatus'])
+            ->middleware('throttle:120,1')->name('system-settings.realtime-status');
         Route::get('/system-settings/errors', [SystemSettingsMonitoringController::class, 'errors'])
             ->middleware('throttle:20,1')->name('system-settings.errors');
         Route::get('/system-settings/logs', [SystemSettingsMonitoringController::class, 'logs'])

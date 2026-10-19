@@ -16,7 +16,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    @vite(['resources/css/seller/seller.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/workspace-sidebar.css', 'resources/css/shared/mapbox.css', 'resources/js/seller/seller.js', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @vite(['resources/css/seller/seller.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/seller/seller.js'])
+    @unless(request()->routeIs('seller.messages'))
+        @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
+    @endunless
     @if($sellerAiEnabled) @vite(['resources/css/shared/likhae-workspace-ai.css', 'resources/js/shared/likhae-workspace-ai.js']) @endif
     @stack('head')
     <script>

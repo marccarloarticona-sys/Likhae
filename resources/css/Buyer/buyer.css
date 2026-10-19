@@ -7599,3 +7599,388 @@ html.dark .lk-landing-body .lk-carousel__slide::before {
         width: 100%;
     }
 }
+
+/* Keep seller contact actions light and text-led in order cards. */
+.lk-order-contact-link.lk-btn {
+    min-height: 32px;
+    padding: 6px 8px !important;
+    color: var(--lk-maroon) !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+.lk-order-contact-link.lk-btn:hover:not(:disabled) {
+    color: var(--lk-maroon-dark) !important;
+    background: transparent !important;
+    text-decoration: underline;
+    transform: none;
+}
+
+/* The destructive action should stay compact while its form remains easy to use. */
+.lk-order-cancel-control {
+    display: inline-block;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.lk-order-cancel-control > summary {
+    display: inline-flex;
+    min-height: 40px;
+    align-items: center;
+    padding: 9px 16px;
+    border: 1px solid var(--lk-maroon) !important;
+    border-radius: 11px;
+    color: #fff !important;
+    background: var(--lk-maroon) !important;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    list-style: revert;
+}
+
+.lk-order-cancel-control > summary:hover {
+    background: var(--lk-maroon-dark) !important;
+    border-color: var(--lk-maroon-dark) !important;
+}
+
+.lk-order-cancel-control[open] > form {
+    width: min(22rem, calc(100vw - 3rem));
+    max-width: 100%;
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--lk-border);
+    border-radius: 12px;
+    background: var(--lk-card);
+}
+
+@media (max-width: 639px) {
+    .lk-order-card-actions > .lk-order-cancel-control {
+        flex: 0 0 auto;
+        width: fit-content;
+    }
+}
+
+/* Marketplace search history and live suggestions. */
+.lk-search[data-marketplace-search] {
+    position: relative;
+    z-index: 60;
+}
+
+.lk-search-dropdown {
+    position: absolute;
+    z-index: 120;
+    top: calc(100% + 8px);
+    right: -1px;
+    left: -1px;
+    display: grid;
+    max-height: min(360px, 70vh);
+    gap: 4px;
+    overflow-y: auto;
+    padding: 8px;
+    border: 1px solid var(--lk-border);
+    border-radius: 14px;
+    background: var(--lk-card);
+    box-shadow: 0 14px 34px rgba(44, 25, 20, .18);
+}
+
+.lk-search-dropdown[hidden],
+.lk-search-dropdown__empty[hidden],
+.lk-search-dropdown__clear[hidden] {
+    display: none !important;
+}
+
+.lk-search-dropdown__heading {
+    margin: 0;
+    padding: 6px 9px 3px;
+    color: var(--lk-muted);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+}
+
+.lk-search .lk-search-dropdown__options {
+    display: grid;
+    gap: 2px;
+}
+
+.lk-search .lk-search-dropdown__option {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 9px;
+    color: var(--lk-text);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.lk-search .lk-search-dropdown__option:hover,
+.lk-search .lk-search-dropdown__option.is-active {
+    color: var(--lk-maroon);
+    background: var(--lk-bg-alt);
+}
+
+.lk-search-dropdown__label {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lk-search-dropdown__type {
+    flex: 0 0 auto;
+    color: var(--lk-muted);
+    font-size: 9px;
+    font-weight: 600;
+}
+
+.lk-search-dropdown__empty {
+    margin: 0;
+    padding: 10px;
+    color: var(--lk-muted);
+    font-size: 11px;
+}
+
+.lk-search button.lk-search-dropdown__clear {
+    display: flex;
+    width: 100%;
+    min-height: 32px;
+    justify-content: flex-start;
+    padding: 7px 10px;
+    border-top: 1px solid var(--lk-border-soft);
+    color: var(--lk-maroon);
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+}
+
+.lk-search button.lk-search-dropdown__clear:hover {
+    color: var(--lk-maroon-dark);
+    text-decoration: underline;
+}
+
+html.dark .lk-search-dropdown {
+    border-color: var(--lk-border);
+    background: var(--lk-card);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, .42);
+}
+
+html.dark .lk-search .lk-search-dropdown__option:hover,
+html.dark .lk-search .lk-search-dropdown__option.is-active {
+    color: #f1b3a7;
+    background: #392722;
+}
+
+.lk-shipment-status-text {
+    display: block;
+    min-width: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+    .lk-shipment-status-text {
+        max-width: 360px;
+    }
+}
+
+/* Give store branding a real image area even when utility CSS is stale. */
+.lk-store-banner {
+    position: relative;
+    display: block;
+    height: clamp(132px, 15vw, 190px);
+    min-height: 132px;
+    overflow: hidden;
+    background: linear-gradient(110deg, #561c17, #842c24 55%, #38231e);
+}
+
+.lk-store-banner > img {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+}
+
+.lk-store-banner__scrim {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(38, 12, 10, .28), transparent 72%);
+    pointer-events: none;
+}
+
+/* Keep the store filters balanced across the full row. */
+.lk-store-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.lk-store-filter-grid .lk-filter-select {
+    margin-bottom: 0;
+}
+
+@media (min-width: 640px) {
+    .lk-store-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 1024px) {
+    .lk-store-filter-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+.lk-store-search-anchor {
+    position: relative;
+    z-index: 60;
+    width: min(100%, 360px);
+}
+
+.lk-store-search-anchor input[name="q"] {
+    flex: 1 1 0;
+    width: 100%;
+}
+
+.lk-store-search-anchor > button {
+    flex: 0 0 auto;
+}
+
+.lk-store-search-anchor .lk-search-dropdown {
+    right: 0;
+    left: auto;
+    width: min(420px, calc(100vw - 32px));
+}
+
+.lk-store-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.lk-store-toolbar__copy {
+    min-width: 0;
+}
+
+.lk-store-toolbar__copy h2 {
+    margin: 3px 0 0;
+    color: var(--lk-text);
+    font-size: clamp(18px, 2vw, 22px);
+    font-weight: 900;
+    line-height: 1.2;
+}
+
+.lk-store-toolbar__copy p {
+    margin: 5px 0 0;
+    color: var(--lk-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.lk-store-search-anchor {
+    flex: 0 1 440px;
+    width: min(100%, 440px);
+}
+
+.lk-store-search-anchor input[name="q"] {
+    min-height: 42px;
+    font-size: 12px;
+}
+
+.lk-store-filter-grid > .lk-price-filter,
+.lk-store-filter-field {
+    min-height: 114px;
+}
+
+.lk-store-filter-field {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.lk-store-filter-field .lk-field-label {
+    margin-bottom: 9px;
+}
+
+.lk-store-filter-grid .lk-filter-select {
+    min-height: 42px;
+}
+
+.lk-store-filter-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.lk-store-filter-footer p {
+    margin: 0;
+}
+
+.lk-store-filter-footer strong {
+    color: var(--lk-text);
+    font-weight: 800;
+}
+
+.lk-store-search-anchor .lk-search-dropdown__options {
+    display: grid;
+    gap: 2px;
+}
+
+.lk-store-search-anchor .lk-search-dropdown__option {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 9px;
+    color: var(--lk-text);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.lk-store-search-anchor .lk-search-dropdown__option:hover,
+.lk-store-search-anchor .lk-search-dropdown__option.is-active {
+    color: var(--lk-maroon);
+    background: var(--lk-bg-alt);
+}
+
+@media (max-width: 639px) {
+    .lk-store-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 14px;
+    }
+
+    .lk-store-search-anchor {
+        flex-basis: auto;
+    }
+
+    .lk-store-filter-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

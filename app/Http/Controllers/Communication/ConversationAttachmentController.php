@@ -43,11 +43,15 @@ class ConversationAttachmentController extends Controller
         $message = Message::query()->findOrFail($message);
         $file = $attachments->authorizedFile($user, $message);
 
-        $response = response()->file($file['path']);
-        $response->headers->set('Content-Type', $file['mime']);
-        $response->headers->set('Cache-Control', 'private, no-store');
-        $response->headers->set('X-Content-Type-Options', 'nosniff');
-        $response->headers->set('Content-Security-Policy', "default-src 'none'; sandbox");
+        $headers = [
+            'Content-Type' => $file['mime'],
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; sandbox",
+        ];
+        $response = $file['is_image']
+            ? response()->file($file['path'], $headers)
+            : response()->download($file['path'], $file['name'], $headers);
 
         return $response;
     }

@@ -39,6 +39,170 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     window.lkBuyerToast = showToast;
 
+    let marketplaceSearchOptionId = 0;
+    all('[data-marketplace-search]').forEach((form) => {
+        const input = one('input[name="q"]', form);
+        const dropdown = one('[data-market-search-dropdown]', form);
+        const heading = one('[data-market-search-heading]', form);
+        const options = one('[data-market-search-options]', form);
+        const emptyMessage = one('[data-market-search-empty]', form);
+        const clearHistory = one('[data-market-search-clear]', form);
+        if (!input || !dropdown || !heading || !options || !emptyMessage || !clearHistory) return;
+
+        const historyKey = 'likhae-marketplace-recent-searches-v1';
+        const readHistory = () => {
+            try {
+                const stored = JSON.parse(window.localStorage.getItem(historyKey) || '[]');
+                return Array.isArray(stored) ? stored.filter((term) => typeof term === 'string').slice(0, 6) : [];
+            } catch (_) {
+                return [];
+            }
+        };
+        const saveSearch = (value) => {
+            const term = value.trim().slice(0, 120);
+            if (!term) return;
+            const searches = readHistory().filter((recent) => recent.toLowerCase() !== term.toLowerCase());
+            searches.unshift(term);
+            try { window.localStorage.setItem(historyKey, JSON.stringify(searches.slice(0, 6))); } catch (_) {}
+        };
+        const setOpen = (open) => {
+            dropdown.hidden = !open;
+            input.setAttribute('aria-expanded', String(open));
+            if (!open) input.removeAttribute('aria-activedescendant');
+        };
+        const renderOptions = (items, title) => {
+            heading.textContent = title;
+            options.replaceChildren();
+            items.forEach((item) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.id = `marketplaceSearchOption-${++marketplaceSearchOptionId}`;
+                button.className = 'lk-search-dropdown__option';
+                button.setAttribute('role', 'option');
+                button.setAttribute('aria-selected', 'false');
+                button.dataset.searchQuery = item.query || item.label;
+
+                const label = document.createElement('span');
+                label.className = 'lk-search-dropdown__label';
+                label.textContent = item.label;
+                const type = document.createElement('span');
+                type.className = 'lk-search-dropdown__type';
+                type.textContent = item.type;
+                button.append(label, type);
+                options.append(button);
+            });
+            emptyMessage.hidden = true;
+            clearHistory.hidden = title !== 'Recent searches' || items.length === 0;
+            setOpen(items.length > 0 || !emptyMessage.hidden);
+        };
+        const showEmptyMessage = (message, title = 'Suggestions') => {
+            heading.textContent = title;
+            options.replaceChildren();
+            emptyMessage.textContent = message;
+            emptyMessage.hidden = false;
+            clearHistory.hidden = true;
+            setOpen(true);
+        };
+        const showRecentSearches = () => {
+            const recent = readHistory().map((term) => ({ label: term, query: term, type: 'Recent' }));
+            if (recent.length) renderOptions(recent, 'Recent searches');
+            else setOpen(false);
+        };
+
+        let searchTimer;
+        let requestId = 0;
+        let activeOption = -1;
+        const findSuggestions = async (query) => {
+            const currentRequest = ++requestId;
+            const url = new URL(form.dataset.suggestionsUrl, window.location.origin);
+            url.searchParams.set('q', query);
+            if (form.dataset.suggestionSeller) {
+                url.searchParams.set('seller_id', form.dataset.suggestionSeller);
+            }
+            try {
+                const response = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+                if (!response.ok) throw new Error('Suggestion request failed');
+                const payload = await response.json();
+                if (currentRequest !== requestId || input.value.trim() !== query) return;
+                const suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+                if (suggestions.length) renderOptions(suggestions, 'Suggestions');
+                else showEmptyMessage(`No matches yet. Press Enter to search for “${query}”.`);
+            } catch (_) {
+                if (currentRequest === requestId) setOpen(false);
+            }
+        };
+        const chooseOption = (button) => {
+            if (!button) return;
+            input.value = button.dataset.searchQuery || '';
+            saveSearch(input.value);
+            setOpen(false);
+            if (typeof form.requestSubmit === 'function') form.requestSubmit();
+            else form.submit();
+        };
+        const setActiveOption = (index) => {
+            const buttons = all('.lk-search-dropdown__option', options);
+            if (!buttons.length) return;
+            activeOption = (index + buttons.length) % buttons.length;
+            buttons.forEach((button, buttonIndex) => {
+                const active = buttonIndex === activeOption;
+                button.classList.toggle('is-active', active);
+                button.setAttribute('aria-selected', String(active));
+            });
+            input.setAttribute('aria-activedescendant', buttons[activeOption].id);
+        };
+
+        input.addEventListener('focus', () => {
+            const query = input.value.trim();
+            if (query.length >= 2) findSuggestions(query);
+            else if (query.length === 0) showRecentSearches();
+        });
+        input.addEventListener('input', () => {
+            window.clearTimeout(searchTimer);
+            activeOption = -1;
+            input.removeAttribute('aria-activedescendant');
+            const query = input.value.trim();
+            if (!query) {
+                showRecentSearches();
+                return;
+            }
+            if (query.length < 2) {
+                showEmptyMessage('Type at least 2 characters to see suggestions.');
+                return;
+            }
+            searchTimer = window.setTimeout(() => findSuggestions(query), 180);
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' && !dropdown.hidden) {
+                event.preventDefault();
+                setActiveOption(activeOption + 1);
+            } else if (event.key === 'ArrowUp' && !dropdown.hidden) {
+                event.preventDefault();
+                setActiveOption(activeOption < 0 ? 0 : activeOption - 1);
+            } else if (event.key === 'Enter' && activeOption >= 0 && !dropdown.hidden) {
+                event.preventDefault();
+                chooseOption(one('.lk-search-dropdown__option.is-active', options));
+            } else if (event.key === 'Escape') {
+                setOpen(false);
+            }
+        });
+        options.addEventListener('click', (event) => {
+            const button = event.target.closest('.lk-search-dropdown__option');
+            if (button) chooseOption(button);
+        });
+        clearHistory.addEventListener('click', () => {
+            try { window.localStorage.removeItem(historyKey); } catch (_) {}
+            setOpen(false);
+        });
+        form.addEventListener('submit', () => {
+            window.clearTimeout(searchTimer);
+            saveSearch(input.value);
+            setOpen(false);
+        });
+        document.addEventListener('click', (event) => {
+            if (!form.contains(event.target)) setOpen(false);
+        });
+    });
+
     all('[data-price-range]').forEach((range) => {
         const minSlider = one('[data-price-min-slider]', range);
         const maxSlider = one('[data-price-max-slider]', range);
@@ -130,6 +294,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         form.addEventListener('input', (event) => {
             if (!event.target.matches('input[type="search"], input[type="text"]')) return;
+            if (form.hasAttribute('data-marketplace-search') && event.target.matches('input[name="q"]')) {
+                window.clearTimeout(searchTimer);
+                return;
+            }
             window.clearTimeout(searchTimer);
             searchTimer = window.setTimeout(submitFilters, 500);
         });
@@ -765,10 +933,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 const title = document.createElement('strong');
                 title.className = 'text-sm text-stone-900';
                 title.textContent = item.title || '';
+                const titleGroup = document.createElement('span');
+                titleGroup.className = 'flex min-w-0 flex-wrap items-center gap-2';
+                titleGroup.appendChild(title);
+                if (item.priority || item.category === 'announcements') {
+                    const priority = document.createElement('span');
+                    priority.className = 'rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300';
+                    priority.textContent = 'Priority';
+                    titleGroup.appendChild(priority);
+                }
                 const time = document.createElement('time');
                 time.className = 'text-[10px] text-stone-400';
                 time.textContent = formatPhilippineTime(item.created_at);
-                top.append(title, time);
+                top.append(titleGroup, time);
                 const message = document.createElement('span');
                 message.className = 'mt-1 block text-xs leading-5 text-stone-500';
                 message.textContent = item.message || '';

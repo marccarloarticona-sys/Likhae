@@ -9,6 +9,9 @@ use App\Http\Controllers\Auth\RegistrationController;
 use App\Http\Controllers\Buyer\GuestMarketplaceController;
 use App\Http\Controllers\Buyer\TrackingController;
 use App\Http\Controllers\Communication\ConversationAttachmentController;
+use App\Http\Controllers\Communication\ConversationReceiptController;
+use App\Http\Controllers\Communication\ConversationReadController;
+use App\Http\Controllers\Communication\MessagePresenceController;
 use App\Http\Controllers\NotificationCenterController;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
 use Illuminate\Http\Request;
@@ -34,12 +37,26 @@ Route::get('/', [GuestMarketplaceController::class, 'home'])->name('home');
 Route::get('/guest-account', [GuestMarketplaceController::class, 'products'])->name('guest.home');
 Route::get('/products', [GuestMarketplaceController::class, 'products'])->name('products');
 Route::get('/products/{slug}', [GuestMarketplaceController::class, 'show'])->name('products.show');
+Route::get('/marketplace/search-suggestions', [GuestMarketplaceController::class, 'searchSuggestions'])
+    ->middleware('throttle:60,1')
+    ->name('marketplace.search-suggestions');
 Route::get('/track/{trackingCode}', [TrackingController::class, 'show'])->middleware('throttle:30,1')->name('tracking.show');
 Route::get('/track/{trackingCode}/live', [TrackingController::class, 'live'])->middleware('throttle:120,1')->name('tracking.live');
 Route::get('/delivery-events/{event}/proof', [TrackingController::class, 'proof'])->middleware('auth')->name('delivery-events.proof');
 Route::get('/messages/{message}/attachment', [ConversationAttachmentController::class, 'show'])
     ->middleware('throttle:120,1')
     ->name('messages.attachments.show');
+Route::post('/conversations/{conversation}/read', [ConversationReadController::class, 'mark'])
+    ->middleware(['auth', 'verified'])
+    ->whereNumber('conversation')
+    ->name('messages.read');
+Route::get('/conversations/{conversation}/receipt', [ConversationReceiptController::class, 'show'])
+    ->middleware(['auth', 'verified', 'throttle:60,1'])
+    ->whereNumber('conversation')
+    ->name('messages.receipt');
+Route::post('/messages/presence', [MessagePresenceController::class, 'touch'])
+    ->middleware(['auth', 'verified', 'throttle:30,1'])
+    ->name('messages.presence');
 
 Route::middleware(['auth', 'verified'])->group(function (): void {
     Route::get('/notifications', [NotificationCenterController::class, 'index'])->name('notifications.index');

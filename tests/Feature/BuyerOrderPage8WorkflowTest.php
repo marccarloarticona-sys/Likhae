@@ -86,7 +86,7 @@ class BuyerOrderPage8WorkflowTest extends TestCase
 
         $allResponse = $this->get(route('buyer.orders', ['status' => 'all']))
             ->assertOk()
-            ->assertSee('My Purchases')
+            ->assertSee('My Orders')
             ->assertSee($returnItem->product_name)
             ->assertSee('To Pay: 1 order', false)
             ->assertSee('To Ship: 2 orders', false)

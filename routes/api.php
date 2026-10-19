@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\BuyerApiController;
 use App\Http\Controllers\Api\LookupApiController;
 use App\Http\Controllers\Api\MobileAuthController;
+use App\Http\Controllers\Api\PlatformEventApiController;
 use App\Http\Controllers\Api\ProductApiController;
 use App\Http\Controllers\Api\RiderApiController;
 use App\Http\Controllers\Api\TrackingApiController;
@@ -47,6 +48,7 @@ Route::prefix('v1')->group(function (): void {
 
     Route::get('/categories', [LookupApiController::class, 'categories'])->name('api.v1.categories.index');
     Route::get('/logistics-centers', [LookupApiController::class, 'logisticsCenters'])->name('api.v1.logistics-centers.index');
+    Route::get('/events', [PlatformEventApiController::class, 'index'])->name('api.v1.events.index');
 
     Route::get('/products', [ProductApiController::class, 'index'])->name('api.v1.products.index');
     Route::get('/products/{slug}', [ProductApiController::class, 'show'])->name('api.v1.products.show');

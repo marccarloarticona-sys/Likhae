@@ -9,7 +9,8 @@
     $transferDestination = trim((string) ($inTransitTransfer?->destinationLogisticsCenter?->business_name ?: 'the next hub'));
     $trackingUpdate = match (true) {
         ! $shipment => null,
-        in_array($shipment->current_status, ['CANCELLED', 'RETURNED'], true) => null,
+        $shipment->current_status === 'CANCELLED' => 'Parcel was cancelled',
+        $shipment->current_status === 'RETURNED' => 'Parcel has been returned to the seller',
         in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true) => 'Parcel has been delivered',
         (bool) $inTransitTransfer && filled($inTransitTransfer->arrival_scanned_at) => 'Parcel has arrived at '.$transferDestination.'. Hub receipt is being verified.',
         (bool) $inTransitTransfer => 'Parcel has departed from '.$centerLabel.' and is on the way to '.$transferDestination,
@@ -30,7 +31,7 @@
             <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 6.75h11.25v10.5H3zM14.25 10.5h4.1l2.65 2.7v4.05h-6.75zM6.75 20.25a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 20.25a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
             </svg>
-            <span class="max-w-[220px] truncate sm:max-w-[360px]" data-shipment-status-id="{{ $shipment->id }}">{{ $trackingUpdate }}</span>
+            <span class="lk-shipment-status-text" data-shipment-status-id="{{ $shipment->id }}" @if($fullStatus ?? false) style="max-width:none;overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere" @endif>{{ $trackingUpdate }}</span>
             <span class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-current text-[9px] font-bold leading-none" title="Tracking updates are based on the latest parcel scan." aria-label="Tracking update information">?</span>
             <span class="ml-0.5 h-4 w-px bg-stone-300" aria-hidden="true"></span>
         </span>

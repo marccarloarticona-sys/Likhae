@@ -13,17 +13,17 @@ class WorkspaceAiAssistantTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_seller_assistant_returns_coming_soon_when_gemini_is_not_configured(): void
+    public function test_seller_assistant_uses_safe_local_help_when_gemini_is_not_configured(): void
     {
         $seller = $this->seller();
         config(['services.gemini.key' => null]);
 
         $this->actingAs($seller)
             ->postJson(route('seller.ai.chat'), ['message' => 'How do I update stock?', 'page' => 'products'])
-            ->assertStatus(503)
+            ->assertOk()
             ->assertExactJson([
-                'reply' => 'Your AI assistant for Seller Center is not available yet.',
-                'mode' => 'unavailable',
+                'reply' => 'Open Products and use the stock control for the listing you need to update. Keep the available quantity accurate so buyers do not order unavailable items.',
+                'mode' => 'local-help',
             ]);
         Http::assertNothingSent();
     }

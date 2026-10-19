@@ -2,6 +2,8 @@
 
 namespace App\Events;
 
+use App\Services\Communication\MessageAttachmentService;
+use App\Services\Communication\ConversationService;
 use App\Models\Communication\Message;
 use App\Models\Communication\ConversationParticipant;
 use Illuminate\Broadcasting\PrivateChannel;
@@ -63,10 +65,12 @@ class MessageSent implements ShouldBroadcastNow
             'conversation_id' => (string) $message->conversation_id,
             'sender_id' => (string) $message->sender_user_id,
             'sender_name' => $this->senderName ?? $message->sender?->name ?? 'User',
-            'body' => $message->body,
+            'body' => app(ConversationService::class)->messageBodyForDisplay($message),
             'time' => $sentAt?->diffForHumans() ?? 'Just now',
             'sent_at' => $sentAt?->toIso8601String(),
             'attachment_url' => filled($message->attachment_path) ? route('messages.attachments.show', $message->id) : null,
+            'attachment_name' => app(MessageAttachmentService::class)->originalNameFor($message),
+            'attachment_mime' => app(MessageAttachmentService::class)->mimeFor($message),
         ];
     }
 }

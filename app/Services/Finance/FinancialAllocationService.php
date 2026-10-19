@@ -91,13 +91,17 @@ class FinancialAllocationService
             $rateVersion = $sellerOrder->shippingRateVersion;
         }
         $riderPoolPercentage = $rateVersion?->rider_pool_percentage ?? ShippingRatePolicyService::DEFAULT_RIDER_PERCENTAGE;
+        $combinedDiscount = FinancialRules::amount(
+            FinancialRules::cents($sellerOrder->voucher_discount)
+            + FinancialRules::cents($sellerOrder->reward_points_discount ?? 0),
+        );
         $calculation = FinancialRules::allocation(
             $items->map(fn ($item): array => [
                 'original_unit_price' => $item->original_unit_price,
                 'charged_unit_price' => $item->unit_price,
                 'quantity' => $item->quantity,
             ])->all(),
-            $sellerOrder->voucher_discount,
+            $combinedDiscount,
             $sellerOrder->shipping_fee,
             (string) $riderPoolPercentage,
         );

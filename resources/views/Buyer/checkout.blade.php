@@ -20,6 +20,9 @@
     $sellerAvailableVouchers = $availableVouchers->except('platform');
     $platformVouchers = collect($availableVouchers->get('platform', []));
     $voucherSource = (string) ($voucherSource ?? 'seller');
+    $rewardPointsBalance = (int) data_get($preview ?? [], 'available_reward_points', 0);
+    $maxRedeemablePoints = (int) data_get($preview ?? [], 'maximum_redeemable_points', 0);
+    $selectedRewardPoints = (int) ($selectedRewardPoints ?? 0);
     $protectionEligibleItemCount = $groups
         ->flatMap(fn ($group) => collect(data_get($group, 'items', [])))
         ->filter(fn ($item) => (bool) data_get($item, 'protection_quote.eligible', false))
@@ -139,11 +142,13 @@
                     @php
                         $sellerSubtotal = (float) data_get($group, 'item_subtotal', 0);
                         $sellerDiscount = (float) data_get($group, 'voucher_discount', 0);
+                        $sellerRewardPoints = (int) data_get($group, 'reward_points_redeemed', 0);
+                        $sellerRewardDiscount = (float) data_get($group, 'reward_points_discount', 0);
                         $sellerShipping = (float) data_get($group, 'shipping_fee', 0);
                         $sellerProtection = (float) data_get($group, 'protection_total', 0);
                         $sellerTotal = (float) data_get($group, 'grand_total', 0);
                     @endphp
-                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}">
+                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}">
                         <header class="border-b border-stone-100 bg-stone-50 px-5 py-4">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <h2 class="text-base font-bold uppercase tracking-wide text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
@@ -197,6 +202,7 @@
                             @if(data_get($group, 'voucher'))
                                 <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Voucher {{ data_get($group, 'voucher.code') }} &middot; {{ data_get($group, 'seller.business_name', 'Shop') }}</span><strong>-&#8369;{{ number_format($sellerDiscount, 2) }}</strong></div>
                             @endif
+                            <div data-seller-reward-row class="flex justify-between gap-3 text-red-800" @if($sellerRewardPoints === 0) hidden @endif><span>Reward points (<span data-seller-reward-points>{{ number_format($sellerRewardPoints) }}</span>)</span><strong data-seller-reward-discount>-&#8369;{{ number_format($sellerRewardDiscount, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 text-stone-500"><span>Shipping</span><strong data-seller-shipping-total>&#8369;{{ number_format($sellerShipping, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 text-amber-800"><span>Additional Care</span><strong data-seller-protection-total>&#8369;{{ number_format($sellerProtection, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 border-t border-stone-100 pt-2 font-bold text-stone-900"><span>Seller total</span><strong data-seller-total>&#8369;{{ number_format($sellerTotal, 2) }}</strong></div>
@@ -221,6 +227,21 @@
                 <dl class="mt-4 space-y-3 text-sm">
                     <div class="flex justify-between"><dt class="text-stone-500">Selected items</dt><dd>{{ collect($cartItems)->count() }}</dd></div>
                     <div class="flex justify-between"><dt class="text-stone-500">Selected subtotal</dt><dd>&#8369;{{ number_format((float) data_get($preview, 'subtotal', 0), 2) }}</dd></div>
+                    <div class="space-y-3 rounded-xl border border-red-200 bg-red-50/60 p-3">
+                        <label for="checkout-reward-points-toggle" class="flex cursor-pointer items-start gap-2.5">
+                            <input id="checkout-reward-points-toggle" type="checkbox" name="use_reward_points" value="1" data-reward-points-toggle class="mt-0.5 rounded border-stone-300 text-red-900 focus:ring-red-200" @checked($selectedRewardPoints > 0) @disabled($maxRedeemablePoints < 100)>
+                            <span>
+                                <strong class="block text-xs font-semibold text-stone-900">Use LIKHAE reward points</strong>
+                                <span class="mt-1 block text-[11px] text-stone-600">Balance: {{ number_format($rewardPointsBalance) }} points &middot; 100 points = &#8369;1 off</span>
+                            </span>
+                        </label>
+                        <label for="checkout-reward-points" class="grid gap-1 text-[11px] font-semibold text-stone-700">
+                            Points to redeem
+                            <input id="checkout-reward-points" name="reward_points" type="number" min="100" step="100" max="{{ $maxRedeemablePoints }}" value="{{ $selectedRewardPoints > 0 ? $selectedRewardPoints : ($maxRedeemablePoints >= 100 ? 100 : '') }}" data-reward-points-input @disabled($maxRedeemablePoints < 100 || $selectedRewardPoints === 0) class="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-normal text-stone-800 disabled:bg-stone-100">
+                        </label>
+                        <p data-reward-points-availability class="text-[10px] leading-4 text-stone-500">@if($maxRedeemablePoints >= 100) Redeem up to {{ number_format($maxRedeemablePoints) }} points on this order. @else You need at least 100 points and at least &#8369;1 in eligible products to redeem. @endif</p>
+                        @error('reward_points')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
+                    </div>
                     <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
                         <div>
                             <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
@@ -271,6 +292,7 @@
                     </div>
                     <div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div>
                     <div class="flex justify-between"><dt class="text-stone-500">Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div>
+                    <div id="checkout-reward-points-summary" class="flex justify-between text-red-800" @if($selectedRewardPoints === 0) hidden @endif><dt>Reward points (<span data-reward-points-summary-count>{{ number_format($selectedRewardPoints) }}</span>)</dt><dd id="checkout-reward-points-discount">-&#8369;{{ number_format((float) data_get($preview, 'reward_points_discount', 0), 2) }}</dd></div>
                     <div class="flex items-center justify-between gap-3 text-amber-800">
                         <dt><label for="checkout-protection-master" class="flex cursor-pointer items-center gap-2"><input id="checkout-protection-master" type="checkbox" data-protection-master aria-label="Apply Additional Care to all eligible items" @disabled($protectionEligibleItemCount === 0)><span><span>Apply Additional Care</span><small class="mt-1 block text-[10px] text-stone-500">{{ $protectionEligibleItemCount > 0 ? 'All eligible items' : 'Not available for these items' }}</small></span></label></dt>
                         <dd id="checkout-protection-total">&#8369;{{ number_format((float) data_get($preview, 'protection_total', 0), 2) }}</dd>
@@ -349,13 +371,54 @@
             const protection = document.getElementById('checkout-protection-total');
             const protectionMaster = document.querySelector('[data-protection-master]');
             const total = document.getElementById('checkout-grand-total');
+            const rewardToggle = document.querySelector('[data-reward-points-toggle]');
+            const rewardInput = document.querySelector('[data-reward-points-input]');
+            const rewardSummary = document.getElementById('checkout-reward-points-summary');
+            const rewardDiscount = document.getElementById('checkout-reward-points-discount');
+            const rewardCount = document.querySelector('[data-reward-points-summary-count]');
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
+            const maximumRewardPoints = Number(@json($maxRedeemablePoints));
             const money = (value) => `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+            const selectedRewardPoints = () => {
+                if (!rewardToggle?.checked || !rewardInput) return 0;
+                const requested = Math.floor(Number(rewardInput.value || 0) / 100) * 100;
+                return Math.max(0, Math.min(requested, maximumRewardPoints));
+            };
+
+            const allocateRewardPoints = (points) => {
+                const cards = [...document.querySelectorAll('[data-seller-card]')];
+                const rows = cards.map((card) => ({
+                    card,
+                    eligibleCents: Math.max(0, Math.round((Number(card.dataset.sellerSubtotal || 0) - Number(card.dataset.sellerDiscount || 0)) * 100)),
+                }));
+                const totalWeight = rows.reduce((sum, row) => sum + row.eligibleCents, 0);
+                let allocated = 0;
+                rows.forEach((row) => {
+                    const numerator = points * row.eligibleCents;
+                    row.points = totalWeight > 0 ? Math.floor(numerator / totalWeight) : 0;
+                    row.remainder = totalWeight > 0 ? numerator % totalWeight : 0;
+                    allocated += row.points;
+                });
+                const remainders = [...rows].sort((left, right) =>
+                    (right.remainder - left.remainder)
+                    || (Number(left.card.dataset.sellerId) - Number(right.card.dataset.sellerId)));
+                let remaining = points - allocated;
+                remainders.forEach((row) => {
+                    if (remaining <= 0) return;
+                    const extra = Math.min(row.eligibleCents - row.points, remaining);
+                    row.points += extra;
+                    remaining -= extra;
+                });
+                return rows;
+            };
 
             const updateTotals = (input) => {
                 let shippingTotal = 0;
                 let protectionTotal = 0;
+                const rewardPoints = selectedRewardPoints();
+                const rewardAllocations = allocateRewardPoints(rewardPoints);
                 const protectionCheckboxes = [...document.querySelectorAll('[data-protection-checkbox]')];
                 const selectedProtectionCount = protectionCheckboxes.filter((checkbox) => checkbox.checked).length;
 
@@ -364,29 +427,48 @@
                     protectionMaster.indeterminate = selectedProtectionCount > 0 && selectedProtectionCount < protectionCheckboxes.length;
                 }
 
-                document.querySelectorAll('[data-seller-card]').forEach((card) => {
+                rewardAllocations.forEach(({ card, points: sellerRewardPoints }) => {
                     const sellerId = card.dataset.sellerId;
                     const sellerSubtotal = Number(card.dataset.sellerSubtotal || 0);
                     const sellerDiscount = Number(card.dataset.sellerDiscount || 0);
+                    const sellerRewardDiscount = sellerRewardPoints / 100;
                     const sellerShipping = input
                         ? Number(input.dataset.shippingFee || 0)
                         : Number(card.dataset.sellerShippingFee || 0);
                     const sellerProtection = [...document.querySelectorAll('[data-protection-checkbox]:checked')]
                         .filter((checkbox) => checkbox.dataset.sellerId === sellerId)
                         .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
-                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount + sellerShipping + sellerProtection);
+                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount - sellerRewardDiscount + sellerShipping + sellerProtection);
 
                     shippingTotal += sellerShipping;
                     protectionTotal += sellerProtection;
                     card.querySelector('[data-seller-shipping-total]')?.replaceChildren(money(sellerShipping));
                     card.querySelector('[data-seller-protection-total]')?.replaceChildren(money(sellerProtection));
+                    const rewardRow = card.querySelector('[data-seller-reward-row]');
+                    if (rewardRow) {
+                        rewardRow.hidden = sellerRewardPoints === 0;
+                        rewardRow.querySelector('[data-seller-reward-points]')?.replaceChildren(sellerRewardPoints.toLocaleString('en-PH'));
+                        rewardRow.querySelector('[data-seller-reward-discount]')?.replaceChildren(`-${money(sellerRewardDiscount)}`);
+                    }
                     card.querySelector('[data-seller-total]')?.replaceChildren(money(sellerTotal));
                 });
 
+                if (rewardSummary) rewardSummary.hidden = rewardPoints === 0;
+                if (rewardCount) rewardCount.textContent = rewardPoints.toLocaleString('en-PH');
+                if (rewardDiscount) rewardDiscount.textContent = `-${money(rewardPoints / 100)}`;
                 if (shipping) shipping.textContent = money(shippingTotal);
                 if (protection) protection.textContent = money(protectionTotal);
-                if (total) total.textContent = money(Math.max(0, subtotal - discount + shippingTotal + protectionTotal));
+                if (total) total.textContent = money(Math.max(0, subtotal - discount - (rewardPoints / 100) + shippingTotal + protectionTotal));
             };
+
+            rewardToggle?.addEventListener('change', () => {
+                if (rewardInput) {
+                    rewardInput.disabled = !rewardToggle.checked;
+                    if (rewardToggle.checked && Number(rewardInput.value || 0) < 100) rewardInput.value = '100';
+                }
+                updateTotals(document.querySelector('input[name="logistics_center_id"]:checked'));
+            });
+            rewardInput?.addEventListener('input', () => updateTotals(document.querySelector('input[name="logistics_center_id"]:checked')));
 
             document.querySelectorAll('[data-protection-checkbox]').forEach((input) => {
                 input.addEventListener('change', () => updateTotals(document.querySelector('input[name="logistics_center_id"]:checked')));

@@ -96,6 +96,7 @@ Route::prefix('buyer')
         Route::post('/account/mobile/resend', [BuyerController::class, 'resendMobileChangeCode'])->middleware('throttle:3,1')->name('account.mobile.resend');
         Route::put('/account/password', [BuyerController::class, 'savePassword'])->middleware('throttle:5,1')->name('account.password.update');
         Route::post('/account/addresses', [BuyerController::class, 'saveAddress'])->name('account.addresses.store');
+        Route::patch('/account/addresses/default', [BuyerController::class, 'setDefaultAddress'])->name('account.addresses.default');
         Route::put('/account/addresses/{address}', [BuyerController::class, 'updateAddress'])->name('account.addresses.update');
         Route::delete('/account/addresses/{address}', [BuyerController::class, 'deleteAddress'])->name('account.addresses.destroy');
         Route::delete('/account', [BuyerController::class, 'destroyAccount'])->name('account.destroy');

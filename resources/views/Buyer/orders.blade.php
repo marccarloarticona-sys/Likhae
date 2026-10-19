@@ -1,5 +1,5 @@
 @extends('layouts.buyer')
-@section('title', 'My Purchases')
+@section('title', 'My Orders')
 @section('active', 'orders')
 
 @section('content')
@@ -15,6 +15,7 @@
     .lk-order-page{width:min(100%,1240px)!important}.lk-order-page .lk-page-title{margin-bottom:20px}.lk-order-page section.rounded-2xl{margin-top:0!important;padding:24px!important;border:1px solid #eadbce!important;border-radius:20px!important;background:#fffdf9!important;box-shadow:0 10px 28px rgba(86,28,23,.06)!important}.lk-order-page section.rounded-2xl>h2{margin:0 0 18px!important;color:#321d17!important;font-family:"Instrument Serif",Georgia,serif;font-size:27px!important;font-weight:400!important}.lk-order-page section.rounded-2xl+.mt-5,.lk-order-page .mt-5+section.rounded-2xl{margin-top:20px!important}.lk-order-page section.rounded-2xl .md\:grid-cols-2>div{padding:18px;border:1px solid #f0e4da;border-radius:14px;background:#fcf7f2}.lk-order-page section.rounded-2xl .divide-y>div{min-width:0;padding:18px 0!important}.lk-order-page section.rounded-2xl .divide-y>div>div{min-width:0}.lk-order-page dl.sm\:grid-cols-2{gap:0!important;overflow:hidden;border:1px solid #f0e4da;border-radius:14px}.lk-order-page dl.sm\:grid-cols-2>div{min-width:0;padding:16px 18px;background:#fcf8f4;border-bottom:1px solid #f0e4da}.lk-order-page dl.sm\:grid-cols-2 dt{margin-bottom:5px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}.lk-order-page dl.sm\:grid-cols-2 dd{margin:0;overflow-wrap:anywhere;color:#37231d}.lk-order-page #reviews form{padding:20px!important;border-color:#eadbce!important;border-radius:16px!important;background:#fcf8f4}.lk-order-page #reviews fieldset{min-width:0;padding:0;border:0}.lk-order-page #reviews textarea{width:100%;resize:vertical;background:#fff}.lk-order-page #reviews input[type=file]{max-width:100%}.lk-order-status-tabs{display:flex;gap:4px;overflow-x:auto;padding:5px;border:1px solid #eadbce;border-radius:16px;background:#fcf7f2;box-shadow:0 8px 20px rgba(86,28,23,.05);scrollbar-width:thin}.lk-order-status-tab{display:inline-flex;min-height:38px;flex:0 0 auto;align-items:center;gap:7px;padding:0 12px;border:1px solid transparent;border-radius:11px;color:#806356;font-size:12px;font-weight:700;text-decoration:none;transition:background .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,transform .16s ease}.lk-order-status-tab:hover{border-color:#eadbce;background:#fffdf9;color:#561c17;box-shadow:0 4px 12px rgba(86,28,23,.07);transform:translateY(-1px)}.lk-order-status-tab:focus-visible{outline:3px solid rgba(122,42,34,.22);outline-offset:2px}.lk-order-status-tab.is-active{border-color:#561c17;background:#561c17;color:#fff;box-shadow:0 5px 14px rgba(86,28,23,.22)}.lk-order-status-count{display:inline-grid;min-width:21px;height:21px;place-items:center;padding:0 5px;border-radius:999px;background:#efe3d7;color:#642920;font-size:10px;font-weight:800;font-variant-numeric:tabular-nums}.lk-order-status-tab.is-active .lk-order-status-count{background:rgba(255,255,255,.18);color:#fff}@media(min-width:640px){.lk-order-status-tab:first-child{padding-left:14px}.lk-order-status-tab:last-child{padding-right:14px}}@media(min-width:1024px){.lk-order-status-tabs{justify-content:space-between}.lk-order-status-tab{justify-content:center}}@media(max-width:639px){.lk-order-page section.rounded-2xl{padding:18px!important}.lk-order-page .lk-page-title{align-items:flex-start!important;flex-direction:column!important}.lk-order-page .flex.items-center.justify-between{align-items:flex-start;gap:10px}.lk-order-page .divide-y .flex.items-center.justify-between{align-items:flex-start;flex-direction:column}.lk-order-page dl.sm\:grid-cols-2{grid-template-columns:1fr!important}.lk-order-page dl.sm\:grid-cols-2>div:last-child{border-bottom:0}.lk-order-status-tabs{margin-inline:-2px;border-radius:14px}.lk-order-status-tab{min-height:36px;padding-inline:11px;font-size:11px}}
 .lk-shipment-timeline{display:grid;gap:0}.lk-shipment-step{position:relative;display:grid;grid-template-columns:minmax(88px,112px) 18px minmax(0,1fr);gap:10px;min-height:54px}.lk-shipment-step:not(:last-child)::before{position:absolute;top:19px;bottom:-1px;left:calc(min(112px, max(88px, 26%)) + 9px);width:1px;background:#eadbce;content:""}.lk-shipment-step__date{padding-top:1px;color:#806356;font-size:11px;line-height:1.4}.lk-shipment-step__dot{position:relative;z-index:1;display:grid;width:18px;height:18px;place-items:center;border:2px solid #d8c8ba;border-radius:999px;background:#fffdf9;color:transparent;font-size:10px}.lk-shipment-step.is-complete .lk-shipment-step__dot{border-color:#561c17;background:#561c17;color:#fff}.lk-shipment-step.is-current .lk-shipment-step__dot{border:4px solid #561c17;background:#fff}.lk-shipment-step__label{min-width:0;padding:0 0 14px;color:#806356;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.lk-shipment-step.is-complete .lk-shipment-step__label{color:#37231d}.lk-shipment-step.is-current .lk-shipment-step__label{color:#561c17;font-weight:800}.lk-proof-image{display:block;width:100%;max-height:260px;aspect-ratio:16/10;border-radius:12px;background:#f4ece4;object-fit:cover}.lk-order-page :is(a,button):focus-visible{outline:3px solid rgba(122,42,34,.3);outline-offset:3px}@media(max-width:639px){.lk-shipment-step{grid-template-columns:minmax(72px,88px) 18px minmax(0,1fr);gap:8px;min-height:50px}.lk-shipment-step:not(:last-child)::before{left:calc(min(88px, max(72px, 25%)) + 8px)}.lk-shipment-step__date{font-size:10px}.lk-shipment-step__label{font-size:12px}.lk-proof-image{max-height:220px}}
 .lk-order-progress{display:grid;grid-template-columns:repeat(5,minmax(124px,1fr));min-width:650px}.lk-order-progress li{position:relative;z-index:0;display:flex;min-width:0;flex-direction:column;align-items:center;text-align:center}.lk-order-progress li:not(:last-child)::after{position:absolute;z-index:-1;top:17px;left:50%;width:100%;height:2px;background:#eadbce;content:""}.lk-order-progress li.is-complete:not(:last-child)::after{background:#561c17}.lk-order-progress__node{display:grid;width:36px;height:36px;place-items:center;border:2px solid #d8c8ba;border-radius:999px;background:#fffdf9;color:#806356;font-size:13px;font-weight:800}.lk-order-progress li.is-complete .lk-order-progress__node{border-color:#561c17;background:#561c17;color:#fff}.lk-order-progress li.is-current .lk-order-progress__node{border:3px solid #561c17;background:#fffdf9;color:#561c17}.lk-order-progress__label{margin-top:9px;color:#806356;font-size:11px;font-weight:600;line-height:1.3}.lk-order-progress li.is-complete .lk-order-progress__label{color:#37231d}.lk-order-progress li.is-current .lk-order-progress__label{color:#561c17;font-weight:800}
+    .lk-order-page .lk-order-contact-link.lk-btn-light{min-height:32px;padding:6px 8px!important;border:0!important;background:transparent!important;box-shadow:none!important;color:#561c17!important}.lk-order-page .lk-order-contact-link.lk-btn-light:hover{background:transparent!important;border-color:transparent!important;color:#3e130f!important;text-decoration:underline}
 </style>
 @php
     $mode = $mode ?? 'index';
@@ -46,7 +47,7 @@
     @if(session('buyer_notice'))<div class="mb-4 rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('buyer_notice') }}</div>@endif
 
     @if($mode === 'success')
-        <section class="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm"><div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-900">&#10003;</div><span class="mt-5 block text-[10px] font-bold uppercase tracking-widest text-red-800">Order placed</span><h1 class="mt-2 text-2xl font-bold text-stone-950">Thank you for your order</h1><p class="mt-2 text-sm text-stone-500">{{ $selectedOrder?->order_number ? 'Order '.$selectedOrder->order_number.' was placed successfully.' : 'Your order was placed successfully.' }}</p><div class="mt-6 flex justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.orders') }}">View My Purchases</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Continue Shopping</a></div></section>
+        <section class="rounded-2xl border border-stone-200 bg-white p-8 text-center shadow-sm"><div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl text-red-900">&#10003;</div><span class="mt-5 block text-[10px] font-bold uppercase tracking-widest text-red-800">Order placed</span><h1 class="mt-2 text-2xl font-bold text-stone-950">Thank you for your order</h1><p class="mt-2 text-sm text-stone-500">{{ $selectedOrder?->order_number ? 'Order '.$selectedOrder->order_number.' was placed successfully.' : 'Your order was placed successfully.' }}</p><div class="mt-6 flex justify-center gap-2"><a class="lk-btn lk-btn-red" href="{{ route('buyer.orders') }}">View My Orders</a><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Continue Shopping</a></div></section>
     @elseif($mode === 'show' && $selectedOrder)
         @php
             $allShipments = $selectedOrder->sellerOrders->flatMap->shipments;
@@ -68,7 +69,7 @@
                 ['label' => 'To Rate', 'date' => $selectedOrder->completed_at],
             ];
         @endphp
-        <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1>@if($isCancelledOrder && $allShipments->isEmpty())<p>Cancelled · Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@elseif($isCancelledOrder)<p>Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@endif</div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to My Purchases</a></div></div>
+        <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1>@if($isCancelledOrder && $allShipments->isEmpty())<p>Cancelled · Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@elseif($isCancelledOrder)<p>Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@endif</div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to My Orders</a></div></div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             @unless($isCancelledOrder)
                 <div class="mb-5 overflow-x-auto border-b border-stone-100 pb-5" aria-label="Order progress"><ol class="lk-order-progress">
@@ -269,7 +270,10 @@
             <dl class="mt-1 divide-y divide-stone-100 text-sm">
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Merchandise subtotal</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->subtotal, 2) }}</dd></div>
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Shipping fee</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->shipping_total, 2) }}</dd></div>
-                <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="min-w-0 text-stone-600">Voucher discount @if($appliedVoucherGroups->isNotEmpty())<span class="mt-1 block text-xs text-stone-500">@foreach($appliedVoucherGroups as $voucherOrders)@php $appliedVoucher = $voucherOrders->first()->voucher; @endphp<span class="mr-2 inline-block">{{ $appliedVoucher->seller_profile_id ? ($voucherOrders->first()->sellerProfile?->business_name ?? 'Shop').' voucher' : 'LIKHAE Platform voucher' }}: {{ $appliedVoucher->code }}</span>@endforeach</span>@endif</dt><dd class="shrink-0 font-semibold text-stone-900">&#8722;&#8369;{{ number_format((float) $selectedOrder->discount_total, 2) }}</dd></div>
+                <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="min-w-0 text-stone-600">Voucher discount @if($appliedVoucherGroups->isNotEmpty())<span class="mt-1 block text-xs text-stone-500">@foreach($appliedVoucherGroups as $voucherOrders)@php $appliedVoucher = $voucherOrders->first()->voucher; @endphp<span class="mr-2 inline-block">{{ $appliedVoucher->seller_profile_id ? ($voucherOrders->first()->sellerProfile?->business_name ?? 'Shop').' voucher' : 'LIKHAE Platform voucher' }}: {{ $appliedVoucher->code }}</span>@endforeach</span>@endif</dt><dd class="shrink-0 font-semibold text-stone-900">&#8722;&#8369;{{ number_format((float) $selectedOrder->sellerOrders->sum('voucher_discount'), 2) }}</dd></div>
+                @if((int) $selectedOrder->reward_points_redeemed > 0)
+                    <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Reward points ({{ number_format((int) $selectedOrder->reward_points_redeemed) }})</dt><dd class="font-semibold text-red-800">&#8722;&#8369;{{ number_format((float) $selectedOrder->reward_points_discount, 2) }}</dd></div>
+                @endif
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Additional Care</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->protection_total, 2) }}</dd></div>
                 <div class="flex flex-wrap justify-between gap-3 border-t border-stone-200 py-4 text-base"><dt class="font-bold text-stone-900">Order total</dt><dd class="font-bold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->grand_total, 2) }}</dd></div>
             </dl>
@@ -406,7 +410,7 @@
             </section>
         @endif
     @else
-        <div class="lk-page-title"><div><span class="lk-kicker">Order Center</span><h1>My Purchases</h1><p>Track fulfillment and confirm receipt after delivery.</p></div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Shop Products</a></div></div>
+        <div class="lk-page-title"><div><span class="lk-kicker">Order Center</span><h1>My Orders</h1><p>Track fulfillment and confirm receipt after delivery.</p></div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.products') }}">Shop Products</a></div></div>
         @php
             $orderTabs = ['all' => 'All', 'to-pay' => 'To Pay', 'to-ship' => 'To Ship', 'to-receive' => 'To Receive', 'completed' => 'Completed', 'returns' => 'Return / Refund', 'cancelled' => 'Cancelled'];
             $activeTabKey = strtolower(str_replace('_', '-', $filter));
@@ -433,13 +437,11 @@
                     $returnRequest = $returnRequests->first();
                     $returnSellerRequests = $returnRequests->flatMap(fn ($requestRecord) => $requestRecord->sellerRequests);
                     $actionState = $orderActionStates->get($order->id, []);
-                    $displayStatus = $order->status === 'PARTIALLY_CANCELLED' ? 'Partially cancelled' : (\App\Services\Marketplace\BuyerOrderTabService::LABELS[$displayTab] ?? str($order->status)->headline());
                 @endphp
                 @if($displayTab === 'RETURNS' && $returnSellerRequests->isNotEmpty())
                     <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
                         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
                             <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
-                            <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
                         </header>
                         <div class="divide-y divide-stone-100">
                     @foreach($returnSellerRequests as $sellerRequest)
@@ -466,8 +468,8 @@
                                     <div class="min-w-0">
                                         <div class="flex flex-wrap items-center gap-2">
                                             <h2 class="font-semibold text-stone-900">{{ $refundSellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h2>
-                                            <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $refundSellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light px-3 py-1.5 text-xs">Chat</button></form>
-                                            @if($refundSellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $refundSellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
+                                            <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $refundSellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs">Chat</button></form>
+                                            @if($refundSellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $refundSellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
                                         </div>
                                         <p class="mt-1 text-xs text-stone-500">Order {{ $order->order_number }} &#183; Submitted {{ $sellerRequest->created_at?->format('M j, Y') }}</p>
                                     </div>
@@ -501,7 +503,6 @@
                     <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
                         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
                             <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
-                            <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
                         </header>
                         <div class="divide-y divide-stone-100">
                     @foreach($order->sellerOrders as $sellerOrder)
@@ -516,36 +517,48 @@
                                 <div class="min-w-0">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <h2 class="font-semibold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h2>
-                                        <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light px-3 py-1.5 text-xs">Chat</button></form>
-                                        @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
+                                        <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs">Chat</button></form>
+                                        @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
                                     </div>
                                     <p class="mt-1 text-xs text-stone-500">Order {{ $order->order_number }} &#183; {{ optional($order->placed_at)->format('M j, Y') }}</p>
                                 </div>
                                 <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
                             </header>
-                            @if($sellerShipments->isNotEmpty())
+                            @if($sellerShipments->contains(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)))
                                 <div class="my-3 grid gap-2">
-                                    @foreach($sellerShipments as $shipment)
+                                    @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
-                                            <span class="text-[11px] text-stone-600">Parcel {{ $loop->iteration }} · Tracking {{ $shipment->tracking_number }}</span>
-                                            @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false])
+                                            <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
+                                            @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
                                 </div>
                             @endif
                             <ul class="divide-y divide-stone-100 px-5">
                                 @foreach($sellerOrder->items as $item)
-                                    <li class="flex items-start gap-3 py-4">
-                                        <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
-                                        <div class="min-w-0 flex-1">
-                                            <p class="font-medium text-stone-900">{{ $item->product_name }}</p>
-                                            <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p>
-                                            @if($displayTab === 'COMPLETED')
-                                                @if($item->review)<p class="mt-1 text-xs font-semibold text-stone-600">Quick review submitted @if($item->review->rating)<span class="ml-1 tracking-wide text-amber-500">{{ str_repeat('★', (int) $item->review->rating) }}{{ str_repeat('☆', 5 - (int) $item->review->rating) }}</span>@endif</p>
-                                                @else<form method="POST" action="{{ route('buyer.orders.review.store', $item) }}" class="mt-1 flex flex-wrap items-center gap-1" aria-label="Quick review for {{ $item->product_name }}">@csrf<span class="mr-1 text-[11px] font-semibold text-stone-600">Quick review</span>@foreach(range(1, 5) as $rating)<button type="submit" name="rating" value="{{ $rating }}" title="Rate {{ $rating }} out of 5 stars" aria-label="Rate {{ $item->product_name }} {{ $rating }} out of 5 stars" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-amber-500 transition hover:bg-amber-100 hover:text-amber-700">&#9733;</button>@endforeach</form>@endif
-                                            @endif
+                                    @php
+                                        $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
+                                        $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
+                                    @endphp
+                                    <li class="flex flex-col gap-3 py-4">
+                                        @if($shipmentForItem)
+                                            <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
+                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                            </div>
+                                        @endif
+                                        <div class="flex items-start gap-3">
+                                            <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
+                                            <div class="min-w-0 flex-1">
+                                                <p class="font-medium text-stone-900">{{ $item->product_name }}</p>
+                                                <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p>
+                                                @if($displayTab === 'COMPLETED')
+                                                    @if($item->review)<p class="mt-1 text-xs font-semibold text-stone-600">Quick review submitted @if($item->review->rating)<span class="ml-1 tracking-wide text-amber-500">{{ str_repeat('★', (int) $item->review->rating) }}{{ str_repeat('☆', 5 - (int) $item->review->rating) }}</span>@endif</p>
+                                                    @else<form method="POST" action="{{ route('buyer.orders.review.store', $item) }}" class="mt-1 flex flex-wrap items-center gap-1" aria-label="Quick review for {{ $item->product_name }}">@csrf<span class="mr-1 text-[11px] font-semibold text-stone-600">Quick review</span>@foreach(range(1, 5) as $rating)<button type="submit" name="rating" value="{{ $rating }}" title="Rate {{ $rating }} out of 5 stars" aria-label="Rate {{ $item->product_name }} {{ $rating }} out of 5 stars" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-amber-500 transition hover:bg-amber-100 hover:text-amber-700">&#9733;</button>@endforeach</form>@endif
+                                                @endif
+                                            </div>
+                                            <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
                                         </div>
-                                        <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
                                     </li>
                                 @endforeach
                             </ul>
@@ -574,7 +587,6 @@
                             <h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2>
                             <p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p>
                         </div>
-                        <span class="rounded-full bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-700" data-order-status-id="{{ $order->id }}">{{ $displayStatus }}</span>
                     </header>
                     <div class="divide-y divide-stone-100">
                         @foreach($order->sellerOrders as $sellerOrder)
@@ -587,28 +599,39 @@
                                 <header class="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-3">
                                     <div class="flex min-w-0 flex-wrap items-center gap-2">
                                         <h3 class="text-sm font-bold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h3>
-                                        <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light px-3 py-1.5 text-xs">Chat</button></form>
-                                        @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
+                                        <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs">Chat</button></form>
+                                        @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
                                     </div>
                                     <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
                                 </header>
-                                @if($sellerShipments->isNotEmpty())
+                                @if($sellerShipments->contains(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)))
                                     <div class="mb-3 grid gap-2">
-                                        @foreach($sellerShipments as $shipment)
+                                        @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
-                                                <span class="text-[11px] text-stone-600">Parcel {{ $loop->iteration }} · Tracking {{ $shipment->tracking_number }}</span>
-                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false])
+                                                <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
+                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
                                     </div>
                                 @endif
                                 <ul class="divide-y divide-stone-100">
                                     @foreach($sellerOrder->items as $item)
-                                        <li class="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                                            <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
-                                            <div class="min-w-0 flex-1">
-                                                <p class="truncate font-medium text-stone-900">{{ $item->product_name }}</p>
-                                                <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} <span aria-hidden="true">·</span> Qty {{ $item->quantity }}</p>
+                                        @php
+                                            $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
+                                            $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
+                                        @endphp
+                                        <li class="flex flex-col gap-3 py-3 first:pt-0 last:pb-0">
+                                            @if($shipmentForItem)
+                                                <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                    <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
+                                                    @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                </div>
+                                            @endif
+                                            <div class="flex items-start gap-3">
+                                                <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
+                                                <div class="min-w-0 flex-1">
+                                                    <p class="truncate font-medium text-stone-900">{{ $item->product_name }}</p>
+                                                    <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} <span aria-hidden="true">·</span> Qty {{ $item->quantity }}</p>
                                                 @if($order->status === 'COMPLETED')
                                                     @if($item->review)
                                                         <p class="mt-2 text-[11px] font-semibold text-emerald-800">Quick review submitted @if($item->review->rating) <span class="ml-1 tracking-wide text-amber-500" aria-label="{{ $item->review->rating }} out of 5 stars">{{ str_repeat('★', (int) $item->review->rating) }}{{ str_repeat('☆', 5 - (int) $item->review->rating) }}</span>@endif</p>
@@ -624,8 +647,9 @@
                                                         </form>
                                                     @endif
                                                 @endif
+                                                </div>
+                                                <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
                                             </div>
-                                            <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
                                         </li>
                                     @endforeach
                                 </ul>
@@ -637,8 +661,8 @@
                         <div class="lk-order-card-actions">
                             @if($order->status === 'COMPLETED')<a class="lk-btn lk-btn-red" href="{{ route('buyer.orders.show', $order) }}#reviews">Rate</a>@endif
                             @if($actionState['can_cancel'] ?? false)
-                                <details class="w-full max-w-xs rounded-xl border border-stone-200 bg-white p-3">
-                                    <summary class="cursor-pointer text-sm font-semibold text-red-900">Cancel Order</summary>
+                                <details class="lk-order-cancel-control">
+                                    <summary class="cursor-pointer text-sm font-semibold">Cancel Order</summary>
                                     <form method="POST" action="{{ route('buyer.orders.cancel', $order) }}" class="mt-3 grid gap-3" onsubmit="return window.confirm('Cancel this order? Eligible stock and voucher usage will be restored.');">
                                         @csrf
                                         <label class="grid gap-1 text-sm font-medium text-stone-800">Reason for cancellation

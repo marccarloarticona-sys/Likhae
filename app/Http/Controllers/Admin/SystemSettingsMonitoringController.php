@@ -12,10 +12,12 @@ use App\Services\Monitoring\SystemHealthMonitor;
 use App\Services\Moderation\ProductModerationService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator as Paginator;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -48,6 +50,7 @@ class SystemSettingsMonitoringController extends Controller
             'settingsConfig' => $settingsConfig,
             'preferences' => $preferences,
             'health' => $health->overview(),
+            'realtimeTransport' => $this->realtimeTransportSnapshot(),
             'productModerationHealth' => $moderation->healthSnapshot(),
             'storage' => $storage,
             'storageRefreshStatus' => $request->hasSession() ? $request->session()->get('storage_refresh_status') : null,
@@ -58,6 +61,32 @@ class SystemSettingsMonitoringController extends Controller
             'auditAvailable' => $auditAvailable,
             'auditPreview' => $auditPreview,
         ]);
+    }
+
+    public function realtimeTransportStatus(): JsonResponse
+    {
+        return response()->json($this->realtimeTransportSnapshot())
+            ->header('Cache-Control', 'private, no-store');
+    }
+
+    private function realtimeTransportSnapshot(): array
+    {
+        $connection = strtolower((string) config('broadcasting.default', ''));
+        $reverb = (array) config('broadcasting.connections.reverb', []);
+        $options = (array) ($reverb['options'] ?? []);
+        $configured = $connection === 'reverb'
+            && filled($reverb['key'] ?? null)
+            && filled($reverb['secret'] ?? null)
+            && filled($reverb['app_id'] ?? null)
+            && filled($options['host'] ?? null)
+            && (int) ($options['port'] ?? 0) > 0;
+
+        return [
+            'configured' => $configured,
+            'broadcast_connection' => $connection !== '' ? $connection : 'not configured',
+            'broadcast_unavailable' => Cache::get('reverb:broadcast-unavailable', false) === true,
+            'checked_at' => now()->toIso8601String(),
+        ];
     }
 
     public function refreshStorage(StorageCapacityMonitor $storageMonitor): RedirectResponse

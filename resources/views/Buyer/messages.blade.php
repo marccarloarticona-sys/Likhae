@@ -29,6 +29,9 @@
     }
     $refProduct = request('product') ? $buyerProducts->firstWhere('slug', request('product')) : null;
     $chatMessages = collect($chatMessages ?? []);
+    $activeOtherReadAt = filled($activeSeller['other_last_read_at'] ?? null)
+        ? \Illuminate\Support\Carbon::parse($activeSeller['other_last_read_at'])
+        : null;
 @endphp
 
 @push('head')
@@ -170,6 +173,32 @@
         box-shadow: 0 8px 18px rgba(86, 28, 23, 0.12);
     }
 
+    .lk-conversation-avatar-wrap {
+        position: relative;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 42px;
+    }
+
+    .lk-conversation-avatar-wrap .lk-chat-avatar {
+        display: block;
+    }
+
+    .lk-conversation-presence-dot {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 12px;
+        height: 12px;
+        border: 2px solid #FFFDF9;
+        border-radius: 999px;
+        background: #A99E98;
+    }
+
+    .lk-conversation-presence-dot.is-online {
+        background: #2EAA60;
+    }
+
     .lk-conversation-copy {
         min-width: 0;
         flex: 1;
@@ -235,6 +264,27 @@
         border-bottom: 1px solid var(--lk-border);
     }
 
+    .lk-chat-back {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        min-height: 38px;
+        padding: 0 9px;
+        border: 1px solid var(--lk-border);
+        border-radius: 11px;
+        background: var(--lk-card);
+        color: var(--lk-maroon);
+        font: 700 11px/1 Poppins, system-ui, sans-serif;
+        cursor: pointer;
+    }
+
+    .lk-chat-back svg {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 16px;
+    }
+
     .lk-chat-user {
         display: flex;
         min-width: 0;
@@ -276,6 +326,25 @@
         height: 8px;
         border-radius: 999px;
         background: #256F4A;
+    }
+
+    .lk-chat-status.is-offline {
+        color: #7B716B;
+    }
+
+    .lk-chat-status.is-offline .lk-chat-status-dot {
+        background: #A99E98;
+    }
+
+    .lk-chat-feedback {
+        margin: 0;
+        padding: 7px 18px;
+        color: var(--lk-muted);
+        font-size: 11px;
+    }
+
+    .lk-chat-feedback.is-error {
+        color: #9A5B11;
     }
 
     .lk-chat-store-btn {
@@ -381,8 +450,46 @@
     }
 
     .lk-message-row.is-buyer .lk-message-time {
-        color: #E8C8B2;
+        color: #D6A58D;
         text-align: right;
+    }
+
+    .lk-message-meta {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 7px;
+        margin-top: 6px;
+    }
+
+    .lk-message-meta .lk-message-time {
+        margin-top: 0;
+    }
+
+    .lk-message-row.is-buyer .lk-message-meta {
+        justify-content: flex-end;
+    }
+
+    .lk-message-receipt {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--lk-muted-2);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .lk-message-row.is-buyer .lk-message-receipt {
+        color: #D6A58D;
+    }
+
+    .lk-message-seen-avatar {
+        width: 16px;
+        height: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        border-radius: 999px;
+        object-fit: cover;
     }
 
     .lk-product-inquiry-card {
@@ -455,24 +562,21 @@
         border-top: 1px solid var(--lk-border);
     }
 
-    .lk-message-attachment {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 40px;
-        padding: 0 11px;
-        border: 1px solid var(--lk-border);
-        border-radius: 12px;
-        background: var(--lk-card);
-        color: var(--lk-text);
-        font-size: 11px;
-        font-weight: 800;
-        cursor: pointer;
-    }
-
+    .lk-message-attachment { position: relative; display: inline-flex; width: 42px; height: 42px; flex: 0 0 42px; align-items: center; justify-content: center; border: 1px solid var(--lk-border); border-radius: 13px; background: var(--lk-card); color: var(--lk-maroon); cursor: pointer; }
+    .lk-message-attachment svg { width: 20px; height: 20px; }
     .lk-message-attachment input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
     .lk-message-preview { display: block; max-width: 76px; max-height: 54px; border-radius: 8px; object-fit: cover; }
     .lk-message-preview[hidden] { display: none; }
+    .lk-attachment-selection { display: inline-flex; min-width: 0; align-items: center; gap: 7px; }
+    [data-attachment-filename] { max-width: 150px; overflow: hidden; color: var(--lk-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    [data-attachment-filename][hidden] { display: none; }
+    .lk-message-image-attachment { display: block; max-width: min(280px,75vw); max-height: 300px; margin-top: 8px; border-radius: 12px; object-fit: contain; }
+    .lk-message-file { display: flex; max-width: min(320px,75vw); align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--lk-border); border-radius: 12px; background: var(--lk-card); color: var(--lk-text); text-decoration: none; }
+    .lk-message-file > svg { width: 22px; height: 22px; flex: 0 0 22px; color: var(--lk-maroon); }
+    .lk-message-file-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
+    .lk-message-file-copy strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .lk-message-file-copy small { color: var(--lk-muted); font-size: 9px; font-weight: 700; }
+    .lk-message-file-download { font-size: 16px; font-weight: 900; }
     .lk-product-context { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--lk-border); background: var(--lk-card); color: var(--lk-text); font-size: 11px; }
     .lk-product-context img { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 10px; object-fit: cover; }
 
@@ -548,36 +652,166 @@
         font-size: 12px;
     }
 
-    @media (max-width: 640px) {
-        .lk-chat-head,
-        .lk-chat-form {
-            align-items: stretch;
-            flex-direction: column;
+    @media (max-width: 1023px) {
+        .lk-messages-shell {
+            grid-template-columns: minmax(220px, 30%) minmax(0, 1fr);
+            grid-template-rows: minmax(0, 1fr);
         }
 
-        .lk-chat-store-btn,
-        .lk-chat-send {
-            width: 100% !important;
+        .lk-messages-sidebar {
+            border-right: 1px solid var(--lk-border);
+            border-bottom: 0;
+        }
+    }
+
+    body:has(.lk-messages-page) {
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    body:has(.lk-messages-page) .lk-shell {
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    body:has(.lk-messages-page) .lk-main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .lk-messages-page {
+        flex: 1;
+        grid-template-rows: auto minmax(0, 1fr);
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .lk-messages-shell {
+        flex: 1;
+        height: auto;
+    }
+
+    body:has(.lk-messages-page) .lk-footer {
+        display: none;
+    }
+
+    @media (max-width: 767px) {
+        body:has(.lk-messages-page) .lk-main {
+            padding: 10px;
+        }
+
+        .lk-messages-page {
+            gap: 10px;
+        }
+
+        .lk-page-title .lk-kicker,
+        .lk-page-title p {
+            display: none;
+        }
+
+        .lk-page-title h1 {
+            font-size: 32px;
+            line-height: 1;
+        }
+
+        .lk-messages-shell {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: minmax(0, 1fr);
+            border-radius: 18px;
+        }
+
+        .lk-messages-page.is-mobile-chat-view .lk-messages-sidebar,
+        .lk-messages-page.is-mobile-list-view .lk-chat-area {
+            display: none;
+        }
+
+        .lk-messages-page.is-mobile-chat-view .lk-chat-area,
+        .lk-messages-page.is-mobile-list-view .lk-messages-sidebar {
+            display: flex;
+        }
+
+        .lk-chat-head {
+            align-items: center;
+            flex-direction: row;
+            gap: 8px;
+            padding: 10px;
+        }
+
+        .lk-chat-back {
+            display: inline-flex;
+            flex: 0 0 auto;
+        }
+
+        .lk-chat-user {
+            flex: 1;
+            gap: 8px;
+        }
+
+        .lk-chat-head .lk-chat-avatar {
+            width: 36px;
+            height: 36px;
+            flex-basis: 36px;
+        }
+
+        .lk-chat-user-copy strong {
+            font-size: 12px;
+        }
+
+        .lk-chat-status {
+            font-size: 10px;
+        }
+
+        .lk-chat-store-btn {
+            display: none !important;
+        }
+
+        .lk-chat-stream {
+            padding: 12px;
         }
 
         .lk-message-row {
             max-width: 94%;
         }
-    }
 
-    @media (max-width: 1023px) {
-        .lk-messages-shell {
-            grid-template-columns: minmax(0, 1fr);
-            grid-template-rows: minmax(118px, 30%) minmax(0, 1fr);
+        .lk-chat-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
         }
-    }
 
-    body:has(.lk-messages-page) {
-        overflow: hidden;
-    }
+        .lk-chat-input {
+            grid-column: 1 / -1;
+            width: 100%;
+            min-height: 42px;
+        }
 
-    body:has(.lk-messages-page) .lk-footer {
-        display: none;
+        .lk-chat-form > span:has([data-message-count]) {
+            grid-column: 1;
+            grid-row: 2;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+
+        .lk-attachment-selection {
+            grid-column: 2;
+            grid-row: 2;
+        }
+
+        .lk-chat-send {
+            grid-column: 3;
+            grid-row: 2;
+            width: auto !important;
+            min-width: 88px;
+            min-height: 42px !important;
+            padding-inline: 12px !important;
+        }
     }
 
     html.dark .lk-messages-shell,
@@ -617,6 +851,11 @@
         color: #C8B7AD !important;
     }
 
+    html.dark .lk-message-row.is-buyer .lk-message-time,
+    html.dark .lk-message-row.is-buyer .lk-message-receipt {
+        color: #F5DDD2 !important;
+    }
+
     html.dark .lk-message-bubble,
     html.dark .lk-chat-input,
     html.dark .lk-chat-day span {
@@ -628,7 +867,7 @@
 @endpush
 
 @section('content')
-<div class="lk-page lk-messages-page">
+<div class="lk-page lk-messages-page {{ ($activeSeller || $sellers->isEmpty()) ? 'is-mobile-chat-view' : 'is-mobile-list-view' }}" data-mobile-messages-page>
     <div class="lk-page-title">
         <div>
             <span class="lk-kicker">
@@ -658,12 +897,17 @@
                     <a
                         href="{{ route('buyer.messages', ['seller' => $item['slug']]) }}"
                         class="lk-conversation-item {{ $selectedSlug === $item['slug'] ? 'is-active' : '' }}"
+                        data-conversation-presence-id="{{ $item['conversation_id'] }}"
+                        data-presence-url="{{ route('messages.receipt', ['conversation' => $item['conversation_id']]) }}"
                     >
-                        <img
-                            class="lk-chat-avatar"
-                            src="{{ $item['avatar'] }}"
-                            alt="{{ $item['name'] }}"
-                        >
+                        <span class="lk-conversation-avatar-wrap">
+                            <img class="lk-chat-avatar" src="{{ $item['avatar'] }}" alt="{{ $item['name'] }}" loading="{{ $selectedSlug === $item['slug'] ? 'eager' : 'lazy' }}" decoding="async" fetchpriority="{{ $selectedSlug === $item['slug'] ? 'high' : 'low' }}">
+                            @php
+                                $initiallyOnline = $item['slug'] === ($activeSeller['slug'] ?? null)
+                                    && (bool) ($activeRecipientOnline ?? false);
+                            @endphp
+                            <span class="lk-conversation-presence-dot {{ $initiallyOnline ? 'is-online' : '' }}" data-conversation-presence-dot role="img" aria-label="{{ $initiallyOnline ? 'Online' : 'Offline' }}" title="{{ $initiallyOnline ? 'Online' : 'Offline' }}"></span>
+                        </span>
 
                         <div class="lk-conversation-copy">
                             <div class="lk-conversation-top">
@@ -692,11 +936,17 @@
         <main class="lk-chat-area">
             @if($activeSeller)
                 <div class="lk-chat-head">
+                    <button type="button" class="lk-chat-back" data-mobile-conversation-list aria-label="Back to conversations" title="Back to conversations">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                        <span>Chats</span>
+                    </button>
                     <div class="lk-chat-user">
                         <img
                             class="lk-chat-avatar"
                             src="{{ $activeSeller['avatar'] }}"
                             alt="{{ $activeSeller['name'] }}"
+                            decoding="async"
+                            fetchpriority="high"
                         >
 
                         <div class="lk-chat-user-copy">
@@ -704,9 +954,9 @@
                                 {{ $activeSeller['name'] }}
                             </strong>
 
-                            <span class="lk-chat-status" data-message-connection-status>
+                            <span class="lk-chat-status {{ ($activeRecipientOnline ?? false) ? '' : 'is-offline' }}" data-message-presence-status data-presence="{{ ($activeRecipientOnline ?? false) ? 'online' : 'offline' }}">
                                 <span class="lk-chat-status-dot"></span>
-                                {{ ($activeSeller['is_support'] ?? false) ? 'LIKHAE Support' : 'Verified Seller · Online' }}
+                                <span data-message-presence-label>{{ ($activeRecipientOnline ?? false) ? 'Online' : 'Offline' }}</span>
                             </span>
                         </div>
                     </div>
@@ -720,6 +970,8 @@
                         </a>
                     @endif
                 </div>
+
+                <p class="lk-chat-feedback" data-message-feedback role="status" aria-live="polite" hidden></p>
 
                 @if($refProduct)
                     <div class="lk-product-context" aria-label="Product context">
@@ -746,23 +998,48 @@
                     data-conversation-id="{{ $activeSeller['conversation_id'] ?? '' }}"
                     data-stream-url="{{ route('buyer.messages.stream', ['conversation' => $activeSeller['conversation_id'] ?? 0]) }}"
                     data-current-user-id="{{ auth()->id() }}"
+                    data-other-user-id="{{ $activeSeller['id'] }}"
                     data-seller-avatar="{{ $activeSeller['avatar'] }}"
                     data-seller-name="{{ $activeSeller['name'] }}"
+                    data-other-avatar="{{ $activeSeller['avatar'] }}"
+                    data-other-name="{{ $activeSeller['name'] }}"
+                    data-other-last-read-at="{{ $activeOtherReadAt?->toIso8601String() }}"
+                    data-read-url-template="{{ route('messages.read', ['conversation' => '__conversation__']) }}"
+                    data-receipt-url-template="{{ route('messages.receipt', ['conversation' => '__conversation__']) }}"
+                    @if($activeSeller['conversation_id'] ?? false)
+                        data-read-url="{{ route('messages.read', ['conversation' => $activeSeller['conversation_id']]) }}"
+                        data-receipt-url="{{ route('messages.receipt', ['conversation' => $activeSeller['conversation_id']]) }}"
+                    @endif
                     @if($messageAttachmentsReady ?? false) data-attachments-enabled="true" @endif
                 >
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($chatMessages as $message)
-                        @php $fromBuyer = $message->sender_user_id === auth()->id(); @endphp
-                        <div class="lk-message-row {{ $fromBuyer ? 'is-buyer' : '' }}" data-message-id="{{ $message->id }}">
+                        @php
+                            $fromBuyer = (int) $message->sender_user_id === (int) auth()->id();
+                            $messageSentAt = $message->sent_at ?? $message->created_at;
+                            $wasSeen = $fromBuyer && $activeOtherReadAt && $messageSentAt && $messageSentAt->lte($activeOtherReadAt);
+                            $messageBody = (string) $message->body;
+                            $showMessageBody = filled($messageBody)
+                                && !(filled($message->attachment_path) && in_array(trim($messageBody), ['[Photo]', '[File]'], true));
+                        @endphp
+                        <div class="lk-message-row {{ $fromBuyer ? 'is-buyer' : '' }}" data-message-id="{{ $message->id }}" data-message-sender-id="{{ $message->sender_user_id }}" @if($messageSentAt) data-message-sent-at="{{ $messageSentAt->toIso8601String() }}" @endif>
                             @unless($fromBuyer)
-                                <img class="lk-message-small-avatar" src="{{ $activeSeller['avatar'] }}" alt="{{ $activeSeller['name'] }}">
+                                <img class="lk-message-small-avatar" src="{{ $activeSeller['avatar'] }}" alt="{{ $activeSeller['name'] }}" loading="lazy" decoding="async" fetchpriority="low">
                             @endunless
                             <div>
-                                <div class="lk-message-bubble">{{ $message->body }}</div>
+                                @if($showMessageBody)<div class="lk-message-bubble">{{ $messageBody }}</div>@endif
                                 @if(($messageAttachmentsReady ?? false) && filled($message->attachment_path))
-                                    <img data-message-attachment="true" class="mt-2 max-h-64 max-w-full rounded-lg object-contain" src="{{ route('messages.attachments.show', $message->id) }}" alt="Image attachment" loading="lazy">
+                                    @include('partials.message-attachment',['message'=>$message])
                                 @endif
-                                <span class="lk-message-time">{{ ($message->sent_at ?? $message->created_at)?->diffForHumans() }}</span>
+                                <div class="lk-message-meta">
+                                    <span class="lk-message-time">{{ $messageSentAt?->diffForHumans() }}</span>
+                                    @if($fromBuyer)
+                                        <span class="lk-message-receipt" data-message-receipt data-message-sent-at="{{ $messageSentAt?->toIso8601String() }}" data-receipt-state="{{ $wasSeen ? 'seen' : 'sent' }}">
+                                            <span data-message-receipt-text>{{ $wasSeen ? 'Seen' : 'Sent' }}</span>
+                                            @if($wasSeen)<img class="lk-message-seen-avatar" data-message-receipt-avatar src="{{ $activeSeller['avatar'] }}" alt="" title="Seen by {{ $activeSeller['name'] }}">@endif
+                                        </span>
+                                    @endif
+                                </div>
                             </div>
                         </div>
                     @empty
@@ -784,7 +1061,6 @@
                     <input
                         type="text"
                         name="body"
-                        required
                         maxlength="1000"
                         placeholder="Type your message to {{ $activeSeller['name'] }}..."
                         class="lk-chat-input"
@@ -793,7 +1069,7 @@
 
                     <span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>
                     @if($messageAttachmentsReady ?? false)
-                        <label class="lk-message-attachment"><span>Attach image</span><input type="file" name="attachment" accept="image/jpeg,image/png,image/webp" data-message-attachment-input><img class="lk-message-preview" data-attachment-preview hidden alt="Selected attachment preview"></label>
+                        <span class="lk-attachment-selection"><label class="lk-message-attachment" title="Attach up to 5 files or images" aria-label="Attach up to 5 files or images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/><path d="M15 3v4h4"/></svg><input type="file" name="attachments[]" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.mp3,.wav,.mp4,.mov" data-message-attachment-input><span class="sr-only">Attach up to 5 files or images</span></label><img class="lk-message-preview" data-attachment-preview hidden alt="Selected image preview"><span data-attachment-filename hidden></span></span>
                     @endif
 
                     <button
@@ -852,12 +1128,40 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = form?.querySelector('[data-chat-input]');
     if (!list) return;
 
+    const messagesPage = document.querySelector('[data-mobile-messages-page]');
+    list.closest('.lk-chat-area')?.querySelector('[data-mobile-conversation-list]')?.addEventListener('click', () => {
+        messagesPage?.classList.remove('is-mobile-chat-view');
+        messagesPage?.classList.add('is-mobile-list-view');
+        messagesPage?.querySelector('.lk-conversation-item.is-active')?.focus();
+    });
+
     const seen = new Set([...list.querySelectorAll('[data-message-id]')].map((row) => row.dataset.messageId));
     let lastId = Math.max(0, ...[...seen].map((id) => Number(id) || 0));
 
     const scrollBottom = () => { list.scrollTop = list.scrollHeight; };
     const hasMessage = (id) => seen.has(id) || [...list.querySelectorAll('[data-message-id]')]
         .some((row) => row.dataset.messageId === id);
+    const setReceipt = (row, state) => {
+        const meta = row.querySelector('.lk-message-meta');
+        if (!meta) return;
+
+        let receipt = meta.querySelector('[data-message-receipt]');
+        if (!receipt) {
+            receipt = document.createElement('span');
+            receipt.className = 'lk-message-receipt';
+            receipt.dataset.messageReceipt = 'true';
+            const label = document.createElement('span');
+            label.dataset.messageReceiptText = 'true';
+            receipt.appendChild(label);
+            meta.appendChild(receipt);
+        }
+
+        receipt.dataset.receiptState = state;
+        receipt.dataset.messageSentAt = row.dataset.messageSentAt || '';
+        const label = receipt.querySelector('[data-message-receipt-text]');
+        if (label) label.textContent = state === 'sending' ? 'Sending' : 'Sent';
+        receipt.setAttribute('aria-label', label?.textContent || 'Sent');
+    };
     const reconcilePending = (message) => {
         const body = String(message.body || '').trim();
         const senderId = String(message.sender_id || message.sender_user_id || list.dataset.currentUserId || '');
@@ -869,17 +1173,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         pending.dataset.messageId = String(message.id);
         pending.dataset.messagePending = 'false';
+        if (message.sent_at) pending.dataset.messageSentAt = message.sent_at;
         if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url
             && !pending.querySelector('[data-message-attachment="true"]')) {
-            const image = document.createElement('img');
-            image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
-            image.dataset.messageAttachment = 'true';
-            image.src = message.attachment_url;
-            image.alt = 'Image attachment';
-            image.loading = 'lazy';
-            pending.querySelector('.lk-message-bubble')?.after(image);
+            const attachment = window.lkCreateMessageAttachment?.(message);
+            if (attachment) pending.querySelector('.lk-message-bubble')?.after(attachment);
         }
         pending.querySelector('.lk-message-time').textContent = message.time || 'Just now';
+        setReceipt(pending, 'sent');
         seen.add(String(message.id));
         lastId = Math.max(lastId, Number(message.id) || 0);
         return true;
@@ -897,6 +1198,8 @@ document.addEventListener('DOMContentLoaded', () => {
         row.className = `lk-message-row${message.from_me ? ' is-buyer' : ''}`;
         row.dataset.messageId = id;
         row.dataset.messageSenderId = String(message.sender_id || message.sender_user_id || list.dataset.currentUserId || '');
+        if (message.sent_at) row.dataset.messageSentAt = message.sent_at;
+        else if (message.pending) row.dataset.messageSentAt = new Date().toISOString();
         if (message.pending) row.dataset.messagePending = 'true';
 
         if (!message.from_me) {
@@ -910,23 +1213,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const wrapper = document.createElement('div');
         const bubble = document.createElement('div');
         bubble.className = 'lk-message-bubble';
-        bubble.textContent = message.body || '';
-        if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url) {
-            const image = document.createElement('img');
-            image.className = 'mt-2 max-h-64 max-w-full rounded-lg object-contain';
-            image.dataset.messageAttachment = 'true';
-            image.src = message.attachment_url;
-            image.alt = 'Image attachment';
-            image.loading = 'lazy';
-            wrapper.appendChild(image);
-        }
+        const body = String(message.body || '').trim();
+        bubble.textContent = body;
+        bubble.hidden = !body || (Boolean(message.attachment_url) && ['[Photo]', '[File]'].includes(body));
         const time = document.createElement('span');
         time.className = 'lk-message-time';
-        time.textContent = message.pending ? 'Sending…' : (message.time || 'Just now');
+        time.textContent = message.pending ? 'Sending' : (message.time || 'Just now');
         wrapper.appendChild(bubble);
-        wrapper.appendChild(time);
+        if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url) {
+            const attachment = window.lkCreateMessageAttachment?.(message);
+            if (attachment) wrapper.appendChild(attachment);
+        }
+        const meta = document.createElement('div');
+        meta.className = 'lk-message-meta';
+        meta.appendChild(time);
+        wrapper.appendChild(meta);
         row.appendChild(wrapper);
         list.appendChild(row);
+        if (message.from_me) setReceipt(row, message.pending ? 'sending' : 'sent');
         scrollBottom();
     };
 
@@ -938,42 +1242,90 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCounter();
     const attachmentInput = form?.querySelector('[data-message-attachment-input]');
     const preview = form?.querySelector('[data-attachment-preview]');
+    const selectedFilename = form?.querySelector('[data-attachment-filename]');
     attachmentInput?.addEventListener('change', () => {
-        const file = attachmentInput.files?.[0];
-        if (!preview) return;
-        if (preview.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
-        if (!file) {
-            delete preview.dataset.previewUrl;
-            preview.removeAttribute('src');
-            preview.hidden = true;
+        const files = Array.from(attachmentInput.files || []);
+        if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
+        if (!files.length) {
+            if (preview) {
+                delete preview.dataset.previewUrl;
+                preview.removeAttribute('src');
+                preview.hidden = true;
+            }
+            if (selectedFilename) {
+                selectedFilename.hidden = true;
+                selectedFilename.textContent = '';
+            }
             return;
         }
-        preview.dataset.previewUrl = URL.createObjectURL(file);
-        preview.src = preview.dataset.previewUrl;
-        preview.hidden = false;
+        if (files.length > 5) {
+            if (preview) {
+                delete preview.dataset.previewUrl;
+                preview.removeAttribute('src');
+                preview.hidden = true;
+            }
+            if (selectedFilename) {
+                selectedFilename.textContent = 'Choose up to 5 files or images';
+                selectedFilename.hidden = false;
+            }
+            return;
+        }
+        const firstImage = files.find((file) => file.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name));
+        if (firstImage && preview) {
+            preview.dataset.previewUrl = URL.createObjectURL(firstImage);
+            preview.src = preview.dataset.previewUrl;
+            preview.hidden = false;
+        } else {
+            if (preview) {
+                delete preview.dataset.previewUrl;
+                preview.removeAttribute('src');
+                preview.hidden = true;
+            }
+        }
+        if (selectedFilename) {
+            selectedFilename.textContent = files.length === 1 ? files[0].name : `${files.length} attachments selected`;
+            selectedFilename.hidden = false;
+        }
     });
 
     form?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const body = input?.value.trim();
-        if (!body || form.dataset.sending === 'true') return;
+        const submittedFiles = Array.from(attachmentInput?.files || []);
+        if (submittedFiles.length > 5) {
+            window.lkBuyerToast?.('Choose up to 5 files or images per message.');
+            return;
+        }
+        if ((!body && !submittedFiles.length) || form.dataset.sending === 'true') return;
         form.dataset.sending = 'true';
         const sendButton = form.querySelector('button[type="submit"]');
         if (sendButton) sendButton.disabled = true;
-        const submittedFile = attachmentInput?.files?.[0] || null;
-
-        const payload = new FormData(form);
+        sendButton?.setAttribute('aria-busy', 'true');
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        appendMessage({
-            id: pendingId,
-            sender_id: list.dataset.currentUserId,
-            body,
-            from_me: true,
-            pending: true,
-        });
+        let timeout = null;
+        let pendingAdded = false;
         try {
+            const preparedFiles = window.lkOptimizeMessageAttachments
+                ? await window.lkOptimizeMessageAttachments(submittedFiles)
+                : submittedFiles;
+            const payload = new FormData(form);
+            payload.set('body', body || '');
+            if (attachmentInput?.name) {
+                payload.delete(attachmentInput.name);
+                preparedFiles.forEach((file) => payload.append(attachmentInput.name, file, file.name));
+            }
+
+            appendMessage({
+                id: pendingId,
+                sender_id: list.dataset.currentUserId,
+                body: body || '',
+                from_me: true,
+                pending: true,
+            });
+            pendingAdded = true;
+
             const controller = new AbortController();
-            const timeout = window.setTimeout(() => controller.abort(), 10000);
+            timeout = window.setTimeout(() => controller.abort(), 45000);
             const response = await fetch(form.action, {
                 method: 'POST',
                 body: payload,
@@ -984,33 +1336,43 @@ document.addEventListener('DOMContentLoaded', () => {
                 cache: 'no-store',
                 signal: controller.signal,
             });
-            window.clearTimeout(timeout);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 const validationMessage = data?.errors ? Object.values(data.errors).flat()[0] : null;
                 throw new Error(validationMessage || data?.message || 'Message could not be sent.');
             }
-            appendMessage(data.message);
+            const sentMessages = Array.isArray(data.messages)
+                ? data.messages
+                : (data.message ? [data.message] : []);
+            if (!sentMessages.length) throw new Error('Message could not be sent.');
+            sentMessages.forEach(appendMessage);
             window.lkSubscribeMessageThread?.(list, data.message);
             if (input?.value.trim() === body) {
                 input.value = '';
                 input.dispatchEvent(new Event('input', {bubbles: true}));
             }
-            const currentFile = attachmentInput?.files?.[0] || null;
-            if (submittedFile && currentFile && submittedFile.name === currentFile.name
-                && submittedFile.size === currentFile.size && submittedFile.lastModified === currentFile.lastModified) {
+            const currentFiles = Array.from(attachmentInput?.files || []);
+            const sameSelection = currentFiles.length === submittedFiles.length && submittedFiles.every((file, index) =>
+                file.name === currentFiles[index].name
+                && file.size === currentFiles[index].size
+                && file.lastModified === currentFiles[index].lastModified,
+            );
+            if (sameSelection) {
                 attachmentInput.value = '';
                 if (preview?.dataset.previewUrl) URL.revokeObjectURL(preview.dataset.previewUrl);
                 if (preview) { delete preview.dataset.previewUrl; preview.removeAttribute('src'); preview.hidden = true; }
+                if (selectedFilename) { selectedFilename.hidden = true; selectedFilename.textContent = ''; }
             }
             input?.focus();
         } catch (error) {
-            removePending(pendingId);
+            if (pendingAdded) removePending(pendingId);
             window.lkBuyerToast?.(error?.message || 'Message could not be sent. Please try again.');
         } finally {
+            if (timeout !== null) window.clearTimeout(timeout);
             form.dataset.sending = 'false';
             if (sendButton) sendButton.disabled = false;
+            sendButton?.removeAttribute('aria-busy');
         }
     });
 });

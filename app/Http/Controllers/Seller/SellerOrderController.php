@@ -370,6 +370,7 @@ class SellerOrderController extends Controller
 
         $itemSubtotalCents = FinancialRules::cents($order->item_subtotal);
         $voucherCents = FinancialRules::cents($order->voucher_discount);
+        $rewardPointsDiscountCents = FinancialRules::cents($order->reward_points_discount ?? 0);
         $shippingCents = FinancialRules::cents($order->shipping_fee);
         $protectionCents = FinancialRules::cents($order->protection_total ?? 0);
         $grandTotalCents = FinancialRules::cents($order->grand_total);
@@ -410,11 +411,13 @@ class SellerOrderController extends Controller
             'total' => (float) $order->grand_total,
             'item_subtotal' => (float) $order->item_subtotal,
             'voucher_discount' => (float) $order->voucher_discount,
+            'reward_points_redeemed' => (int) ($order->reward_points_redeemed ?? 0),
+            'reward_points_discount' => (float) ($order->reward_points_discount ?? 0),
             'voucher_code' => $order->voucher?->code,
             'shipping_fee' => (float) $order->shipping_fee,
             'protection_total' => (float) ($order->protection_total ?? 0),
             'cod_amount' => $order->order?->payments?->first()?->method === 'COD' ? $codAmountCents / 100 : null,
-            'financial_reconciles' => $itemSubtotalCents - $voucherCents + $shippingCents + $protectionCents === $grandTotalCents,
+            'financial_reconciles' => $itemSubtotalCents - $voucherCents - $rewardPointsDiscountCents + $shippingCents + $protectionCents === $grandTotalCents,
             'can_cancel' => in_array($order->status, ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'], true)
                 && ! $paidOnline && ! $pickupIrreversible && ! $codCollected,
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),

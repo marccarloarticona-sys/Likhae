@@ -45,15 +45,21 @@
     @else
         <div class="lk-header-title"><strong>{{ preg_replace('/\s+-\s+LIKHAE$/', '', $title) }}</strong><span>Shop smart with LIKHAE</span></div>
     @endif
-    <form action="{{ $searchRoute }}" method="GET" class="lk-search" role="search">
+    <form action="{{ $searchRoute }}" method="GET" class="lk-search" role="search" data-marketplace-search data-suggestions-url="{{ route('marketplace.search-suggestions') }}">
         @if(!$guest && Route::currentRouteName() === 'buyer.products')
             @foreach($catalogSearchParameters as $key => $value)
                 <input type="hidden" name="{{ $key }}" value="{{ $value }}">
             @endforeach
         @endif
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input type="search" name="q" value="{{ $searchValue }}" placeholder="Search products, categories, local sellers..." aria-label="Search marketplace">
+        <input type="search" name="q" value="{{ $searchValue }}" placeholder="Search products, categories, local sellers..." aria-label="Search marketplace" autocomplete="off" aria-autocomplete="list" aria-expanded="false" aria-controls="marketplaceSearchSuggestions">
         <button type="submit" aria-label="Search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+        <div id="marketplaceSearchSuggestions" class="lk-search-dropdown" data-market-search-dropdown hidden>
+            <p class="lk-search-dropdown__heading" data-market-search-heading></p>
+            <div class="lk-search-dropdown__options" role="listbox" aria-label="Marketplace search suggestions" data-market-search-options></div>
+            <p class="lk-search-dropdown__empty" data-market-search-empty hidden></p>
+            <button type="button" class="lk-search-dropdown__clear" data-market-search-clear hidden>Clear recent searches</button>
+        </div>
     </form>
     @if($guest)
         <nav class="lk-guest-actions" aria-label="Guest actions">
