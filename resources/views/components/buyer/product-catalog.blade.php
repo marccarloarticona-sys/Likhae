@@ -139,7 +139,11 @@
                     <p class="lk-filter-error" role="alert">{{ $catalogErrors->first($generalErrorKey) }}</p>
                 @endif
                 @if($visibleProducts->isNotEmpty())
-                    <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}">@foreach($visibleProducts as $product)<x-buyer.product-card :product="$product" :guest="$guest" catalog-listing /></div>
+                    <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}">
+                        @foreach($visibleProducts as $product)
+                            <x-buyer.product-card :product="$product" :guest="$guest" catalog-listing />
+                        @endforeach
+                    </div>
                 @else
                     <x-buyer.empty-state title="No products found" message="Try another category, search term, price, or rating filter." />
                     @if($query && $searchSuggestions->isNotEmpty())
