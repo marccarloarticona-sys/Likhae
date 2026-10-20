@@ -819,8 +819,8 @@
                     <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                     <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
                 @elseif($hasVariations)
-                    <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Choose Options</a>
-                    <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Choose Options</a>
+                    <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Buy Now</a>
+                    <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Add to Cart</a>
                 @else
                     <form method="POST" action="{{ route('buyer.buy-now', ['product' => $id ?? $slug]) }}" data-catalog-buy-now-form>
                         @csrf
@@ -916,8 +916,8 @@
                         <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                         <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
                     @elseif($hasVariations)
-                        <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Choose Options</a>
-                        <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Choose Options</a>
+                        <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Buy Now</a>
+                        <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Add to Cart</a>
                     @else
                         <form method="POST" action="{{ route('buyer.buy-now', ['product' => $id ?? $slug]) }}" data-catalog-buy-now-form>
                             @csrf
