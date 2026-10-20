@@ -28,12 +28,31 @@ class GuestMarketplaceController extends Controller
 
     public function products(Request $request): View
     {
+        $request->validate([
+            'q' => ['nullable', 'string', 'max:100'],
+            'category' => ['nullable', 'string', 'max:100'],
+            'seller_profile_id' => ['nullable', 'integer', 'min:1'],
+            'min_price' => ['nullable', 'numeric', 'min:0'],
+            'max_price' => ['nullable', 'numeric', 'min:0'],
+            'sort' => ['nullable', 'in:latest,oldest,name,price-low,price-high,best-rated,best-selling'],
+            'view' => ['nullable', 'in:grid,list'],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+
         $products = $this->catalog->paginated($request, 24);
+        $sellers = SellerProfile::query()
+            ->where('status', 'ACTIVE')
+            ->where('store_visibility', true)
+            ->whereHas('user', fn ($user) => $user->where('status', 'ACTIVE'))
+            ->whereHas('products', fn ($products) => $products->visible())
+            ->orderBy('business_name')
+            ->get(['id', 'business_name']);
 
         return view('guest.products', [
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
             'categories' => $this->catalog->categories(),
+            'sellers' => $sellers,
         ]);
     }
 

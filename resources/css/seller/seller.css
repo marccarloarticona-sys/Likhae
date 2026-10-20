@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../shared/feedback.css";
 
 /* =========================================================
    LIKHAE SELLER CENTER — Tailwind CSS v4 design system
@@ -3111,4 +3112,39 @@ html.dark .sl-dashboard-payable-grid .is-outstanding { background: rgba(243, 198
     .sl-dashboard-trend .sl-order-value-x-axis { gap: 3px; }
     .sl-dashboard-trend .sl-order-value-bar strong { font-size: 7px; }
     .sl-dashboard-trend .sl-order-value-x-axis span { font-size: 7px; }
+}
+
+/* Seller dashboard priorities and financial definitions */
+.sl-dashboard-section-heading { margin-top: 22px; display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.sl-dashboard-section-heading h2 { margin: 2px 0 0; color: var(--sl-text); font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+.sl-dashboard-section-heading p { margin: 0; color: var(--sl-muted); font-size: 9px; }
+.sl-seller-dashboard .sl-dashboard-priorities { margin-top: 16px; }
+.sl-dashboard-priorities__header { margin-bottom: 10px; display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.sl-dashboard-priorities__header h2 { margin: 2px 0 0; color: var(--sl-text); font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+.sl-dashboard-priorities__header > span { color: var(--sl-muted); font-size: 9px; }
+.sl-dashboard-priorities__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sl-dashboard-priority { min-width: 0; min-height: 100px; padding: 13px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; gap: 7px 10px; color: var(--sl-text); background: var(--sl-card); border: 1px solid var(--sl-border); border-radius: 13px; text-decoration: none; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.sl-dashboard-priority:hover { transform: translateY(-2px); border-color: var(--sl-tan); box-shadow: 0 8px 20px rgba(47, 30, 20, .08); }
+.sl-dashboard-priority:focus-visible { outline: 3px solid rgba(86, 28, 23, .3); outline-offset: 2px; }
+.sl-dashboard-priority__icon { grid-row: 1 / 3; width: 32px; height: 32px; display: grid; place-items: center; color: var(--sl-warning); background: rgba(179, 111, 39, .12); border-radius: 10px; font-size: 15px; font-weight: 900; }
+.sl-dashboard-priority.is-urgent { border-left: 3px solid var(--sl-warning); }
+.sl-dashboard-priority.is-clear .sl-dashboard-priority__icon { color: #287451; background: rgba(40, 116, 81, .1); }
+.sl-dashboard-priority__copy { min-width: 0; display: grid; gap: 3px; }
+.sl-dashboard-priority__copy strong { overflow: hidden; color: var(--sl-text); font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.sl-dashboard-priority__copy small { color: var(--sl-muted); font-size: 8px; line-height: 1.4; }
+.sl-dashboard-priority__count { color: var(--sl-text); font-size: 20px; font-weight: 850; line-height: 1; }
+.sl-dashboard-priority.is-urgent .sl-dashboard-priority__count { color: var(--sl-warning); }
+.sl-dashboard-priority__action { grid-column: 2 / 4; display: flex; justify-content: space-between; align-items: center; padding-top: 7px; color: var(--sl-blue); border-top: 1px solid var(--sl-border); font-size: 9px; font-weight: 800; }
+.sl-dashboard-financials__totals > div > span { display: grid; gap: 2px; }
+.sl-dashboard-financials__totals > div > span > strong { color: var(--sl-text); font-size: 9px; font-weight: 750; white-space: normal; }
+.sl-dashboard-financials__totals > div > span > small { color: var(--sl-muted); font-size: 8px; font-weight: 450; line-height: 1.3; }
+.sl-dashboard-financials__totals .is-net > span > strong { color: var(--sl-blue); }
+
+@media (max-width: 900px) {
+    .sl-dashboard-priorities__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 540px) {
+    .sl-dashboard-section-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+    .sl-dashboard-priorities__grid { grid-template-columns: minmax(0, 1fr); }
+    .sl-dashboard-priority { min-height: 88px; }
 }

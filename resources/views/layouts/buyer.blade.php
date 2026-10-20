@@ -18,7 +18,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/modal-refresh.css', 'resources/css/Buyer/likhae-buyer-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/realtime.js', 'resources/js/Buyer/likhae-buyer-ai.js'])
+    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/status-guidance.css', 'resources/css/shared/modal-refresh.css', 'resources/css/Buyer/likhae-buyer-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/realtime.js', 'resources/js/Buyer/likhae-buyer-ai.js'])
     @unless(request()->routeIs('buyer.messages'))
         @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
     @endunless
@@ -36,7 +36,7 @@
             <x-buyer.footer />
         </div>
     </div>
-    <div id="lkBuyerToast" class="lk-toast" aria-live="polite" aria-atomic="true"></div>
+    <x-shared.feedback-region workspace="buyer" />
     <x-notification-popover />
     @include('partials.confirm-action-modal')
     @php($aiAssistantVisible = (bool) data_get(auth()->user()?->notification_preferences, 'ai_assistant_enabled', true))

@@ -16,30 +16,52 @@
         <div>
             <span class="sl-eyebrow">{{ now()->format('l, F j') }}</span>
             <h2>Good {{ now()->hour < 12 ? 'morning' : (now()->hour < 18 ? 'afternoon' : 'evening') }}, {{ $firstName }}.</h2>
-            <p><strong>{{ number_format($orderStatusCounts['placed']) }} new orders</strong> and <strong>{{ number_format($stats['inventory_alerts']) }} inventory alerts</strong> may need attention.</p>
+            <p>Your store activity and the tasks that need attention are below.</p>
         </div>
         <div class="sl-welcome-actions">
             <a href="{{ route('seller.products', ['mode' => 'add']) }}" class="sl-btn sl-btn-white">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                 Add Product
             </a>
-            <a href="{{ route('seller.orders', ['status' => 'placed']) }}" class="sl-btn sl-btn-blue-soft">Process Orders</a>
+            <a href="{{ route('seller.orders') }}" class="sl-btn sl-btn-blue-soft">All Orders</a>
         </div>
     </section>
 
-    <section class="sl-stat-grid" aria-label="Store summary">
-        <x-seller.stat-card label="Orders Placed Today" :value="number_format($stats['orders_today'])" icon="orders" />
-        <x-seller.stat-card label="Total Orders" :value="number_format($stats['orders'])" icon="orders" />
-        <x-seller.stat-card label="Completed order value (all time)" :value="$peso.number_format($stats['completed_order_value_all_time'], 2)" icon="revenue" />
-        <x-seller.stat-card label="Total Products" :value="number_format($stats['products_total'])" icon="products" />
-        <x-seller.stat-card label="Ready for Pickup" :value="number_format($stats['pending_shipment'])" change="Needs action" direction="down" icon="shipping" />
+    <section class="sl-dashboard-priorities" aria-labelledby="seller-priorities-title">
+        <header class="sl-dashboard-priorities__header">
+            <div><span class="sl-eyebrow">Start here</span><h2 id="seller-priorities-title">Needs attention</h2></div>
+            <span>Actionable tasks</span>
+        </header>
+        <div class="sl-dashboard-priorities__grid">
+            <a class="sl-dashboard-priority {{ $orderStatusCounts['placed'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'placed']) }}">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $orderStatusCounts['placed'] > 0 ? '!' : '✓' }}</span>
+                <span class="sl-dashboard-priority__copy"><strong>New orders</strong><small>{{ $orderStatusCounts['placed'] > 0 ? 'Review and confirm placed orders' : 'No placed orders to review' }}</small></span>
+                <strong class="sl-dashboard-priority__count">{{ number_format($orderStatusCounts['placed']) }}</strong>
+                <span class="sl-dashboard-priority__action">Review orders <span aria-hidden="true">→</span></span>
+            </a>
+            <a class="sl-dashboard-priority {{ $stats['pending_shipment'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $stats['pending_shipment'] > 0 ? '!' : '✓' }}</span>
+                <span class="sl-dashboard-priority__copy"><strong>Ready for pickup</strong><small>{{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for courier handoff' : 'No parcels waiting for pickup' }}</small></span>
+                <strong class="sl-dashboard-priority__count">{{ number_format($stats['pending_shipment']) }}</strong>
+                <span class="sl-dashboard-priority__action">View pickups <span aria-hidden="true">→</span></span>
+            </a>
+            <a class="sl-dashboard-priority {{ $stats['inventory_alerts'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.products', ['mode' => 'inventory']) }}">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $stats['inventory_alerts'] > 0 ? '!' : '✓' }}</span>
+                <span class="sl-dashboard-priority__copy"><strong>Inventory alerts</strong><small>{{ $stats['inventory_alerts'] > 0 ? 'Review low and out-of-stock products' : 'No stock alerts right now' }}</small></span>
+                <strong class="sl-dashboard-priority__count">{{ number_format($stats['inventory_alerts']) }}</strong>
+                <span class="sl-dashboard-priority__action">Manage stock <span aria-hidden="true">→</span></span>
+            </a>
+        </div>
     </section>
-    <p class="sl-muted-note sl-dashboard-note">Completed order value includes shipping and Additional Care. Gross and net sales below count merchandise only.</p>
 
+    <header class="sl-dashboard-section-heading">
+        <div><span class="sl-eyebrow">Performance</span><h2>Sales &amp; finances</h2></div>
+        <p>Order totals and recognized merchandise sales are shown separately.</p>
+    </header>
     <div class="sl-dashboard-performance">
         <section class="sl-card sl-dashboard-trend" aria-labelledby="seller-order-value-title">
             <header class="sl-card-head">
-                <div><span class="sl-eyebrow">Sales trend</span><h2 id="seller-order-value-title">Order value</h2><p>Non-cancelled order value for {{ $orderValueChart['period_label'] }}.</p></div>
+                <div><span class="sl-eyebrow">Sales trend</span><h2 id="seller-order-value-title">Order value</h2><p>Buyer order totals for {{ $orderValueChart['period_label'] }}. Includes shipping and Additional Care; this is not your payout.</p></div>
                 <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-order-value-filter">
                     <input type="hidden" name="from" value="{{ $financialFrom->toDateString() }}">
                     <input type="hidden" name="to" value="{{ $financialTo->toDateString() }}">
@@ -51,7 +73,7 @@
                 </form>
             </header>
             <div class="sl-chart-summary sl-order-value-summary">
-                <div><span>Gross order value</span><strong>{{ $peso }}{{ number_format($orderValueChart['gross'], 2) }}</strong><small>Non-cancelled orders · {{ $orderValueChart['grouping_label'] }}</small></div>
+                <div><span>Order value</span><strong>{{ $peso }}{{ number_format($orderValueChart['gross'], 2) }}</strong><small>Non-cancelled orders · {{ $orderValueChart['grouping_label'] }}</small></div>
                 <span class="sl-order-value-legend"><i></i>Order value</span>
             </div>
             @if ($orderValueChart['has_orders'])
@@ -87,12 +109,12 @@
                 <div><span class="sl-eyebrow">Recognized financials</span><h2 id="seller-financials-title">Sales after commission</h2></div>
                 <a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Report</a>
             </header>
-            <p class="sl-dashboard-financials__note">Merchandise on delivered orders. Shipping and Additional Care excluded.</p>
+            <p class="sl-dashboard-financials__note">Recognized merchandise sales from delivered orders. Shipping and Additional Care are excluded.</p>
             <div class="sl-dashboard-financials__period">{{ $financialFrom->format('M d') }} – {{ $financialTo->format('M d, Y') }}</div>
             <div class="sl-dashboard-financials__totals" aria-label="Recognized sales totals">
-                <div><span>Gross sales</span><strong>{{ $peso }}{{ number_format($financialSummary['gross'], 2) }}</strong></div>
-                <div><span>Commission</span><strong>{{ $peso }}{{ number_format($financialSummary['commission'], 2) }}</strong></div>
-                <div class="is-net"><span>Net sales</span><strong>{{ $peso }}{{ number_format($financialSummary['net'], 2) }}</strong></div>
+                <div><span><strong>Gross sales</strong><small>Merchandise value before commission</small></span><strong>{{ $peso }}{{ number_format($financialSummary['gross'], 2) }}</strong></div>
+                <div><span><strong>Commission</strong><small>Platform commission on those sales</small></span><strong>{{ $peso }}{{ number_format($financialSummary['commission'], 2) }}</strong></div>
+                <div class="is-net"><span><strong>Net sales</strong><small>Gross sales minus commission</small></span><strong>{{ $peso }}{{ number_format($financialSummary['net'], 2) }}</strong></div>
             </div>
             <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-dashboard-period sl-form-grid sl-form-grid-4" aria-label="Financial reporting period">
                 <input type="hidden" name="period" value="{{ $orderValueChart['period'] }}">

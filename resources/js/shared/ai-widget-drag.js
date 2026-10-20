@@ -6,6 +6,7 @@ export function makeAiWidgetDraggable(widget, head, windowEl, storageKey) {
     let dragging = false;
     let suppressClick = false;
     let pointerStart = null;
+    let suppressClickTimer = null;
 
     const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -78,6 +79,7 @@ export function makeAiWidgetDraggable(widget, head, windowEl, storageKey) {
             const interactive = event.target.closest('button, input, textarea, a, [role="button"]');
             if (interactive && interactive !== handle) return;
 
+            if (handle === head) handle.classList.add('is-pressed');
             pointerStart = {
                 id: event.pointerId,
                 x: event.clientX,
@@ -109,8 +111,13 @@ export function makeAiWidgetDraggable(widget, head, windowEl, storageKey) {
                 savePosition();
             }
             pointerStart.handle.classList.remove('is-dragging');
+            pointerStart.handle.classList.remove('is-pressed');
             pointerStart = null;
             dragging = false;
+            if (suppressClick) {
+                clearTimeout(suppressClickTimer);
+                suppressClickTimer = setTimeout(() => { suppressClick = false; }, 0);
+            }
         };
 
         handle.addEventListener('pointerup', finishPointer);

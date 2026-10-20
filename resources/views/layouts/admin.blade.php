@@ -36,7 +36,7 @@
         </div>
     </div>
 
-    <div class="ad-toast-region" data-toast-region aria-live="polite" aria-atomic="true"></div>
+    <x-shared.feedback-region workspace="admin" />
     <x-notification-popover />
     @include('partials.confirm-action-modal')
 

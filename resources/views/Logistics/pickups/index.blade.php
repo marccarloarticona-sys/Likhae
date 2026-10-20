@@ -37,6 +37,16 @@
                     </div>
                     <span class="border border-line px-3 py-2 text-xs font-bold uppercase text-ink">{{ str($pickupRequest->status)->replace('_', ' ')->title() }}</span>
                 </header>
+                @php
+                    [$pickupRequestNextStep, $pickupRequestNextActor] = match ($pickupRequest->status) {
+                        'REQUESTED' => ['Assign an eligible rider to collect these parcels.', 'Logistics'],
+                        'ASSIGNED' => ['Collect the parcels and hand them to the authorized center.', 'Pickup rider'],
+                        'COMPLETED' => ['Scan the collected parcels into center custody.', 'Logistics'],
+                        'REJECTED' => ['Review the rejection reason; the Seller may submit a new request.', 'Seller'],
+                        default => ['Check parcel history for the latest handoff update.', 'Logistics / pickup rider'],
+                    };
+                @endphp
+                <x-shared.status-guidance :status="str($pickupRequest->status)->replace('_', ' ')->title()" :next="$pickupRequestNextStep" :actor="$pickupRequestNextActor" />
                 <ol class="divide-y divide-line">
                     @foreach($requestParcels as $membership)
                         @php($shipment = $membership->shipment)

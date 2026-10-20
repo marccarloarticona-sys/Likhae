@@ -1,4 +1,5 @@
 import '../address/forms.js';
+import '../shared/feedback.js';
 import { startRealtimeFallback } from '../shared/realtime-fallback.js';
 import './hero-carousel.js';
 
@@ -31,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const showToast = (message) => {
+        if (window.lkFeedback) return window.lkFeedback.show(message);
         if (!toast || !message) return;
         toast.textContent = message;
         toast.classList.add('is-visible');
@@ -1450,6 +1452,31 @@ document.addEventListener('DOMContentLoaded', () => {
             timeline.replaceChildren(...items);
             timeline.dataset.shipmentCurrentStatus = shipment.status;
             timeline.dataset.shipmentCancelled = String(shipment.status === 'CANCELLED');
+
+            const guidance = document.querySelector(`[data-shipment-guidance-id="${shipment.id}"]`);
+            if (guidance) {
+                const guidanceByStatus = {
+                    PLACED: ['Placed', 'Wait for the seller to prepare and confirm the parcel.', 'Seller'],
+                    CONFIRMED: ['Confirmed', 'Wait for the seller to prepare the parcel.', 'Seller'],
+                    PREPARING: ['Preparing', 'Wait for the seller to finish preparing the parcel.', 'Seller'],
+                    READY_FOR_PICKUP: ['Ready for Pickup', 'Logistics will assign a pickup rider.', 'Logistics'],
+                    PICKUP_ASSIGNED: ['Pickup Assigned', 'The pickup rider will collect the parcel from the seller.', 'Pickup rider'],
+                    PICKED_UP: ['Picked Up', 'The sorting center will scan the parcel into its facility.', 'Logistics'],
+                    AT_SORTING_CENTER: ['At Sorting Center', 'The parcel will be sorted toward your delivery area.', 'Logistics'],
+                    SORTED: ['Sorted', 'A delivery rider will be assigned in your area.', 'Logistics'],
+                    ASSIGNED_TO_RIDER: ['Assigned To Rider', 'The delivery rider will accept and start the route.', 'Delivery rider'],
+                    OUT_FOR_DELIVERY: ['Out For Delivery', 'Keep your phone available while the rider attempts delivery.', 'Delivery rider'],
+                    DELIVERY_FAILED: ['Delivery Failed', 'Check for a new attempt or contact the delivery team if needed.', 'Logistics / delivery rider'],
+                    DELIVERED: ['Delivered', 'Wait for the remaining parcels; confirm receipt when the order is ready.', 'Buyer'],
+                    COMPLETED: ['Completed', 'You can leave a review for the delivered products.', 'Buyer'],
+                    RETURNED: ['Returned', 'Check Returns & Refunds for the seller review and refund update.', 'Seller / refund payer'],
+                    CANCELLED: ['Cancelled', 'No further delivery action is required for this parcel.', 'No action pending'],
+                };
+                const [status, next, actor] = guidanceByStatus[shipment.status] || [headline(shipment.status), 'Follow the tracking timeline for the next scan.', 'Logistics'];
+                guidance.querySelector('[data-guidance-status]')?.replaceChildren(document.createTextNode(status));
+                guidance.querySelector('[data-guidance-next]')?.replaceChildren(document.createTextNode(next));
+                guidance.querySelector('[data-guidance-actor]')?.replaceChildren(document.createTextNode(actor));
+            }
         };
 
         const checkOrders = async () => {
@@ -1529,6 +1556,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             detailMessage.textContent = order.actions.completed
                                 ? (orderPage.querySelector('#reviews') ? 'Your order is complete. You can rate the products below.' : 'Your order was received. Refresh to open the product review forms.')
                                 : (order.actions.can_confirm_received ? 'Check the delivered items before confirming receipt.' : 'Review your delivery and order details.');
+                        }
+                        if (order.actions.can_confirm_received) {
+                            orderPage.querySelectorAll('[data-shipment-guidance-id]').forEach((guidance) => {
+                                const status = guidance.querySelector('[data-guidance-status]')?.textContent || '';
+                                if (status.toLowerCase() === 'delivered') {
+                                    const next = guidance.querySelector('[data-guidance-next]');
+                                    if (next) next.textContent = 'Check the parcel, then confirm receipt for the order.';
+                                }
+                            });
                         }
                         const progressSteps = Array.from(orderPage.querySelectorAll('[data-order-progress-step]'));
                         const currentProgressLabel = order.actions.completed

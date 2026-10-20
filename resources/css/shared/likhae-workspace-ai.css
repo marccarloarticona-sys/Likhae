@@ -5,4 +5,5 @@ html.dark .likhae-workspace-ai-window{border-color:#594038;background:#241b18;bo
 @media(max-width:600px){.likhae-workspace-ai-widget{right:14px;bottom:14px}.likhae-workspace-ai-window{right:0;bottom:69px;width:calc(100vw - 28px);height:min(560px,calc(100dvh - 96px));border-radius:18px}.likhae-workspace-ai-head{width:54px;height:54px}.likhae-workspace-ai-bubble{max-width:91%}}@media(prefers-reduced-motion:reduce){.likhae-workspace-ai-head,.likhae-workspace-ai-typing span{transition:none!important;animation:none!important}}
 
 .likhae-workspace-ai-head{touch-action:none;user-select:none;cursor:grab}.likhae-workspace-ai-head.is-dragging{cursor:grabbing;transform:none!important;transition:none!important}
+.likhae-workspace-ai-head.is-pressed{transform:none!important;transition:none!important}
 .likhae-workspace-ai-header{touch-action:none;user-select:none;cursor:grab}.likhae-workspace-ai-header.is-dragging{cursor:grabbing}
