@@ -304,6 +304,305 @@ document.addEventListener('DOMContentLoaded', () => {
         form.addEventListener('submit', () => window.clearTimeout(searchTimer));
     });
 
+    all('[data-catalog-filter]').forEach((filter) => {
+        const toggle = one('[data-catalog-filter-toggle]', filter);
+        const panel = one('.lk-toolbar-filter-panel', filter);
+        if (!toggle || !panel) return;
+
+        const setFilterOpen = (open) => {
+            filter.classList.toggle('is-open', open);
+            panel.hidden = !open;
+            toggle.setAttribute('aria-expanded', String(open));
+        };
+
+        toggle.addEventListener('click', () => setFilterOpen(panel.hidden));
+        document.addEventListener('click', (event) => {
+            if (!filter.contains(event.target)) setFilterOpen(false);
+        });
+        filter.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape' || panel.hidden) return;
+            setFilterOpen(false);
+            toggle.focus();
+        });
+    });
+
+    let catalogGrid = one('.lk-products-main .lk-product-grid');
+    const catalogViewLinks = all('.lk-products-toolbar .lk-view-toggle');
+    if (catalogViewLinks.length) {
+        const applyCatalogView = (view) => {
+            const useListView = view === 'list';
+            catalogGrid?.classList.toggle('is-list-view', useListView);
+            catalogViewLinks.forEach((link) => {
+                const isActive = new URL(link.href, window.location.href).searchParams.get('view') === view;
+                link.classList.toggle('active', isActive);
+                if (isActive) link.setAttribute('aria-current', 'page');
+                else link.removeAttribute('aria-current');
+            });
+        };
+
+        applyCatalogView(new URL(window.location.href).searchParams.get('view') === 'list' ? 'list' : 'grid');
+
+        catalogViewLinks.forEach((link) => {
+            link.addEventListener('click', (event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                const nextUrl = new URL(link.href, window.location.href);
+                const view = nextUrl.searchParams.get('view') === 'list' ? 'list' : 'grid';
+                applyCatalogView(view);
+                window.history.pushState({ catalogView: view }, '', nextUrl);
+            });
+        });
+
+        window.addEventListener('popstate', () => {
+            applyCatalogView(new URL(window.location.href).searchParams.get('view') === 'list' ? 'list' : 'grid');
+        });
+    }
+
+    const catalogFilterForm = one('[data-catalog-ajax-filters]');
+    const catalogSortForm = one('[data-catalog-ajax-sort]');
+    let catalogResults = one('[data-catalog-results]');
+    const catalogResultCount = one('[data-catalog-result-count]');
+    const catalogFilter = one('[data-catalog-filter]');
+    const catalogFilterToggle = one('[data-catalog-filter-toggle]', catalogFilter || document);
+    const catalogFilterPanel = one('.lk-toolbar-filter-panel', catalogFilter || document);
+    const catalogCategoryNav = one('[data-catalog-category-nav]');
+    const catalogResultKey = (url) => {
+        const normalized = new URL(url, window.location.href);
+        normalized.searchParams.delete('view');
+        normalized.searchParams.sort();
+        return `${normalized.pathname}?${normalized.searchParams.toString()}`;
+    };
+    const normalizeCatalogUrl = (url) => {
+        const normalized = new URL(url, window.location.href);
+        ['q', 'min_price', 'max_price', 'province', 'municipality'].forEach((name) => {
+            if (!normalized.searchParams.get(name)?.trim()) normalized.searchParams.delete(name);
+        });
+        if (normalized.searchParams.get('category') === 'all') normalized.searchParams.delete('category');
+        if (normalized.searchParams.get('rating') === '0') normalized.searchParams.delete('rating');
+        if (normalized.searchParams.get('sort') === 'latest') normalized.searchParams.delete('sort');
+        if (normalized.searchParams.get('view') === 'grid') normalized.searchParams.delete('view');
+        return normalized;
+    };
+    let lastCatalogResultKey = catalogResultKey(window.location.href);
+    let catalogRequestController = null;
+    let catalogRequestId = 0;
+
+    const syncCatalogFilterFields = (url) => {
+        if (!catalogFilterForm) return;
+        ['q', 'category', 'sort', 'view'].forEach((name) => {
+            const input = one(`input[type="hidden"][name="${name}"]`, catalogFilterForm);
+            const value = url.searchParams.get(name);
+            if (value === null) {
+                input?.remove();
+                return;
+            }
+            if (input) input.value = value;
+            else {
+                const hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.name = name;
+                hidden.value = value;
+                catalogFilterForm.prepend(hidden);
+            }
+        });
+    };
+
+    const syncCatalogSortFields = (url) => {
+        if (!catalogSortForm) return;
+        all('input[type="hidden"]', catalogSortForm).forEach((input) => input.remove());
+        url.searchParams.forEach((value, name) => {
+            if (name === 'sort' || name === 'page') return;
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = name;
+            hidden.value = value;
+            catalogSortForm.prepend(hidden);
+        });
+        const sortSelect = one('select[name="sort"]', catalogSortForm);
+        if (sortSelect) sortSelect.value = url.searchParams.get('sort') || 'latest';
+    };
+
+    const syncCatalogFilterValues = (documentWithResults) => {
+        if (!catalogFilterForm) return;
+        const nextForm = documentWithResults.querySelector('[data-catalog-ajax-filters]');
+        if (!nextForm) return;
+
+        all('input[name], select[name]', catalogFilterForm).forEach((control) => {
+            const nextControl = all('[name]', nextForm).find((candidate) => candidate.name === control.name && candidate.type === control.type);
+            if (nextControl) control.value = nextControl.value;
+        });
+        all('input[type="range"]', catalogFilterForm).forEach((control) => {
+            const nextControl = nextForm.querySelector(`#${CSS.escape(control.id)}`);
+            if (!nextControl) return;
+            control.value = nextControl.value;
+            control.setAttribute('aria-valuetext', nextControl.getAttribute('aria-valuetext') || '');
+        });
+        all('[data-price-min-output], [data-price-max-output]', catalogFilterForm).forEach((output) => {
+            const nextOutput = nextForm.querySelector(`[${output.hasAttribute('data-price-min-output') ? 'data-price-min-output' : 'data-price-max-output'}]`);
+            if (nextOutput) output.textContent = nextOutput.textContent;
+        });
+        const currentFill = one('[data-price-range-fill]', catalogFilterForm);
+        const nextFill = nextForm.querySelector('[data-price-range-fill]');
+        if (currentFill && nextFill) currentFill.style.cssText = nextFill.style.cssText;
+
+        const errorSummary = one('[data-catalog-ajax-error]', catalogFilterForm);
+        if (errorSummary) {
+            const messages = all('.lk-filter-error[role="alert"]', nextForm).map((error) => error.textContent.trim()).filter(Boolean);
+            all('.lk-filter-error[role="alert"]', catalogFilterForm)
+                .filter((error) => error !== errorSummary)
+                .forEach((error) => error.remove());
+            errorSummary.textContent = [...new Set(messages)].join(' ');
+            errorSummary.hidden = messages.length === 0;
+        }
+    };
+
+    const syncCatalogCategoryNav = (documentWithResults) => {
+        if (!catalogCategoryNav) return;
+        const nextCategoryNav = documentWithResults.querySelector('[data-catalog-category-nav]');
+        if (!nextCategoryNav) return;
+
+        const openCategories = new Set(all('details[data-category-slug][open]', catalogCategoryNav)
+            .map((category) => category.dataset.categorySlug));
+        catalogCategoryNav.innerHTML = nextCategoryNav.innerHTML;
+        all('details[data-category-slug]', catalogCategoryNav).forEach((category) => {
+            if (openCategories.has(category.dataset.categorySlug)) category.open = true;
+        });
+    };
+
+    const syncCatalogToolbar = (documentWithResults, url) => {
+        const nextCount = documentWithResults.querySelector('[data-catalog-result-count]');
+        if (nextCount && catalogResultCount) catalogResultCount.innerHTML = nextCount.innerHTML;
+
+        const nextBadge = documentWithResults.querySelector('.lk-toolbar-filter-count');
+        const currentBadge = one('.lk-toolbar-filter-count', catalogFilterToggle || document);
+        if (nextBadge && currentBadge) currentBadge.textContent = nextBadge.textContent;
+        else if (nextBadge && catalogFilterToggle) catalogFilterToggle.append(nextBadge.cloneNode(true));
+        else currentBadge?.remove();
+
+        const nextFilter = documentWithResults.querySelector('[data-catalog-filter]');
+        const nextIsOpen = Boolean(nextFilter?.classList.contains('is-open') || (catalogFilterPanel && !catalogFilterPanel.hidden));
+        if (catalogFilter && catalogFilterPanel && catalogFilterToggle) {
+            catalogFilter.classList.toggle('is-open', nextIsOpen);
+            catalogFilterPanel.hidden = !nextIsOpen;
+            catalogFilterToggle.setAttribute('aria-expanded', String(nextIsOpen));
+        }
+
+        const nextViewLinks = all('.lk-products-toolbar .lk-view-toggle', documentWithResults);
+        catalogViewLinks.forEach((link) => {
+            const nextLink = nextViewLinks.find((candidate) => candidate.getAttribute('aria-label') === link.getAttribute('aria-label'));
+            if (nextLink) link.href = nextLink.href;
+        });
+        const activeView = url.searchParams.get('view') === 'list' ? 'list' : 'grid';
+        catalogViewLinks.forEach((link) => {
+            const isActive = new URL(link.href, window.location.href).searchParams.get('view') === activeView;
+            link.classList.toggle('active', isActive);
+            if (isActive) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+        });
+
+        syncCatalogFilterValues(documentWithResults);
+        syncCatalogFilterFields(url);
+        syncCatalogSortFields(url);
+        all('input[type="search"][name="q"]').forEach((input) => {
+            input.value = url.searchParams.get('q') || '';
+        });
+    };
+
+    const refreshCatalogResults = async (requestedUrl, { pushHistory = true } = {}) => {
+        if (!catalogResults || !catalogResultCount) return;
+
+        const url = normalizeCatalogUrl(requestedUrl);
+        catalogRequestController?.abort();
+        const controller = new AbortController();
+        catalogRequestController = controller;
+        const requestId = ++catalogRequestId;
+        catalogResults.setAttribute('aria-busy', 'true');
+
+        try {
+            const response = await fetch(url, {
+                credentials: 'same-origin',
+                headers: { Accept: 'text/html', 'X-Requested-With': 'XMLHttpRequest' },
+                signal: controller.signal,
+            });
+            if (!response.ok) throw new Error('The product results could not be refreshed.');
+
+            const responseDocument = new DOMParser().parseFromString(await response.text(), 'text/html');
+            const nextResults = responseDocument.querySelector('[data-catalog-results]');
+            if (!nextResults || !responseDocument.querySelector('[data-catalog-result-count]')) {
+                throw new Error('The product results could not be refreshed.');
+            }
+            if (requestId !== catalogRequestId) return;
+
+            catalogResults.innerHTML = nextResults.innerHTML;
+            catalogResults.setAttribute('aria-busy', 'false');
+            catalogGrid = one('.lk-products-main .lk-product-grid');
+            syncCatalogToolbar(responseDocument, url);
+            syncCatalogCategoryNav(responseDocument);
+
+            if (pushHistory && url.href !== window.location.href) {
+                window.history.pushState({ catalogResults: true }, '', url);
+            }
+            lastCatalogResultKey = catalogResultKey(url);
+            document.dispatchEvent(new CustomEvent('catalog:results-updated', { detail: { root: catalogResults } }));
+        } catch (error) {
+            if (error?.name !== 'AbortError') {
+                showToast(error instanceof Error ? error.message : 'The product results could not be refreshed.');
+            }
+        } finally {
+            if (requestId === catalogRequestId) {
+                catalogResults.setAttribute('aria-busy', 'false');
+                catalogRequestController = null;
+            }
+        }
+    };
+
+    if (catalogFilterForm) {
+        catalogFilterForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const url = new URL(catalogFilterForm.action, window.location.href);
+            const parameters = new URLSearchParams(new FormData(catalogFilterForm));
+            const currentView = new URL(window.location.href).searchParams.get('view');
+            if (currentView === 'grid' || currentView === 'list') parameters.set('view', currentView);
+            parameters.delete('page');
+            url.search = parameters.toString();
+            refreshCatalogResults(url);
+        });
+    }
+
+    if (catalogSortForm) {
+        catalogSortForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const url = new URL(catalogSortForm.action, window.location.href);
+            const parameters = new URLSearchParams(new FormData(catalogSortForm));
+            parameters.delete('page');
+            url.search = parameters.toString();
+            refreshCatalogResults(url);
+        });
+    }
+
+    if (catalogCategoryNav) {
+        catalogCategoryNav.addEventListener('click', (event) => {
+            const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+            if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            refreshCatalogResults(link.href);
+        });
+    }
+
+    const clearCatalogFiltersLink = one('[data-catalog-clear-filter]');
+    if (clearCatalogFiltersLink) {
+        clearCatalogFiltersLink.addEventListener('click', (event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            refreshCatalogResults(clearCatalogFiltersLink.href);
+        });
+    }
+
+    window.addEventListener('popstate', () => {
+        const url = new URL(window.location.href);
+        if (catalogResultKey(url) !== lastCatalogResultKey) refreshCatalogResults(url, { pushHistory: false });
+    });
+
     const setAccountMenu = (open) => {
         if (!accountMenuToggle || !accountMenuPanel) return;
         accountMenuToggle.setAttribute('aria-expanded', String(open));
@@ -763,14 +1062,15 @@ document.addEventListener('DOMContentLoaded', () => {
         syncVariantGallery(one('[data-variation-option][aria-pressed="true"]', product));
     });
 
-    all('[data-add-cart]').forEach((button) => button.addEventListener('click', () => {
-        const source = button.dataset.quantitySource ? one(button.dataset.quantitySource) : null;
-        const quantity = source?.value || 1;
-        showToast(`${quantity} item${Number(quantity) === 1 ? '' : 's'} added to your cart.`);
-    }));
+    const bindCatalogProductActions = (root = document) => {
+        all('[data-add-cart]', root).forEach((button) => button.addEventListener('click', () => {
+            const source = button.dataset.quantitySource ? one(button.dataset.quantitySource) : null;
+            const quantity = source?.value || 1;
+            showToast(`${quantity} item${Number(quantity) === 1 ? '' : 's'} added to your cart.`);
+        }));
 
-    all('[data-wishlist]').forEach((button) => {
-        button.addEventListener('click', async () => {
+        all('[data-wishlist]', root).forEach((button) => {
+            button.addEventListener('click', async () => {
             const productId = button.dataset.productId;
             const endpoint = button.dataset.wishlistUrl;
             const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
@@ -815,7 +1115,13 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 matchingButtons.forEach((candidate) => { candidate.disabled = false; });
             }
+            });
         });
+    };
+
+    bindCatalogProductActions();
+    document.addEventListener('catalog:results-updated', (event) => {
+        if (event.detail?.root instanceof Element) bindCatalogProductActions(event.detail.root);
     });
 
     const wishlistForm = one('[data-wishlist-selection-form]');
