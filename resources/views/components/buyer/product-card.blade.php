@@ -74,7 +74,8 @@
     $hasVariations = $variants->count() > 1;
     $singleVariant = $hasVariations ? null : $variants->first();
     $sellerOnVacation = $catalogListing && (bool) data_get($product, 'seller.vacation_mode', false);
-    $outOfStock = $catalogListing && (int) data_get($product, 'stock', $variants->sum('stock')) < 1;
+    $catalogStock = max(0, (int) data_get($product, 'stock', $variants->sum('stock')));
+    $outOfStock = $catalogListing && $catalogStock < 1;
     $canAddToCart = ! $unavailable && ! $availabilityRestricted && ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
     $isWishlistSaved = false;
     if (! $guest && auth()->check() && $id !== null) {
@@ -882,5 +883,54 @@
                 </form>
             @endif
         </div>
+
+        @if($catalogListing)
+            <div class="lk-catalog-list-purchase" data-catalog-purchase>
+                <div class="lk-catalog-list-quantity">
+                    <label for="catalog-quantity-{{ \Illuminate\Support\Str::slug((string) $slug) }}">Quantity</label>
+                    <div class="lk-catalog-quantity-control">
+                        <button type="button" data-catalog-quantity-step="-1" aria-label="Decrease quantity" @disabled($sellerOnVacation || $outOfStock || $availabilityRestricted || $unavailable)>−</button>
+                        <input
+                            id="catalog-quantity-{{ \Illuminate\Support\Str::slug((string) $slug) }}"
+                            type="number"
+                            min="1"
+                            max="{{ max(1, $catalogStock) }}"
+                            value="1"
+                            inputmode="numeric"
+                            aria-label="Quantity for {{ $name }}"
+                            data-catalog-quantity
+                            @disabled($sellerOnVacation || $outOfStock || $availabilityRestricted || $unavailable)
+                        >
+                        <button type="button" data-catalog-quantity-step="1" aria-label="Increase quantity" @disabled($sellerOnVacation || $outOfStock || $availabilityRestricted || $unavailable)>+</button>
+                    </div>
+                </div>
+
+                <div class="lk-catalog-list-actions">
+                    @if($guest)
+                        <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in or create a Buyer account to purchase {{ $name }}.">Buy Now</button>
+                        <button type="button" class="lk-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
+                    @elseif($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
+                        <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
+                        <button type="button" class="lk-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
+                    @elseif($hasVariations)
+                        <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Choose Options</a>
+                        <a href="{{ $detailsUrl }}" class="lk-add-cart">Choose Options</a>
+                    @else
+                        <form method="POST" action="{{ route('buyer.buy-now', ['product' => $id ?? $slug]) }}" data-catalog-buy-now-form>
+                            @csrf
+                            <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
+                            <input type="hidden" name="quantity" value="1">
+                            <button type="submit" class="lk-catalog-buy-now" @disabled(! $canAddToCart)>Buy Now</button>
+                        </form>
+                        <form method="POST" action="{{ route('buyer.cart.add', ['product' => $id ?? $slug]) }}" data-cart-add-form>
+                            @csrf
+                            <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
+                            <input type="hidden" name="quantity" value="1">
+                            <button type="submit" class="lk-add-cart" @disabled(! $canAddToCart)>Add to Cart</button>
+                        </form>
+                    @endif
+                </div>
+            </div>
+        @endif
     </div>
 </article>

@@ -328,18 +328,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let catalogGrid = one('.lk-products-main .lk-product-grid');
     const catalogViewLinks = all('.lk-products-toolbar .lk-view-toggle');
-    if (catalogViewLinks.length) {
-        const applyCatalogView = (view) => {
-            const useListView = view === 'list';
-            catalogGrid?.classList.toggle('is-list-view', useListView);
-            catalogViewLinks.forEach((link) => {
-                const isActive = new URL(link.href, window.location.href).searchParams.get('view') === view;
-                link.classList.toggle('active', isActive);
-                if (isActive) link.setAttribute('aria-current', 'page');
-                else link.removeAttribute('aria-current');
+    const applyCatalogView = (view) => {
+        const useListView = view === 'list';
+        catalogGrid?.classList.toggle('is-list-view', useListView);
+        if (catalogGrid) {
+            all('.lk-product-card--palette', catalogGrid).forEach((card) => {
+                card.classList.toggle('is-compact', useListView);
             });
-        };
+        }
+        catalogViewLinks.forEach((link) => {
+            const isActive = new URL(link.href, window.location.href).searchParams.get('view') === view;
+            link.classList.toggle('active', isActive);
+            if (isActive) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+        });
+    };
 
+    if (catalogViewLinks.length) {
         applyCatalogView(new URL(window.location.href).searchParams.get('view') === 'list' ? 'list' : 'grid');
 
         catalogViewLinks.forEach((link) => {
@@ -538,6 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
             catalogGrid = one('.lk-products-main .lk-product-grid');
             syncCatalogToolbar(responseDocument, url);
             syncCatalogCategoryNav(responseDocument);
+            applyCatalogView(url.searchParams.get('view') === 'list' ? 'list' : 'grid');
 
             if (pushHistory && url.href !== window.location.href) {
                 window.history.pushState({ catalogResults: true }, '', url);
@@ -692,14 +698,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const authDialog = one('[data-auth-dialog]');
-    all('[data-auth-required]').forEach((button) => button.addEventListener('click', (event) => {
+    document.addEventListener('click', (event) => {
+        const button = event.target instanceof Element ? event.target.closest('[data-auth-required]') : null;
+        if (!button) return;
         event.preventDefault();
         const message = button.dataset.authMessage || 'Sign in or create a Buyer account to continue.';
         const copy = one('[data-auth-message]', authDialog || document);
         if (copy) copy.textContent = message;
         if (authDialog?.showModal) authDialog.showModal();
         else window.location.href = button.dataset.loginUrl || '/login';
-    }));
+    });
 
     all('[data-detail-thumbnail], [data-gallery-thumb]').forEach((thumbnail) => thumbnail.addEventListener('click', () => {
         const gallery = thumbnail.closest('[data-product-gallery]') || document;
@@ -1003,15 +1011,78 @@ document.addEventListener('DOMContentLoaded', () => {
         if (button) button.disabled = true;
     }));
 
-    all('[data-cart-add-form]').forEach((form) => form.addEventListener('submit', async (event) => {
+    const syncCatalogPurchaseQuantity = (form) => {
+        const card = form.closest('[data-product-card]');
+        const quantityInput = one('[data-catalog-quantity]', card || document);
+        if (!quantityInput) return true;
+
+        const quantity = Number(quantityInput.value);
+        const minimum = Number(quantityInput.min || 1);
+        const maximum = Number(quantityInput.max || 99);
+        if (!Number.isInteger(quantity) || quantity < minimum) {
+            showToast('Enter a valid quantity.');
+            quantityInput.focus();
+            return false;
+        }
+        if (quantity > maximum) {
+            showToast(`Only ${maximum} item${maximum === 1 ? '' : 's'} available.`);
+            quantityInput.focus();
+            return false;
+        }
+
+        const quantityField = one('input[name="quantity"]', form);
+        if (quantityField) quantityField.value = String(quantity);
+        return true;
+    };
+
+    document.addEventListener('click', (event) => {
+        const stepButton = event.target instanceof Element ? event.target.closest('[data-catalog-quantity-step]') : null;
+        if (!stepButton || stepButton.disabled) return;
+        const card = stepButton.closest('[data-product-card]');
+        const input = one('[data-catalog-quantity]', card || document);
+        if (!input) return;
+        const minimum = Number(input.min || 1);
+        const maximum = Number(input.max || 99);
+        const step = Number(stepButton.dataset.catalogQuantityStep || 0);
+        input.value = String(Math.min(maximum, Math.max(minimum, Number(input.value || minimum) + step)));
+    });
+
+    document.addEventListener('change', (event) => {
+        const input = event.target instanceof HTMLInputElement && event.target.matches('[data-catalog-quantity]')
+            ? event.target
+            : null;
+        if (!input) return;
+        const minimum = Number(input.min || 1);
+        const maximum = Number(input.max || 99);
+        input.value = String(Math.min(maximum, Math.max(minimum, Number(input.value || minimum))));
+    });
+
+    document.addEventListener('submit', async (event) => {
+        const form = event.target instanceof HTMLFormElement && event.target.matches('[data-cart-add-form]')
+            ? event.target
+            : null;
+        if (!form) return;
         event.preventDefault();
 
         const button = one('button[type="submit"]', form);
-        if (!button || button.disabled) return;
+        if (!button || button.disabled || !syncCatalogPurchaseQuantity(form)) return;
 
         const fields = Object.fromEntries(new FormData(form).entries());
         await addCartWithConfirmation(form.action, fields, button);
-    }));
+    });
+
+    document.addEventListener('submit', (event) => {
+        const form = event.target instanceof HTMLFormElement && event.target.matches('[data-catalog-buy-now-form]')
+            ? event.target
+            : null;
+        if (!form) return;
+        if (!syncCatalogPurchaseQuantity(form)) {
+            event.preventDefault();
+            return;
+        }
+        const button = one('button[type="submit"]', form);
+        if (button) button.disabled = true;
+    });
 
     all('[data-variant-stock-product]').forEach((product) => {
         let stocks = {};

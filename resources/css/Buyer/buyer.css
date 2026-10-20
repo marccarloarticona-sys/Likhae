@@ -2121,6 +2121,113 @@ body.lk-sidebar-is-collapsed .lk-nav-toggle {
     font-size: 15px;
 }
 
+.lk-catalog-list-purchase {
+    display: none;
+}
+
+.lk-products-main .lk-product-grid.is-list-view .lk-product-card--palette .lk-card-actions {
+    display: none !important;
+}
+
+.lk-products-main .lk-product-grid.is-list-view .lk-product-card--palette .lk-catalog-list-purchase {
+    display: grid !important;
+    gap: 12px;
+    margin-top: auto;
+    padding-top: 14px;
+}
+
+.lk-catalog-list-quantity {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--lk-text);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.lk-catalog-quantity-control {
+    display: inline-grid;
+    grid-template-columns: 30px 56px 30px;
+    align-items: center;
+    overflow: hidden;
+    border: 1px solid var(--lk-border);
+    border-radius: 10px;
+    background: var(--lk-card);
+}
+
+.lk-catalog-quantity-control button {
+    display: grid;
+    width: 30px;
+    height: 32px;
+    place-items: center;
+    border: 0;
+    background: var(--lk-bg-soft);
+    color: var(--lk-maroon);
+    cursor: pointer;
+    font: inherit;
+}
+
+.lk-catalog-quantity-control button:disabled {
+    color: var(--lk-muted-2);
+    cursor: not-allowed;
+}
+
+.lk-catalog-quantity-control input {
+    width: 56px;
+    height: 32px;
+    padding: 0 3px;
+    border: 0;
+    background: transparent;
+    color: var(--lk-text);
+    font: inherit;
+    text-align: center;
+}
+
+.lk-catalog-list-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+}
+
+.lk-catalog-list-actions > form {
+    display: contents;
+}
+
+.lk-product-card--palette .lk-catalog-list-actions .lk-catalog-buy-now,
+.lk-product-card--palette .lk-catalog-list-actions .lk-add-cart {
+    display: inline-flex !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 8px !important;
+    border-radius: 11px !important;
+    font-size: 10px !important;
+    font-weight: 900 !important;
+    text-align: center;
+    text-decoration: none !important;
+    white-space: nowrap;
+}
+
+.lk-product-card--palette .lk-catalog-list-actions .lk-catalog-buy-now {
+    border: 1px solid var(--lk-tan) !important;
+    background: var(--lk-bg-soft) !important;
+    color: var(--lk-maroon) !important;
+}
+
+.lk-product-card--palette .lk-catalog-list-actions .lk-catalog-buy-now:hover:not(:disabled) {
+    border-color: var(--lk-maroon) !important;
+    background: var(--lk-maroon) !important;
+    color: #fff !important;
+}
+
+.lk-product-card--palette .lk-catalog-list-actions button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+}
+
 /* =========================================================
    PRODUCT BROWSE AND FILTERS
 ========================================================= */
