@@ -99,11 +99,27 @@
                                 @endforeach
                                 <p class="lk-filter-error lk-toolbar-filter-error" data-catalog-ajax-error role="alert" hidden></p>
                                 <x-buyer.price-range-filter prefix="catalog" :minimum="$minimumPrice" :maximum="$maximumPrice" :price-range="$catalogPriceRange" :errors="$catalogErrors" class="lk-toolbar-filter-price" />
-                                <div class="lk-filter-card">
-                                    <label class="lk-field-label" for="catalogRating">Minimum rating</label>
-                                    <select id="catalogRating" name="rating" class="lk-filter-select"><option value="0">Any rating</option>@foreach([4.5,4,3] as $rating)<option value="{{ $rating }}" @selected($minimumRating == $rating)>{{ number_format($rating,1) }}&#9733; and above</option>@endforeach</select>
+                                <fieldset class="lk-filter-card lk-rating-filter">
+                                    <legend class="lk-field-label">Minimum rating</legend>
+                                    <div class="lk-rating-filter-options">
+                                        <label class="lk-rating-filter-option" for="catalogRatingAny">
+                                            <input id="catalogRatingAny" type="radio" name="rating" value="0" @checked($minimumRating === 0.0)>
+                                            <span class="lk-rating-filter-content"><span>Any rating</span></span>
+                                        </label>
+                                        @foreach([4.5, 4, 3] as $rating)
+                                            @php($ratingId = 'catalogRating'.str_replace('.', '', number_format($rating, 1)))
+                                            <label class="lk-rating-filter-option" for="{{ $ratingId }}">
+                                                <input id="{{ $ratingId }}" type="radio" name="rating" value="{{ $rating }}" @checked($minimumRating === (float) $rating)>
+                                                <span class="lk-rating-filter-content">
+                                                    <strong>{{ number_format($rating, 1) }}</strong>
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z" /></svg>
+                                                    <span>and above</span>
+                                                </span>
+                                            </label>
+                                        @endforeach
+                                    </div>
                                     @if($catalogErrors?->has('rating'))<p class="lk-filter-error" role="alert">{{ $catalogErrors->first('rating') }}</p>@endif
-                                </div>
+                                </fieldset>
                                 <div class="lk-filter-card">
                                     <div class="lk-filter-heading"><h2>Store location</h2></div>
                                     <label class="lk-field-label" for="catalogProvince">Province</label>

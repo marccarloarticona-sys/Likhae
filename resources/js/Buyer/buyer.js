@@ -290,7 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         form.addEventListener('change', (event) => {
-            if (event.target.matches('select, input[type="range"]')) submitFilters();
+            if (event.target.matches('select, input[type="range"], input[type="radio"]')) submitFilters();
         });
         form.addEventListener('input', (event) => {
             if (!event.target.matches('input[type="search"], input[type="text"]')) return;
@@ -433,7 +433,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!nextForm) return;
 
         all('input[name], select[name]', catalogFilterForm).forEach((control) => {
-            const nextControl = all('[name]', nextForm).find((candidate) => candidate.name === control.name && candidate.type === control.type);
+            const matchingControls = all('[name]', nextForm).filter((candidate) => candidate.name === control.name && candidate.type === control.type);
+            if (control.type === 'radio') {
+                control.checked = matchingControls.some((candidate) => candidate.value === control.value && candidate.checked);
+                return;
+            }
+            const nextControl = matchingControls[0];
             if (nextControl) control.value = nextControl.value;
         });
         all('input[type="range"]', catalogFilterForm).forEach((control) => {
