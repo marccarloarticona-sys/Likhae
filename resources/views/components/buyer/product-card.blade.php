@@ -810,77 +810,80 @@
             @endif
         </div>
 
-        <div class="lk-card-actions">
-            @if($detailsUrl)
-                <a href="{{ $detailsUrl }}" class="lk-btn-view">View</a>
+        <div class="lk-card-actions {{ $catalogListing ? 'lk-card-actions--catalog' : '' }}">
+            @if($catalogListing)
+                @if($guest)
+                    <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in or create a Buyer account to purchase {{ $name }}.">Buy Now</button>
+                    <button type="button" class="lk-add-cart lk-catalog-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
+                @elseif($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
+                    <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
+                    <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
+                @elseif($hasVariations)
+                    <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Choose Options</a>
+                    <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Choose Options</a>
+                @else
+                    <form method="POST" action="{{ route('buyer.buy-now', ['product' => $id ?? $slug]) }}" data-catalog-buy-now-form>
+                        @csrf
+                        <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
+                        <input type="hidden" name="quantity" value="1">
+                        <button type="submit" class="lk-catalog-buy-now" @disabled(! $canAddToCart)>{{ $canAddToCart ? 'Buy Now' : 'Out of Stock' }}</button>
+                    </form>
+                    <form method="POST" action="{{ route('buyer.cart.add', ['product' => $id ?? $slug]) }}" data-cart-add-form>
+                        @csrf
+                        <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
+                        <input type="hidden" name="quantity" value="1">
+                        <button type="submit" class="lk-add-cart lk-catalog-add-cart" @disabled(! $canAddToCart)>Add to Cart</button>
+                    </form>
+                @endif
             @else
-                <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
-            @endif
+                @if($detailsUrl)
+                    <a href="{{ $detailsUrl }}" class="lk-btn-view">View</a>
+                @else
+                    <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
+                @endif
 
-            @if($guest)
-                <button
-                    type="button"
-                    class="lk-add-cart"
-                    data-auth-required
-                    data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart."
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
-                        <circle cx="9" cy="20" r="1"/>
-                        <circle cx="18" cy="20" r="1"/>
-                    </svg>
-
-                    <span>
-                        Add to Cart
-                    </span>
-                </button>
-            @elseif($availabilityRestricted || $unavailable)
-                <button type="button" class="lk-add-cart" disabled aria-disabled="true">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
-                        <circle cx="9" cy="20" r="1"/>
-                        <circle cx="18" cy="20" r="1"/>
-                    </svg>
-                    <span>Unavailable</span>
-                </button>
-            @elseif($catalogListing && ($sellerOnVacation || $outOfStock))
-                <button type="button" class="lk-add-cart" disabled aria-disabled="true">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
-                        <circle cx="9" cy="20" r="1"/>
-                        <circle cx="18" cy="20" r="1"/>
-                    </svg>
-                    <span>{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</span>
-                </button>
-            @elseif($hasVariations)
-                <a
-                    href="{{ $detailsUrl }}"
-                    class="lk-add-cart"
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
-                        <circle cx="9" cy="20" r="1"/>
-                        <circle cx="18" cy="20" r="1"/>
-                    </svg>
-
-                    <span>
-                        Add to Cart
-                    </span>
-                </a>
-            @else
-                <form method="POST" action="{{ route('buyer.cart.add', ['product' => $id ?? $slug]) }}" data-cart-add-form>
-                    @csrf
-                    <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
-                    <input type="hidden" name="quantity" value="1">
-                    <button type="submit" class="lk-add-cart" @disabled(! $canAddToCart)>
+                @if($guest)
+                    <button type="button" class="lk-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
                             <circle cx="9" cy="20" r="1"/>
                             <circle cx="18" cy="20" r="1"/>
                         </svg>
-                        <span>{{ $canAddToCart ? 'Add to Cart' : 'Out of Stock' }}</span>
+                        <span>Add to Cart</span>
                     </button>
-                </form>
+                @elseif($availabilityRestricted || $unavailable)
+                    <button type="button" class="lk-add-cart" disabled aria-disabled="true">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
+                            <circle cx="9" cy="20" r="1"/>
+                            <circle cx="18" cy="20" r="1"/>
+                        </svg>
+                        <span>Unavailable</span>
+                    </button>
+                @elseif($hasVariations)
+                    <a href="{{ $detailsUrl }}" class="lk-add-cart">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
+                            <circle cx="9" cy="20" r="1"/>
+                            <circle cx="18" cy="20" r="1"/>
+                        </svg>
+                        <span>Add to Cart</span>
+                    </a>
+                @else
+                    <form method="POST" action="{{ route('buyer.cart.add', ['product' => $id ?? $slug]) }}" data-cart-add-form>
+                        @csrf
+                        <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
+                        <input type="hidden" name="quantity" value="1">
+                        <button type="submit" class="lk-add-cart" @disabled(! $canAddToCart)>
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
+                                <circle cx="9" cy="20" r="1"/>
+                                <circle cx="18" cy="20" r="1"/>
+                            </svg>
+                            <span>{{ $canAddToCart ? 'Add to Cart' : 'Out of Stock' }}</span>
+                        </button>
+                    </form>
+                @endif
             @endif
         </div>
 
@@ -908,13 +911,13 @@
                 <div class="lk-catalog-list-actions">
                     @if($guest)
                         <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in or create a Buyer account to purchase {{ $name }}.">Buy Now</button>
-                        <button type="button" class="lk-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
+                        <button type="button" class="lk-add-cart lk-catalog-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
                     @elseif($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                         <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
-                        <button type="button" class="lk-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
+                        <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
                     @elseif($hasVariations)
                         <a href="{{ $detailsUrl }}" class="lk-catalog-buy-now">Choose Options</a>
-                        <a href="{{ $detailsUrl }}" class="lk-add-cart">Choose Options</a>
+                        <a href="{{ $detailsUrl }}" class="lk-add-cart lk-catalog-add-cart">Choose Options</a>
                     @else
                         <form method="POST" action="{{ route('buyer.buy-now', ['product' => $id ?? $slug]) }}" data-catalog-buy-now-form>
                             @csrf
@@ -926,7 +929,7 @@
                             @csrf
                             <input type="hidden" name="product_variant_id" value="{{ data_get($singleVariant, 'id') }}">
                             <input type="hidden" name="quantity" value="1">
-                            <button type="submit" class="lk-add-cart" @disabled(! $canAddToCart)>Add to Cart</button>
+                            <button type="submit" class="lk-add-cart lk-catalog-add-cart" @disabled(! $canAddToCart)>Add to Cart</button>
                         </form>
                     @endif
                 </div>
