@@ -13,7 +13,7 @@
 <main class="label {{ $pageBreak ? 'page-break' : '' }}">
     <header class="head"><div><div class="brand">LIKHAE</div><div>Marketplace Parcel Waybill</div></div><div><strong>Order</strong><br>{{ $sellerOrder->seller_order_number }}<br><small>{{ $sellerOrder->order?->order_number }}</small></div></header>
     <div class="tracking">{{ $shipment->tracking_number }}</div>
-    <x-waybill-barcode :tracking="$shipment->tracking_number" />
+    <x-shared.waybill-barcode :tracking="$shipment->tracking_number" />
     <section class="grid">
         <div class="box"><h2>From</h2><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><br>{{ $sellerOrder->sellerProfile?->businessAddress?->formatted() }}</div>
         <div class="box"><h2>Deliver to</h2><strong>{{ $address?->recipient_name }}</strong><br>{{ $address?->contact_number }}<br>{{ $address?->formatted() }}</div>

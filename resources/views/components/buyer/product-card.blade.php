@@ -522,6 +522,10 @@
         padding-top: 13px !important;
     }
 
+    .lk-product-card--palette .lk-card-actions--guest-view {
+        grid-template-columns: 1fr !important;
+    }
+
     .lk-product-card--palette .lk-card-actions > form .lk-add-cart {
         width: 100%;
         height: 100%;
@@ -733,25 +737,22 @@
             <span class="lk-product-unavailable-badge">Unavailable</span>
         @endif
 
-        <button
-            type="button"
-            class="lk-product-heart {{ ! $guest && $isWishlistSaved ? 'is-active' : '' }}"
-            @if($guest)
-                data-auth-required
-                data-auth-message="Sign in to save {{ $name }} to your wishlist."
-            @else
+        @unless($guest)
+            <button
+                type="button"
+                class="lk-product-heart {{ $isWishlistSaved ? 'is-active' : '' }}"
                 data-wishlist
                 data-product-id="{{ $id }}"
                 data-product-name="{{ $name }}"
                 data-wishlist-url="{{ route('buyer.wishlist.toggle', ['product' => $id]) }}"
                 aria-pressed="{{ $isWishlistSaved ? 'true' : 'false' }}"
-            @endif
-            aria-label="{{ $guest || ! $isWishlistSaved ? 'Save' : 'Remove' }} {{ $name }} {{ $guest || ! $isWishlistSaved ? 'to' : 'from' }} wishlist"
-        >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z"/>
-            </svg>
-        </button>
+                aria-label="{{ $isWishlistSaved ? 'Remove' : 'Save' }} {{ $name }} {{ $isWishlistSaved ? 'from' : 'to' }} wishlist"
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z"/>
+                </svg>
+            </button>
+        @endunless
     </div>
 
     <div class="lk-product-body">
@@ -810,12 +811,15 @@
             @endif
         </div>
 
-        <div class="lk-card-actions {{ $catalogListing ? 'lk-card-actions--catalog' : '' }}">
-            @if($catalogListing)
-                @if($guest)
-                    <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in or create a Buyer account to purchase {{ $name }}.">Buy Now</button>
-                    <button type="button" class="lk-add-cart lk-catalog-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
-                @elseif($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
+        <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : '') }}">
+            @if($guest)
+                @if($detailsUrl)
+                    <a href="{{ $detailsUrl }}" class="lk-btn-view">{{ $catalogListing ? 'View Details' : 'View' }}</a>
+                @else
+                    <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
+                @endif
+            @elseif($catalogListing)
+                @if($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                     <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                     <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
                 @elseif($hasVariations)
@@ -842,16 +846,7 @@
                     <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
                 @endif
 
-                @if($guest)
-                    <button type="button" class="lk-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
-                            <circle cx="9" cy="20" r="1"/>
-                            <circle cx="18" cy="20" r="1"/>
-                        </svg>
-                        <span>Add to Cart</span>
-                    </button>
-                @elseif($availabilityRestricted || $unavailable)
+                @if($availabilityRestricted || $unavailable)
                     <button type="button" class="lk-add-cart" disabled aria-disabled="true">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M6 6h15l-2 8H8zM6 6 5 3H2"/>
@@ -887,7 +882,7 @@
             @endif
         </div>
 
-        @if($catalogListing)
+        @if($catalogListing && ! $guest)
             <div class="lk-catalog-list-purchase" data-catalog-purchase>
                 <div class="lk-catalog-list-quantity">
                     <label for="catalog-quantity-{{ \Illuminate\Support\Str::slug((string) $slug) }}">Quantity</label>
@@ -909,10 +904,7 @@
                 </div>
 
                 <div class="lk-catalog-list-actions">
-                    @if($guest)
-                        <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in or create a Buyer account to purchase {{ $name }}.">Buy Now</button>
-                        <button type="button" class="lk-add-cart lk-catalog-add-cart" data-auth-required data-auth-message="Sign in or create a Buyer account to add {{ $name }} to your cart.">Add to Cart</button>
-                    @elseif($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
+                    @if($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                         <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                         <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>
                     @elseif($hasVariations)

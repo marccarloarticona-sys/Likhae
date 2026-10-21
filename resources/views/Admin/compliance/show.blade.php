@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Compliance Case '.$case->case_number)
 @section('subtitle', 'Review the recorded warning, product context, case history, and authorized decision.')
 @section('active', 'compliance')

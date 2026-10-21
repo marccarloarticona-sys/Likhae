@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Product Details')
 @section('subtitle', 'Catalog inspection with authorized moderation actions.')

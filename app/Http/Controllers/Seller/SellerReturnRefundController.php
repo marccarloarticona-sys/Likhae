@@ -43,7 +43,7 @@ class SellerReturnRefundController extends Controller
             $sellerRequest->setRelation('cashRefundObligation', null);
         }
 
-        return view('Seller.return-refund-show', compact('sellerRequest'));
+        return view('seller.return-refund-show', compact('sellerRequest'));
     }
 
     public function approve(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse

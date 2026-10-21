@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -40,6 +41,14 @@ class AdminUserController extends Controller
             'SERVICE_POLICY_VIOLATIONS' => 'Repeated substantiated service-policy violations',
             'OTHER' => 'Other',
         ],
+    ];
+
+    private const ACCOUNT_SUSPENSION_DURATIONS = [
+        'week' => ['label' => '1 week', 'unit' => 'week', 'count' => 1],
+        'fortnight' => ['label' => '2 weeks', 'unit' => 'week', 'count' => 2],
+        'month' => ['label' => '1 month', 'unit' => 'month', 'count' => 1],
+        'quarter' => ['label' => '3 months', 'unit' => 'month', 'count' => 3],
+        'half_year' => ['label' => '6 months', 'unit' => 'month', 'count' => 6],
     ];
 
     public function index(Request $request): View
@@ -98,7 +107,7 @@ class AdminUserController extends Controller
             })
             ->orderByDesc('created_at')
             ->orderByDesc('id')
-            ->paginate(10)
+            ->paginate(20)
             ->withQueryString();
 
         $stats = [
@@ -145,6 +154,10 @@ class AdminUserController extends Controller
             'warningCount' => $warningCount,
             'warningCategories' => self::ACCOUNT_WARNING_CATEGORIES[$user->account_type] ?? [],
             'accountEnforcementReady' => $accountEnforcementReady,
+            'suspensionDurations' => array_map(
+                fn (array $duration): string => $duration['label'],
+                self::ACCOUNT_SUSPENSION_DURATIONS,
+            ),
         ]);
     }
 
@@ -156,17 +169,17 @@ class AdminUserController extends Controller
             'category' => ['required', 'string', Rule::in(array_keys($categories))],
             'reason' => ['required', 'string', 'min:10', 'max:5000'],
             'corrective_action' => ['required', 'string', 'min:5', 'max:5000'],
-            'reference' => ['nullable', 'string', 'max:2000'],
             'evidence' => ['nullable', 'string', 'max:5000'],
         ]);
 
+        $reference = $this->makeAccountReference($user, 'WARNING');
         $newValues = [
             'account_type' => $user->account_type,
             'category' => $data['category'],
             'category_label' => $categories[$data['category']],
             'reason' => trim($data['reason']),
             'corrective_action' => trim($data['corrective_action']),
-            'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+            'reference' => $reference,
             'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
             'status' => 'OPEN',
         ];
@@ -221,13 +234,13 @@ class AdminUserController extends Controller
             'user_id' => $user->id,
             'type' => 'ACCOUNT_WARNING',
             'title' => 'Account warning from LIKHAE',
-            'message' => 'Your account received a warning for '.$newValues['category_label'].'. Reason: '.$newValues['reason'].' Corrective action: '.$newValues['corrective_action'],
+            'message' => 'Your account received a warning for '.$newValues['category_label'].'. Reason: '.$newValues['reason'].' Corrective action: '.$newValues['corrective_action'].' Reference: '.$reference,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
 
-        return back()->with('status', 'Account warning recorded and notification sent.');
+        return back()->with('status', 'Account warning recorded and notification sent. Reference: '.$reference);
     }
 
     public function reviewWarning(Request $request, User $user, AuditLog $warning): RedirectResponse
@@ -276,12 +289,15 @@ class AdminUserController extends Controller
 
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
-            'duration' => ['required', Rule::in(['week', 'month'])],
-            'reference' => ['nullable', 'string', 'max:2000'],
+            'duration' => ['required', Rule::in(array_keys(self::ACCOUNT_SUSPENSION_DURATIONS))],
             'evidence' => ['nullable', 'string', 'max:5000'],
         ]);
-        $suspendedUntil = $data['duration'] === 'week' ? now()->addWeek() : now()->addMonth();
-        DB::transaction(function () use ($request, $user, $data, $suspendedUntil): void {
+        $reference = $this->makeAccountReference($user, 'SUSPENSION');
+        $duration = self::ACCOUNT_SUSPENSION_DURATIONS[$data['duration']];
+        $suspendedUntil = $duration['unit'] === 'week'
+            ? now()->addWeeks($duration['count'])
+            : now()->addMonths($duration['count']);
+        DB::transaction(function () use ($request, $user, $data, $duration, $suspendedUntil, $reference): void {
             $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             abort_unless(
                 $lockedUser->status === User::STATUS_ACTIVE && ! $lockedUser->isPermanentlyBanned(),
@@ -304,9 +320,10 @@ class AdminUserController extends Controller
                 'new_values' => [
                     'status' => User::STATUS_SUSPENDED,
                     'duration' => $data['duration'],
+                    'duration_label' => $duration['label'],
                     'suspended_until' => $suspendedUntil->toISOString(),
                     'reason' => trim($data['reason']),
-                    'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+                    'reference' => $reference,
                     'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
                 ],
                 'ip_address' => $request->ip(),
@@ -318,13 +335,13 @@ class AdminUserController extends Controller
             'user_id' => $user->id,
             'type' => 'ACCOUNT_SUSPENDED',
             'title' => 'Account suspended',
-            'message' => 'Your LIKHAE account was suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reason: '.trim($data['reason']),
+            'message' => 'Your LIKHAE account was suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reason: '.trim($data['reason']).' Reference: '.$reference,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
 
-        return back()->with('status', 'User suspended until '.$suspendedUntil->format('M d, Y h:i A').'. The change was recorded.');
+        return back()->with('status', 'User suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reference: '.$reference);
     }
 
     public function reactivate(Request $request, User $user): RedirectResponse
@@ -337,7 +354,8 @@ class AdminUserController extends Controller
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
         ]);
-        DB::transaction(function () use ($request, $user, $data): void {
+        $reference = $this->makeAccountReference($user, 'REACTIVATION');
+        DB::transaction(function () use ($request, $user, $data, $reference): void {
             $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             abort_unless(
                 $lockedUser->status === User::STATUS_SUSPENDED && ! $lockedUser->isPermanentlyBanned(),
@@ -358,7 +376,11 @@ class AdminUserController extends Controller
                     'status' => $oldStatus,
                     'suspended_until' => $oldSuspendedUntil?->toISOString(),
                 ],
-                'new_values' => ['status' => User::STATUS_ACTIVE, 'reason' => trim($data['reason'])],
+                'new_values' => [
+                    'status' => User::STATUS_ACTIVE,
+                    'reason' => trim($data['reason']),
+                    'reference' => $reference,
+                ],
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent(),
                 'created_at' => now(),
@@ -368,13 +390,13 @@ class AdminUserController extends Controller
             'user_id' => $user->id,
             'type' => 'ACCOUNT_REACTIVATED',
             'title' => 'Account reactivated',
-            'message' => 'Your LIKHAE account was reactivated by Admin. Reason: '.trim($data['reason']),
+            'message' => 'Your LIKHAE account was reactivated by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
 
-        return back()->with('status', 'User reactivated and the change was recorded.');
+        return back()->with('status', 'User reactivated. Reference: '.$reference);
     }
 
     public function permanentlyBan(Request $request, User $user): RedirectResponse
@@ -386,12 +408,12 @@ class AdminUserController extends Controller
 
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
-            'reference' => ['nullable', 'string', 'max:2000'],
             'evidence' => ['nullable', 'string', 'max:5000'],
         ]);
 
+        $reference = $this->makeAccountReference($user, 'BAN');
         $bannedAt = now();
-        DB::transaction(function () use ($request, $user, $data, $bannedAt): void {
+        DB::transaction(function () use ($request, $user, $data, $bannedAt, $reference): void {
             $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             abort_unless(! $lockedUser->isPermanentlyBanned(), 422, 'This account is already permanently banned.');
             $oldValues = [
@@ -420,7 +442,7 @@ class AdminUserController extends Controller
                     'account_status' => User::STATUS_DEACTIVATED,
                     'permanently_banned_at' => $bannedAt->toISOString(),
                     'reason' => trim($data['reason']),
-                    'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+                    'reference' => $reference,
                     'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
                 ],
                 'ip_address' => $request->ip(),
@@ -433,13 +455,18 @@ class AdminUserController extends Controller
             'user_id' => $user->id,
             'type' => 'ACCOUNT_PERMANENTLY_BANNED',
             'title' => 'Account permanently banned',
-            'message' => 'Your LIKHAE account was permanently banned by Admin. Reason: '.trim($data['reason']),
+            'message' => 'Your LIKHAE account was permanently banned by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
 
-        return back()->with('status', 'User permanently banned and the change was recorded.');
+        return back()->with('status', 'User permanently banned. Reference: '.$reference);
+    }
+
+    private function makeAccountReference(User $user, string $action): string
+    {
+        return 'USR-'.$user->id.'-'.$action.'-'.Str::upper((string) Str::ulid());
     }
 
     private function ensureViewable(User $user): void

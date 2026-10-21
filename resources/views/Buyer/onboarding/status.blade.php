@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 @section('content')
 @php($status=$record?->status)
 <div class="mx-auto max-w-2xl px-5 py-16 text-center"><div class="border border-stone-200 bg-white p-10 shadow-sm"><p class="text-xs font-bold uppercase text-red-800">{{ str($type)->headline() }}</p>

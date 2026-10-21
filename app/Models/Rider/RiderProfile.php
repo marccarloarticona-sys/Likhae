@@ -17,6 +17,8 @@ class RiderProfile extends Model
 {
     protected $table = 'rider_profiles';
 
+    protected $hidden = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+
     protected $fillable = [
         'user_id',
         'logistics_center_id',
@@ -33,6 +35,10 @@ class RiderProfile extends Model
         'availability_location_updated_at',
         'approved_by_user_id',
         'approved_at',
+        'payout_method',
+        'payout_bank_name',
+        'payout_account_name',
+        'payout_account_number',
     ];
 
     protected function casts(): array
@@ -46,6 +52,8 @@ class RiderProfile extends Model
             'approved_parcel_capacity' => 'integer',
             'approved_weight_capacity_kg' => 'decimal:3',
             'approved_volume_capacity_liters' => 'decimal:3',
+            'payout_account_name' => 'encrypted',
+            'payout_account_number' => 'encrypted',
         ];
     }
 

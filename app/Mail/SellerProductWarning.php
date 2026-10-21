@@ -33,7 +33,7 @@ class SellerProductWarning extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'emails.seller.product-warning',
+            view: 'seller.emails.product-warning',
             with: [
                 'product' => $this->product,
                 'case' => $this->case,

@@ -14,6 +14,9 @@ class Voucher extends Model
         'platform_code_key',
         'code',
         'name',
+        'image_path',
+        'image_alt',
+        'theme_color',
         'discount_type',
         'discount_value',
         'minimum_order_amount',
@@ -35,6 +38,15 @@ class Voucher extends Model
             'ends_at' => 'datetime',
             'is_active' => 'boolean',
         ];
+    }
+
+    public function getSafeThemeColorAttribute(): ?string
+    {
+        $color = (string) $this->theme_color;
+
+        return preg_match('/^#[0-9a-fA-F]{6}$/', $color) === 1
+            ? strtoupper($color)
+            : null;
     }
 
     public function sellerProfile(): BelongsTo

@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title','Logistics Reports - LIKHAE')
 @section('content')
 <div class="space-y-6"><header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><p class="text-xs font-bold uppercase text-primary">Analytics</p><h1 class="mt-2 text-2xl font-bold">Logistics Reports</h1><p class="mt-2 text-sm text-muted">Live shipment totals for {{ $center->business_name }}.</p></div><a href="{{ route('logistics.reports.export') }}" class="bg-primary px-4 py-2 font-semibold text-white">Download PDF</a></header><section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">@foreach($shipmentsByStatus as $status=>$total)<article class="border border-line bg-surface p-5"><span class="text-xs text-muted">{{ str($status)->headline() }}</span><strong class="mt-2 block text-3xl">{{ $total }}</strong></article>@endforeach<article class="border border-line bg-surface p-5"><span class="text-xs text-muted">Registered Riders</span><strong class="mt-2 block text-3xl">{{ $riderCount }}</strong></article></section></div>

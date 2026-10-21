@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('title', 'Wishlist — LIKHAE')
 @section('active', 'wishlist')

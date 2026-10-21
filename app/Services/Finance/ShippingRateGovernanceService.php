@@ -9,6 +9,8 @@ use App\Models\Finance\ShippingRateVersion;
 use App\Models\User;
 use App\Support\FinancialRules;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
@@ -27,11 +29,23 @@ final class ShippingRateGovernanceService
         if (($data['reason_code'] ?? null) === 'OTHER' && $reasonDetails === '') {
             throw ValidationException::withMessages(['reason_details' => 'Explain the reason when you select Other.']);
         }
+        $isCommissionRequest = array_key_exists('requested_rider_pool_percentage', $data)
+            && $data['requested_rider_pool_percentage'] !== null
+            && $data['requested_rider_pool_percentage'] !== '';
+        if ($isCommissionRequest && (! Schema::hasColumn('shipping_rate_change_requests', 'current_rider_pool_percentage')
+            || ! Schema::hasColumn('shipping_rate_change_requests', 'requested_rider_pool_percentage'))) {
+            throw new RuntimeException('The reviewed commission-request migration must be applied before Logistics can request a Rider share change.');
+        }
+        if ($isCommissionRequest && (! is_numeric($data['requested_rider_pool_percentage'])
+            || (float) $data['requested_rider_pool_percentage'] < 0
+            || (float) $data['requested_rider_pool_percentage'] > 100)) {
+            throw ValidationException::withMessages(['requested_rider_pool_percentage' => 'Enter a Rider share from 0 to 100%.']);
+        }
         if (preg_match('/<[^>]*>/', $reasonDetails)) {
             throw ValidationException::withMessages(['reason_details' => 'HTML is not allowed in the request note.']);
         }
 
-        return DB::transaction(function () use ($requester, $data, $reasonDetails): ShippingRateChangeRequest {
+        return DB::transaction(function () use ($requester, $data, $reasonDetails, $isCommissionRequest): ShippingRateChangeRequest {
             // Locking the requester's stable users row serializes duplicate
             // checks for that operator under MySQL/InnoDB transactions.
             $lockedRequester = User::query()->whereKey($requester->id)->lockForUpdate()->firstOrFail();
@@ -56,28 +70,50 @@ final class ShippingRateGovernanceService
             }
 
             $currentCents = FinancialRules::cents((string) $currentVersion->shipping_fee);
-            $requestedCents = FinancialRules::cents((string) $data['requested_shipping_fee']);
-            if ($requestedCents <= 0) {
+            $requestedCents = $isCommissionRequest
+                ? $currentCents
+                : FinancialRules::cents((string) $data['requested_shipping_fee']);
+            if (! $isCommissionRequest && $requestedCents <= 0) {
                 throw ValidationException::withMessages(['requested_shipping_fee' => 'Enter a shipping fee greater than zero.']);
             }
-            if ($requestedCents === $currentCents) {
+            if (! $isCommissionRequest && $requestedCents === $currentCents) {
                 throw ValidationException::withMessages(['requested_shipping_fee' => 'The requested fee must differ from the current approved fee.']);
             }
 
+            $currentRiderPercentage = (string) $currentVersion->rider_pool_percentage;
+            $requestedRiderPercentage = $isCommissionRequest
+                ? number_format((float) $data['requested_rider_pool_percentage'], 4, '.', '')
+                : null;
+            if ($isCommissionRequest && (float) $requestedRiderPercentage === (float) $currentRiderPercentage) {
+                throw ValidationException::withMessages(['requested_rider_pool_percentage' => 'The requested Rider share must differ from the current approved share.']);
+            }
+
             $difference = $requestedCents - $currentCents;
-            $percentageUnits = intdiv((abs($difference) * 1_000_000) + intdiv($currentCents, 2), $currentCents);
-            $request = ShippingRateChangeRequest::query()->create([
+            $percentageUnits = $difference === 0
+                ? 0
+                : intdiv((abs($difference) * 1_000_000) + intdiv($currentCents, 2), $currentCents);
+            $attributes = [
                 'requesting_logistics_user_id' => $lockedRequester->id,
                 'current_shipping_fee' => FinancialRules::amount($currentCents),
                 'requested_shipping_fee' => FinancialRules::amount($requestedCents),
-                'change_type' => $difference > 0 ? 'INCREASE' : 'DECREASE',
+                'change_type' => $isCommissionRequest ? 'RIDER_SHARE' : ($difference > 0 ? 'INCREASE' : 'DECREASE'),
                 'change_amount' => FinancialRules::amount($difference),
                 'change_percentage' => self::decimalFromUnits($percentageUnits, 4, $difference < 0),
                 'reason_code' => $data['reason_code'],
                 'reason_details' => $reasonDetails !== '' ? $reasonDetails : null,
                 'requested_effective_at' => null,
                 'status' => ShippingRateChangeRequest::STATUS_PENDING,
-            ]);
+            ];
+            if (Schema::hasColumn('shipping_rate_change_requests', 'idempotency_key')) {
+                $attributes['idempotency_key'] = (string) Str::uuid();
+            } else {
+                unset($attributes['idempotency_key']);
+            }
+            if ($isCommissionRequest) {
+                $attributes['current_rider_pool_percentage'] = $currentRiderPercentage;
+                $attributes['requested_rider_pool_percentage'] = $requestedRiderPercentage;
+            }
+            $request = ShippingRateChangeRequest::query()->create($attributes);
 
             $this->audit(
                 'LOGISTICS_SHIPPING_RATE_REQUESTED',
@@ -192,8 +228,11 @@ final class ShippingRateGovernanceService
                     'expected_active_version_id' => 'The active GLOBAL rate changed after this review page was loaded. Refresh the page and review the current predecessor before approving.',
                 ]);
             }
+            $commissionRequest = $lockedRequest->requested_rider_pool_percentage !== null;
             $baselineIsStale = FinancialRules::cents((string) $current->shipping_fee)
-                !== FinancialRules::cents((string) $lockedRequest->current_shipping_fee);
+                !== FinancialRules::cents((string) $lockedRequest->current_shipping_fee)
+                || ($commissionRequest && (float) $current->rider_pool_percentage
+                    !== (float) $lockedRequest->current_rider_pool_percentage);
             if ($baselineIsStale && ! $confirmStaleBaseline) {
                 throw ValidationException::withMessages([
                     'confirm_stale_baseline' => 'The global rate changed after this request was submitted. Refresh the review page, then explicitly confirm the original baseline and add an Admin note before approving the exact requested target.',
@@ -215,9 +254,15 @@ final class ShippingRateGovernanceService
 
             $version = ShippingRateVersion::query()->create([
                 'scope' => ShippingRateVersion::SCOPE_GLOBAL,
-                'shipping_fee' => FinancialRules::amount(FinancialRules::cents((string) $lockedRequest->requested_shipping_fee)),
-                'rider_pool_percentage' => $current->rider_pool_percentage,
-                'logistics_percentage' => $current->logistics_percentage,
+                'shipping_fee' => $commissionRequest
+                    ? (string) $current->shipping_fee
+                    : FinancialRules::amount(FinancialRules::cents((string) $lockedRequest->requested_shipping_fee)),
+                'rider_pool_percentage' => $commissionRequest
+                    ? (string) $lockedRequest->requested_rider_pool_percentage
+                    : $current->rider_pool_percentage,
+                'logistics_percentage' => $commissionRequest
+                    ? number_format(100 - (float) $lockedRequest->requested_rider_pool_percentage, 4, '.', '')
+                    : $current->logistics_percentage,
                 'pickup_rider_weight' => $current->pickup_rider_weight,
                 'hub_to_hub_rider_weight' => $current->hub_to_hub_rider_weight,
                 'last_mile_rider_weight' => $current->last_mile_rider_weight,
@@ -244,7 +289,9 @@ final class ShippingRateGovernanceService
                 ['request' => $this->requestState($lockedRequest), 'approved_rate' => $this->versionState($version)],
                 $baselineIsStale
                     ? 'Admin confirmed the original request baseline was stale and approved the exact requested target against the current predecessor; activation was immediate.'
-                    : 'Admin approved the exact amount requested; activation was immediate.',
+                    : ($commissionRequest
+                        ? 'Admin approved the requested Rider/Logistics shipping share; activation was immediate.'
+                        : 'Admin approved the exact amount requested; activation was immediate.'),
             );
             $this->audit(
                 'SHIPPING_RATE_ACTIVATED',
@@ -298,6 +345,57 @@ final class ShippingRateGovernanceService
         }, 3);
     }
 
+    public function updateCommissionSplit(User $admin, string|int|float $logisticsPercentage): ShippingRateVersion
+    {
+        $this->requireAdmin($admin);
+        $this->requireSchema();
+        if (! is_numeric($logisticsPercentage) || (float) $logisticsPercentage < 0 || (float) $logisticsPercentage > 100) {
+            throw ValidationException::withMessages(['logistics_percentage' => 'Enter a Logistics shipping share from 0 to 100%.']);
+        }
+
+        $logisticsPercentage = number_format((float) $logisticsPercentage, 4, '.', '');
+        $riderPercentage = number_format(100 - (float) $logisticsPercentage, 4, '.', '');
+
+        return DB::transaction(function () use ($admin, $logisticsPercentage, $riderPercentage): ShippingRateVersion {
+            $this->lockGlobalWriter();
+            $current = $this->rates->currentVersion(lockForUpdate: true);
+            if (! $current) {
+                throw ValidationException::withMessages(['shipping_rate' => 'Initialize the current global shipping policy before changing its split.']);
+            }
+            if ((float) $current->logistics_percentage === (float) $logisticsPercentage) {
+                throw ValidationException::withMessages(['logistics_percentage' => 'The Logistics share already matches the active policy.']);
+            }
+
+            $now = now();
+            $before = $this->versionState($current);
+            $current->forceFill(['effective_until' => $now, 'status' => ShippingRateVersion::STATUS_SUPERSEDED])->save();
+            $version = ShippingRateVersion::query()->create([
+                'scope' => ShippingRateVersion::SCOPE_GLOBAL,
+                'shipping_fee' => $current->shipping_fee,
+                'rider_pool_percentage' => $riderPercentage,
+                'logistics_percentage' => $logisticsPercentage,
+                'pickup_rider_weight' => $current->pickup_rider_weight,
+                'hub_to_hub_rider_weight' => $current->hub_to_hub_rider_weight,
+                'last_mile_rider_weight' => $current->last_mile_rider_weight,
+                'effective_from' => $now,
+                'effective_until' => null,
+                'status' => ShippingRateVersion::STATUS_ACTIVE,
+                'approved_by_admin_user_id' => $admin->id,
+                'source_request_id' => null,
+            ]);
+            $this->audit(
+                'SHIPPING_COMMISSION_SPLIT_UPDATED',
+                $version,
+                $admin,
+                $before,
+                $this->versionState($version),
+                'Admin changed the active shipping revenue split. Existing SellerOrder rate snapshots remain unchanged.',
+            );
+
+            return $version;
+        }, 3);
+    }
+
     private function lockGlobalWriter(): void
     {
         // Every Admin rate write locks the same existing Admin user row. This
@@ -316,10 +414,11 @@ final class ShippingRateGovernanceService
     private function notifyAdminsOfRequest(ShippingRateChangeRequest $request): void
     {
         $request->loadMissing('requester');
-        $message = ($request->requester?->name ?: 'A Logistics operator')
-            .' requested PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee))
-            .' from PHP '.self::money(FinancialRules::cents((string) $request->current_shipping_fee))
-            .' ('.strtolower($request->change_type).').';
+        $message = ($request->requester?->name ?: 'A Logistics operator').' requested '
+            .($request->requested_rider_pool_percentage !== null
+                ? 'a Rider shipping share change from '.$request->current_rider_pool_percentage.'% to '.$request->requested_rider_pool_percentage.'%.'
+                : 'a shipping fee change from PHP '.self::money(FinancialRules::cents((string) $request->current_shipping_fee))
+                    .' to PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee)).'.');
 
         User::query()->where('account_type', User::TYPE_ADMIN)
             ->where('status', User::STATUS_ACTIVE)
@@ -344,17 +443,20 @@ final class ShippingRateGovernanceService
 
     private function notifyRequesterOfDecision(ShippingRateChangeRequest $request, bool $approved): void
     {
-        $currentFee = $approved
-            ? $request->current_shipping_fee
-            : $request->current_shipping_fee;
-        $title = $approved ? 'Shipping Fee Request Approved' : 'Shipping Fee Request Rejected';
-        $message = $approved
-            ? 'Your request to change the global shipping fee from PHP '.self::money(FinancialRules::cents((string) $currentFee))
-                .' to PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee))
-                .' was approved and is effective now.'
-            : 'Your request for PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee))
-                .' was rejected. The current rate remains PHP '.self::money(FinancialRules::cents((string) $currentFee))
-                .'. Reason: '.(string) $request->admin_decision_reason;
+        $commissionRequest = $request->requested_rider_pool_percentage !== null;
+        $title = $approved
+            ? ($commissionRequest ? 'Shipping Commission Request Approved' : 'Shipping Fee Request Approved')
+            : ($commissionRequest ? 'Shipping Commission Request Rejected' : 'Shipping Fee Request Rejected');
+        $message = $commissionRequest
+            ? ($approved
+                ? 'Your requested Rider shipping share of '.$request->requested_rider_pool_percentage.'% was approved. The Logistics share is now '.number_format(100 - (float) $request->requested_rider_pool_percentage, 4).'%.'
+                : 'Your requested Rider shipping share of '.$request->requested_rider_pool_percentage.'% was rejected. The active split remains Rider '.$request->current_rider_pool_percentage.'% / Logistics '.number_format(100 - (float) $request->current_rider_pool_percentage, 4).'%. Reason: '.(string) $request->admin_decision_reason)
+            : ($approved
+                ? 'Your request to change the global shipping fee from PHP '.self::money(FinancialRules::cents((string) $request->current_shipping_fee))
+                    .' to PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee)).' was approved and is effective now.'
+                : 'Your request for PHP '.self::money(FinancialRules::cents((string) $request->requested_shipping_fee))
+                    .' was rejected. The current rate remains PHP '.self::money(FinancialRules::cents((string) $request->current_shipping_fee))
+                    .'. Reason: '.(string) $request->admin_decision_reason);
 
         Notification::query()->firstOrCreate(
             [
@@ -391,6 +493,8 @@ final class ShippingRateGovernanceService
             'requesting_logistics_user_id' => $request->requesting_logistics_user_id,
             'current_shipping_fee' => (string) $request->current_shipping_fee,
             'requested_shipping_fee' => (string) $request->requested_shipping_fee,
+            'current_rider_pool_percentage' => $request->current_rider_pool_percentage === null ? null : (string) $request->current_rider_pool_percentage,
+            'requested_rider_pool_percentage' => $request->requested_rider_pool_percentage === null ? null : (string) $request->requested_rider_pool_percentage,
             'change_type' => $request->change_type,
             'change_amount' => (string) $request->change_amount,
             'change_percentage' => (string) $request->change_percentage,

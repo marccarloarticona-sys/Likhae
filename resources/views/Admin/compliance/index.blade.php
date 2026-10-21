@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Seller Compliance')
 @section('subtitle', 'Investigate Seller violations, review corrections, and record authorized decisions.')
 @section('active', 'compliance')

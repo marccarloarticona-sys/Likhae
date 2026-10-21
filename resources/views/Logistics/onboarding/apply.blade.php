@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('content')
 <div class="mx-auto max-w-3xl px-5 py-10">

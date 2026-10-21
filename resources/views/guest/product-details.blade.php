@@ -1,4 +1,4 @@
-@extends('layouts.guest')
+@extends('layouts.guest.app')
 
 @section('title', data_get($product, 'name', 'Product Details'))
 
@@ -70,7 +70,7 @@
     </div>
 
     @if($related->isNotEmpty())
-        <section class="lk-section"><div class="lk-section-head"><div><span class="lk-kicker">Keep exploring</span><h2>Related Products</h2><p>More finds you may like.</p></div></div><div class="lk-product-grid">@foreach($related as $relatedProduct) @include('guest.partials.product-card', ['product' => $relatedProduct]) @endforeach</div></section>
+        <section class="lk-section"><div class="lk-section-head"><div><span class="lk-kicker">Keep exploring</span><h2>Related Products</h2><p>More finds you may like.</p></div></div><div class="lk-product-grid">@foreach($related as $relatedProduct) @include('components.guest.product-card', ['product' => $relatedProduct]) @endforeach</div></section>
     @endif
 </div>
 @endsection

@@ -73,6 +73,7 @@ class SellerOperationsController extends Controller
             'schema_ready' => false,
             'pending' => 0.0,
             'authorized' => 0.0,
+            'awaiting_ack' => 0.0,
             'paid' => 0.0,
             'outstanding' => 0.0,
             'review_required' => 0,
@@ -82,8 +83,9 @@ class SellerOperationsController extends Controller
             $settlements = SellerSettlement::query()->where('seller_profile_id', $seller->id);
             $settlementSummary = [
                 'schema_ready' => true,
-                'pending' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
+                'pending' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
                 'authorized' => (float) (clone $settlements)->where('payout_status', 'AUTHORIZED')->sum('seller_payable'),
+                'awaiting_ack' => (float) (clone $settlements)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount'),
                 'paid' => (float) (clone $settlements)->where('payout_status', 'PAID')->sum('payout_amount'),
                 'outstanding' => (float) (clone $settlements)->where('payout_status', '!=', 'PAID')->sum('outstanding_balance'),
                 'review_required' => (clone $settlements)->where('payout_status', 'REVIEW_REQUIRED')->count(),
@@ -155,7 +157,7 @@ class SellerOperationsController extends Controller
             ->whereHas('variants', fn ($query) => $query->where('is_active', true))
             ->count();
 
-        return view('Seller.dashboard', [
+        return view('seller.dashboard', [
             'seller' => $request->user(),
             'sellerProfile' => $seller,
             'financialFrom' => $financialFrom,
@@ -226,7 +228,7 @@ class SellerOperationsController extends Controller
                 ->firstOrFail();
             $mapMarkers = app(MapDataService::class)->forShipments($trackingOrder->shipments, includeSeller: true);
 
-            return view('Seller.logistics', [
+            return view('seller.logistics', [
                 'seller' => $seller,
                 'trackingOrder' => $trackingOrder,
                 'mapMarkers' => $mapMarkers,
@@ -277,7 +279,7 @@ class SellerOperationsController extends Controller
             });
         }
 
-        return view('Seller.logistics', [
+        return view('seller.logistics', [
             'seller' => $seller,
             'trackingOrder' => null,
             'orders' => $orders,
@@ -302,7 +304,7 @@ class SellerOperationsController extends Controller
                 throw $exception;
             }
 
-            return view('Seller.waybill', [
+            return view('seller.waybill', [
                 'sellerOrder' => $sellerOrder,
                 'shipment' => $legacyShipment->loadMissing($this->waybillRelations()),
                 'item' => null,
@@ -312,7 +314,7 @@ class SellerOperationsController extends Controller
         $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
         $shipments->each(fn ($shipment) => $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]));
 
-        return view('Seller.waybills', [
+        return view('seller.waybills', [
             'sellerOrder' => $sellerOrder,
             'shipments' => $shipments,
         ]);
@@ -338,7 +340,7 @@ class SellerOperationsController extends Controller
         $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
         $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]);
 
-        return view('Seller.waybill', [
+        return view('seller.waybill', [
             'sellerOrder' => $sellerOrder,
             'shipment' => $shipment,
             'item' => $shipment->orderItem,
@@ -403,7 +405,7 @@ class SellerOperationsController extends Controller
         abort_unless($seller, 403);
         $report = $this->buildReport($request, $seller->id, (string) $seller->business_name, app(SellerSalesSummaryService::class));
 
-        return view('Seller.reports', [
+        return view('seller.reports', [
             'report' => $report['report'],
             'reportFrom' => $report['from'],
             'reportTo' => $report['to'],
@@ -508,11 +510,12 @@ class SellerOperationsController extends Controller
                 COALESCE(SUM(discount_amount), 0) as discounts,
                 COALESCE(SUM(seller_payable), 0) as seller_payable,
                 COALESCE(SUM(CASE WHEN payout_status = 'PAID' THEN payout_amount ELSE 0 END), 0) as settled_payouts,
-                COALESCE(SUM(CASE WHEN payout_status IN ('PENDING', 'REVIEW_REQUIRED') THEN outstanding_balance ELSE 0 END), 0) as pending_balance,
+                COALESCE(SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED') THEN outstanding_balance ELSE 0 END), 0) as pending_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'AUTHORIZED' THEN seller_payable ELSE 0 END), 0) as authorized_balance,
+                COALESCE(SUM(CASE WHEN payout_status = 'PAYOUT_PENDING_ACK' THEN payout_amount ELSE 0 END), 0) as awaiting_ack_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'PAID' THEN payout_amount ELSE 0 END), 0) as paid_balance,
                 COALESCE(SUM(CASE WHEN payout_status != 'PAID' THEN outstanding_balance ELSE 0 END), 0) as outstanding_balance,
-                SUM(CASE WHEN payout_status IN ('PENDING', 'AUTHORIZED', 'REVIEW_REQUIRED') THEN 1 ELSE 0 END) as pending_settlement,
+                SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'AUTHORIZED', 'REVIEW_REQUIRED', 'PAYOUT_PENDING_ACK') THEN 1 ELSE 0 END) as pending_settlement,
                 SUM(CASE WHEN payout_status = 'REVIEW_REQUIRED' THEN 1 ELSE 0 END) as review_required_count
                 SQL)->first();
             $settlementSummary = [
@@ -523,6 +526,7 @@ class SellerOperationsController extends Controller
                 'settled_payouts' => (float) ($settlementTotals->settled_payouts ?? 0),
                 'pending_balance' => (float) ($settlementTotals->pending_balance ?? 0),
                 'authorized_balance' => (float) ($settlementTotals->authorized_balance ?? 0),
+                'awaiting_ack_balance' => (float) ($settlementTotals->awaiting_ack_balance ?? 0),
                 'paid_balance' => (float) ($settlementTotals->paid_balance ?? 0),
                 'outstanding_balance' => (float) ($settlementTotals->outstanding_balance ?? 0),
                 'pending_settlement' => (int) ($settlementTotals->pending_settlement ?? 0),

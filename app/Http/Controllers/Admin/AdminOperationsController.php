@@ -19,6 +19,8 @@ use App\Models\Admin\SellerComplianceResponse;
 use App\Models\Buyer\Payment;
 use App\Models\Communication\Conversation;
 use App\Models\Finance\CodCollection;
+use App\Models\Finance\FinancialLedgerEntry;
+use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Finance\SellerSettlement;
 use App\Models\Finance\ShipmentFinancialAllocation;
@@ -39,6 +41,7 @@ use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
 use App\Services\Finance\FinanceSchemaReadiness;
+use App\Services\Finance\PayoutDestinationReadiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -375,7 +378,7 @@ class AdminOperationsController extends Controller
         return view('Admin.complaints.show', compact('dispute'));
     }
 
-    public function finance(FinanceSchemaReadiness $schema): View
+    public function finance(FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations): View
     {
         $financialTotals = [
             'schema_ready' => $schema->ready(),
@@ -390,6 +393,9 @@ class AdminOperationsController extends Controller
             'unresolved_settlements' => 0,
         ];
         $sellerSettlements = null;
+        $productProceeds = null;
+        $codDiscrepancies = null;
+        $logisticsPayouts = null;
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
@@ -407,15 +413,44 @@ class AdminOperationsController extends Controller
             $financialTotals['rider_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('rider_allocation');
             $financialTotals['unresolved_settlements'] = SellerSettlement::query()->where('payout_status', 'REVIEW_REQUIRED')->count();
             $sellerSettlements = SellerSettlement::query()
-                ->with('sellerProfile')
+                ->with(['sellerProfile', 'allocation.shipment', 'sellerOrder.order'])
+                ->orderByRaw("CASE WHEN payout_status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
                 ->latest()
                 ->paginate(15, ['*'], 'settlements_page');
+            if ($schema->parcelSettlementReady()) {
+                $productProceeds = FinancialLedgerEntry::query()
+                    ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
+                    ->whereIn('status', ['SUBMITTED', 'DISCREPANCY'])
+                    ->with(['shipment.sellerOrder.order', 'allocation'])
+                    ->latest()->paginate(15, ['*'], 'product_proceeds_page');
+                $codDiscrepancies = CodCollection::query()
+                    ->where('status', CodCollection::REMITTED_DISCREPANCY)
+                    ->with(['shipment', 'order', 'sellerOrder', 'remittanceItem.remittance'])
+                    ->latest()->paginate(15, ['*'], 'cod_discrepancies_page');
+                $receivedAllocationIds = FinancialLedgerEntry::query()
+                    ->select('shipment_financial_allocation_id')
+                    ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
+                    ->where('status', 'RECEIVED');
+                $logisticsPayouts = LogisticsEarningPool::query()
+                    ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
+                    ->where('total_amount', '>', 0)
+                    ->whereIn('status', ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'])
+                    ->with(['logisticsCenter', 'shipment.sellerOrder.order', 'allocation'])
+                    ->orderByRaw("CASE WHEN status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
+                    ->latest()
+                    ->paginate(15, ['*'], 'logistics_payouts_page');
+            }
         }
 
         return view('Admin.finance.index', [
             'payments' => Payment::with('order.buyer')->latest()->paginate(15),
             'commissions' => CommissionTransaction::with('sellerOrder.sellerProfile.user')->latest()->paginate(15),
             'sellerSettlements' => $sellerSettlements,
+            'productProceeds' => $productProceeds,
+            'logisticsPayouts' => $logisticsPayouts,
+            'codDiscrepancies' => $codDiscrepancies,
+            'parcelSettlementReady' => $schema->parcelSettlementReady(),
+            'payoutDestinationReady' => $destinations->readyFor('seller_profiles') && $destinations->readyFor('logistics_centers'),
             'financialTotals' => $financialTotals,
             'totals' => [
                 'payments' => (float) Payment::where('status', 'PAID')->sum('amount'),
@@ -587,6 +622,8 @@ class AdminOperationsController extends Controller
                 'commission_rate' => PlatformSetting::commissionRate(),
                 'transfer_commission_type' => PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'),
                 'transfer_commission_value' => PlatformSetting::valueOf('transfer_commission_value', 0),
+                'additional_region_tier_fee' => PlatformSetting::valueOf('additional_region_tier_fee', \App\Services\Finance\RegionShippingRateService::DEFAULT_ADDITIONAL_TIER_FEE),
+                'shipping_region_tiers' => PlatformSetting::valueOf('shipping_region_tiers', ''),
                 'registration_enabled' => (bool) PlatformSetting::valueOf('registration_enabled', true),
             ],
             'policies' => PlatformPolicy::latest()->get(),
@@ -1104,12 +1141,14 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Announcement saved.');
     }
 
-    public function updateSettings(Request $request): RedirectResponse
+    public function updateSettings(Request $request, \App\Services\Finance\RegionShippingRateService $regionShipping): RedirectResponse
     {
         $data = $request->validate([
             'commission_rate' => ['required', 'numeric', 'in:0.10'],
             'transfer_commission_type' => ['required', Rule::in(['PERCENT', 'FIXED'])],
             'transfer_commission_value' => ['required', 'numeric', 'min:0', 'max:10000'],
+            'additional_region_tier_fee' => ['required', 'decimal:0,2', 'min:0', 'max:1000000'],
+            'shipping_region_tiers' => ['nullable', 'string', 'max:10000'],
             'registration_enabled' => ['required', 'boolean'],
         ]);
         if ($data['transfer_commission_type'] === 'PERCENT' && (float) $data['transfer_commission_value'] > 100) {
@@ -1117,9 +1156,12 @@ class AdminOperationsController extends Controller
                 ->withErrors(['transfer_commission_value' => 'The transfer commission percentage cannot exceed 100%.'])
                 ->withInput();
         }
+        $normalizedRegionTiers = $regionShipping->normalizeTierMap((string) ($data['shipping_region_tiers'] ?? ''));
         PlatformSetting::put('commission_rate', $data['commission_rate'], 'decimal', $request->user()->id);
         PlatformSetting::put('transfer_commission_type', $data['transfer_commission_type'], 'string', $request->user()->id);
         PlatformSetting::put('transfer_commission_value', $data['transfer_commission_value'], 'decimal', $request->user()->id);
+        PlatformSetting::put('additional_region_tier_fee', $data['additional_region_tier_fee'], 'decimal', $request->user()->id);
+        PlatformSetting::put('shipping_region_tiers', $normalizedRegionTiers, 'string', $request->user()->id);
         PlatformSetting::put('registration_enabled', (bool) $data['registration_enabled'], 'boolean', $request->user()->id);
 
         return back()->with('status', 'Settings updated.');

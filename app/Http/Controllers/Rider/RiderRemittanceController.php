@@ -19,13 +19,13 @@ class RiderRemittanceController extends Controller
         abort_unless($rider, 403);
         $schemaReady = $schema->step6Ready();
         $history = $schemaReady
-            ? $rider->remittances()->with('items.codCollection.shipment')->latest()->paginate(15)
+            ? $rider->remittances()->with(['items.codCollection.shipment', 'items.codCollection.order'])->latest()->paginate(15)
             : new LengthAwarePaginator([], 0, 15, max(1, $request->integer('page', 1)), [
                 'path' => $request->url(),
                 'query' => $request->query(),
             ]);
 
-        return view('Rider.remittances.index', [
+        return view('rider.remittances.index', [
             'rider' => $rider,
             'collections' => $schemaReady ? $remittances->availableCollections($rider) : collect(),
             'remittances' => $history,
@@ -50,6 +50,6 @@ class RiderRemittanceController extends Controller
             throw \Illuminate\Validation\ValidationException::withMessages(['collection_ids' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Remittance submitted. Your destination logistics center must verify and reconcile the cash.');
+        return back()->with('status', 'Parcel remittance submitted. Your destination logistics center must acknowledge the received amount.');
     }
 }

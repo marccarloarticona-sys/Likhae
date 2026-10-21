@@ -20,7 +20,7 @@ class ProductThumbnailTest extends TestCase
             'product_name' => 'Chair',
         ];
 
-        $this->blade('<x-product-thumbnail :item="$item" />', compact('item'))
+        $this->blade('<x-shared.product-thumbnail :item="$item" />', compact('item'))
             ->assertSee('src="/storage/sellers/1/products/chair.jpg"', false)
             ->assertDontSee('127.0.0.1:8000');
     }

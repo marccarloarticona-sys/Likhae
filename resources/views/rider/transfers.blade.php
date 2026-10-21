@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 @section('title', 'Inter-Hub Transfers - LIKHAE')
 @section('content')
 <div class="space-y-6">
@@ -8,7 +8,7 @@
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>@endif
     @error('tracking')<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{{ $message }}</div>@enderror
-    <x-parcel-scanner
+    <x-shared.parcel-scanner
         :action="route('rider.scan', ['return_to' => 'transfers'])"
         :tracking="old('tracking', request('tracking', ''))"
         :method="request('scan_method', 'MANUAL')"

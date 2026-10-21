@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 
 @section('title', 'Rider Applications - LIKHAE Logistics')
 
@@ -18,7 +18,7 @@
         <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rider Management</span>
         <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink sm:text-[38px]">Rider Applications</h1>
         <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">
-            Review courier registration requests from actual rider accounts.
+            Review rider registration requests from Rider accounts.
         </p>
     </section>
 
@@ -34,7 +34,7 @@
 
     <section class="overflow-hidden rounded-xl border border-line bg-surface">
         <div class="border-b border-line px-5 py-4">
-            <h2 class="text-[13px] font-semibold text-ink">Courier Applicants</h2>
+            <h2 class="text-[13px] font-semibold text-ink">Rider Applicants</h2>
         </div>
 
         @forelse($riders as $rider)

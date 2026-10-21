@@ -29,11 +29,14 @@ class ShippingRateChangeRequest extends Model
 
     protected $fillable = [
         'requesting_logistics_user_id',
+        'idempotency_key',
         'current_shipping_fee',
         'requested_shipping_fee',
         'change_type',
         'change_amount',
         'change_percentage',
+        'current_rider_pool_percentage',
+        'requested_rider_pool_percentage',
         'reason_code',
         'reason_details',
         'requested_effective_at',
@@ -51,6 +54,8 @@ class ShippingRateChangeRequest extends Model
             'requested_shipping_fee' => 'decimal:2',
             'change_amount' => 'decimal:2',
             'change_percentage' => 'decimal:4',
+            'current_rider_pool_percentage' => 'decimal:4',
+            'requested_rider_pool_percentage' => 'decimal:4',
             'requested_effective_at' => 'datetime',
             'reviewed_at' => 'datetime',
             'approved_effective_at' => 'datetime',

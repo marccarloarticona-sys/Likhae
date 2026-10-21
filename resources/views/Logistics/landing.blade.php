@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <x-likhae-favicon />
+    <x-shared.likhae-favicon />
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="The LIKHAE workspace for logistics centers and riders. Coordinate parcel intake, sorting, pickups, and deliveries in one place.">
@@ -16,7 +16,7 @@
 
     <header class="lp-header lp-container">
         <a href="{{ route('logistics.home') }}" class="lp-brand" aria-label="LIKHAE Logistics home">
-            <x-likhae-logo context="Logistics" />
+            <x-shared.likhae-logo context="Logistics" />
             <span class="lp-brand__context" aria-hidden="true">Logistics<br>&amp; Riders</span>
         </a>
         <nav class="lp-nav" aria-label="Portal navigation">
@@ -108,7 +108,7 @@
                         <span class="lp-role__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="17.5" r="3.5" /><circle cx="18.5" cy="17.5" r="3.5" /><path d="m5.5 17.5 5-9 4.5 9H5.5Zm5-9h6l2 9M9 5h4M16.5 8.5 15 4h-3" /></svg></span>
                         <span class="lp-role__label">On the road</span>
                     </div>
-                    <h3>Riders &amp; couriers</h3>
+                    <h3>Riders</h3>
                     <p>Make every stop count with a clear view of your assigned pickups and deliveries.</p>
                     <ul class="lp-role__features">
                         <li>View your pickup and delivery assignments</li>

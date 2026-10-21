@@ -52,7 +52,9 @@ class AdminShippingRateController extends Controller
         $policy = $rates->currentPolicy();
         $isStale = $policy['initialized']
             && FinancialRules::cents($shippingRateRequest->current_shipping_fee)
-                !== FinancialRules::cents($policy['shipping_fee']);
+                !== FinancialRules::cents($policy['shipping_fee'])
+            || ($policy['initialized'] && $shippingRateRequest->requested_rider_pool_percentage !== null
+                && (float) $shippingRateRequest->current_rider_pool_percentage !== (float) $policy['rider_pool_percentage']);
         $history = ShippingRateChangeRequest::query()
             ->with('reviewer')
             ->where('requesting_logistics_user_id', $shippingRateRequest->requesting_logistics_user_id)
@@ -77,6 +79,24 @@ class AdminShippingRateController extends Controller
         }
 
         return redirect()->route('admin.shipping-rate-requests')->with('status', 'The current global shipping rate was initialized as an approved policy version.');
+    }
+
+    public function updateCommissionSplit(Request $request, ShippingRateGovernanceService $governance): RedirectResponse
+    {
+        $data = $request->validate([
+            'logistics_percentage' => ['required', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        try {
+            $version = $governance->updateCommissionSplit($request->user(), $data['logistics_percentage']);
+        } catch (RuntimeException $exception) {
+            abort(503, $exception->getMessage());
+        }
+
+        return redirect()->route('admin.shipping-rate-requests')->with(
+            'status',
+            'Shipping split updated: Rider '.number_format((float) $version->rider_pool_percentage, 2).'% / Logistics '.number_format((float) $version->logistics_percentage, 2).'%.',
+        );
     }
 
     public function approve(Request $request, ShippingRateChangeRequest $shippingRateRequest, ShippingRateGovernanceService $governance): RedirectResponse

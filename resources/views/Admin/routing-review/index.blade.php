@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'PSGC Routing Review')
 @section('active', 'routing-review')

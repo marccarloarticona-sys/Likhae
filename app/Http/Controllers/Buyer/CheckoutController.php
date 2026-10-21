@@ -79,7 +79,7 @@ class CheckoutController extends Controller
                 $voucherCode,
                 $request->user(),
                 null,
-                $automaticRouting ? $previewAddress : null,
+                $previewAddress,
                 $selectedProtectionIds,
                 rewardPointsToRedeem: $selectedRewardPoints,
             );
@@ -124,7 +124,7 @@ class CheckoutController extends Controller
                         $voucherCode,
                         $request->user(),
                         null,
-                        null,
+                        $previewAddress,
                         $selectedProtectionIds,
                         rewardPointsToRedeem: 0,
                     );
@@ -181,7 +181,7 @@ class CheckoutController extends Controller
             }
         }
 
-        return view('Buyer.checkout', [
+        return view('buyer.checkout', [
             'cartItems' => $items,
             'addresses' => $addresses,
             'availableVouchers' => $availableVouchers,

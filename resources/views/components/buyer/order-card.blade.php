@@ -548,7 +548,7 @@
                 Delivered {{ data_get($order, 'delivered_at') }}.
                 Auto-receive on {{ data_get($order, 'auto_receive_at') }} if no action is taken.
             @else
-                Parcel is in transit. Track it for the latest courier update.
+                Parcel is in transit. Track it for the latest rider update.
             @endif
         </div>
     @endif

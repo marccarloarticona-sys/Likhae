@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Review Shipping Rate Request')
 @section('subtitle', 'Approve the exact proposal or reject it with a reason.')
 @section('active', 'shipping-rate-requests')
@@ -10,15 +10,20 @@
         <div class="ad-page-head"><div><span class="ad-overline">{{ str($shippingRateRequest->status)->headline() }}</span><h2>{{ $shippingRateRequest->requester?->logisticsCenter?->business_name ?? $shippingRateRequest->requester?->name ?? 'Logistics account' }}</h2><p>Submitted {{ $shippingRateRequest->created_at?->format('M j, Y g:i A') }}</p></div><a class="ad-btn ad-btn-secondary" href="{{ route('admin.shipping-rate-requests') }}">Back to requests</a></div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
             <div><small>Current Approved Rate</small><h3>PHP {{ number_format((float) $policy['shipping_fee'], 2) }}</h3></div>
-            <div><small>Request Base</small><h3>PHP {{ number_format((float) $shippingRateRequest->current_shipping_fee, 2) }}</h3></div>
-            <div><small>Requested Rate</small><h3>PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }}</h3></div>
-            <div><small>Change</small><h3>{{ $shippingRateRequest->change_type }} · PHP {{ number_format(abs((float) $shippingRateRequest->change_amount), 2) }}</h3><small>{{ number_format((float) $shippingRateRequest->change_percentage, 2) }}%</small></div>
+            @if($shippingRateRequest->requested_rider_pool_percentage !== null)
+                <div><small>Request Base Split</small><h3>Rider {{ number_format((float) $shippingRateRequest->current_rider_pool_percentage, 2) }}% · Logistics {{ number_format(100 - (float) $shippingRateRequest->current_rider_pool_percentage, 2) }}%</h3></div>
+                <div><small>Requested Split</small><h3>Rider {{ number_format((float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}% · Logistics {{ number_format(100 - (float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}%</h3></div>
+            @else
+                <div><small>Request Base</small><h3>PHP {{ number_format((float) $shippingRateRequest->current_shipping_fee, 2) }}</h3></div>
+                <div><small>Requested Rate</small><h3>PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }}</h3></div>
+            @endif
+            <div><small>Change</small><h3>@if($shippingRateRequest->requested_rider_pool_percentage !== null)Rider share proposal @else{{ $shippingRateRequest->change_type }} @endif</h3><small>@if($shippingRateRequest->requested_rider_pool_percentage !== null)Logistics share {{ number_format(100 - (float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}%@else PHP {{ number_format(abs((float) $shippingRateRequest->change_amount), 2) }} ({{ number_format((float) $shippingRateRequest->change_percentage, 2) }}%)@endif</small></div>
             <div><small>Current Allocation</small><h3>Rider {{ number_format((float) $policy['rider_pool_percentage'], 2) }}% · Logistics {{ number_format((float) $policy['logistics_percentage'], 2) }}%</h3></div>
         </div>
         @if($isStale)
             <div role="alert" style="margin-top:14px;padding:14px;border:1px solid #d99b2b;border-radius:10px;background:#fff8e8;color:#684b13">
                 <strong>Request baseline is stale.</strong>
-                <p style="margin:6px 0 0">This request was submitted when the GLOBAL rate was PHP {{ number_format((float) $shippingRateRequest->current_shipping_fee, 2) }}. The current active GLOBAL rate is PHP {{ number_format((float) $policy['shipping_fee'], 2) }}. The requested target remains PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }}; the stored request baseline will not be rewritten.</p>
+                <p style="margin:6px 0 0">@if($shippingRateRequest->requested_rider_pool_percentage !== null)The requested Rider share was {{ number_format((float) $shippingRateRequest->current_rider_pool_percentage, 2) }}% when this request was submitted. The active Rider share is {{ number_format((float) $policy['rider_pool_percentage'], 2) }}%. The target remains Rider {{ number_format((float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}% / Logistics {{ number_format(100 - (float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}%.@else This request was submitted when the GLOBAL rate was PHP {{ number_format((float) $shippingRateRequest->current_shipping_fee, 2) }}. The current active GLOBAL rate is PHP {{ number_format((float) $policy['shipping_fee'], 2) }}. The requested target remains PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }}; the stored request baseline will not be rewritten.@endif</p>
                 <p style="margin:6px 0 0">Admin may approve that exact target after confirming the changed baseline. The new rate will replace the current active version, and the original request baseline and predecessor version will remain in the audit history.</p>
             </div>
         @endif
@@ -30,15 +35,15 @@
     @if($shippingRateRequest->status === 'PENDING')
         <div class="ad-card ad-card-body">
             <h2>Admin decision</h2>
-            <p>Approving activates exactly PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }} immediately for new eligible checkouts. Existing SellerOrder fee snapshots remain unchanged. The active Rider/Logistics split stays at {{ number_format((float) $policy['rider_pool_percentage'], 2) }}% / {{ number_format((float) $policy['logistics_percentage'], 2) }}%.</p>
-            <form method="POST" action="{{ route('admin.shipping-rate-requests.approve', $shippingRateRequest) }}" style="display:grid;gap:10px;margin-bottom:18px" onsubmit="return confirm('Approve exactly PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }} effective immediately? Existing orders will keep their snapshots.')">
+            <p>@if($shippingRateRequest->requested_rider_pool_percentage !== null)Approving activates the requested Rider {{ number_format((float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}% / Logistics {{ number_format(100 - (float) $shippingRateRequest->requested_rider_pool_percentage, 2) }}% shipping split immediately for new orders. The shipping fee stays at the active rate. Existing orders keep their saved policy.@else Approving activates exactly PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }} immediately for new eligible checkouts. Existing SellerOrder fee snapshots remain unchanged. The active Rider/Logistics split stays at {{ number_format((float) $policy['rider_pool_percentage'], 2) }}% / {{ number_format((float) $policy['logistics_percentage'], 2) }}%.@endif</p>
+            <form method="POST" action="{{ route('admin.shipping-rate-requests.approve', $shippingRateRequest) }}" style="display:grid;gap:10px;margin-bottom:18px" onsubmit="return confirm('Approve this exact proposal effective immediately? Existing orders will keep their snapshots.')">
                 @csrf
                 <input type="hidden" name="expected_active_version_id" value="{{ $policy['version']?->id }}">
                 @if($isStale)
-                    <label><input type="checkbox" name="confirm_stale_baseline" value="1" required @checked(old('confirm_stale_baseline'))> I reviewed the original PHP {{ number_format((float) $shippingRateRequest->current_shipping_fee, 2) }} baseline, current PHP {{ number_format((float) $policy['shipping_fee'], 2) }} rate, and confirm approval of the exact PHP {{ number_format((float) $shippingRateRequest->requested_shipping_fee, 2) }} target.</label>
+                    <label><input type="checkbox" name="confirm_stale_baseline" value="1" required @checked(old('confirm_stale_baseline'))> I reviewed the original request baseline and current active policy, and confirm approval of the exact requested target.</label>
                 @endif
                 <label>{{ $isStale ? 'Required Admin decision note' : 'Optional Admin decision note' }}<textarea name="admin_decision_reason" maxlength="2000" rows="2" @required($isStale) style="display:block;width:100%;margin-top:6px">{{ old('admin_decision_reason') }}</textarea></label>
-                <div><button type="submit" class="ad-btn ad-btn-primary">Approve Exact Requested Rate</button></div>
+                <div><button type="submit" class="ad-btn ad-btn-primary">{{ $shippingRateRequest->requested_rider_pool_percentage !== null ? 'Approve Requested Split' : 'Approve Exact Requested Rate' }}</button></div>
             </form>
             <form method="POST" action="{{ route('admin.shipping-rate-requests.reject', $shippingRateRequest) }}" style="display:grid;gap:10px;border-top:1px solid #e8ece9;padding-top:16px">
                 @csrf

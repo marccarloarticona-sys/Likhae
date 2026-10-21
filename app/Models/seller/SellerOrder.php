@@ -34,6 +34,7 @@ class SellerOrder extends Model
         'reward_points_discount',
         'shipping_fee',
         'shipping_rate_version_id',
+        'shipping_rate_snapshot',
         'grand_total',
         'protection_total',
     ];
@@ -48,6 +49,7 @@ class SellerOrder extends Model
             'shipping_fee' => 'decimal:2',
             'grand_total' => 'decimal:2',
             'protection_total' => 'decimal:2',
+            'shipping_rate_snapshot' => 'array',
         ];
     }
 

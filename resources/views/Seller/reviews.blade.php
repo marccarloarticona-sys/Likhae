@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 @section('title', 'Reviews')
 @section('active', 'reviews')
 @section('subtitle', 'Read buyer feedback and manage your replies.')

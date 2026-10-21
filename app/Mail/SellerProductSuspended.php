@@ -38,7 +38,7 @@ class SellerProductSuspended extends Mailable
                 : 'PHP '.number_format($prices->min(), 2).' - PHP '.number_format($prices->max(), 2));
 
         return new Content(
-            view: 'emails.seller.product-suspended',
+            view: 'seller.emails.product-suspended',
             with: [
                 'product' => $this->product,
                 'case' => $this->case,

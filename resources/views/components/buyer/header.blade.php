@@ -40,7 +40,7 @@
     @endunless
     @if($guest)
         <a href="{{ route('home') }}" class="lk-guest-brand" aria-label="LIKHAE Marketplace home">
-            <x-likhae-logo context="Marketplace" class="likhae-logo--guest" />
+            <x-shared.likhae-logo context="Marketplace" class="likhae-logo--guest" />
         </a>
     @else
         <div class="lk-header-title"><strong>{{ preg_replace('/\s+-\s+LIKHAE$/', '', $title) }}</strong><span>Shop smart with LIKHAE</span></div>

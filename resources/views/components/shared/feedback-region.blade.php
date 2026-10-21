@@ -1,8 +1,11 @@
 @props(['workspace' => 'app'])
 
 @php
-    $flashMessage = session('success') ?: session('status') ?: (($workspace === 'buyer' || $workspace === 'guest') ? null : (session('error') ?: $errors->first()));
-    $flashType = (session('error') || $errors->any()) ? 'error' : 'success';
+    $errorBag = $errors ?? null;
+    $validationMessage = $errorBag?->first();
+    $hasValidationErrors = $errorBag?->any() ?? false;
+    $flashMessage = session('success') ?: session('status') ?: (($workspace === 'buyer' || $workspace === 'guest') ? null : (session('error') ?: $validationMessage));
+    $flashType = (session('error') || $hasValidationErrors) ? 'error' : 'success';
 @endphp
 
 <div

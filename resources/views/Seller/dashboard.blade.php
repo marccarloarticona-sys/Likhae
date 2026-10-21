@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 
 @section('title', 'Dashboard')
 @section('active', 'dashboard')
@@ -15,7 +15,7 @@
         ['label' => 'Accepted', 'count' => (int) $orderStatusCounts['confirmed'], 'url' => route('seller.orders', ['status' => 'confirmed']), 'color' => '#6f8fa0'],
         ['label' => 'Preparing', 'count' => (int) $orderStatusCounts['preparing'], 'url' => route('seller.orders', ['status' => 'preparing']), 'color' => '#c49259'],
         ['label' => 'Ready for pickup', 'count' => (int) $orderStatusCounts['ready-for-pickup'], 'url' => route('seller.orders', ['status' => 'ready-for-pickup']), 'color' => '#b5a66c'],
-        ['label' => 'With courier', 'count' => (int) $shippingOrders, 'url' => route('seller.orders', ['status' => 'shipping']), 'color' => '#6e9a8d'],
+        ['label' => 'With rider', 'count' => (int) $shippingOrders, 'url' => route('seller.orders', ['status' => 'shipping']), 'color' => '#6e9a8d'],
         ['label' => 'Delivered', 'count' => (int) $orderStatusCounts['delivered'], 'url' => route('seller.orders', ['status' => 'shipping']), 'color' => '#87a579'],
         ['label' => 'Completed', 'count' => (int) $orderStatusCounts['completed'], 'url' => route('seller.orders', ['status' => 'completed']), 'color' => '#537763'],
     ];
@@ -68,7 +68,7 @@
             </a>
             <a class="sl-dashboard-priority {{ $stats['pending_shipment'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}">
                 <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $stats['pending_shipment'] > 0 ? '!' : '✓' }}</span>
-                <span class="sl-dashboard-priority__copy"><strong>Ready for pickup</strong><small>{{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for courier handoff' : 'No parcels waiting for pickup' }}</small></span>
+                <span class="sl-dashboard-priority__copy"><strong>Ready for pickup</strong><small>{{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for rider handoff' : 'No parcels waiting for pickup' }}</small></span>
                 <strong class="sl-dashboard-priority__count">{{ number_format($stats['pending_shipment']) }}</strong>
                 <span class="sl-dashboard-priority__action">View pickups <span aria-hidden="true">→</span></span>
             </a>
@@ -195,13 +195,14 @@
         <section class="sl-card sl-dashboard-overview-card">
             <header class="sl-card-head">
                 <div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable</h2></div>
-                <a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Reports</a>
+                <a href="{{ route('seller.wallet') }}" class="sl-text-link">Wallet &amp; payouts</a>
             </header>
             <p class="sl-dashboard-overview-card__note">Commission uses original product prices; discount-funded rows may be under review.</p>
             @if ($settlementSummary['schema_ready'])
                 <div class="sl-dashboard-payable-grid" aria-label="Seller payable amounts">
-                    <div><span>Pending / review</span><strong>{{ $peso }}{{ number_format($settlementSummary['pending'], 2) }}</strong></div>
+                    <div><span>Pending / requested / review</span><strong>{{ $peso }}{{ number_format($settlementSummary['pending'], 2) }}</strong></div>
                     <div><span>Authorized</span><strong>{{ $peso }}{{ number_format($settlementSummary['authorized'], 2) }}</strong></div>
+                    <div><span>Awaiting your receipt</span><strong>{{ $peso }}{{ number_format($settlementSummary['awaiting_ack'], 2) }}</strong></div>
                     <div><span>Paid</span><strong>{{ $peso }}{{ number_format($settlementSummary['paid'], 2) }}</strong></div>
                     <div class="is-outstanding"><span>Outstanding</span><strong>{{ $peso }}{{ number_format($settlementSummary['outstanding'], 2) }}</strong></div>
                 </div>

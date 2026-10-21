@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','Notifications')
 @section('subtitle','Your real administrator workspace notifications.')
 @section('active','notifications')

@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title', 'Parcel Sorting - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">
@@ -10,7 +10,7 @@
     <x-logistics.parcel-flow current="sort" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
-    <x-parcel-scanner :action="route('logistics.sorting')" :tracking="request('tracking', '')" :method="request('scan_method', 'MANUAL')" title="Read Address and Determine Area" description="Scan the received parcel and verify its saved buyer destination and matched logistics route." button="Find Parcel" />
+    <x-shared.parcel-scanner :action="route('logistics.sorting')" :tracking="request('tracking', '')" :method="request('scan_method', 'MANUAL')" title="Read Address and Determine Area" description="Scan the received parcel and verify its saved buyer destination and matched logistics route." button="Find Parcel" />
     <div class="grid gap-4">
     @forelse($shipments as $shipment)
         @php

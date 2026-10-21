@@ -149,7 +149,7 @@
         <div class="register-container">
 
             <a href="{{ url('/') }}" class="register-brand register-brand--main">
-                <x-likhae-logo context="Marketplace" class="likhae-logo--auth" />
+                <x-shared.likhae-logo context="Marketplace" class="likhae-logo--auth" />
             </a>
 
             {{-- =================================================

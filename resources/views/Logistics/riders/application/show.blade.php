@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 
 @section('title', 'Rider Application Review - LIKHAE Logistics')
 
@@ -48,7 +48,7 @@
 
     <section class="flex flex-col gap-5 rounded-xl border border-line bg-surface p-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-            <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Courier Registration</span>
+            <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rider Registration</span>
             <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink sm:text-[38px]">Rider Application</h1>
             <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">
                 Review the submitted information and each document before making an approval decision.

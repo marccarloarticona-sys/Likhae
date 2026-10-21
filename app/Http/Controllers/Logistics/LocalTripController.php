@@ -27,7 +27,7 @@ class LocalTripController extends Controller
     {
         $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
         if (! $this->schema->localTripsReady()) {
-            return view('Logistics.local-trips.index', [
+            return view('logistics.local-trips.index', [
                 'center' => $center,
                 'ready' => false,
                 'trips' => collect(),
@@ -60,7 +60,7 @@ class LocalTripController extends Controller
             )
             ->values();
 
-        return view('Logistics.local-trips.index', [
+        return view('logistics.local-trips.index', [
             'center' => $center,
             'ready' => true,
             'trips' => RiderLocalTrip::query()->where('logistics_center_id', $center->id)
@@ -101,7 +101,7 @@ class LocalTripController extends Controller
             ->where('assignment_type', $trip->trip_type)->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->with('shipment')->latest()->limit(100)->get();
 
-        return view('Logistics.local-trips.show', compact('center', 'trip', 'assignments'));
+        return view('logistics.local-trips.show', compact('center', 'trip', 'assignments'));
     }
 
     public function addAssignment(Request $request, int $trip): RedirectResponse

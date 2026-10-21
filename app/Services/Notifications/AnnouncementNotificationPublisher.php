@@ -23,10 +23,12 @@ class AnnouncementNotificationPublisher
             ? strtoupper((string) ($announcement->target_audience ?? 'ALL'))
             : 'ALL';
         $accountTypes = match ($audience) {
-            'ALL' => null,
+            'ALL' => [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_LOGISTICS, User::TYPE_RIDER],
             'BUYERS' => [User::TYPE_BUYER],
             'SELLERS' => [User::TYPE_SELLER],
             'LOGISTICS' => [User::TYPE_LOGISTICS, User::TYPE_RIDER],
+            'LOGISTICS_CENTERS' => [User::TYPE_LOGISTICS],
+            'RIDERS' => [User::TYPE_RIDER],
             default => [],
         };
 

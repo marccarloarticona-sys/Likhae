@@ -80,7 +80,7 @@ class RiderApplicationController extends Controller
             ];
         });
 
-        return view('Logistics.riders.application.index', [
+        return view('logistics.riders.application.index', [
             'logisticsRiderApplications' => $rows,
             'logisticsRiderSummary' => $summary,
             'statusFilter' => $status,
@@ -101,7 +101,7 @@ class RiderApplicationController extends Controller
         $address = $application->user?->addresses?->firstWhere('is_default', true)
             ?? $application->user?->addresses?->first();
 
-        return view('Logistics.riders.application.show', [
+        return view('logistics.riders.application.show', [
             'application' => $application,
             'rider' => [
                 'id' => $application->id,

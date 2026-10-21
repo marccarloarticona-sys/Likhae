@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 @section('title','Shipment Monitoring')
 @section('active','logistics')
 @section('subtitle','Track parcel pickup, sorting, assignment, and delivery from live shipment records.')
@@ -29,11 +29,11 @@
                 'CONFIRMED' => 'Seller accepted the order',
                 'PREPARING' => 'Parcel preparation started',
                 'READY_FOR_PICKUP' => 'Ready for pickup',
-                'PICKUP_ASSIGNED' => 'Pickup courier assigned',
+                'PICKUP_ASSIGNED' => 'Pickup rider assigned',
                 'PICKED_UP' => 'Collected from seller',
                 'AT_SORTING_CENTER' => 'Arrived at sorting center',
                 'SORTED' => 'Sorted for delivery',
-                'ASSIGNED_TO_RIDER' => 'Delivery courier assigned',
+                'ASSIGNED_TO_RIDER' => 'Delivery rider assigned',
                 'OUT_FOR_DELIVERY' => 'Out for delivery',
                 'DELIVERY_FAILED' => 'Delivery attempt unsuccessful',
                 'DELIVERED' => 'Delivered',
@@ -75,12 +75,12 @@
                                     $markerTitle = match ($markerKind) {
                                         'seller' => 'Seller pickup',
                                         'center' => 'Sorting center',
-                                        'rider' => data_get($mapMarker, 'assignment_type') === 'PICKUP' ? 'Pickup courier' : 'Delivery courier',
+                                        'rider' => data_get($mapMarker, 'assignment_type') === 'PICKUP' ? 'Pickup rider' : 'Delivery rider',
                                         'destination' => 'Buyer destination',
                                         default => data_get($mapMarker, 'label', 'Route location'),
                                     };
                                     $markerDetail = $markerKind === 'rider'
-                                        ? (data_get($mapMarker, 'location_pending') ? 'Waiting for courier GPS' : (data_get($mapMarker, 'location_state') === 'live' ? 'Live location · '.data_get($mapMarker, 'popup', 'Recently updated') : 'Last known location · '.data_get($mapMarker, 'popup', '')))
+                                        ? (data_get($mapMarker, 'location_pending') ? 'Waiting for rider GPS' : (data_get($mapMarker, 'location_state') === 'live' ? 'Live location · '.data_get($mapMarker, 'popup', 'Recently updated') : 'Last known location · '.data_get($mapMarker, 'popup', '')))
                                         : (data_get($mapMarker, 'popup') ?: 'Saved map location');
                                 @endphp
                                 <li class="sl-tracking-map-point sl-tracking-map-point--{{ $markerKind }}">
@@ -92,7 +92,7 @@
                     @else
                         <div class="sl-tracking-map-empty"><strong>No route pins yet</strong><p>Saved pickup and delivery coordinates will appear here when available.</p></div>
                     @endif
-                    <p class="sl-tracking-map-note">Courier GPS appears when an active assignment is sharing a location.</p>
+                    <p class="sl-tracking-map-note">Rider GPS appears when an active assignment is sharing a location.</p>
                 </aside>
             </div>
         </section>
@@ -208,7 +208,7 @@
         <section class="space-y-4">
             <div><h2 class="text-xl font-semibold text-ink">Your pickup requests</h2><p class="mt-1 text-sm text-muted">Collected progress is counted from successful per-parcel Rider scans.</p></div>
             @forelse($pickupRequests as $pickupRequest)
-                @include('Seller.partials.pickup-request-progress', ['pickupRequest' => $pickupRequest])
+                @include('seller.partials.pickup-request-progress', ['pickupRequest' => $pickupRequest])
             @empty
                 <section class="sl-card text-sm text-muted">No pickup requests yet.</section>
             @endforelse

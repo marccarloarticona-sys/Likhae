@@ -1,9 +1,9 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title','Messages - LIKHAE Logistics')
 @section('content')
 <div class="lk-workspace-messages-page">
-    @include('partials.workspace-messages-heading', ['description' => 'Keep conversations with buyers, sellers, riders, and platform staff in one polished LIKHAE inbox.'])
-    @include('partials.conversation-center', [
+    @include('components.shared.workspace-messages-heading', ['description' => 'Keep conversations with buyers, sellers, riders, and platform staff in one polished LIKHAE inbox.'])
+    @include('components.shared.conversation-center', [
         'sendRoute' => route('logistics.messages.send'),
         'streamRoute' => route('logistics.messages.stream'),
         'messageAttachmentsReady' => $messageAttachmentsReady ?? false,

@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Complaints and Disputes')
 @section('subtitle', 'Review existing disputes and explicitly escalated refund cases.')
 @section('active', 'complaints')

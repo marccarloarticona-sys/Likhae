@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('title', 'Messages')
 @section('active', 'messages')
@@ -1029,7 +1029,7 @@
                             <div>
                                 @if($showMessageBody)<div class="lk-message-bubble">{{ $messageBody }}</div>@endif
                                 @if(($messageAttachmentsReady ?? false) && filled($message->attachment_path))
-                                    @include('partials.message-attachment',['message'=>$message])
+                                    @include('components.shared.message-attachment',['message'=>$message])
                                 @endif
                                 <div class="lk-message-meta">
                                     <span class="lk-message-time">{{ $messageSentAt?->diffForHumans() }}</span>

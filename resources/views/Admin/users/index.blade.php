@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'User Management')
 @section('subtitle', 'Monitor platform accounts, issue violation notices, and apply proportionate enforcement.')

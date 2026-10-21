@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','System Errors')
 @section('active','system-settings')
 @section('subtitle','Sanitized application error records from configured Laravel log files.')

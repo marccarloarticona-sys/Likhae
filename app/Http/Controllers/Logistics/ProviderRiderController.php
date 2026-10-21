@@ -38,7 +38,7 @@ class ProviderRiderController extends Controller
             ];
         });
 
-        return view('Logistics.riders.index', [
+        return view('logistics.riders.index', [
             'logisticsRiders' => $rows,
             'logisticsRiderStats' => [
                 ['label' => 'Active Riders', 'value' => $riders->where('status', 'ACTIVE')->count(), 'tone' => 'success'],
@@ -58,7 +58,7 @@ class ProviderRiderController extends Controller
         $activeAssignments = $rider->assignments()->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])->count();
         $ratingSummary = $riderRatings->summary($rider);
 
-        return view('Logistics.riders.show', [
+        return view('logistics.riders.show', [
             'rider' => [
                 'id' => $rider->id,
                 'name' => $rider->user?->name ?? 'Rider',

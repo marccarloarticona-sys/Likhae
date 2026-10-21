@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('title', 'Account')
 @section('active', 'account')
@@ -232,9 +232,9 @@
                             @method('PUT')
                             <div class="grid gap-5 sm:grid-cols-2">
                                 <div class="sm:col-span-2 rounded-2xl border border-stone-200 bg-stone-50 p-4">
-                                    <x-profile-photo-upload :user="$user" id="buyer-profile-photo">
+                                    <x-shared.profile-photo-upload :user="$user" id="buyer-profile-photo">
                                         Profile photo
-                                    </x-profile-photo-upload>
+                                    </x-shared.profile-photo-upload>
                                 </div>
 
                                 <div class="sm:col-span-2">
@@ -476,7 +476,7 @@
                         @else
                         <form method="POST" action="{{ route('buyer.account.addresses.store') }}" class="grid gap-4 rounded-2xl border border-stone-200 bg-stone-50 p-4 sm:p-5 sm:grid-cols-2">
                             @csrf
-                            <div class="sm:col-span-2"><h3 class="text-sm font-semibold text-stone-900">Add delivery address</h3><p class="mt-1 text-xs text-stone-500">Choose a precise location so the courier can find you.</p></div>
+                            <div class="sm:col-span-2"><h3 class="text-sm font-semibold text-stone-900">Add delivery address</h3><p class="mt-1 text-xs text-stone-500">Choose a precise location so the rider can find you.</p></div>
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Address label<input required name="label" value="{{ old('label','Home') }}" maxlength="50" placeholder="Home, Work" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Recipient name<input required name="recipient_name" value="{{ old('recipient_name',$buyerName) }}" maxlength="200" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Recipient contact number<input required name="contact_number" value="{{ old('contact_number',$buyerPhoneDisplay) }}" maxlength="30" inputmode="tel" placeholder="09XX XXX XXXX" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>

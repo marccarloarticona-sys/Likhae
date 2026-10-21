@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','Administrative Audit Logs')
 @section('active','system-settings')
 @section('subtitle','Read-only view of existing audit events attributed to Admin accounts.')

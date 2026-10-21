@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','Admin Account')
 @section('subtitle','Persisted profile, security, and notification preferences.')
 @section('active','account')

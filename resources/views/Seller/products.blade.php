@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 
 @php
     $currentMode = $mode ?? request('mode', 'list');

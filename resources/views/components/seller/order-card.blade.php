@@ -22,7 +22,7 @@
             <ul class="mt-2 divide-y divide-stone-200">
                 @foreach(data_get($order, 'items', collect()) as $item)
                     <li class="flex items-center gap-3 py-3 first:pt-1 last:pb-1">
-                        <x-product-thumbnail :item="$item" size="56" class="sl-order-thumb"/>
+                        <x-shared.product-thumbnail :item="$item" size="56" class="sl-order-thumb"/>
                         <div class="min-w-0 flex-1"><strong class="block">{{ $item->product_name }}</strong><small class="block">Variant: {{ $item->variant_description ?: 'Standard' }} · Qty: {{ $item->quantity }} · Unit price: ₱{{ number_format((float) $item->unit_price, 2) }}</small></div>
                         <strong class="shrink-0">₱{{ number_format((float) $item->line_total, 2) }}</strong>
                     </li>
@@ -32,7 +32,7 @@
         </div>
         <dl class="sl-order-details" style="grid-column: 1 / -1"><div><dt>Buyer</dt><dd>{{ data_get($order,'buyer') }}</dd></div><div><dt>Payment</dt><dd>{{ data_get($order,'payment') }}</dd></div><div><dt>Shipping</dt><dd>{{ data_get($order,'shipping') }}</dd></div><div><dt>Total</dt><dd><strong>₱{{ number_format((float) data_get($order,'total'),2) }}</strong></dd></div></dl>
     </div>
-    <p class="sl-order-provider"><strong>Logistics:</strong> {{ data_get($order, 'logistics_provider', 'Not assigned') }} <span aria-hidden="true">·</span> <strong>Courier:</strong> {{ data_get($order, 'shipping', 'Waiting for Logistics') }}</p>
+    <p class="sl-order-provider"><strong>Logistics:</strong> {{ data_get($order, 'logistics_provider', 'Not assigned') }} <span aria-hidden="true">·</span> <strong>Rider:</strong> {{ data_get($order, 'shipping', 'Waiting for Logistics') }}</p>
     @if(filled(data_get($order, 'buyer_note')))
         <section class="sl-order-buyer-note" data-buyer-note>
             <strong>Buyer note</strong>

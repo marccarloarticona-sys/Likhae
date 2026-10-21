@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 @section('title', 'Rider Trip #'.$trip->id.' - LIKHAE')
 @section('content')
 <div class="space-y-6">

@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const overlay = one('[data-lk-overlay]');
     const toast = one('#lkBuyerToast');
     const desktop = window.matchMedia('(min-width: 1024px)');
+    const buyerHomeAutoCollapse = body.classList.contains('lk-buyer-home-sidebar-hover');
     const storageKey = 'likhae-buyer-sidebar-collapsed';
     const accountMenu = one('[data-account-menu]');
     const accountMenuToggle = one('[data-account-menu-toggle]', accountMenu || document);
@@ -641,6 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sidebar || !desktop.matches) return;
         sidebar.classList.toggle('lk-sidebar-collapsed', collapsed);
         body.classList.toggle('lk-sidebar-is-collapsed', collapsed);
+        if (buyerHomeAutoCollapse) body.classList.toggle('lk-buyer-home-sidebar-expanded', !collapsed);
         collapseButton?.setAttribute('aria-expanded', String(!collapsed));
         collapseButton?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
         if (persist) {
@@ -656,7 +658,19 @@ document.addEventListener('DOMContentLoaded', () => {
         mobileButton?.setAttribute('aria-expanded', String(open));
     };
 
-    if (desktop.matches) setCollapsed(storedCollapsed(), false);
+    if (desktop.matches) setCollapsed(buyerHomeAutoCollapse || storedCollapsed(), false);
+    if (buyerHomeAutoCollapse && sidebar) {
+        sidebar.addEventListener('pointerenter', () => setCollapsed(false, false));
+        sidebar.addEventListener('pointerleave', () => {
+            if (!sidebar.contains(document.activeElement)) setCollapsed(true, false);
+        });
+        sidebar.addEventListener('focusin', () => setCollapsed(false, false));
+        sidebar.addEventListener('focusout', (event) => {
+            if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) {
+                setCollapsed(true, false);
+            }
+        });
+    }
     mobileButton?.addEventListener('click', () => setMobileOpen(!sidebar?.classList.contains('lk-sidebar-open')));
     overlay?.addEventListener('click', () => setMobileOpen(false));
     collapseButton?.addEventListener('click', () => {
@@ -664,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setMobileOpen(false);
             return;
         }
-        setCollapsed(!sidebar?.classList.contains('lk-sidebar-collapsed'));
+        setCollapsed(!sidebar?.classList.contains('lk-sidebar-collapsed'), !buyerHomeAutoCollapse);
     });
 
     const submenuFor = (toggle) => toggle.nextElementSibling?.matches('[data-nav-submenu]') ? toggle.nextElementSibling : null;
@@ -702,7 +716,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setMobileOpen(false);
         body.classList.remove('lk-sidebar-is-collapsed');
         sidebar?.classList.remove('lk-sidebar-collapsed');
-        if (event.matches) setCollapsed(storedCollapsed(), false);
+        body.classList.remove('lk-buyer-home-sidebar-expanded');
+        if (event.matches) setCollapsed(buyerHomeAutoCollapse || storedCollapsed(), false);
     });
 
     document.addEventListener('keydown', (event) => {

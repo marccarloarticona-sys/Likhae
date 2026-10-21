@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title', 'Parcels - LIKHAE Logistics')
 @php
     $dateQuery = array_filter(['from_date' => $filters['from_date'] ?? null, 'to_date' => $filters['to_date'] ?? null]);

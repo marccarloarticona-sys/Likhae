@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 @section('title', 'Returns & Refunds')
 @section('active', 'orders')
 @section('content')

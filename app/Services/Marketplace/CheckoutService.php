@@ -19,6 +19,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Finance\CodCollectionService;
+use App\Services\Finance\RegionShippingRateService;
 use App\Services\Finance\ShippingRatePolicyService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\PsgcLogisticsRoutingService;
@@ -42,6 +43,7 @@ class CheckoutService
         private readonly FragileProtectionRuleService $protection,
         private readonly PurchaseLimitService $purchaseLimits,
         private readonly ShippingRatePolicyService $shippingRates,
+        private readonly RegionShippingRateService $regionShippingRates,
         private readonly BuyerProductAvailabilityService $productAvailability,
         private readonly RewardPointsService $rewardPoints,
     ) {}
@@ -271,10 +273,18 @@ class CheckoutService
         // resolve the provider from the destination service area.
         $ratePolicy = $this->shippingRates->currentPolicy(lockForUpdate: $lockVoucherUsage);
         $shippingFee = (float) $ratePolicy['shipping_fee'];
+        $destinationForPricing = $automaticDestination;
+        if (! $destinationForPricing && $buyer) {
+            $destinationForPricing = $buyer->addresses()
+                ->orderByDesc('is_default')
+                ->latest('id')
+                ->first();
+        }
+        $shippingQuotes = [];
 
         foreach ($items as $item) {
             /** @var CartItem $item */
-            $item->loadMissing(['productVariant.product.sellerProfile.user', 'productVariant.optionValues.option']);
+            $item->loadMissing(['productVariant.product.sellerProfile.user', 'productVariant.product.sellerProfile.businessAddress', 'productVariant.optionValues.option']);
             $variant = $item->productVariant;
             $product = $variant?->product;
             $seller = $product?->sellerProfile;
@@ -316,6 +326,24 @@ class CheckoutService
             $protectionTotal += $itemProtectionFee;
 
             $groupShippingFee = $shippingFee;
+            $shippingSnapshot = [
+                'base_fee' => number_format($shippingFee, 2, '.', ''),
+                'origin_region' => null,
+                'destination_region' => null,
+                'additional_region_tiers' => null,
+                'additional_region_tier_fee' => null,
+                'shipping_fee' => number_format($shippingFee, 2, '.', ''),
+                'region_pricing_pending' => true,
+            ];
+            if ($destinationForPricing) {
+                $shippingQuotes[$sellerId] ??= $this->regionShippingRates->quote(
+                    $seller->businessAddress,
+                    $destinationForPricing,
+                    $ratePolicy['shipping_fee'],
+                );
+                $groupShippingFee = (float) $shippingQuotes[$sellerId]['shipping_fee'];
+                $shippingSnapshot = $shippingQuotes[$sellerId]['snapshot'];
+            }
             $groupNeedsRoutingReview = false;
             $groupRoutingReviewReason = null;
             if ($this->automaticRoutingReady() && $logisticsProvider === null && $automaticDestination) {
@@ -335,7 +363,6 @@ class CheckoutService
                 if ($route) {
                     $this->assertCrossHubCustodyReady($route);
                 }
-                $groupShippingFee = $shippingFee;
             }
 
             $groups[$sellerId] ??= [
@@ -348,6 +375,7 @@ class CheckoutService
                 'reward_points_discount' => 0.0,
                 'shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
+                'shipping_rate_snapshot' => $shippingSnapshot,
                 'routing_review_required' => $groupNeedsRoutingReview,
                 'routing_review_reason' => $groupRoutingReviewReason,
                 'protection_total' => 0.0,
@@ -703,7 +731,7 @@ class CheckoutService
                 $voucherCodes,
                 $lockedBuyer,
                 $logisticsProvider,
-                $automaticRouting ? $address : null,
+                $address,
                 $protectionItemIds,
                 lockVoucherUsage: true,
                 rewardPointsToRedeem: $rewardPointsToRedeem,
@@ -742,7 +770,7 @@ class CheckoutService
                 'updated_at' => now(),
             ]);
 
-            $order->address()->create([
+            $orderAddressAttributes = [
                 'recipient_name' => $address->recipient_name,
                 'contact_number' => $address->contact_number,
                 'province_code' => $address->province_code,
@@ -757,7 +785,13 @@ class CheckoutService
                 'landmark' => $address->landmark,
                 'latitude' => $address->latitude,
                 'longitude' => $address->longitude,
-            ]);
+            ];
+            foreach (['region_code', 'region_name'] as $regionColumn) {
+                if (Schema::hasColumn('order_addresses', $regionColumn)) {
+                    $orderAddressAttributes[$regionColumn] = $address->{$regionColumn};
+                }
+            }
+            $order->address()->create($orderAddressAttributes);
 
             Payment::query()->create([
                 'order_id' => $order->id,
@@ -787,6 +821,9 @@ class CheckoutService
                 if ($group['shipping_rate_version_id'] !== null
                     && Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
                     $sellerOrderAttributes['shipping_rate_version_id'] = $group['shipping_rate_version_id'];
+                }
+                if (Schema::hasColumn('seller_orders', 'shipping_rate_snapshot')) {
+                    $sellerOrderAttributes['shipping_rate_snapshot'] = $group['shipping_rate_snapshot'];
                 }
                 if (Schema::hasColumn('seller_orders', 'protection_total')) {
                     $sellerOrderAttributes['protection_total'] = $group['protection_total'];

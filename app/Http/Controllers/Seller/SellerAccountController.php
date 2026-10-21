@@ -28,7 +28,7 @@ class SellerAccountController extends Controller
     {
         $shop = $this->shop($request);
 
-        return view('Seller.store', [
+        return view('seller.store', [
             'tab' => $request->input('tab', 'profile'),
             'seller' => $shop->user,
             'storeProfile' => $this->profile($shop),
@@ -122,7 +122,7 @@ class SellerAccountController extends Controller
         $shop = $this->shop($request);
         $businessAddress = $this->ownedBusinessAddress($shop);
 
-        return view('Seller.account', [
+        return view('seller.account', [
             'tab' => $request->input('tab', 'profile'),
             'seller' => $shop->user,
             'storeProfile' => $this->profile($shop),

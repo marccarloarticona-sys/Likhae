@@ -20,6 +20,8 @@ class Address extends Model
         'contact_number',
         'province_code',
         'province_name',
+        'region_code',
+        'region_name',
         'municipality_code',
         'municipality_name',
         'barangay_code',

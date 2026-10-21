@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Dashboard')
 @section('subtitle', 'Platform health, risk signals, and operational priorities at a glance.')

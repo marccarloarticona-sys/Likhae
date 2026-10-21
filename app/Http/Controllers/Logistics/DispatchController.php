@@ -68,7 +68,7 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
-        return view('Logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
+        return view('logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
     }
 
     public function pickups(Request $request, LogisticsSchemaReadiness $schema): View
@@ -210,7 +210,7 @@ class DispatchController extends Controller
             includeSeller: true,
             viewer: auth()->user(),
         );
-        return view('Logistics.pickups.index', [
+        return view('logistics.pickups.index', [
             'center' => $center,
             'tracking' => $tracking,
             'sellerPickupQueue' => $sellerPickupQueue,
@@ -273,7 +273,7 @@ class DispatchController extends Controller
                 ->get()
             : collect();
 
-        return view('Logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches', 'incomingTransferItems'));
+        return view('logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches', 'incomingTransferItems'));
     }
 
     public function sorting(Request $request): View
@@ -378,7 +378,7 @@ class DispatchController extends Controller
             $shipment->setRelation('sorting_destination_hubs', $matchingDestinationCenters);
         });
 
-        return view('Logistics.sorting.index', compact('shipments', 'areas', 'center'));
+        return view('logistics.sorting.index', compact('shipments', 'areas', 'center'));
     }
 
     public function assignments(Request $request, ShipmentWorkflowService $workflow, LogisticsSchemaReadiness $schema): View
@@ -435,7 +435,7 @@ class DispatchController extends Controller
 
         $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
         $localTripDispatchReady = $schema->localTripsReady();
-        return view('Logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady', 'mapMarkers'));
+        return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady', 'mapMarkers'));
     }
 
     public function tracking(Request $request, LogisticsShipmentQuery $shipmentQuery): View
@@ -466,7 +466,7 @@ class DispatchController extends Controller
         }
 
         $mapMarkers = app(MapDataService::class)->forShipments($trackingResults, true);
-        return view('Logistics.tracking.index', compact('shipment', 'tracking', 'trackingResults', 'mapMarkers'));
+        return view('logistics.tracking.index', compact('shipment', 'tracking', 'trackingResults', 'mapMarkers'));
     }
 
     public function overrideShipmentStatus(Request $request, Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): RedirectResponse
@@ -632,7 +632,7 @@ class DispatchController extends Controller
         $shipment->load(['sellerOrder.items.product.images', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address', 'events.actor', 'scans', 'deliveryAttempts']);
 
         $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, true);
-        return view('Logistics.parcels.show', compact('shipment', 'mapMarkers'));
+        return view('logistics.parcels.show', compact('shipment', 'mapMarkers'));
     }
 
     public function assign(Request $request, Shipment $shipment, LogisticsSchemaReadiness $schema, FinalMileDispatchService $dispatch): RedirectResponse
@@ -1098,7 +1098,7 @@ class DispatchController extends Controller
             ->with(['orderItem', 'sellerOrder.items', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
             ->firstOrFail();
 
-        return view('Logistics.waybill', compact('shipment'));
+        return view('logistics.waybill', compact('shipment'));
     }
 
     private function center(Request $request): mixed

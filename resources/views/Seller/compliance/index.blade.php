@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 @section('title', 'Compliance Notices')
 @section('active', 'products')
 @section('subtitle', 'Review product warnings, required corrections, and recorded case outcomes.')

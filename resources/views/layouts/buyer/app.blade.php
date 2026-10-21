@@ -1,0 +1,77 @@
+@php
+    $pageTitle = html_entity_decode(
+        trim($__env->yieldContent('title')) ?: 'Buyer',
+        ENT_QUOTES | ENT_HTML5,
+        'UTF-8'
+    );
+    $activePage = trim($__env->yieldContent('active')) ?: 'home';
+    $globalErrorMessage = session('upload_error') ?: session('buyer_error') ?: session('error');
+    $buyerThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    if (! in_array($buyerThemePreference, ['light', 'dark', 'system'], true)) {
+        $buyerThemePreference = 'system';
+    }
+@endphp
+<!doctype html>
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" data-buyer-theme-preference="{{ $buyerThemePreference }}" data-buyer-theme-update-url="{{ route('buyer.settings.theme.update') }}">
+<head>
+    <x-shared.likhae-favicon />
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>{{ $pageTitle }} &middot; LIKHAE Buyer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/status-guidance.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/announcement-popup.css', 'resources/css/Buyer/likhae-buyer-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/realtime.js', 'resources/js/Buyer/likhae-buyer-ai.js'])
+    @if(request()->routeIs('buyer.orders', 'buyer.orders.show', 'tracking.show') || (request()->routeIs('buyer.account') && request()->query('tab') === 'addresses'))
+        @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js'])
+    @endif
+    @if(request()->routeIs('buyer.account') && request()->query('tab') === 'addresses')
+        @vite(['resources/js/shared/address-pin.js'])
+    @endif
+    @stack('head')
+    <script>
+        (function () {
+            var root = document.documentElement;
+            root.dataset.buyerThemePreference = root.dataset.buyerThemePreference || 'system';
+            var systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+            var applyTheme = function () {
+                var preference = root.dataset.buyerThemePreference;
+                root.classList.toggle('dark', preference === 'dark' || (preference === 'system' && systemTheme.matches));
+            };
+
+            applyTheme();
+            systemTheme.addEventListener('change', function () {
+                if (root.dataset.buyerThemePreference === 'system') applyTheme();
+            });
+        })();
+    </script>
+</head>
+<body @class(['lk-buyer-body', 'lk-buyer-home-sidebar-hover' => request()->routeIs('buyer.home')])>
+    <div class="lk-buyer-app" data-lk-buyer-app data-buyer-user-id="{{ auth()->id() }}">
+        <x-buyer.sidebar :active="$activePage" />
+        <div class="lk-shell" data-sidebar-content>
+            <x-buyer.header :title="$pageTitle" />
+            <main class="lk-main" id="main-content">@yield('content')</main>
+            <x-buyer.footer />
+        </div>
+    </div>
+    <x-shared.feedback-region workspace="buyer" />
+    <x-shared.announcement-popup />
+    <x-shared.notification-popover />
+    @include('components.shared.confirm-action-modal')
+    @php($aiAssistantVisible = (bool) data_get(auth()->user()?->notification_preferences, 'ai_assistant_enabled', true))
+    <x-buyer.ai-assistant :page="$activePage" :page-title="$pageTitle" :visible="$aiAssistantVisible" />
+    <style>
+        .lk-global-error-backdrop{position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:18px;background:rgba(35,20,17,.58);backdrop-filter:blur(3px)}.lk-global-error-backdrop[hidden]{display:none}.lk-global-error-card{width:min(100%,460px);border:1px solid #eadbce;border-radius:20px;background:#fffdf9;padding:24px;box-shadow:0 24px 80px rgba(35,20,17,.25);color:#321d17}.lk-global-error-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:#fee2e2;color:#b42318;font-size:23px;font-weight:800}.lk-global-error-card h2{margin:14px 0 6px;font-size:20px;font-weight:800}.lk-global-error-card p{margin:0;color:#705c54;font-size:13px;line-height:1.55}.lk-global-error-actions{display:flex;justify-content:flex-end;margin-top:20px}.lk-global-error-close{border:0;border-radius:10px;background:#943b30;color:#fff;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer}.dark .lk-global-error-card{border-color:#4b3831;background:#241b18;color:#f7eee9}.dark .lk-global-error-card p{color:#c7b5ac}.dark .lk-global-error-icon{background:#4a2923;color:#ffb4a8}
+    </style>
+    <div class="lk-global-error-backdrop" data-global-error-modal @if(!$globalErrorMessage) hidden @endif role="alertdialog" aria-modal="true" aria-labelledby="globalErrorTitle" aria-describedby="globalErrorMessage">
+        <div class="lk-global-error-card"><div class="lk-global-error-icon" aria-hidden="true">!</div><h2 id="globalErrorTitle">Upload could not be completed</h2><p id="globalErrorMessage" data-global-error-message>{{ $globalErrorMessage }}</p><div class="lk-global-error-actions"><button type="button" class="lk-global-error-close" data-global-error-close>Close</button></div></div>
+    </div>
+    <script>
+        (function(){const modal=document.querySelector('[data-global-error-modal]');const message=modal?.querySelector('[data-global-error-message]');const close=()=>{if(modal)modal.hidden=true};window.likhaeShowError=function(text){if(!modal)return;if(message)message.textContent=text;modal.hidden=false;modal.querySelector('[data-global-error-close]')?.focus()};modal?.querySelector('[data-global-error-close]')?.addEventListener('click',close);modal?.addEventListener('click',event=>{if(event.target===modal)close()});document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!modal?.hidden)close()})})();
+    </script>
+    @include('components.shared.darkmode')
+    @stack('scripts')
+</body>
+</html>

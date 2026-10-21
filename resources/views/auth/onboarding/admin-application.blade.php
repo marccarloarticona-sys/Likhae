@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Registration Review')
 
@@ -61,7 +61,7 @@
 
     @if($rider)
         <div class="ad-card ad-card-body" style="margin-bottom:16px;">
-            <h2>Rider / Courier Information</h2>
+            <h2>Rider Information</h2>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:16px;">
                 <div><small>Vehicle</small><strong style="display:block;">{{ str($rider->vehicle_type)->headline() }}</strong></div>
                 <div><small>Plate Number</small><strong style="display:block;">{{ $rider->plate_number }}</strong></div>

@@ -1,4 +1,4 @@
-@extends('layouts.guest')
+@extends('layouts.guest.app')
 
 @section('title', isset($storeMode) ? data_get($seller, 'name', 'Store') : 'Marketplace')
 
@@ -59,7 +59,7 @@
         @if($products->isNotEmpty())
             <div class="lk-product-grid">
                 @foreach($products as $product)
-                    @include('guest.partials.product-card', ['product' => $product])
+                    @include('components.guest.product-card', ['product' => $product])
                 @endforeach
             </div>
         @else

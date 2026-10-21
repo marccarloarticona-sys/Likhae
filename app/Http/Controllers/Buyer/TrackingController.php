@@ -37,7 +37,7 @@ class TrackingController extends Controller
 
         $mapMarkers = app(MapDataService::class)->forShipment($shipment);
 
-        return view('Buyer.tracking.show', compact('shipment', 'mapMarkers'));
+        return view('buyer.tracking.show', compact('shipment', 'mapMarkers'));
     }
 
     public function live(Request $request, string $trackingCode): JsonResponse

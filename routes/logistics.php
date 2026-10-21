@@ -14,7 +14,7 @@ use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('logistics')->name('logistics.')->group(function (): void {
-    Route::get('/', fn () => view('Logistics.landing'))->name('home');
+    Route::get('/', fn () => view('logistics.landing'))->name('home');
 
     Route::get('/login', function () {
         return view('auth.workspace-login', [
@@ -121,8 +121,15 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/messages', [LogisticsPortalController::class, 'sendMessage'])->name('messages.send');
         Route::get('/reports', [LogisticsPortalController::class, 'reports'])->name('reports');
         Route::get('/remittances', [LogisticsRemittanceController::class, 'index'])->name('remittances');
+        Route::get('/wallet', [LogisticsRemittanceController::class, 'wallet'])->name('wallet');
+        Route::put('/wallet/payout-destination', [LogisticsRemittanceController::class, 'updatePayoutDestination'])->name('wallet.payout-destination.update');
+        Route::post('/wallet/payout-requests/{pool}', [LogisticsRemittanceController::class, 'requestPayout'])->whereNumber('pool')->name('wallet.payout-requests.store');
+        Route::post('/remittances/rider-payouts/{entry}/record', [LogisticsRemittanceController::class, 'recordRiderPayout'])->whereNumber('entry')->name('remittances.rider-payouts.record');
+        Route::post('/remittances/logistics-payouts/{entry}/acknowledge', [LogisticsRemittanceController::class, 'acknowledgeLogisticsPayout'])->whereNumber('entry')->name('remittances.logistics-payouts.acknowledge');
         Route::post('/remittances/{remittance}/verify', [LogisticsRemittanceController::class, 'verify'])->name('remittances.verify');
         Route::post('/remittances/{remittance}/reconcile', [LogisticsRemittanceController::class, 'reconcile'])->name('remittances.reconcile');
+        Route::post('/remittances/{remittance}/resolve', [LogisticsRemittanceController::class, 'resolveDiscrepancy'])->name('remittances.resolve');
+        Route::post('/product-proceeds/{entry}/submit', [LogisticsRemittanceController::class, 'submitProductProceeds'])->name('product-proceeds.submit');
         Route::get('/reports/export', [LogisticsPortalController::class, 'exportReport'])->name('reports.export');
         Route::get('/profile', [LogisticsPortalController::class, 'profile'])->name('profile');
         Route::get('/account', [LogisticsPortalController::class, 'profile'])->name('account');

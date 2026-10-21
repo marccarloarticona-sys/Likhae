@@ -37,23 +37,32 @@ class LogisticsShippingRateController extends Controller
                 ->first()
             : null;
 
-        return view('Logistics.shipping-rate.index', [
+        return view('logistics.shipping-rate.index', [
             'center' => $user->logisticsCenter,
             'schemaReady' => $ready,
             'policy' => $policy,
             'requests' => $requests,
             'pendingRequest' => $pendingRequest,
             'reasons' => ShippingRateChangeRequest::REASONS,
+            'commissionRequestsReady' => $ready
+                && \Illuminate\Support\Facades\Schema::hasColumn('shipping_rate_change_requests', 'requested_rider_pool_percentage')
+                && \Illuminate\Support\Facades\Schema::hasColumn('shipping_rate_change_requests', 'current_rider_pool_percentage'),
         ]);
     }
 
     public function store(Request $request, ShippingRateGovernanceService $governance): RedirectResponse
     {
         $data = $request->validate([
-            'requested_shipping_fee' => ['required', 'decimal:0,2', 'min:0.01', 'max:1000000'],
+            'requested_shipping_fee' => ['nullable', 'decimal:0,2', 'min:0.01', 'max:1000000'],
+            'requested_rider_pool_percentage' => ['nullable', 'decimal:0,4', 'min:0', 'max:100'],
             'reason_code' => ['required', Rule::in(array_keys(ShippingRateChangeRequest::REASONS))],
             'reason_details' => ['nullable', 'string', 'max:2000', 'not_regex:/<[^>]*>/'],
         ]);
+        $hasFee = filled($data['requested_shipping_fee'] ?? null);
+        $hasRiderShare = filled($data['requested_rider_pool_percentage'] ?? null);
+        if ($hasFee === $hasRiderShare) {
+            return back()->withErrors(['requested_shipping_fee' => 'Enter either a shipping fee proposal or a Rider share proposal.'])->withInput();
+        }
         if ($data['reason_code'] === 'OTHER' && blank($data['reason_details'] ?? null)) {
             return back()->withErrors(['reason_details' => 'Explain the reason when you select Other.'])->withInput();
         }
@@ -64,7 +73,9 @@ class LogisticsShippingRateController extends Controller
             abort(503, $exception->getMessage());
         }
 
-        return redirect()->route('logistics.shipping-rate')->with('status', 'Shipping fee request submitted for Admin review.');
+        return redirect()->route('logistics.shipping-rate')->with('status', $hasRiderShare
+            ? 'Rider shipping share request submitted for Admin review.'
+            : 'Shipping fee request submitted for Admin review.');
     }
 
     public function cancel(Request $request, ShippingRateChangeRequest $shippingRateRequest, ShippingRateGovernanceService $governance): RedirectResponse

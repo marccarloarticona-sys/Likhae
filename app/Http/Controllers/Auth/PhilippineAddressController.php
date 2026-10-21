@@ -159,6 +159,26 @@ class PhilippineAddressController extends Controller
         return null;
     }
 
+    public static function regionNameForCode(string $regionCode): ?string
+    {
+        $regionCode = trim($regionCode);
+        if ($regionCode === '') {
+            return null;
+        }
+
+        try {
+            $region = collect((new self)->list('/regions'))->first(
+                fn (array $row): bool => (string) ($row['code'] ?? '') === $regionCode,
+            );
+
+            return filled($region['name'] ?? null) ? trim((string) $region['name']) : null;
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return null;
+        }
+    }
+
     public function postalCode(Request $request): JsonResponse
     {
         $municipalityCode = trim((string) $request->query('municipality', ''));

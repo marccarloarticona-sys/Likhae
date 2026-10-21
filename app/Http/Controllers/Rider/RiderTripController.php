@@ -29,7 +29,7 @@ class RiderTripController extends Controller
             ? RiderLocalTrip::query()->where('rider_profile_id', $rider->id)->where('trip_type', RiderLocalTrip::TYPE_DELIVERY)->withCount(['items as load_count' => fn ($query) => $query->whereIn('status', ['QUEUED', 'LOADED'])])->latest()->paginate(20)
             : collect();
 
-        return view('Rider.trips', compact('rider', 'trips', 'localTripsReady'));
+        return view('rider.trips', compact('rider', 'trips', 'localTripsReady'));
     }
 
     public function show(Request $request, int $trip): View
@@ -38,7 +38,7 @@ class RiderTripController extends Controller
         abort_unless($rider, 403);
         abort_unless($this->schema->localTripsReady(), 503, 'Local trip schema is not installed.');
         $trip = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)->where('trip_type', RiderLocalTrip::TYPE_DELIVERY)->with('items.riderAssignment.shipment')->findOrFail($trip);
-        return view('Rider.trip-show', compact('rider', 'trip'));
+        return view('rider.trip-show', compact('rider', 'trip'));
     }
 
     public function load(Request $request, int $trip): RedirectResponse

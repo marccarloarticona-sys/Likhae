@@ -80,7 +80,7 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('Buyer.home', [
+        return view('buyer.home', [
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
             'heroProducts' => $bestSellingProducts,
@@ -103,7 +103,7 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('Buyer.flash-deals', [
+        return view('buyer.flash-deals', [
             'products' => $products,
             'dealProducts' => $dealProducts,
         ]);
@@ -159,7 +159,7 @@ class BuyerController extends Controller
             ? $this->catalogSearchSuggestions($filters)
             : [];
 
-        return view('Buyer.products', [
+        return view('buyer.products', [
             'products' => $paginator,
             'buyerProducts' => $paginator->getCollection()->map(fn (Product $product) => $this->buyerCatalogPayload($product)),
             'categories' => $this->catalog->categories(),
@@ -510,7 +510,7 @@ class BuyerController extends Controller
             ? $this->catalog->sellerRating($product->sellerProfile)
             : 0;
 
-        return view('Buyer.product-details', [
+        return view('buyer.product-details', [
             'productModel' => $product,
             'product' => $productPayload,
             'relatedProducts' => $this->catalog->visibleQuery()
@@ -576,7 +576,7 @@ class BuyerController extends Controller
             ->paginate(24, ['*'], 'page', $filters['page'])
             ->appends($filters['query_parameters']);
 
-        return view('Buyer.store', [
+        return view('buyer.store', [
             'seller' => $sellerProfile,
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
@@ -739,7 +739,7 @@ class BuyerController extends Controller
             })
             ->filter(fn ($vouchers) => $vouchers->isNotEmpty());
 
-        return view('Buyer.cart', [
+        return view('buyer.cart', [
             'cartItems' => $cartItems,
             'availableVouchers' => $availableVouchers,
             'defaultAddress' => $buyer->addresses()->orderByDesc('is_default')->latest()->first(),
@@ -1193,7 +1193,7 @@ class BuyerController extends Controller
             }
         }
 
-        return view('Buyer.messages', [
+        return view('buyer.messages', [
             'buyerProducts' => $referenceProduct ? collect([$referenceProduct]) : collect(),
             'conversationRows' => $rows,
             'dbActiveSeller' => null,
@@ -1327,7 +1327,7 @@ class BuyerController extends Controller
                 return $payload;
             });
 
-        return view('Buyer.wishlist', compact('wishlistProducts'));
+        return view('buyer.wishlist', compact('wishlistProducts'));
     }
 
     public function toggleWishlist(Request $request, string $productId): RedirectResponse|JsonResponse
@@ -1528,7 +1528,7 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('Buyer.rewards', [
+        return view('buyer.rewards', [
             'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
             'platformVoucherCards' => $platformVoucherCards,
             'voucherHistory' => $voucherHistory,
@@ -1539,7 +1539,7 @@ class BuyerController extends Controller
 
     public function notifications(Request $request): View
     {
-        return view('Buyer.notifications', [
+        return view('buyer.notifications', [
             'notifications' => $request->user()->notifications()
                 ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])
                 ->latest('created_at')
@@ -1643,7 +1643,7 @@ class BuyerController extends Controller
         $buyer = $request->user();
         $addresses = $buyer->addresses()->latest()->get();
 
-        return view('Buyer.account', [
+        return view('buyer.account', [
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
             'addressCount' => $addresses->count(),
@@ -1661,7 +1661,7 @@ class BuyerController extends Controller
 
     public function settings(Request $request): View
     {
-        return view('Buyer.settings', [
+        return view('buyer.settings', [
             'preferences' => $this->buyerPreferences($request->user()),
         ]);
     }

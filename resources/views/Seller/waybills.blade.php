@@ -8,7 +8,7 @@
 </head>
 <body>
 @foreach($shipments as $index => $shipment)
-    @include('Seller.partials.waybill-label', ['sellerOrder' => $sellerOrder, 'shipment' => $shipment, 'item' => $shipment->orderItem, 'parcelNumber' => $index + 1, 'pageBreak' => $index < $shipments->count() - 1])
+    @include('seller.partials.waybill-label', ['sellerOrder' => $sellerOrder, 'shipment' => $shipment, 'item' => $shipment->orderItem, 'parcelNumber' => $index + 1, 'pageBreak' => $index < $shipments->count() - 1])
 @endforeach
 <script>window.addEventListener('load',()=>window.print())</script>
 </body>

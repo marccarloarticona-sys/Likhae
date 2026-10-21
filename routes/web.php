@@ -61,6 +61,12 @@ Route::post('/messages/presence', [MessagePresenceController::class, 'touch'])
 Route::middleware(['auth', 'verified'])->group(function (): void {
     Route::get('/notifications', [NotificationCenterController::class, 'index'])->name('notifications.index');
     Route::post('/notifications/read-all', [NotificationCenterController::class, 'markAllRead'])->name('notifications.read-all');
+    Route::post('/notifications/announcements/{notification}/dismiss', [NotificationCenterController::class, 'dismissAnnouncement'])
+        ->whereNumber('notification')
+        ->name('notifications.announcements.dismiss');
+    Route::post('/notifications/announcements/{notification}/open', [NotificationCenterController::class, 'openAnnouncement'])
+        ->whereNumber('notification')
+        ->name('notifications.announcements.open');
 });
 
 /*

@@ -242,7 +242,7 @@ class SystemSettingsMonitoringController extends Controller
     private function settingsConfig(): array
     {
         return [
-            'view' => 'Admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
+            'view' => 'admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
             'update_route' => 'admin.system-settings.update', 'workspace' => 'admin', 'show_ai' => false,
             'sound_key' => 'admin_notification_sounds',
             'description' => 'Adjust your Admin Center appearance and notification sound preference.',

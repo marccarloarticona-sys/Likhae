@@ -28,7 +28,7 @@ class RiderTransferController extends Controller
             ? TransferManifest::query()->where('assigned_driver_rider_profile_id', $rider->id)->with('originLogisticsCenter', 'destinationLogisticsCenter')->latest()->paginate(20)
             : collect();
 
-        return view('Rider.transfers', compact('rider', 'ready', 'manifests'));
+        return view('rider.transfers', compact('rider', 'ready', 'manifests'));
     }
 
     public function show(Request $request, int $manifest): View
@@ -53,7 +53,7 @@ class RiderTransferController extends Controller
             }
         }
 
-        return view('Rider.transfer-show', compact('rider', 'manifest', 'mapMarkers'));
+        return view('rider.transfer-show', compact('rider', 'manifest', 'mapMarkers'));
     }
 
     public function accept(Request $request, int $manifest): RedirectResponse

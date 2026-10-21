@@ -9,7 +9,7 @@ class WaybillBarcodeComponentTest extends TestCase
 {
     public function test_waybill_barcode_component_renders_a_machine_readable_code_128_barcode(): void
     {
-        $html = Blade::render('<x-waybill-barcode tracking="LKH-TEST-123" />');
+        $html = Blade::render('<x-shared.waybill-barcode tracking="LKH-TEST-123" />');
 
         $this->assertStringContainsString('Waybill barcode for LKH-TEST-123', $html);
         $this->assertStringContainsString('LKH-TEST-123', $html);

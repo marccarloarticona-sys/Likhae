@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title', 'Local Trip #'.$trip->id.' - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">

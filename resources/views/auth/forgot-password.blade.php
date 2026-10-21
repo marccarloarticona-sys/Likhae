@@ -9,7 +9,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <x-likhae-favicon />
+    <x-shared.likhae-favicon />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -28,7 +28,7 @@
                     @if ($isLogistics)
                         <span class="likhae-logo likhae-logo--auth likhae-logo--logistics" role="img" aria-label="LIKHAE {{ $accountLabel }}"><img class="likhae-logo__image" src="{{ asset('images/likhae-logo.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true"></span>
                     @else
-                        <x-likhae-logo context="Marketplace" class="likhae-logo--auth" />
+                        <x-shared.likhae-logo context="Marketplace" class="likhae-logo--auth" />
                     @endif
                 </a>
                 <div class="auth-hero__content">
@@ -56,7 +56,7 @@
                         @if ($isLogistics)
                             <span class="likhae-logo likhae-logo--auth-panel" role="img" aria-label="LIKHAE {{ $accountLabel }}"><img src="{{ asset('images/likhae-logo-black-text.png') }}" alt="LIKHAE" width="194" height="42" loading="eager" decoding="async"></span>
                         @else
-                            <x-likhae-logo context="Marketplace" class="likhae-logo--auth likhae-logo--auth-panel" />
+                            <x-shared.likhae-logo context="Marketplace" class="likhae-logo--auth likhae-logo--auth-panel" />
                         @endif
                     </a>
                 </div>

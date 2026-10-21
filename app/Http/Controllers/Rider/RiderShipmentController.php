@@ -63,7 +63,7 @@ class RiderShipmentController extends Controller
             ->latest()
             ->paginate(15);
 
-        return view('Rider.shipments', compact('assignments', 'rider'));
+        return view('rider.shipments', compact('assignments', 'rider'));
     }
 
     public function transition(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images, LocalRiderTripService $localTrips): RedirectResponse

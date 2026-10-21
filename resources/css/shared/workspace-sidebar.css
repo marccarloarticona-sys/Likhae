@@ -669,8 +669,8 @@
     }
 
     @media (min-width: 1024px) {
-        body.lk-buyer-home-sidebar-hover:not(.lk-buyer-home-sidebar-expanded) #adminSidebar {
-            width: var(--admin-side-collapsed);
+        body.lk-buyer-home-sidebar-hover:not(.lk-buyer-home-sidebar-expanded) .lk-sidebar {
+            width: var(--lk-sidebar-collapsed);
         }
 
         body.lk-buyer-home-sidebar-hover:not(.lk-buyer-home-sidebar-expanded) [data-sidebar-content] {
@@ -683,3 +683,546 @@
             margin-left: 0 !important;
         }
     }
+
+/* Logistics and rider workspaces share the same sidebar markup. */
+body.logistics-shell,
+body.rider-shell {
+    --workspace-sidebar-width: 252px;
+    --workspace-sidebar-collapsed-width: 76px;
+    --workspace-sidebar-bg: #FFFDF9;
+    --workspace-sidebar-soft: #F6EFE7;
+    --workspace-sidebar-border: #EADCCC;
+    --workspace-sidebar-ink: #3B211B;
+    --workspace-sidebar-muted: #987865;
+    --workspace-sidebar-primary: #561C17;
+    --workspace-sidebar-active: #F3E4DE;
+}
+
+body.rider-shell {
+    --workspace-sidebar-width: 248px;
+}
+
+body.logistics-shell [data-sl-sidebar],
+body.rider-shell [data-sl-sidebar] {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 100;
+    display: flex;
+    width: var(--workspace-sidebar-width);
+    height: 100vh;
+    height: 100dvh;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--workspace-sidebar-border);
+    background: var(--workspace-sidebar-bg);
+    color: var(--workspace-sidebar-muted);
+    box-shadow: 8px 0 26px rgba(74, 35, 27, .05);
+    transition: width .22s ease, transform .22s ease;
+}
+
+body.logistics-shell .sl-sidebar-head,
+body.rider-shell .sl-sidebar-head {
+    display: flex;
+    min-height: 62px;
+    flex: 0 0 62px;
+    align-items: center;
+    gap: 11px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--workspace-sidebar-border);
+}
+
+body.logistics-shell .sl-icon-btn,
+body.rider-shell .sl-icon-btn {
+    display: inline-grid;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--workspace-sidebar-border);
+    border-radius: 10px;
+    background: var(--workspace-sidebar-soft);
+    color: var(--workspace-sidebar-primary);
+    cursor: pointer;
+}
+
+body.logistics-shell .sl-icon-btn svg,
+body.rider-shell .sl-icon-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+body.logistics-shell .sl-brand,
+body.rider-shell .sl-brand {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+    color: inherit;
+    text-decoration: none;
+}
+
+body.logistics-shell .sl-brand-mark,
+body.rider-shell .sl-brand-mark {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    place-items: center;
+    border-radius: 11px;
+    background: var(--workspace-sidebar-primary);
+    color: #fff;
+    font-size: 19px;
+    font-weight: 700;
+}
+
+body.logistics-shell .sl-brand-copy,
+body.rider-shell .sl-brand-copy {
+    display: grid;
+    min-width: 0;
+    line-height: 1.15;
+    white-space: nowrap;
+}
+
+body.logistics-shell .sl-brand-copy strong,
+body.rider-shell .sl-brand-copy strong {
+    color: var(--workspace-sidebar-ink);
+    font-size: 15px;
+    letter-spacing: .02em;
+}
+
+body.logistics-shell .sl-brand-copy small,
+body.rider-shell .sl-brand-copy small {
+    margin-top: 3px;
+    color: var(--workspace-sidebar-muted);
+    font-size: 8px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+body.logistics-shell .sl-seller-card,
+body.rider-shell .sl-seller-card {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 12px 11px 7px;
+    padding: 10px;
+    overflow: hidden;
+    border: 1px solid var(--workspace-sidebar-border);
+    border-radius: 12px;
+    background: var(--workspace-sidebar-soft);
+}
+
+body.logistics-shell .sl-avatar,
+body.rider-shell .sl-avatar {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    place-items: center;
+    border-radius: 11px;
+    background: var(--workspace-sidebar-primary);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+body.logistics-shell .sl-seller-copy,
+body.rider-shell .sl-seller-copy {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    white-space: nowrap;
+}
+
+body.logistics-shell .sl-seller-copy strong,
+body.rider-shell .sl-seller-copy strong {
+    overflow: hidden;
+    color: var(--workspace-sidebar-ink);
+    font-size: 10px;
+    text-overflow: ellipsis;
+}
+
+body.logistics-shell .sl-seller-copy small,
+body.rider-shell .sl-seller-copy small {
+    overflow: hidden;
+    color: var(--workspace-sidebar-muted);
+    font-size: 8px;
+    text-overflow: ellipsis;
+}
+
+body.logistics-shell .sl-verified,
+body.rider-shell .sl-verified {
+    display: grid;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--workspace-sidebar-primary);
+    color: #fff;
+    font-size: 10px;
+}
+
+body.logistics-shell .sl-sidebar-scroll,
+body.rider-shell .sl-sidebar-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 5px 9px 14px;
+    scrollbar-color: var(--workspace-sidebar-border) transparent;
+    scrollbar-width: thin;
+}
+
+body.logistics-shell .sl-nav-section,
+body.rider-shell .sl-nav-section {
+    margin-top: 11px;
+}
+
+body.logistics-shell .sl-nav-label,
+body.rider-shell .sl-nav-label {
+    display: flex;
+    min-height: 25px;
+    align-items: center;
+    padding: 0 10px;
+    color: var(--workspace-sidebar-muted);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+body.logistics-shell .sl-nav-link,
+body.rider-shell .sl-nav-link {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 39px;
+    align-items: center;
+    gap: 10px;
+    margin: 2px 0;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--workspace-sidebar-muted);
+    font: inherit;
+    font-size: 10px;
+    text-align: left;
+    text-decoration: none;
+    transition: color .15s ease, background .15s ease;
+}
+
+body.logistics-shell .sl-nav-link:hover,
+body.rider-shell .sl-nav-link:hover {
+    background: var(--workspace-sidebar-soft);
+    color: var(--workspace-sidebar-primary);
+}
+
+body.logistics-shell .sl-nav-link.is-active,
+body.rider-shell .sl-nav-link.is-active {
+    background: var(--workspace-sidebar-active);
+    color: var(--workspace-sidebar-primary);
+    font-weight: 700;
+}
+
+body.logistics-shell .sl-nav-link.is-active::before,
+body.rider-shell .sl-nav-link.is-active::before {
+    position: absolute;
+    inset: 8px auto 8px 0;
+    width: 3px;
+    border-radius: 0 5px 5px 0;
+    background: var(--workspace-sidebar-primary);
+    content: "";
+}
+
+body.logistics-shell .sl-nav-icon,
+body.rider-shell .sl-nav-icon {
+    display: grid;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    place-items: center;
+}
+
+body.logistics-shell .sl-nav-icon svg,
+body.rider-shell .sl-nav-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+body.logistics-shell .sl-nav-text,
+body.rider-shell .sl-nav-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.logistics-shell .sl-nav-badge,
+body.rider-shell .sl-nav-badge {
+    display: grid;
+    min-width: 18px;
+    height: 18px;
+    place-items: center;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: #987865;
+    color: #fff;
+    font-size: 9px;
+}
+
+body.logistics-shell .sl-sidebar-foot,
+body.rider-shell .sl-sidebar-foot {
+    flex: 0 0 auto;
+    padding: 9px 9px max(9px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--workspace-sidebar-border);
+    background: var(--workspace-sidebar-bg);
+}
+
+body.logistics-shell .sl-sidebar-foot form,
+body.rider-shell .sl-sidebar-foot form {
+    margin: 0;
+}
+
+body.logistics-shell .sl-sidebar-foot .sl-logout,
+body.rider-shell .sl-sidebar-foot .sl-logout {
+    color: #B42318;
+}
+
+body.logistics-shell [data-sidebar-content],
+body.rider-shell [data-sidebar-content] {
+    margin-left: var(--workspace-sidebar-width);
+    transition: margin-left .22s ease;
+}
+
+body.logistics-shell.sl-sidebar-collapsed [data-sl-sidebar],
+body.rider-shell.sl-sidebar-collapsed [data-sl-sidebar] {
+    width: var(--workspace-sidebar-collapsed-width);
+}
+
+body.logistics-shell.sl-sidebar-collapsed [data-sidebar-content],
+body.rider-shell.sl-sidebar-collapsed [data-sidebar-content] {
+    margin-left: var(--workspace-sidebar-collapsed-width);
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-brand-copy,
+body.rider-shell.sl-sidebar-collapsed .sl-brand-copy,
+body.logistics-shell.sl-sidebar-collapsed .sl-seller-copy,
+body.rider-shell.sl-sidebar-collapsed .sl-seller-copy,
+body.logistics-shell.sl-sidebar-collapsed .sl-verified,
+body.rider-shell.sl-sidebar-collapsed .sl-verified,
+body.logistics-shell.sl-sidebar-collapsed .sl-nav-label,
+body.rider-shell.sl-sidebar-collapsed .sl-nav-label,
+body.logistics-shell.sl-sidebar-collapsed .sl-nav-text,
+body.rider-shell.sl-sidebar-collapsed .sl-nav-text,
+body.logistics-shell.sl-sidebar-collapsed .sl-nav-badge,
+body.rider-shell.sl-sidebar-collapsed .sl-nav-badge {
+    display: none !important;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-head,
+body.rider-shell.sl-sidebar-collapsed .sl-sidebar-head {
+    position: relative;
+    justify-content: center;
+    padding-inline: 8px;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-toggle,
+body.rider-shell.sl-sidebar-collapsed .sl-sidebar-toggle {
+    position: absolute;
+    top: 13px;
+    left: 19px;
+    z-index: 2;
+    opacity: 0;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-head:hover .sl-sidebar-toggle,
+body.rider-shell.sl-sidebar-collapsed .sl-sidebar-head:hover .sl-sidebar-toggle,
+body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-toggle:focus-visible,
+body.rider-shell.sl-sidebar-collapsed .sl-sidebar-toggle:focus-visible {
+    opacity: 1;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-head:hover .sl-brand,
+body.rider-shell.sl-sidebar-collapsed .sl-sidebar-head:hover .sl-brand {
+    opacity: 0;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-seller-card,
+body.rider-shell.sl-sidebar-collapsed .sl-seller-card {
+    justify-content: center;
+    margin-inline: 8px;
+    padding: 8px 0;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-nav-link,
+body.rider-shell.sl-sidebar-collapsed .sl-nav-link {
+    justify-content: center;
+    padding-inline: 0;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-theme-copy,
+body.rider-shell.sl-sidebar-collapsed .sl-theme-copy,
+body.logistics-shell.sl-sidebar-collapsed .sl-theme-state,
+body.rider-shell.sl-sidebar-collapsed .sl-theme-state {
+    display: none !important;
+}
+
+body.logistics-shell.sl-sidebar-collapsed #themeToggle,
+body.rider-shell.sl-sidebar-collapsed #themeToggle {
+    justify-content: center !important;
+    padding-inline: 0 !important;
+}
+
+body.logistics-shell.sl-sidebar-collapsed .sl-nav-link:hover::after,
+body.rider-shell.sl-sidebar-collapsed .sl-nav-link:hover::after {
+    position: absolute;
+    left: 58px;
+    z-index: 130;
+    padding: 6px 9px;
+    border: 1px solid var(--workspace-sidebar-border);
+    border-radius: 7px;
+    background: var(--workspace-sidebar-ink);
+    color: #fff;
+    content: attr(data-title);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+body.logistics-shell .sl-overlay,
+body.rider-shell .sl-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    visibility: hidden;
+    background: rgba(28, 22, 15, .42);
+    opacity: 0;
+    backdrop-filter: blur(3px);
+    transition: opacity .2s ease, visibility .2s ease;
+}
+
+body.logistics-shell .sl-overlay.is-open,
+body.rider-shell .sl-overlay.is-open {
+    visibility: visible;
+    opacity: 1;
+}
+
+body.sl-mobile-open {
+    overflow: hidden;
+}
+
+html.dark body.logistics-shell,
+html.dark body.rider-shell {
+    --workspace-sidebar-bg: #130F0E;
+    --workspace-sidebar-soft: #1B1513;
+    --workspace-sidebar-border: #30231F;
+    --workspace-sidebar-ink: #F5EFE8;
+    --workspace-sidebar-muted: #B8AAA1;
+    --workspace-sidebar-active: #3A1111;
+}
+
+html.dark body.logistics-shell [data-sl-sidebar],
+html.dark body.rider-shell [data-sl-sidebar] {
+    box-shadow: none;
+}
+
+html.dark body.logistics-shell .sl-nav-link.is-active,
+html.dark body.rider-shell .sl-nav-link.is-active {
+    color: #F3C6BA;
+}
+
+@media (max-width: 1023px) {
+    body.logistics-shell [data-sl-sidebar],
+    body.rider-shell [data-sl-sidebar],
+    body.logistics-shell.sl-sidebar-collapsed [data-sl-sidebar],
+    body.rider-shell.sl-sidebar-collapsed [data-sl-sidebar] {
+        width: min(84vw, 270px);
+        height: 100dvh;
+        max-height: 100dvh;
+        transform: translateX(-102%);
+    }
+
+    body.logistics-shell [data-sl-sidebar].is-open,
+    body.rider-shell [data-sl-sidebar].is-open {
+        transform: translateX(0);
+    }
+
+    body.logistics-shell [data-sidebar-content],
+    body.rider-shell [data-sidebar-content],
+    body.logistics-shell.sl-sidebar-collapsed [data-sidebar-content],
+    body.rider-shell.sl-sidebar-collapsed [data-sidebar-content] {
+        margin-left: 0 !important;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-brand-copy,
+    body.rider-shell.sl-sidebar-collapsed .sl-brand-copy,
+    body.logistics-shell.sl-sidebar-collapsed .sl-seller-copy,
+    body.rider-shell.sl-sidebar-collapsed .sl-seller-copy,
+    body.logistics-shell.sl-sidebar-collapsed .sl-verified,
+    body.rider-shell.sl-sidebar-collapsed .sl-verified,
+    body.logistics-shell.sl-sidebar-collapsed .sl-nav-label,
+    body.rider-shell.sl-sidebar-collapsed .sl-nav-label,
+    body.logistics-shell.sl-sidebar-collapsed .sl-nav-text,
+    body.rider-shell.sl-sidebar-collapsed .sl-nav-text,
+    body.logistics-shell.sl-sidebar-collapsed .sl-nav-badge,
+    body.rider-shell.sl-sidebar-collapsed .sl-nav-badge {
+        display: initial !important;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-head,
+    body.rider-shell.sl-sidebar-collapsed .sl-sidebar-head {
+        justify-content: flex-start;
+        padding-inline: 14px;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-seller-card,
+    body.rider-shell.sl-sidebar-collapsed .sl-seller-card {
+        justify-content: flex-start;
+        margin: 12px 11px 7px;
+        padding: 10px;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-nav-link,
+    body.rider-shell.sl-sidebar-collapsed .sl-nav-link {
+        justify-content: flex-start;
+        padding-inline: 10px;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-theme-copy,
+    body.rider-shell.sl-sidebar-collapsed .sl-theme-copy {
+        display: grid !important;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-theme-state,
+    body.rider-shell.sl-sidebar-collapsed .sl-theme-state {
+        display: inline-flex !important;
+    }
+
+    body.logistics-shell.sl-sidebar-collapsed .sl-sidebar-toggle,
+    body.rider-shell.sl-sidebar-collapsed .sl-sidebar-toggle {
+        position: static;
+        opacity: 1;
+    }
+
+    body.logistics-shell .sl-sidebar-toggle,
+    body.rider-shell .sl-sidebar-toggle {
+        display: none;
+    }
+}

@@ -1,4 +1,4 @@
-@extends('layouts.guest')
+@extends('layouts.guest.app')
 @section('title', 'Welcome to LIKHAE')
 @section('content')
 @php
@@ -41,7 +41,7 @@
     {{-- ══════════════════════════════════════════════════════
          HERO
     ══════════════════════════════════════════════════════ --}}
-    @include('guest.partials.hero-carousel')
+    @include('components.guest.hero-carousel')
 
     {{-- ══════════════════════════════════════════════════════
          TRUST BAR
@@ -123,7 +123,7 @@
         @if($featuredProducts->isNotEmpty())
             <div class="lk-product-grid lk-ed-product-grid">
                 @foreach($featuredProducts as $product)
-                    @include('guest.partials.product-card', ['product' => $product])
+                    @include('components.guest.product-card', ['product' => $product])
                 @endforeach
             </div>
         @else

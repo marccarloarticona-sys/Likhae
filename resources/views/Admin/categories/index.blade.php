@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Category Management')
 @section('subtitle', 'Organize and manage marketplace categories and subcategories.')

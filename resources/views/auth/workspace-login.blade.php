@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <x-likhae-favicon />
+    <x-shared.likhae-favicon />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -88,7 +88,7 @@
                             <img src="{{ asset('images/likhae-logo-black-text.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true">
                         </span>
                     @else
-                        <x-likhae-logo :context="$accountLabel" class="likhae-logo--auth" />
+                        <x-shared.likhae-logo :context="$accountLabel" class="likhae-logo--auth" />
                     @endif
                 </a>
             </div>

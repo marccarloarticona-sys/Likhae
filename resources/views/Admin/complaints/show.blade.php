@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Dispute '.$dispute->dispute_number)
 @section('subtitle', 'Review the complete escalation and record an accountable Admin decision.')
 @section('active', 'complaints')

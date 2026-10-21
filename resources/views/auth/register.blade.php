@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <x-likhae-favicon />
+    <x-shared.likhae-favicon />
     <meta charset="UTF-8">
 
     <meta
@@ -199,7 +199,7 @@
         <div class="register-container">
 
             <a href="{{ url('/') }}" class="register-brand register-brand--main">
-                <x-likhae-logo context="Marketplace" class="likhae-logo--auth" />
+                <x-shared.likhae-logo context="Marketplace" class="likhae-logo--auth" />
             </a>
 
             {{-- =================================================

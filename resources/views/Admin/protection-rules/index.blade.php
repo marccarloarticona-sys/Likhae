@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Additional Care Rules')
 @section('content')
 <div style="display:grid;gap:16px">

@@ -10,11 +10,14 @@ use App\Models\Buyer\Cart;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\Review;
 use App\Models\Communication\Message;
+use App\Models\Finance\SellerSettlement;
+use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\PickupRequest;
 use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
+use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Rider\RiderProfile;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
@@ -88,7 +91,7 @@ class AppServiceProvider extends ServiceProvider
 
             return (new MailMessage)
                 ->subject('Reset Your LIKHAE Password')
-                ->view('emails.auth.reset-password', [
+                ->view('auth.emails.reset-password', [
                     'resetUrl' => $resetUrl,
                     'expirationMinutes' => (int) config('auth.passwords.'.config('auth.defaults.passwords').'.expire'),
                 ]);
@@ -221,6 +224,7 @@ class AppServiceProvider extends ServiceProvider
 
             $counts = [
                 'to_process' => 0,
+                'payout_requests' => 0,
                 'to_prepare' => 0,
                 'ready_pickup' => 0,
                 'shipping' => 0,
@@ -234,6 +238,13 @@ class AppServiceProvider extends ServiceProvider
                 $sellerProfileId = $sellerUser->sellerProfile()->where('status', 'ACTIVE')->value('id');
 
                 if ($sellerProfileId) {
+                    if (Schema::hasTable('seller_settlements')) {
+                        $counts['payout_requests'] = SellerSettlement::query()
+                            ->where('seller_profile_id', $sellerProfileId)
+                            ->where('payout_status', 'PAYOUT_REQUESTED')
+                            ->count();
+                    }
+
                     SellerOrder::query()
                         ->where('seller_profile_id', $sellerProfileId)
                         ->selectRaw('status, COUNT(*) as total')
@@ -267,7 +278,7 @@ class AppServiceProvider extends ServiceProvider
             /** @var User|null $buyer */
             $buyer = auth()->user();
 
-            $counts = ['cart' => 0, 'messages' => 0, 'notifications' => 0];
+            $counts = ['cart' => 0, 'orders' => 0, 'messages' => 0, 'notifications' => 0];
 
             if ($buyer?->isAccountType(User::TYPE_BUYER)) {
                 if (Schema::hasTable('carts') && Schema::hasTable('cart_items')) {
@@ -278,6 +289,13 @@ class AppServiceProvider extends ServiceProvider
                         ->first()?->items?->sum('quantity') ?? 0);
                 }
 
+                if (Schema::hasTable('orders')) {
+                    $counts['orders'] = Order::query()
+                        ->where('buyer_user_id', $buyer->id)
+                        ->whereNotIn('status', ['COMPLETED', 'CANCELLED', 'PARTIALLY_CANCELLED', 'RETURNED'])
+                        ->count();
+                }
+
                 $counts['messages'] = $unreadMessageCount($buyer);
                 $counts['notifications'] = $unreadNotificationCount($buyer);
             }
@@ -285,12 +303,13 @@ class AppServiceProvider extends ServiceProvider
             $view->with('buyerUiCounts', $counts);
         });
 
-        View::composer(['components.admin.sidebar', 'Logistics.app', 'rider.app'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {
+        View::composer(['components.admin.sidebar', 'layouts.logistics.app', 'layouts.rider.app'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {
             /** @var User|null $user */
             $user = auth()->user();
             $counts = [
                 'registrations' => 0,
                 'products' => 0,
+                'payout_requests' => 0,
                 'compliance' => 0,
                 'disputes' => 0,
                 'messages' => 0,
@@ -308,6 +327,16 @@ class AppServiceProvider extends ServiceProvider
             ];
 
             if ($user?->isAccountType(User::TYPE_ADMIN)) {
+                if (Schema::hasTable('seller_settlements')) {
+                    $counts['payout_requests'] = SellerSettlement::query()
+                        ->where('payout_status', 'PAYOUT_REQUESTED')
+                        ->count();
+                }
+                if (Schema::hasTable('logistics_earning_pools')) {
+                    $counts['payout_requests'] += LogisticsEarningPool::query()
+                        ->where('status', 'PAYOUT_REQUESTED')
+                        ->count();
+                }
                 if (Schema::hasTable('registration_applications')) {
                     $counts['registrations'] = RegistrationApplication::query()
                         ->whereIn('status', [RegistrationApplication::STATUS_PENDING, RegistrationApplication::STATUS_UNDER_REVIEW])
@@ -346,6 +375,12 @@ class AppServiceProvider extends ServiceProvider
                 $counts['deliveries'] = (clone $riderAssignments)->where('assignment_type', 'DELIVERY')->count();
                 $counts['messages'] = $unreadMessageCount($user);
             }
+            if ($user?->isAccountType(User::TYPE_RIDER) && $user->riderProfile && Schema::hasTable('rider_earning_pool_participants')) {
+                $counts['payout_requests'] = RiderEarningPoolParticipant::query()
+                    ->where('rider_profile_id', $user->riderProfile->id)
+                    ->whereIn('status', ['PAYOUT_REQUESTED', 'PAYOUT_PENDING_ACK'])
+                    ->count();
+            }
 
             if ($user?->isAccountType(User::TYPE_BUYER)) {
                 if (Schema::hasTable('carts') && Schema::hasTable('cart_items')) {
@@ -367,6 +402,12 @@ class AppServiceProvider extends ServiceProvider
             if ($user?->isAccountType(User::TYPE_LOGISTICS) && Schema::hasTable('shipments')) {
                 $centerId = $user->logisticsCenter?->id;
                 if ($centerId) {
+                    if (Schema::hasTable('logistics_earning_pools')) {
+                        $counts['payout_requests'] = LogisticsEarningPool::query()
+                            ->where('logistics_center_id', $centerId)
+                            ->where('status', 'PAYOUT_REQUESTED')
+                            ->count();
+                    }
                     $forCenter = static function ($query) use ($centerId): void {
                         $query->where(function ($centerQuery) use ($centerId): void {
                             $centerQuery->where('logistics_center_id', $centerId)

@@ -3287,3 +3287,229 @@ html.dark .sl-tracking-map-panel .lk-map-button:hover { background: var(--sl-bg-
     .sl-dashboard-priorities__grid { grid-template-columns: minmax(0, 1fr); }
     .sl-dashboard-priority { min-height: 88px; }
 }
+
+/* Seller sidebar refresh */
+#seller-sidebar.sl-sidebar {
+    width: var(--sl-sidebar) !important;
+    color: #6C4936 !important;
+    background: #FFFDF9 !important;
+    border-right: 1px solid #E8D8C8 !important;
+    box-shadow: 3px 0 14px rgba(65, 35, 24, .045) !important;
+    transition: width .22s ease, transform .22s ease;
+}
+
+#seller-sidebar .sl-sidebar-head {
+    min-height: 62px;
+    flex: 0 0 62px;
+    gap: 9px;
+    padding: 0 9px;
+    background: #FFFDF9 !important;
+    border-bottom: 1px solid #E8D8C8 !important;
+}
+
+#seller-sidebar .sl-sidebar-toggle {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 10px;
+    background: #F6EFE7 !important;
+    border: 1px solid #E8D8C8 !important;
+    color: #561C17 !important;
+}
+
+#seller-sidebar .sl-sidebar-toggle svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+}
+
+#seller-sidebar .sl-brand { min-width: 0; flex: 1; justify-content: center; }
+#seller-sidebar .likhae-logo { padding: 0; background: transparent; }
+#seller-sidebar .likhae-logo img,
+#seller-sidebar .likhae-logo__image { height: 34px; max-width: 100%; }
+
+#seller-sidebar .sl-sidebar-scroll {
+    min-height: 0;
+    padding: 4px 8px 12px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+#seller-sidebar .sl-nav-section { margin-top: 7px; }
+#seller-sidebar .sl-nav-label {
+    min-height: 25px;
+    padding: 0 9px;
+    color: #8D7469 !important;
+    font-size: 7px;
+    font-weight: 750;
+    letter-spacing: .15em;
+    line-height: 1.2;
+}
+
+#seller-sidebar .sl-nav-link {
+    position: relative;
+    width: 100%;
+    min-height: 38px;
+    margin: 2px 0;
+    padding: 0 9px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #6C4936 !important;
+    background: transparent !important;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+
+#seller-sidebar .sl-nav-link:hover {
+    color: #561C17 !important;
+    background: #F6EFE7 !important;
+}
+
+#seller-sidebar .sl-nav-link.is-active {
+    color: #561C17 !important;
+    background: #F3E4DE !important;
+    border-color: transparent !important;
+    font-weight: 650;
+}
+
+#seller-sidebar .sl-nav-link.is-active::before {
+    position: absolute;
+    inset: 7px auto 7px 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: #8E3027;
+    content: "";
+}
+
+#seller-sidebar .sl-nav-icon {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    display: grid;
+    place-items: center;
+    color: inherit;
+}
+
+#seller-sidebar .sl-nav-icon svg {
+    width: 17px;
+    height: 17px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.65;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+#seller-sidebar .sl-nav-text {
+    min-width: 0;
+    flex: 1;
+    color: inherit;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+}
+
+#seller-sidebar .sl-nav-badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: grid;
+    place-items: center;
+    color: #fff !important;
+    background: #A98771 !important;
+    border-radius: 99px;
+    font-size: 8px;
+    font-weight: 700;
+}
+
+#seller-sidebar .sl-sidebar-foot {
+    flex: 0 0 auto;
+    padding: 8px 8px max(9px, env(safe-area-inset-bottom));
+    background: #FFFDF9 !important;
+    border-top: 1px solid #E8D8C8 !important;
+}
+
+#seller-sidebar .sl-sidebar-foot form { margin: 2px 0 0; }
+#seller-sidebar .sl-appearance { min-height: 44px; }
+#seller-sidebar .sl-appearance .sl-nav-text { display: grid; gap: 2px; }
+#seller-sidebar .sl-appearance strong { color: inherit; font-size: 10px; font-weight: 650; }
+#seller-sidebar .sl-appearance small { color: #8D7469; font-size: 8px; font-weight: 450; }
+#seller-sidebar .sl-theme-badge { padding: 3px 9px; color: #fff; background: #c92d2f; border-radius: 99px; font-size: 8px; font-weight: 750; }
+#seller-sidebar .sl-logout { min-height: 36px; }
+#seller-sidebar .sl-logout:hover { color: #8E3027 !important; background: #F6EFE7 !important; }
+
+body.sl-sidebar-collapsed #seller-sidebar.sl-sidebar { width: var(--sl-sidebar-mini) !important; }
+body.sl-sidebar-collapsed .sl-shell { margin-left: var(--sl-sidebar-mini) !important; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-sidebar-head { justify-content: center; padding-inline: 8px; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-brand,
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-text,
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-label,
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-badge { display: none !important; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-sidebar-toggle { opacity: 1; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-link { justify-content: center; padding-inline: 0; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-link.is-active::before { inset-inline-start: 0; }
+body.sl-sidebar-collapsed #seller-sidebar .sl-nav-section { margin-top: 5px; }
+
+@media (min-width: 1024px) {
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar.sl-sidebar {
+        width: var(--sl-sidebar-mini) !important;
+    }
+
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) [data-sidebar-content] {
+        margin-left: var(--sl-sidebar-mini) !important;
+    }
+
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-sidebar-head {
+        justify-content: center;
+        padding-inline: 8px;
+    }
+
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-brand,
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-nav-text,
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-nav-label,
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-nav-badge {
+        display: none !important;
+    }
+
+    body.sl-dashboard-sidebar-hover:not(.sl-dashboard-sidebar-expanded) #seller-sidebar .sl-nav-link {
+        justify-content: center;
+        padding-inline: 0;
+    }
+}
+
+@media (max-width: 1023px) {
+    #seller-sidebar.sl-sidebar { width: min(84vw, 270px) !important; height: 100dvh; max-height: 100dvh; }
+    body.sl-sidebar-collapsed #seller-sidebar.sl-sidebar { width: min(84vw, 270px) !important; }
+    body.sl-sidebar-collapsed #seller-sidebar .sl-brand,
+    body.sl-sidebar-collapsed #seller-sidebar .sl-nav-text,
+    body.sl-sidebar-collapsed #seller-sidebar .sl-nav-label,
+    body.sl-sidebar-collapsed #seller-sidebar .sl-nav-badge { display: initial !important; }
+    body.sl-sidebar-collapsed #seller-sidebar .sl-sidebar-head { justify-content: flex-start; padding-inline: 9px; }
+    body.sl-sidebar-collapsed #seller-sidebar .sl-nav-link { justify-content: flex-start; padding-inline: 9px; }
+}
+
+html.dark #seller-sidebar.sl-sidebar,
+html.dark #seller-sidebar .sl-sidebar-head,
+html.dark #seller-sidebar .sl-sidebar-foot {
+    color: #C8B7AD !important;
+    background: #161210 !important;
+    border-color: #30231F !important;
+}
+
+html.dark #seller-sidebar .sl-nav-label { color: #9B8175 !important; }
+html.dark #seller-sidebar .sl-nav-link { color: #C8B7AD !important; }
+html.dark #seller-sidebar .sl-nav-link:hover { color: #F3C6BA !important; background: #211917 !important; }
+html.dark #seller-sidebar .sl-nav-link.is-active { color: #F3C6BA !important; background: #351515 !important; }
+html.dark #seller-sidebar .sl-nav-link.is-active::before { background: #BB574B; }
+html.dark #seller-sidebar .sl-appearance small { color: #9B8175; }
+html.dark #seller-sidebar .sl-sidebar-toggle { color: #F3C6BA !important; background: #211917 !important; border-color: #30231F !important; }

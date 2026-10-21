@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 
 @section('title', 'Transfer '.$manifest->manifest_number.' - LIKHAE')
 

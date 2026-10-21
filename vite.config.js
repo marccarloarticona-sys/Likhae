@@ -49,6 +49,7 @@ export default defineConfig(({ mode }) => {
                     'resources/css/shared/feedback.css',
                     'resources/css/shared/status-guidance.css',
                     'resources/css/shared/modal-refresh.css',
+                    'resources/css/shared/announcement-popup.css',
                     'resources/css/shared/workspace-settings.css',
                     'resources/css/admin/system-settings.css',
                     'resources/js/app.js',

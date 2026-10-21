@@ -1,17 +1,15 @@
 @props([
     'active' => null,
     'notificationCount' => null,
-    'role' => 'admin',
 ])
 
 @php
-    $role = in_array($role, ['admin', 'buyer', 'seller', 'rider', 'logistics'], true) ? $role : 'admin';
     $user = auth()->user();
     $demoUser = session('demo_user');
 
     $profileName = data_get($user, 'name')
         ?? data_get($demoUser, 'name')
-        ?? ucfirst($role).' Account';
+        ?? 'Admin Account';
 
     $profileInitials = collect(explode(' ', trim($profileName)))
         ->filter()
@@ -26,15 +24,10 @@
     $adminUiCounts = $adminUiCounts ?? ['messages' => 0, 'notifications' => 0];
     $sidebarCounts = $sidebarCounts ?? [];
     $notificationCount = $notificationCount ?? ($sidebarCounts['notifications'] ?? ($adminUiCounts['notifications'] ?? 0));
-    $roleDetails = [
-        'admin' => ['workspace' => 'Admin Center', 'profile' => 'LIKHAE Administrator', 'dashboard' => 'admin.dashboard', 'dashboard_label' => 'Dashboard'],
-        'buyer' => ['workspace' => 'Marketplace', 'profile' => 'Buyer Account', 'dashboard' => 'buyer.home', 'dashboard_label' => 'Home'],
-        'seller' => ['workspace' => 'Seller Center', 'profile' => data_get($user, 'sellerProfile.business_name') ?? 'Seller Account', 'dashboard' => 'seller.dashboard', 'dashboard_label' => 'Dashboard'],
-        'rider' => ['workspace' => 'Rider Panel', 'profile' => 'Rider / Courier', 'dashboard' => 'rider.dashboard', 'dashboard_label' => 'Dashboard'],
-        'logistics' => ['workspace' => 'Sorting Center', 'profile' => 'Logistics Operator', 'dashboard' => 'logistics.dashboard', 'dashboard_label' => 'Dashboard'],
-    ];
-    $roleDetail = $roleDetails[$role];
-    $buyerHomeSidebarAutoCollapse = $role === 'buyer' && request()->routeIs('buyer.home');
+    $workspaceName = 'Admin Center';
+    $profileLabel = 'LIKHAE Administrator';
+    $dashboardRoute = 'admin.dashboard';
+    $dashboardLabel = 'Dashboard';
 
     $icons = [
         'dashboard' => '
@@ -265,9 +258,10 @@
             'items' => [
                 [
                     'key' => 'finance',
-                    'label' => 'Finance',
+                    'label' => 'Finance & Payouts',
                     'route' => 'admin.finance',
                     'icon' => 'finance',
+                    'count' => $sidebarCounts['payout_requests'] ?? 0,
                     'active' => [
                         'admin.finance',
                         'admin.payments',
@@ -346,6 +340,13 @@
                     'active' => ['admin.system-settings'],
                 ],
                 [
+                    'key' => 'audit-logs',
+                    'label' => 'Audit Logs',
+                    'route' => 'admin.system-settings.audit-logs',
+                    'icon' => 'history',
+                    'active' => ['admin.system-settings.audit-logs'],
+                ],
+                [
                     'key' => 'account',
                     'label' => 'My Account',
                     'route' => 'admin.account',
@@ -357,119 +358,6 @@
             ],
         ],
     ];
-
-    if ($role === 'buyer') {
-        $groups = [
-            ['label' => 'Marketplace', 'items' => [
-                ['key' => 'products', 'label' => 'Categories', 'route' => 'buyer.products', 'icon' => 'products', 'active' => ['buyer.products', 'buyer.product-details', 'buyer.shop']],
-                ['key' => 'cart', 'label' => 'Cart', 'route' => 'buyer.cart', 'icon' => 'cart', 'count' => $sidebarCounts['cart'] ?? 0, 'active' => ['buyer.cart', 'buyer.checkout', 'buyer.checkout.*']],
-            ]],
-            ['label' => 'Orders', 'items' => [
-                ['key' => 'orders', 'label' => 'Orders', 'route' => 'buyer.orders', 'icon' => 'orders', 'count' => $sidebarCounts['orders'] ?? 0, 'active' => ['buyer.orders', 'buyer.orders.*']],
-            ]],
-            ['label' => 'Communication', 'items' => [
-                ['key' => 'messages', 'label' => 'Messages', 'route' => 'buyer.messages', 'icon' => 'messages', 'count' => $sidebarCounts['messages'] ?? 0, 'active' => ['buyer.messages', 'buyer.messages.*']],
-                ['key' => 'notifications', 'label' => 'Notifications', 'route' => 'notifications.index', 'icon' => 'notifications', 'count' => $notificationCount, 'active' => ['notifications.index', 'buyer.notifications']],
-            ]],
-            ['label' => 'Account', 'items' => [
-                ['key' => 'rewards', 'label' => 'Rewards', 'route' => 'buyer.rewards', 'icon' => 'finance', 'active' => ['buyer.rewards']],
-                ['key' => 'account', 'label' => 'My Account', 'route' => 'buyer.account', 'icon' => 'account', 'active' => ['buyer.account', 'buyer.account.*', 'buyer.notifications']],
-                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'buyer.settings', 'icon' => 'settings', 'active' => ['buyer.settings']],
-            ]],
-        ];
-    } elseif ($role === 'seller') {
-        $groups = [
-            ['label' => 'Store Operations', 'items' => [
-                ['key' => 'products', 'label' => 'Products', 'route' => 'seller.products', 'parameters' => ['mode' => 'list'], 'icon' => 'products', 'query' => ['key' => 'mode', 'value' => 'list', 'default' => 'list'], 'active' => ['seller.products', 'seller.products.*']],
-                ['key' => 'inventory', 'label' => 'Inventory', 'route' => 'seller.products', 'parameters' => ['mode' => 'inventory'], 'icon' => 'settings', 'query' => ['key' => 'mode', 'value' => 'inventory', 'default' => 'list'], 'active' => ['seller.products']],
-                ['key' => 'orders', 'label' => 'Orders', 'route' => 'seller.orders', 'icon' => 'orders', 'count' => $sidebarCounts['orders'] ?? 0, 'active' => ['seller.orders', 'seller.orders.*']],
-            ]],
-            ['label' => 'Customer Service', 'items' => [
-                ['key' => 'messages', 'label' => 'Messages', 'route' => 'seller.messages', 'icon' => 'messages', 'count' => $sidebarCounts['messages'] ?? 0, 'active' => ['seller.messages', 'seller.messages.*']],
-                ['key' => 'notifications', 'label' => 'Notifications', 'route' => 'notifications.index', 'icon' => 'notifications', 'count' => $notificationCount, 'active' => ['notifications.index', 'seller.notifications']],
-                ['key' => 'reviews', 'label' => 'Reviews', 'route' => 'seller.reviews', 'icon' => 'complaints', 'active' => ['seller.reviews', 'seller.reviews.*']],
-            ]],
-            ['label' => 'Growth & Finance', 'items' => [
-                ['key' => 'marketing', 'label' => 'Marketing', 'route' => 'seller.marketing', 'icon' => 'products', 'active' => ['seller.marketing', 'seller.marketing.*']],
-                ['key' => 'reports', 'label' => 'Reports', 'route' => 'seller.reports', 'icon' => 'reports', 'active' => ['seller.reports', 'seller.reports.*']],
-                ['key' => 'store', 'label' => 'Store Settings', 'route' => 'seller.store', 'icon' => 'settings', 'active' => ['seller.store', 'seller.store.*']],
-            ]],
-            ['label' => 'Account', 'items' => [
-                ['key' => 'account', 'label' => 'My Account', 'route' => 'seller.account', 'icon' => 'account', 'active' => ['seller.account', 'seller.account.*', 'seller.notifications']],
-                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'seller.settings', 'icon' => 'settings', 'active' => ['seller.settings']],
-            ]],
-        ];
-    } elseif ($role === 'rider') {
-        $groups = [
-            ['label' => 'Assignments', 'items' => [
-                ['key' => 'pickups', 'label' => 'Pickup Assignments', 'route' => 'rider.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickups'] ?? 0, 'active' => ['rider.pickups', 'rider.pickups.*', 'rider.parcels.*']],
-                ['key' => 'deliveries', 'label' => 'Delivery Assignments', 'route' => 'rider.deliveries', 'icon' => 'shipment', 'count' => $sidebarCounts['deliveries'] ?? 0, 'active' => ['rider.deliveries', 'rider.deliveries.*']],
-                ['key' => 'trips', 'label' => 'Local Trips', 'route' => 'rider.trips', 'icon' => 'shipment', 'active' => ['rider.trips', 'rider.trips.*']],
-                ['key' => 'transfers', 'label' => 'Inter-Hub Transfers', 'route' => 'rider.transfers', 'icon' => 'sorting', 'active' => ['rider.transfers', 'rider.transfers.*']],
-            ]],
-            ['label' => 'History & Earnings', 'items' => [
-                ['key' => 'history', 'label' => 'Delivery History', 'route' => 'rider.history', 'icon' => 'history', 'active' => ['rider.history', 'rider.history.*']],
-                ['key' => 'earnings', 'label' => 'Profit', 'route' => 'rider.earnings', 'icon' => 'finance', 'active' => ['rider.earnings', 'rider.earnings.*']],
-            ]],
-            ['label' => 'Communication', 'items' => [
-                ['key' => 'messages', 'label' => 'Messages', 'route' => 'rider.messages', 'icon' => 'messages', 'count' => $sidebarCounts['messages'] ?? 0, 'active' => ['rider.messages', 'rider.messages.*']],
-                ['key' => 'notifications', 'label' => 'Notifications', 'route' => 'notifications.index', 'icon' => 'notifications', 'count' => $notificationCount, 'active' => ['notifications.index']],
-            ]],
-            ['label' => 'Account', 'items' => [
-                ['key' => 'account', 'label' => 'My Account', 'route' => 'rider.account', 'icon' => 'account', 'active' => ['rider.account', 'rider.account.*', 'rider.profile']],
-                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'rider.settings', 'icon' => 'settings', 'active' => ['rider.settings']],
-            ]],
-        ];
-    } elseif ($role === 'logistics') {
-        $groups = [
-            ['label' => 'Parcel Operations', 'items' => [
-                ['key' => 'pickup-requests', 'label' => 'Pickup Requests', 'route' => 'logistics.pickups', 'icon' => 'pickup', 'count' => $sidebarCounts['pickup_requests'] ?? 0, 'active' => ['logistics.pickups', 'logistics.pickups.*']],
-                ['key' => 'incoming', 'label' => 'Incoming Parcels', 'route' => 'logistics.parcels.receive', 'icon' => 'shipment', 'count' => $sidebarCounts['incoming'] ?? 0, 'active' => ['logistics.parcels', 'logistics.parcels.receive', 'logistics.parcels.show']],
-                ['key' => 'sorting', 'label' => 'Sorting', 'route' => 'logistics.sorting', 'icon' => 'sorting', 'count' => $sidebarCounts['sorting'] ?? 0, 'active' => ['logistics.sorting', 'logistics.sorting.*']],
-                ['key' => 'transfers', 'label' => 'Hub Transfers', 'route' => 'logistics.transfers', 'icon' => 'sorting', 'active' => ['logistics.transfers', 'logistics.transfers.*']],
-                ['key' => 'local-trips', 'label' => 'Local Rider Trips', 'route' => 'logistics.local-trips', 'icon' => 'sorting', 'active' => ['logistics.local-trips', 'logistics.local-trips.*']],
-                ['key' => 'assignments', 'label' => 'Rider Assignment', 'route' => 'logistics.assignments', 'icon' => 'riders', 'count' => $sidebarCounts['assignments'] ?? 0, 'active' => ['logistics.assignments', 'logistics.dispatch', 'logistics.assignments.*', 'logistics.dispatch.*']],
-                ['key' => 'monitoring', 'label' => 'Delivery Monitoring', 'route' => 'logistics.parcels.tracking', 'icon' => 'tracking', 'count' => $sidebarCounts['monitoring'] ?? 0, 'active' => ['logistics.parcels.tracking']],
-            ]],
-            ['label' => 'Rider Management', 'items' => [
-                ['key' => 'rider-applications', 'label' => 'Rider Management', 'route' => 'logistics.riders.applications', 'icon' => 'riders', 'count' => $sidebarCounts['rider_applications'] ?? 0, 'active' => ['logistics.riders.applications', 'logistics.riders.application.*']],
-                ['key' => 'riders', 'label' => 'All Riders', 'route' => 'logistics.riders', 'icon' => 'users', 'active' => ['logistics.riders', 'logistics.riders.show', 'logistics.riders.activate', 'logistics.riders.deactivate']],
-                ['key' => 'delivery-areas', 'label' => 'Delivery Areas', 'route' => 'logistics.delivery-areas', 'icon' => 'map', 'active' => ['logistics.delivery-areas', 'logistics.delivery-areas.*']],
-            ]],
-            ['label' => 'Communication & Reports', 'items' => [
-                ['key' => 'reports', 'label' => 'Reports', 'route' => 'logistics.reports', 'icon' => 'reports', 'active' => ['logistics.reports', 'logistics.reports.*']],
-                ['key' => 'shipping-rate', 'label' => 'Shipping Rate', 'route' => 'logistics.shipping-rate', 'icon' => 'finance', 'active' => ['logistics.shipping-rate', 'logistics.shipping-rate-requests.*']],
-                ['key' => 'messages', 'label' => 'Messages', 'route' => 'logistics.messages', 'icon' => 'messages', 'count' => $sidebarCounts['messages'] ?? 0, 'active' => ['logistics.messages', 'logistics.messages.*']],
-                ['key' => 'notifications', 'label' => 'Notifications', 'route' => 'notifications.index', 'icon' => 'notifications', 'count' => $notificationCount, 'active' => ['notifications.index']],
-            ]],
-            ['label' => 'Account', 'items' => [
-                ['key' => 'account', 'label' => 'My Account', 'route' => 'logistics.profile', 'icon' => 'account', 'active' => ['logistics.profile', 'logistics.account']],
-                ['key' => 'settings', 'label' => 'System Settings', 'route' => 'logistics.settings', 'icon' => 'settings', 'active' => ['logistics.settings']],
-            ]],
-        ];
-    }
-
-    if ($role === 'rider') {
-        $riderVehicle = data_get($user, 'riderProfile.vehicle_type');
-        $allowedRiderItems = \App\Support\RiderVehicleType::isLocalBarangay($riderVehicle)
-            ? ['pickups', 'deliveries', 'trips', 'history', 'earnings', 'messages', 'notifications', 'account', 'settings']
-            : (\App\Support\RiderVehicleType::isInterLogistics($riderVehicle)
-                ? ['transfers', 'earnings', 'messages', 'notifications', 'account', 'settings']
-                : ['earnings', 'messages', 'notifications', 'account', 'settings']);
-
-        $groups = collect($groups)
-            ->map(function (array $group) use ($allowedRiderItems): array {
-                $group['items'] = collect($group['items'])
-                    ->filter(fn (array $item): bool => in_array($item['key'], $allowedRiderItems, true))
-                    ->values()
-                    ->all();
-
-                return $group;
-            })
-            ->filter(fn (array $group): bool => $group['items'] !== [])
-            ->values()
-            ->all();
-    }
 
     $routeActive = function (array $routes) {
         return collect($routes)
@@ -486,9 +374,7 @@
 
 <aside
     id="adminSidebar"
-    data-buyer-home-auto-collapse="{{ $buyerHomeSidebarAutoCollapse ? 'true' : 'false' }}"
-    @class(['is-collapsed' => $buyerHomeSidebarAutoCollapse])
-    aria-label="{{ $roleDetail['workspace'] }} navigation"
+    aria-label="{{ $workspaceName }} navigation"
 >
     <div class="ad-side-head">
         <button
@@ -496,7 +382,7 @@
             id="adminSidebarToggle"
             class="ad-side-menu"
             aria-label="Toggle admin sidebar"
-            aria-expanded="{{ $buyerHomeSidebarAutoCollapse ? 'false' : 'true' }}"
+            aria-expanded="true"
         >
             <svg viewBox="0 0 24 24" aria-hidden="true">
                 {!! $icons['menu'] !!}
@@ -504,13 +390,13 @@
         </button>
 
         <a
-            href="{{ route($roleDetail['dashboard']) }}"
+            href="{{ route($dashboardRoute) }}"
             class="ad-side-brand"
-            aria-label="LIKHAE {{ $roleDetail['workspace'] }}"
+            aria-label="LIKHAE {{ $workspaceName }}"
         >
-            <x-likhae-logo
-                :context="$roleDetail['workspace']"
-                class="likhae-logo--sidebar {{ $role === 'buyer' && request()->routeIs('buyer.home') ? 'likhae-logo--buyer-home' : '' }}"
+            <x-shared.likhae-logo
+                :context="$workspaceName"
+                class="likhae-logo--sidebar"
             />
         </a>
     </div>
@@ -534,13 +420,13 @@
             </strong>
 
             <small>
-                {{ $roleDetail['profile'] }}
+                {{ $profileLabel }}
             </small>
         </span>
 
         <span
             class="ad-side-verified"
-            title="{{ $roleDetail['profile'] }}"
+            title="{{ $profileLabel }}"
         >
             ✓
         </span>
@@ -554,10 +440,10 @@
         </p>
 
         <a
-            href="{{ route($roleDetail['dashboard']) }}"
+            href="{{ route($dashboardRoute) }}"
             class="ad-side-link
-                {{ request()->routeIs($roleDetail['dashboard']) || ($role === 'admin' && $active === 'dashboard') ? 'is-active' : '' }}"
-            @if(request()->routeIs($roleDetail['dashboard']) || ($role === 'admin' && $active === 'dashboard'))
+                {{ request()->routeIs($dashboardRoute) || $active === 'dashboard' ? 'is-active' : '' }}"
+            @if(request()->routeIs($dashboardRoute) || $active === 'dashboard')
                 aria-current="page"
             @endif
         >
@@ -568,7 +454,7 @@
             </span>
 
             <span class="ad-side-label">
-                {{ $roleDetail['dashboard_label'] }}
+                {{ $dashboardLabel }}
             </span>
         </a>
 
@@ -586,7 +472,7 @@
                                 $matchesRoute = $matchesRoute
                                     && request()->query($item['query']['key'], $item['query']['default']) === $item['query']['value'];
                             }
-                            $isActive = ($role === 'admin' && $active === $item['key']) || $matchesRoute;
+                            $isActive = $active === $item['key'] || $matchesRoute;
                         @endphp
 
                         <a
@@ -697,9 +583,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const sidebarToggle =
         document.getElementById('adminSidebarToggle');
 
-    const buyerHomeAutoCollapse =
-        sidebar?.dataset.buyerHomeAutoCollapse === 'true';
-
     const themeToggle =
         document.getElementById('adminThemeToggle');
 
@@ -800,15 +683,10 @@ document.addEventListener('DOMContentLoaded', function () {
             body.classList.remove(
                 'workspace-sidebar-collapsed'
             );
-            body.classList.remove(
-                'lk-buyer-home-sidebar-expanded'
-            );
-
             return;
         }
 
-        const collapsed = buyerHomeAutoCollapse
-            || localStorage.getItem('likhae-admin-sidebar') === 'collapsed';
+        const collapsed = localStorage.getItem('likhae-admin-sidebar') === 'collapsed';
 
         sidebar.classList.toggle(
             'is-collapsed',
@@ -823,46 +701,10 @@ document.addEventListener('DOMContentLoaded', function () {
             'workspace-sidebar-collapsed',
             collapsed
         );
-        body.classList.toggle(
-            'lk-buyer-home-sidebar-expanded',
-            buyerHomeAutoCollapse && !collapsed
-        );
-
         sidebarToggle?.setAttribute(
             'aria-expanded',
             collapsed ? 'false' : 'true'
         );
-    }
-
-
-    function setBuyerHomeCollapsed(collapsed) {
-        if (!buyerHomeAutoCollapse || isMobile() || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-            return;
-        }
-
-        sidebar?.classList.toggle('is-collapsed', collapsed);
-        body.classList.toggle('admin-sidebar-collapsed', collapsed);
-        body.classList.toggle('workspace-sidebar-collapsed', collapsed);
-        body.classList.toggle('lk-buyer-home-sidebar-expanded', !collapsed);
-        sidebarToggle?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-
-        window.dispatchEvent(new CustomEvent('likhae:admin-sidebar', {
-            detail: { collapsed, width: collapsed ? 76 : 252 },
-        }));
-    }
-
-
-    if (buyerHomeAutoCollapse && sidebar) {
-        sidebar.addEventListener('pointerenter', () => setBuyerHomeCollapsed(false));
-        sidebar.addEventListener('pointerleave', () => {
-            if (!sidebar.contains(document.activeElement)) setBuyerHomeCollapsed(true);
-        });
-        sidebar.addEventListener('focusin', () => setBuyerHomeCollapsed(false));
-        sidebar.addEventListener('focusout', (event) => {
-            if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) {
-                setBuyerHomeCollapsed(true);
-            }
-        });
     }
 
 
@@ -905,18 +747,11 @@ document.addEventListener('DOMContentLoaded', function () {
             collapsed ? 'false' : 'true'
         );
 
-        if (!buyerHomeAutoCollapse) {
-            localStorage.setItem(
-                'likhae-admin-sidebar',
-                collapsed
-                    ? 'collapsed'
-                    : 'expanded'
-            );
-        }
-
-        body.classList.toggle(
-            'lk-buyer-home-sidebar-expanded',
-            buyerHomeAutoCollapse && !collapsed
+        localStorage.setItem(
+            'likhae-admin-sidebar',
+            collapsed
+                ? 'collapsed'
+                : 'expanded'
         );
 
         window.dispatchEvent(

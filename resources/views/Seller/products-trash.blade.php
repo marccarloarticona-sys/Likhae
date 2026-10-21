@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 
 @section('title', 'Recently Deleted Products')
 @section('active', 'products')

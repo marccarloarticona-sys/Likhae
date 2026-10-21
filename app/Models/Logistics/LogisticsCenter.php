@@ -15,11 +15,13 @@ class LogisticsCenter extends Model
 {
     protected $table = 'logistics_centers';
 
+    protected $hidden = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+
     /**
      * Legacy per-center fee retained for old records only. GLOBAL approved
-     * shipping_rate_versions are authoritative for new Checkout pricing.
-     * FUTURE SHIPPING PRICING may use location, distance, parcel weight,
-     * parcel dimensions, or service level; that capability is not implemented.
+     * shipping_rate_versions provide the base rate; named region tiers provide
+     * cross-region pricing. Distance, parcel weight, dimensions, and service-
+     * level pricing are outside the current policy.
      */
 
     protected $fillable = [
@@ -33,6 +35,10 @@ class LogisticsCenter extends Model
         'status',
         'approved_by_user_id',
         'approved_at',
+        'payout_method',
+        'payout_bank_name',
+        'payout_account_name',
+        'payout_account_number',
     ];
 
     protected function casts(): array
@@ -40,6 +46,8 @@ class LogisticsCenter extends Model
         return [
             'approved_at' => 'datetime',
             'shipping_fee' => 'decimal:2',
+            'payout_account_name' => 'encrypted',
+            'payout_account_number' => 'encrypted',
         ];
     }
 

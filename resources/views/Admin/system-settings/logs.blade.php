@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','System Logs')
 @section('active','system-settings')
 @section('subtitle','Read-only, sanitized view of configured Laravel application logs.')

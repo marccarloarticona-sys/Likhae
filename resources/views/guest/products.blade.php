@@ -1,4 +1,4 @@
-@extends('layouts.guest')
+@extends('layouts.guest.app')
 
 @section('title', 'Products - LIKHAE Marketplace')
 

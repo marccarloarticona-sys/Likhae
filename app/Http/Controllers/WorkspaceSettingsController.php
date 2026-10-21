@@ -81,7 +81,7 @@ class WorkspaceSettingsController extends Controller
     {
         return match ($workspace) {
             'seller' => [
-                'view' => 'Seller.settings', 'center' => 'Seller Center', 'account_route' => 'seller.account',
+                'view' => 'seller.settings', 'center' => 'Seller Center', 'account_route' => 'seller.account',
                 'update_route' => 'seller.settings.update',
                 'description' => 'Tune store alerts, workspace assistance, and display preferences.',
                 'notifications' => [
@@ -93,7 +93,7 @@ class WorkspaceSettingsController extends Controller
                 ],
             ],
             'admin' => [
-                'view' => 'Admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
+                'view' => 'admin.system-settings.index', 'center' => 'Admin Center', 'account_route' => 'admin.account',
                 'update_route' => 'admin.system-settings.update',
                 'show_ai' => false,
                 'description' => 'Adjust your Admin Center appearance and notification sound preference.',
@@ -101,7 +101,7 @@ class WorkspaceSettingsController extends Controller
                 'show_language' => false,
             ],
             'logistics' => [
-                'view' => 'Logistics.settings', 'center' => 'Logistics Center', 'account_route' => 'logistics.profile',
+                'view' => 'logistics.settings', 'center' => 'Logistics Center', 'account_route' => 'logistics.profile',
                 'update_route' => 'logistics.settings.update',
                 'description' => 'Choose operational alerts and how your sorting-center workspace behaves.',
                 'notifications' => [

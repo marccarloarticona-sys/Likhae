@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 @section('title', 'Request Submitted')
 @section('active', 'orders')
 @section('content')

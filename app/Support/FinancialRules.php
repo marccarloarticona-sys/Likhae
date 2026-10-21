@@ -10,6 +10,7 @@ final class FinancialRules
 {
     public const COD_METHOD = 'COD';
     public const COMMISSION_RATE = 0.10;
+    public const COD_RIDER_SHARE_PERCENTAGE = '60.0000';
     public const DEFAULT_RIDER_POOL_PERCENTAGE = '60.0000';
 
     private function __construct() {}

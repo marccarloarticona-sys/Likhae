@@ -1,4 +1,4 @@
-@extends('layouts.seller')
+@extends('layouts.seller.app')
 @section('title', 'Refund Request '.$sellerRequest->request->request_number)
 @section('active', 'orders')
 @section('subtitle', 'Review Buyer evidence and manage the cash-only refund workflow for new COD cases.')

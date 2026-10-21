@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 
 @section('title', 'Delivery Assignments - LIKHAE Rider')
 
@@ -20,7 +20,7 @@
         <span class="rounded-full bg-primary-soft px-5 py-3 text-sm font-semibold text-primary">{{ number_format($deliveryStats['active']) }} Active Deliveries</span>
     </section>
 
-    <x-parcel-scanner
+    <x-shared.parcel-scanner
         :action="route('rider.scan', ['return_to' => 'deliveries'])"
         :tracking="old('tracking', request('tracking', ''))"
         :method="request('scan_method', 'MANUAL')"

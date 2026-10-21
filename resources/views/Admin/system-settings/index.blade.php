@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title','System Settings')
 @section('active','system-settings')
 @section('subtitle','Current database status, storage capacity, and Admin preferences.')
@@ -211,7 +211,7 @@
 
     <section class="ad-card ad-ops-section ws-personal-preferences">
         <header class="ad-card-head ad-ops-section-head"><div><span>Personal workspace experience</span><h2>Admin Preferences</h2></div></header>
-        <x-workspace-settings :config="$settingsConfig" :preferences="$preferences" :show-heading="false" />
+        <x-shared.workspace.settings :config="$settingsConfig" :preferences="$preferences" :show-heading="false" />
     </section>
 </div>
 @endsection

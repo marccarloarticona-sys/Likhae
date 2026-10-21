@@ -4,5 +4,6 @@ import '../shared/echo';
 import '../shared/messages';
 import '../shared/notification-sounds';
 import '../shared/rider-location';
+import '../shared/workspace-shell.js';
 
 document.addEventListener('DOMContentLoaded', initializeParcelScanners);

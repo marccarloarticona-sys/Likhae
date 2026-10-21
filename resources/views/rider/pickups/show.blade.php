@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 
 @section('title', 'Pickup Batch #'.$pickup->id.' - LIKHAE Rider')
 
@@ -97,7 +97,7 @@
 
         @if($pickup->status === 'IN_PROGRESS' && ! $pickupFinished)
             <div class="mt-5">
-                <x-parcel-scanner
+                <x-shared.parcel-scanner
                     :action="route('rider.pickups.batches.scan', $pickup->id)"
                     :tracking="old('scanned_code', '')"
                     :method="old('scan_method', 'MANUAL')"

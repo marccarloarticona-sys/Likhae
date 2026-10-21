@@ -18,6 +18,7 @@ class CodCollection extends Model
     public const COLLECTED = 'COLLECTED';
     public const FAILED = 'FAILED';
     public const REMITTED = 'REMITTED';
+    public const REMITTED_DISCREPANCY = 'REMITTED_DISCREPANCY';
     public const DISCREPANCY = 'DISCREPANCY';
     public const VOID = 'VOID';
 
@@ -43,5 +44,5 @@ class CodCollection extends Model
     public function logisticsCenter(): BelongsTo { return $this->belongsTo(LogisticsCenter::class); }
     public function confirmedBy(): BelongsTo { return $this->belongsTo(User::class, 'confirmed_by_user_id'); }
     public function recordedBy(): BelongsTo { return $this->belongsTo(User::class, 'recorded_by_user_id'); }
-    public function remittanceItem(): HasOne { return $this->hasOne(RiderRemittanceItem::class); }
+    public function remittanceItem(): HasOne { return $this->hasOne(RiderRemittanceItem::class, 'cod_collection_id', 'id'); }
 }

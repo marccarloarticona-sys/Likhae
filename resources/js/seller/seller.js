@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const mobileButton = select('[data-sl-mobile-menu]');
     const collapseButton = select('[data-sl-sidebar-toggle]');
     const desktop = window.matchMedia('(min-width: 1024px)');
+    const dashboardAutoCollapse = document.body.classList.contains('sl-dashboard-sidebar-hover');
     const storageKey = 'likhae-seller-sidebar-collapsed';
     let toastTimer;
 
@@ -103,19 +104,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sidebar) return;
         if (!desktop.matches) collapsed = false;
         document.body.classList.toggle('sl-sidebar-collapsed', collapsed);
+        if (dashboardAutoCollapse) document.body.classList.toggle('sl-dashboard-sidebar-expanded', !collapsed);
         collapseButton?.setAttribute('aria-expanded', String(!collapsed));
         collapseButton?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
         if (persist) writeStorage(storageKey, String(collapsed));
     };
 
-    if (desktop.matches && readStorage(storageKey) === 'true') setCollapsed(true, false);
+    if (desktop.matches) setCollapsed(dashboardAutoCollapse || readStorage(storageKey) === 'true', false);
+    if (dashboardAutoCollapse && sidebar) {
+        sidebar.addEventListener('pointerenter', () => setCollapsed(false, false));
+        sidebar.addEventListener('pointerleave', () => {
+            if (!sidebar.contains(document.activeElement)) setCollapsed(true, false);
+        });
+        sidebar.addEventListener('focusin', () => setCollapsed(false, false));
+        sidebar.addEventListener('focusout', (event) => {
+            if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) setCollapsed(true, false);
+        });
+    }
     mobileButton?.addEventListener('click', () => setMobileSidebar(!sidebar?.classList.contains('is-open')));
     overlay?.addEventListener('click', () => setMobileSidebar(false));
-    collapseButton?.addEventListener('click', () => setCollapsed(!document.body.classList.contains('sl-sidebar-collapsed')));
+    collapseButton?.addEventListener('click', () => setCollapsed(
+        !document.body.classList.contains('sl-sidebar-collapsed'),
+        !dashboardAutoCollapse,
+    ));
 
     desktop.addEventListener('change', (event) => {
         setMobileSidebar(false);
-        setCollapsed(event.matches && readStorage(storageKey) === 'true', false);
+        setCollapsed(event.matches && (dashboardAutoCollapse || readStorage(storageKey) === 'true'), false);
     });
 
     selectAll('.sl-sidebar a').forEach((link) => link.addEventListener('click', () => {

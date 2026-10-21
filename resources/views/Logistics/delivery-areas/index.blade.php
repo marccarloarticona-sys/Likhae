@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 
 @section('title', 'Delivery Areas - LIKHAE Logistics')
 

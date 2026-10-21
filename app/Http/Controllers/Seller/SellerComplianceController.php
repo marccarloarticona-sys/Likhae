@@ -31,7 +31,7 @@ class SellerComplianceController extends Controller
             ->paginate(20)
             ->withQueryString();
 
-        return view('Seller.compliance.index', compact('cases'));
+        return view('seller.compliance.index', compact('cases'));
     }
 
     public function show(Request $request, SellerComplianceCase $case): View
@@ -58,7 +58,7 @@ class SellerComplianceController extends Controller
         $warningAction = $case->actions->where('action_type', 'WARNING')->last();
         $publicActions = $case->actions->whereIn('action_type', ['WARNING', 'PRODUCT_SUSPEND']);
 
-        return view('Seller.compliance.show', [
+        return view('seller.compliance.show', [
             'case' => $case,
             'warningAction' => $warningAction,
             'publicActions' => $publicActions,

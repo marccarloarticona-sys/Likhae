@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', str($type)->headline())
 @section('content')
 <div class="ad-page"><div class="ad-page-header"><div><p class="ad-eyebrow">Onboarding</p><h1>{{ str($type)->headline() }}</h1></div></div>

@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Account Details')
 @section('subtitle', 'Review registration details and manage account access.')
@@ -13,8 +13,13 @@
     $warningCount = $warningCount ?? 0;
 @endphp
 <div class="ad-page ad-user-details-page">
-    <div class="ad-page-head">
-        <div><span class="ad-overline">USR-{{ $user->id }}</span><h2>{{ $user->name }}</h2><p>{{ $user->email }}</p></div>
+    <div class="ad-page-head ad-user-page-head">
+        <div class="ad-user-identity">
+            <div class="ad-user-identity-kicker"><span class="ad-overline">USR-{{ $user->id }}</span><span class="ad-user-role">{{ ucfirst(strtolower($user->account_type)) }} account</span></div>
+            <h2>{{ $user->name }}</h2>
+            <p>{{ $user->email }}</p>
+            <div class="ad-user-summary-line"><span class="ad-status is-{{ $status }}">{{ $status === 'pending' ? 'Pending approval' : ($status === 'banned' ? 'Permanently banned' : ucfirst($status)) }}</span><span>Registered {{ $user->created_at->format('M d, Y') }}</span></div>
+        </div>
         <a class="ad-btn ad-btn-secondary" href="{{ route('admin.users') }}">Back to users</a>
     </div>
     @if(session('success'))<div class="ad-note" role="status">{{ session('success') }}</div>@endif
@@ -24,9 +29,9 @@
     @endif
 
     <section class="ad-card">
-        <header class="ad-card-head"><h2>Account information</h2><span class="ad-status is-{{ $status }}">{{ $status === 'pending' ? 'Pending approval' : ($status === 'banned' ? 'Permanently banned' : ucfirst($status)) }}</span></header>
+        <header class="ad-card-head"><div><h2>Account information</h2><p>Contact details and registered address</p></div></header>
         <div class="ad-card-body">
-            <dl class="ad-application-meta">
+            <dl class="ad-application-meta ad-user-meta">
                 <div><dt>Role</dt><dd>{{ ucfirst(strtolower($user->account_type)) }}</dd></div>
                 <div><dt>Registered</dt><dd>{{ $user->created_at->format('M d, Y H:i') }}</dd></div>
                 <div><dt>Contact number</dt><dd>{{ $user->contact_number ?: 'Not provided' }}</dd></div>
@@ -41,7 +46,7 @@
             </dl>
             @if($user->isAccountType(\App\Models\User::TYPE_SELLER, \App\Models\User::TYPE_LOGISTICS))
                 <h3>Business details</h3>
-                <dl class="ad-application-meta">
+                <dl class="ad-application-meta ad-user-meta">
                     <div><dt>Business name</dt><dd>{{ $shop?->business_name ?? $provider?->business_name ?? 'Not provided' }}</dd></div>
                     <div><dt>Registration number</dt><dd>{{ $shop?->business_registration_number ?? $provider?->business_registration_number ?? 'Not provided' }}</dd></div>
                     @if($provider)<div><dt>DTI number</dt><dd>{{ $provider->dti_registration_number ?: 'Not provided' }}</dd></div>@endif
@@ -50,21 +55,21 @@
         </div>
     </section>
 
-    <section class="ad-card" id="account-access">
-        <header class="ad-card-head"><h2>Account access</h2></header>
+    <section class="ad-card ad-user-access-card" id="account-access">
+        <header class="ad-card-head"><div><h2>Account access</h2><p>Apply a temporary suspension or permanently remove platform access</p></div></header>
         <div class="ad-card-body">
             @unless($accountEnforcementReady)
-                <p>Suspension and permanent ban controls are unavailable until the account enforcement database migration is applied.</p>
+                <div class="ad-note is-warning" role="status"><span>Account enforcement controls are unavailable until the account enforcement migration is applied to this database.</span></div>
             @elseif($managedAccount && in_array($status, ['active', 'suspended'], true))
                 @php($suspended = $user->isSuspended())
                 <p>
                     @if($suspended)
                         This account is suspended{{ $user->suspended_until ? ' until '.$user->suspended_until->format('M d, Y h:i A') : ' with no expiry recorded' }}. You can reactivate it early.
                     @else
-                        Choose a one-week or one-month suspension. Access will return automatically when it ends.
+                        Choose a suspension period. Access will return automatically when it ends.
                     @endif
                 </p>
-                <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}" @if(!$suspended) data-confirm-tone="danger" @endif>
+                <form class="ad-user-control-form" method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}" @if(!$suspended) data-confirm-tone="danger" @endif>
                     @csrf
                     <label class="ad-field">
                         <span>{{ $suspended ? 'Reason for reactivation' : 'Reason for suspension' }}</span>
@@ -74,14 +79,12 @@
                         <label class="ad-field">
                             <span>Suspension period</span>
                             <select name="duration" required>
-                                <option value="week" @selected(old('duration', 'week') === 'week')>One week</option>
-                                <option value="month" @selected(old('duration') === 'month')>One month</option>
+                                @foreach($suspensionDurations as $durationValue => $durationLabel)
+                                    <option value="{{ $durationValue }}" @selected(old('duration', 'week') === $durationValue)>{{ $durationLabel }}</option>
+                                @endforeach
                             </select>
                         </label>
-                        <label class="ad-field">
-                            <span>Case or evidence reference (optional)</span>
-                            <input name="reference" value="{{ old('reference') }}" maxlength="2000" placeholder="Complaint, order, or investigation reference">
-                        </label>
+                        <p class="ad-user-reference-note">A case reference will be generated automatically when the suspension is recorded.</p>
                         <label class="ad-field">
                             <span>Evidence or investigation notes (optional)</span>
                             <textarea name="evidence" rows="3" maxlength="5000" placeholder="Record the supporting context for this reviewed decision.">{{ old('evidence') }}</textarea>
@@ -98,7 +101,7 @@
             @endif
 
             @if($accountEnforcementReady && $managedAccount && ! $user->isPermanentlyBanned())
-                <div class="ad-form-section" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--ad-border,#e7e1dc);">
+                <div class="ad-user-danger-panel">
                     <h3>Permanent ban</h3>
                     <p>Blocks this account from signing in or using LIKHAE. A permanent ban does not expire.</p>
                     <form method="POST" action="{{ route('admin.users.ban', $user) }}" data-confirm-title="Permanently ban this account?" data-confirm-message="This account will lose LIKHAE access permanently. This cannot be undone from this page." data-confirm-label="Permanently ban" data-confirm-tone="danger" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}">
@@ -107,10 +110,7 @@
                             <span>Reason for permanent ban</span>
                             <textarea name="reason" rows="3" required minlength="10" maxlength="2000" placeholder="Document the reason for permanently removing this account from the platform.">{{ old('reason') }}</textarea>
                         </label>
-                        <label class="ad-field">
-                            <span>Case or evidence reference (optional)</span>
-                            <input name="reference" value="{{ old('reference') }}" maxlength="2000" placeholder="Complaint, order, or investigation reference">
-                        </label>
+                        <p class="ad-user-reference-note">A case reference will be generated automatically when the ban is recorded.</p>
                         <label class="ad-field">
                             <span>Evidence or investigation notes (optional)</span>
                             <textarea name="evidence" rows="3" maxlength="5000" placeholder="Record supporting evidence for this permanent decision.">{{ old('evidence') }}</textarea>
@@ -123,11 +123,11 @@
     </section>
 
     <section class="ad-card" id="account-warnings">
-        <header class="ad-card-head"><div><h2>Account Warnings</h2><p>{{ $warningCount }} of {{ \App\Models\User::MAX_ACCOUNT_WARNINGS }} warnings issued. The limit applies to all warnings, including resolved or closed ones.</p></div></header>
+        <header class="ad-card-head"><div><h2>Account warnings</h2><p>The three-warning limit includes resolved and closed warnings.</p></div><span class="ad-user-warning-count">{{ $warningCount }} / {{ \App\Models\User::MAX_ACCOUNT_WARNINGS }} used</span></header>
         <div class="ad-card-body">
             @if($managedAccount)
                 @if($warningCount < \App\Models\User::MAX_ACCOUNT_WARNINGS)
-                <form method="POST" action="{{ route('admin.users.warnings.store', $user) }}" data-confirm-title="Issue account warning?" data-confirm-message="Send this documented warning and corrective action to {{ $user->name }}?" data-confirm-label="Issue warning">
+                <form class="ad-user-warning-form" method="POST" action="{{ route('admin.users.warnings.store', $user) }}" data-confirm-title="Issue account warning?" data-confirm-message="Send this documented warning and corrective action to {{ $user->name }}?" data-confirm-label="Issue warning">
                     @csrf
                     <div class="ad-form-grid">
                         <label class="ad-field">
@@ -155,10 +155,7 @@
                             <span>Corrective action requested</span>
                             <textarea name="corrective_action" rows="3" required minlength="5" maxlength="5000" placeholder="Explain what the account holder must correct or review.">{{ old('corrective_action') }}</textarea>
                         </label>
-                        <label class="ad-field">
-                            <span>Transaction or case reference (optional)</span>
-                            <input name="reference" value="{{ old('reference') }}" maxlength="2000" placeholder="Order, complaint, or case reference">
-                        </label>
+                        <p class="ad-user-reference-note is-full">A case reference will be generated automatically when this warning is issued.</p>
                         <label class="ad-field">
                             <span>Evidence or investigation notes (optional)</span>
                             <textarea name="evidence" rows="3" maxlength="5000" placeholder="Keep notes relevant to this warning.{{ $user->account_type === \App\Models\User::TYPE_BUYER ? ' Do not treat failed checkout alone as proof of misconduct.' : '' }}">{{ old('evidence') }}</textarea>
@@ -175,7 +172,7 @@
                 <p>Rider accounts are managed by their Logistics provider and are not available here.</p>
             @endif
         </div>
-        <div class="ad-table-wrap">
+        <div class="ad-table-wrap ad-user-history-table">
             <table class="ad-table">
                 <thead><tr><th>Date issued</th><th>Category</th><th>Reason / corrective action</th><th>Admin</th><th>Status</th></tr></thead>
                 <tbody>
@@ -213,14 +210,14 @@
 
     <section class="ad-card">
         <header class="ad-card-head"><h2>Access history</h2><p>Recorded account changes.</p></header>
-        <div class="ad-table-wrap">
+        <div class="ad-table-wrap ad-user-history-table">
             <table class="ad-table">
-                <thead><tr><th>Date</th><th>Change</th><th>Administrator</th><th>Status</th></tr></thead>
+                <thead><tr><th>Date</th><th>Change</th><th>Reference</th><th>Administrator</th><th>Status</th></tr></thead>
                 <tbody>
                     @forelse($changes as $change)
-                        <tr><td>{{ $change->created_at->format('M d, Y H:i') }}</td><td>{{ str($change->event)->replace('.', ' ')->headline() }}</td><td>{{ $change->actor?->name ?? 'System' }}</td><td>{{ data_get($change->old_values, 'status', '—') }} → {{ data_get($change->new_values, 'status', '—') }}</td></tr>
+                        <tr><td>{{ $change->created_at->format('M d, Y H:i') }}</td><td>{{ str($change->event)->replace('.', ' ')->headline() }}</td><td><code>{{ data_get($change->new_values, 'reference') ?: 'Not recorded' }}</code></td><td>{{ $change->actor?->name ?? 'System' }}</td><td>{{ data_get($change->old_values, 'status', '—') }} → {{ data_get($change->new_values, 'status', '—') }}</td></tr>
                     @empty
-                        <tr><td colspan="4">No access changes recorded.</td></tr>
+                        <tr><td colspan="5">No access changes recorded.</td></tr>
                     @endforelse
                 </tbody>
             </table>

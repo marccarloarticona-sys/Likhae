@@ -28,7 +28,7 @@ class TransferController extends Controller
     {
         $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
         if (! $this->schema->manifestReady()) {
-            return view('Logistics.transfers.index', [
+            return view('logistics.transfers.index', [
                 'center' => $center,
                 'transferReady' => false,
                 'outgoing' => collect(),
@@ -42,7 +42,7 @@ class TransferController extends Controller
 
         ['available' => $drivers, 'unavailable' => $unavailableDrivers] = $this->driverOptionsForCenter((int) $center->id);
 
-        return view('Logistics.transfers.index', [
+        return view('logistics.transfers.index', [
             'center' => $center,
             'transferReady' => true,
             'outgoing' => TransferManifest::query()
@@ -142,7 +142,7 @@ class TransferController extends Controller
             ? $this->driverOptionsForCenter((int) $manifest->origin_logistics_center_id, (int) $manifest->id)['unavailable']
             : collect();
 
-        return view('Logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers', 'unavailableDrivers', 'isOriginCenter'));
+        return view('logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers', 'unavailableDrivers', 'isOriginCenter'));
     }
 
     public function addLeg(Request $request, int $manifest): RedirectResponse

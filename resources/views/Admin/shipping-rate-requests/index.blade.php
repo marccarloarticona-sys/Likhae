@@ -1,10 +1,25 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 @section('title', 'Shipping Rate Requests')
-@section('subtitle', 'Review proposals for the single GLOBAL platform shipping fee.')
+@section('subtitle', 'Review shipping fee and commission split proposals.')
 @section('active', 'shipping-rate-requests')
 @section('content')
 <div style="display:grid;gap:16px">
     @if(session('status'))<div role="status" class="ad-card ad-card-body" style="color:#245434">{{ session('status') }}</div>@endif
+    @if($schemaReady && $policy['initialized'])
+        <div class="ad-card ad-card-body">
+            <span class="ad-overline">Shipping commission split</span>
+            <h2>Set Logistics Share</h2>
+            <p>Applies to shipping fees only. The Rider receives the remainder. Existing orders keep their saved rate version.</p>
+            <form method="POST" action="{{ route('admin.shipping-rate-requests.commission-split') }}" style="display:flex;align-items:end;gap:12px;flex-wrap:wrap" onsubmit="return confirm('Activate this shipping split for new orders?')">
+                @csrf
+                <label class="ad-field"><span>Logistics share (%)</span><input type="number" name="logistics_percentage" min="0" max="100" step="0.0001" value="{{ old('logistics_percentage', $policy['logistics_percentage']) }}" required></label>
+                <div style="padding:10px 0;color:#4b5960">Rider receives {{ number_format(100 - (float) old('logistics_percentage', $policy['logistics_percentage']), 2) }}%</div>
+                <button class="ad-btn ad-btn-primary">Save Shipping Split</button>
+            </form>
+            @error('logistics_percentage')<p role="alert" style="color:#a52920">{{ $message }}</p>@enderror
+        </div>
+    @endif
+
     <div class="ad-card ad-card-body">
         <div class="ad-page-head"><div><span class="ad-overline">GLOBAL rate policy</span><h2>Current Approved Shipping Fee</h2><p>New checkout transactions use this global fee. Existing SellerOrder snapshots remain unchanged.</p></div></div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
@@ -27,7 +42,7 @@
         </div>
         <div class="ad-table-wrap" style="margin-top:14px"><table class="ad-table"><thead><tr><th>Logistics</th><th>Current</th><th>Requested</th><th>Change</th><th>Reason</th><th>Requested At</th><th>Status</th><th>Action</th></tr></thead><tbody>
         @forelse($requests as $rateRequest)
-            <tr><td>{{ $rateRequest->requester?->logisticsCenter?->business_name ?? $rateRequest->requester?->name ?? 'Logistics account' }}</td><td>PHP {{ number_format((float) $rateRequest->current_shipping_fee, 2) }}</td><td>PHP {{ number_format((float) $rateRequest->requested_shipping_fee, 2) }}</td><td>{{ $rateRequest->change_type }} · PHP {{ number_format(abs((float) $rateRequest->change_amount), 2) }} ({{ number_format((float) $rateRequest->change_percentage, 2) }}%)</td><td>{{ \App\Models\Finance\ShippingRateChangeRequest::REASONS[$rateRequest->reason_code] ?? $rateRequest->reason_code }}</td><td>{{ $rateRequest->created_at?->format('M j, Y g:i A') }}</td><td>{{ str($rateRequest->status)->headline() }}</td><td><a class="ad-btn ad-btn-secondary" href="{{ route('admin.shipping-rate-requests.show', $rateRequest) }}">Review</a></td></tr>
+            <tr><td>{{ $rateRequest->requester?->logisticsCenter?->business_name ?? $rateRequest->requester?->name ?? 'Logistics account' }}</td><td>@if($rateRequest->requested_rider_pool_percentage !== null)Rider {{ number_format((float) $rateRequest->current_rider_pool_percentage, 2) }}% / Logistics {{ number_format(100 - (float) $rateRequest->current_rider_pool_percentage, 2) }}%@else PHP {{ number_format((float) $rateRequest->current_shipping_fee, 2) }}@endif</td><td>@if($rateRequest->requested_rider_pool_percentage !== null)Rider {{ number_format((float) $rateRequest->requested_rider_pool_percentage, 2) }}% / Logistics {{ number_format(100 - (float) $rateRequest->requested_rider_pool_percentage, 2) }}%@else PHP {{ number_format((float) $rateRequest->requested_shipping_fee, 2) }}@endif</td><td>@if($rateRequest->requested_rider_pool_percentage !== null)Rider share change @else{{ $rateRequest->change_type }} · PHP {{ number_format(abs((float) $rateRequest->change_amount), 2) }} ({{ number_format((float) $rateRequest->change_percentage, 2) }}%)@endif</td><td>{{ \App\Models\Finance\ShippingRateChangeRequest::REASONS[$rateRequest->reason_code] ?? $rateRequest->reason_code }}</td><td>{{ $rateRequest->created_at?->format('M j, Y g:i A') }}</td><td>{{ str($rateRequest->status)->headline() }}</td><td><a class="ad-btn ad-btn-secondary" href="{{ route('admin.shipping-rate-requests.show', $rateRequest) }}">Review</a></td></tr>
         @empty
             <tr><td colspan="8">No requests in this view.</td></tr>
         @endforelse

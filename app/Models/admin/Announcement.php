@@ -16,6 +16,12 @@ class Announcement extends Model
         'title',
         'body',
         'target_audience',
+        'image_path',
+        'image_alt',
+        'theme_color',
+        'cta_label',
+        'cta_url',
+        'show_popup',
         'published_at',
         'expires_at',
         'is_active',
@@ -27,7 +33,17 @@ class Announcement extends Model
             'published_at' => 'datetime',
             'expires_at' => 'datetime',
             'is_active' => 'boolean',
+            'show_popup' => 'boolean',
         ];
+    }
+
+    public function getSafeThemeColorAttribute(): ?string
+    {
+        $color = (string) $this->theme_color;
+
+        return preg_match('/^#[0-9a-fA-F]{6}$/', $color) === 1
+            ? strtoupper($color)
+            : null;
     }
 
     public function creator(): BelongsTo

@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Registration Applications')
 
@@ -21,7 +21,7 @@
     <form method="GET" class="ad-card ad-card-body ad-filter-bar" style="margin-bottom:16px;">
         <select name="type" onchange="this.form.submit()">
             <option value="">All account types</option>
-            @foreach(['BUYER' => 'Buyer', 'SELLER' => 'Seller', 'LOGISTICS' => 'Logistics', 'RIDER' => 'Rider / Courier'] as $value => $label)
+            @foreach(['BUYER' => 'Buyer', 'SELLER' => 'Seller', 'LOGISTICS' => 'Logistics', 'RIDER' => 'Rider'] as $value => $label)
                 <option value="{{ $value }}" @selected($type === $value)>{{ $label }}</option>
             @endforeach
         </select>

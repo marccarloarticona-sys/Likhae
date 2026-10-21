@@ -35,7 +35,7 @@ class RiderPickupBatchController extends Controller
             ->latest()
             ->paginate(15);
 
-        return view('Rider.pickups.index', compact('rider', 'batches'));
+        return view('rider.pickups.index', compact('rider', 'batches'));
     }
 
     public function show(Request $request, int $trip): View
@@ -64,7 +64,7 @@ class RiderPickupBatchController extends Controller
                 'target_kind' => $marker['kind'] === 'center' ? 'logistics' : 'seller',
             ]))->values()->all();
 
-        return view('Rider.pickups.show', [
+        return view('rider.pickups.show', [
             'pickup' => $pickup,
             'rider' => $pickup->rider,
             'items' => $items,

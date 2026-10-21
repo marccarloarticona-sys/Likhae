@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Product Management')
 @section('subtitle', 'Catalog moderation and category management.')

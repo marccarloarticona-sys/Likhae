@@ -1,30 +1,16 @@
-@props(['active' => 'home', 'cartCount' => null, 'messageCount' => null])
+@props(['active' => 'home', 'cartCount' => null, 'orderCount' => null, 'messageCount' => null, 'notificationCount' => null])
 
 @php
-    $buyer = auth()->user();
-    $demoUser = session('demo_user');
-
     $cartCount = $cartCount ?? (int) data_get($buyerUiCounts ?? [], 'cart', 0);
+    $orderCount = $orderCount ?? (int) data_get($buyerUiCounts ?? [], 'orders', 0);
     $messageCount = $messageCount ?? (int) data_get($buyerUiCounts ?? [], 'messages', 0);
+    $notificationCount = $notificationCount ?? (int) data_get($buyerUiCounts ?? [], 'notifications', 0);
 
-    $buyerName = data_get($buyer, 'name')
-        ?? data_get($demoUser, 'name')
-        ?? 'Buyer Account';
-
-    $buyerInitials = collect(explode(' ', trim($buyerName)))
-        ->filter()
-        ->take(2)
-        ->map(fn ($word) => mb_strtoupper(mb_substr($word, 0, 1)))
-        ->implode('') ?: 'BA';
-
-    $profilePhoto = data_get($buyer, 'profile_photo_path')
-        ?? data_get($buyer, 'profile_photo_url')
-        ?? data_get($buyer, 'avatar_url');
-
-
-    $orderStatus = request('status', 'all');
-    $rewardTab = request('tab', 'vouchers');
-    $accountTab = request('tab', 'profile');
+    if (request()->routeIs('notifications.index', 'buyer.notifications')) {
+        $active = 'notifications';
+    } elseif (request()->routeIs('buyer.settings', 'buyer.settings.*')) {
+        $active = 'settings';
+    }
 
     /*
      * Seller-sidebar inspired icon language:
@@ -94,57 +80,14 @@
             <path d="m16 17 5-5-5-5"></path>
             <path d="M21 12H9"></path>
         ',
-    ];
-
-    $topLinks = [
-        [
-            'key' => 'home',
-            'label' => 'Home',
-            'route' => 'buyer.home',
-            'icon' => 'home',
-        ],
-        [
-            'key' => 'products',
-            'label' => 'Categories',
-            'route' => 'buyer.products',
-            'icon' => 'products',
-        ],
-        [
-            'key' => 'cart',
-            'label' => 'Cart',
-            'route' => 'buyer.cart',
-            'icon' => 'cart',
-            'count' => $cartCount,
-        ],
-        [
-            'key' => 'messages',
-            'label' => 'Messages',
-            'route' => 'buyer.messages',
-            'icon' => 'messages',
-            'count' => $messageCount,
-        ],
-    ];
-
-    $orderLinks = [
-        'all' => 'All',
-        'to-pay' => 'To Pay',
-        'to-ship' => 'To Ship',
-        'to-receive' => 'To Receive',
-        'completed' => 'Completed',
-        'cancelled' => 'Cancelled',
-        'returns' => 'Return / Refund',
-    ];
-
-    $rewardLinks = [
-        'vouchers' => 'My Vouchers',
-        'points' => 'Reward Points',
-        'cashback' => 'Cashback',
-    ];
-
-    $accountLinks = [
-        'profile' => 'Profile',
-        'addresses' => 'Addresses',
-        'password' => 'Change Password',
+        'notifications' => '
+            <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+            <path d="M10 21h4"></path>
+        ',
+        'settings' => '
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.6a7.8 7.8 0 0 1-1.5.9l-.3 1.8h-2.8l-.3-1.8a7.8 7.8 0 0 1-1.5-.9l-1.7.6-1.4-2.4 1.4-1.1a7 7 0 0 1 0-1.8l-1.4-1.1 1.4-2.4 1.7.6a7.8 7.8 0 0 1 1.5-.9l.3-1.8h2.8l.3 1.8a7.8 7.8 0 0 1 1.5.9l1.7-.6 1.4 2.4-1.4 1.1a7 7 0 0 1 0 1.8Z"></path>
+        ',
     ];
 @endphp
 
@@ -248,77 +191,6 @@
         max-height: 40px;
     }
 
-    /* PROFILE ----------------------------------------------------- */
-
-    .lk-sidebar-profile {
-        display: grid;
-        grid-template-columns: auto minmax(0,1fr) auto;
-        align-items: center;
-        gap: 10px;
-        margin: 13px 10px 8px;
-        padding: 10px;
-        min-height: 61px;
-        border: 1px solid var(--buyer-line);
-        border-radius: 13px;
-        background:
-            radial-gradient(circle at 94% 9%, rgba(193,151,113,.12), transparent 34%),
-            var(--buyer-soft);
-    }
-
-    .lk-sidebar-avatar {
-        display: grid;
-        width: 39px;
-        height: 39px;
-        place-items: center;
-        overflow: hidden;
-        border-radius: 10px;
-        background: var(--buyer-primary);
-        color: #FFF;
-        font-size: 10px;
-        font-weight: 900;
-    }
-
-    .lk-sidebar-avatar img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-
-    .lk-sidebar-profile-copy {
-        min-width: 0;
-    }
-
-    .lk-sidebar-profile-copy strong {
-        display: block;
-        overflow: hidden;
-        color: var(--buyer-text-strong);
-        font-size: 10px;
-        font-weight: 800;
-        line-height: 1.2;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .lk-sidebar-profile-copy span {
-        display: block;
-        margin-top: 3px;
-        color: var(--buyer-muted);
-        font-size: 7px;
-        line-height: 1.15;
-    }
-
-    .lk-sidebar-verified {
-        display: grid;
-        width: 19px;
-        height: 19px;
-        place-items: center;
-        border-radius: 999px;
-        background: var(--buyer-primary);
-        color: #FFF;
-        font-size: 9px;
-        font-weight: 900;
-    }
-
     /* SCROLL AREA ------------------------------------------------- */
 
     .lk-sidebar-scroll {
@@ -361,8 +233,7 @@
 
     /* NAV ROWS ---------------------------------------------------- */
 
-    .lk-nav-link,
-    .lk-nav-toggle {
+    .lk-nav-link {
         position: relative;
         display: flex;
         min-height: 41px;
@@ -383,21 +254,18 @@
         transition: .14s ease;
     }
 
-    .lk-nav-link:hover,
-    .lk-nav-toggle:hover {
+    .lk-nav-link:hover {
         background: var(--buyer-soft);
         color: var(--buyer-primary);
     }
 
-    .lk-nav-link.is-active,
-    .lk-nav-toggle.is-active {
+    .lk-nav-link.is-active {
         background: var(--buyer-active);
         color: var(--buyer-primary);
         font-weight: 700;
     }
 
-    .lk-nav-link.is-active::before,
-    .lk-nav-toggle.is-active::before {
+    .lk-nav-link.is-active::before {
         position: absolute;
         top: 8px;
         bottom: 8px;
@@ -447,68 +315,6 @@
         color: #FFF;
         font-size: 8px;
         font-weight: 800;
-    }
-
-    .lk-nav-arrow {
-        display: grid;
-        width: 16px;
-        height: 16px;
-        flex: 0 0 16px;
-        place-items: center;
-        color: #8F6C59;
-        transition: transform .18s ease;
-    }
-
-    .lk-nav-arrow svg {
-        width: 12px;
-        height: 12px;
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 1.65;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-
-    .lk-nav-toggle.is-open .lk-nav-arrow {
-        transform: rotate(180deg);
-    }
-
-    /* SUBMENUS ---------------------------------------------------- */
-
-    .lk-nav-submenu {
-        display: grid;
-        gap: 2px;
-        margin: 2px 0 5px 37px;
-        padding-left: 10px;
-        border-left: 1px solid var(--buyer-line);
-    }
-
-    .lk-nav-submenu[hidden] {
-        display: none;
-    }
-
-    .lk-nav-submenu a {
-        display: flex;
-        min-height: 33px;
-        align-items: center;
-        padding: 0 9px;
-        border-radius: 8px;
-        color: #8B6A59;
-        font-size: 9px;
-        font-weight: 500;
-        text-decoration: none;
-        transition: .14s ease;
-    }
-
-    .lk-nav-submenu a:hover {
-        background: var(--buyer-soft);
-        color: var(--buyer-primary);
-    }
-
-    .lk-nav-submenu a.is-active {
-        background: var(--buyer-active);
-        color: var(--buyer-primary);
-        font-weight: 700;
     }
 
     /* FOOTER ------------------------------------------------------ */
@@ -580,37 +386,30 @@
 
     /* COLLAPSED --------------------------------------------------- */
 
-    .lk-sidebar.is-collapsed {
+    .lk-sidebar.lk-sidebar-collapsed {
         width: var(--buyer-side-collapsed);
     }
 
-    .lk-sidebar.is-collapsed .lk-brand,
-    .lk-sidebar.is-collapsed .lk-sidebar-profile-copy,
-    .lk-sidebar.is-collapsed .lk-sidebar-verified,
-    .lk-sidebar.is-collapsed .lk-nav-section-title,
-    .lk-sidebar.is-collapsed .lk-nav-text,
-    .lk-sidebar.is-collapsed .lk-nav-count,
-    .lk-sidebar.is-collapsed .lk-nav-arrow,
-    .lk-sidebar.is-collapsed .lk-nav-submenu,
-    .lk-sidebar.is-collapsed .lk-theme-copy,
-    .lk-sidebar.is-collapsed #themeToggleBadge {
+    .lk-sidebar.lk-sidebar-collapsed .lk-brand,
+    .lk-sidebar.lk-sidebar-collapsed .lk-nav-section-title,
+    .lk-sidebar.lk-sidebar-collapsed .lk-nav-text,
+    .lk-sidebar.lk-sidebar-collapsed .lk-nav-count,
+    .lk-sidebar.lk-sidebar-collapsed .lk-theme-copy,
+    .lk-sidebar.lk-sidebar-collapsed #themeToggleBadge {
         display: none !important;
     }
 
-    .lk-sidebar.is-collapsed .lk-sidebar-head {
+    .lk-sidebar.lk-sidebar-collapsed .lk-sidebar-head {
         justify-content: center;
         padding-inline: 0;
     }
 
-    .lk-sidebar.is-collapsed .lk-sidebar-profile {
-        display: flex;
+    .lk-sidebar.lk-sidebar-collapsed .lk-nav-link {
         justify-content: center;
-        margin-inline: 8px;
-        padding: 8px 0;
+        padding-inline: 0;
     }
 
-    .lk-sidebar.is-collapsed .lk-nav-link,
-    .lk-sidebar.is-collapsed .lk-nav-toggle {
+    .lk-sidebar.lk-sidebar-collapsed #themeToggle {
         justify-content: center;
         padding-inline: 0;
     }
@@ -634,55 +433,27 @@
         color: #EBA99D;
     }
 
-    html.dark .lk-sidebar-profile {
-        border-color: #30231F;
-        background: #1B1513;
-    }
-
-    html.dark .lk-sidebar-profile-copy strong {
-        color: #F5EFE8;
-    }
-
-    html.dark .lk-sidebar-profile-copy span,
     html.dark .lk-theme-copy span,
     html.dark .lk-nav-section-title {
         color: #8F817A;
     }
 
-    html.dark .lk-nav-link,
-    html.dark .lk-nav-toggle {
+    html.dark .lk-nav-link {
         color: #B8AAA1;
     }
 
-    html.dark .lk-nav-link:hover,
-    html.dark .lk-nav-toggle:hover {
+    html.dark .lk-nav-link:hover {
         background: #211B17;
         color: #F3C6BA;
     }
 
-    html.dark .lk-nav-link.is-active,
-    html.dark .lk-nav-toggle.is-active {
+    html.dark .lk-nav-link.is-active {
         background: #3A1111;
         color: #F3C6BA;
     }
 
-    html.dark .lk-nav-link.is-active::before,
-    html.dark .lk-nav-toggle.is-active::before {
+    html.dark .lk-nav-link.is-active::before {
         background: #A84538;
-    }
-
-    html.dark .lk-nav-submenu {
-        border-color: #30231F;
-    }
-
-    html.dark .lk-nav-submenu a {
-        color: #AFA19A;
-    }
-
-    html.dark .lk-nav-submenu a:hover,
-    html.dark .lk-nav-submenu a.is-active {
-        background: #211B17;
-        color: #F3C6BA;
     }
 
     html.dark #themeToggleBadge {
@@ -694,8 +465,8 @@
 
     @media (max-width: 1023px) {
         .lk-sidebar,
-        .lk-sidebar.is-collapsed {
-            width: var(--buyer-side-width);
+        .lk-sidebar.lk-sidebar-collapsed {
+            width: min(86vw, 300px);
             height: 100dvh;
             max-height: 100dvh;
             transform: translateX(-100%);
@@ -706,38 +477,27 @@
             transform: translateX(0);
         }
 
-        .lk-sidebar.is-collapsed .lk-brand,
-        .lk-sidebar.is-collapsed .lk-sidebar-profile-copy,
-        .lk-sidebar.is-collapsed .lk-sidebar-verified,
-        .lk-sidebar.is-collapsed .lk-nav-section-title,
-        .lk-sidebar.is-collapsed .lk-nav-text,
-        .lk-sidebar.is-collapsed .lk-nav-count,
-        .lk-sidebar.is-collapsed .lk-nav-arrow,
-        .lk-sidebar.is-collapsed .lk-theme-copy,
-        .lk-sidebar.is-collapsed #themeToggleBadge {
+        .lk-sidebar.lk-sidebar-collapsed .lk-brand,
+        .lk-sidebar.lk-sidebar-collapsed .lk-nav-section-title,
+        .lk-sidebar.lk-sidebar-collapsed .lk-nav-text,
+        .lk-sidebar.lk-sidebar-collapsed .lk-nav-count,
+        .lk-sidebar.lk-sidebar-collapsed .lk-theme-copy,
+        .lk-sidebar.lk-sidebar-collapsed #themeToggleBadge {
             display: initial !important;
         }
 
-        .lk-sidebar.is-collapsed .lk-nav-submenu.expanded {
-            display: grid !important;
-        }
-
-        .lk-sidebar.is-collapsed .lk-sidebar-head {
+        .lk-sidebar.lk-sidebar-collapsed .lk-sidebar-head {
             justify-content: flex-start;
             padding-inline: 11px;
         }
 
-        .lk-sidebar.is-collapsed .lk-sidebar-profile {
-            display: grid;
-            grid-template-columns: auto minmax(0,1fr) auto;
+        .lk-sidebar.lk-sidebar-collapsed .lk-nav-link {
             justify-content: initial;
-            margin-inline: 10px;
-            padding: 10px;
+            padding-inline: 11px;
         }
 
-        .lk-sidebar.is-collapsed .lk-nav-link,
-        .lk-sidebar.is-collapsed .lk-nav-toggle {
-            justify-content: initial;
+        .lk-sidebar.lk-sidebar-collapsed #themeToggle {
+            justify-content: space-between;
             padding-inline: 11px;
         }
     }
@@ -767,37 +527,19 @@
             class="lk-brand"
             aria-label="LIKHAE Buyer Home"
         >
-            <x-likhae-logo
+            <x-shared.likhae-logo
                 context="Buyer Center"
-                class="likhae-logo--sidebar"
+                class="likhae-logo--sidebar {{ request()->routeIs('buyer.home') ? 'likhae-logo--buyer-home' : '' }}"
             />
         </a>
     </div>
 
-    <div class="lk-sidebar-profile">
-        <span class="lk-sidebar-avatar">
-            <x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" />
-        </span>
-
-        <span class="lk-sidebar-profile-copy">
-            <strong>{{ $buyerName }}</strong>
-            <span>LIKHAE Buyer</span>
-        </span>
-
-        <span
-            class="lk-sidebar-verified"
-            title="Buyer account"
-        >
-            ✓
-        </span>
-    </div>
-
     <nav class="lk-sidebar-scroll">
 
-        {{-- Marketplace --}}
+        {{-- Navigation --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Marketplace
+                Navigation
             </span>
 
             <a
@@ -815,6 +557,13 @@
                     Home
                 </span>
             </a>
+        </div>
+
+        {{-- Marketplace --}}
+        <div class="lk-nav-section">
+            <span class="lk-nav-section-title">
+                Marketplace
+            </span>
 
             <a
                 href="{{ route('buyer.products') }}"
@@ -858,14 +607,13 @@
         {{-- Orders --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Order Management
+                Orders
             </span>
 
-            <button
-                type="button"
-                class="lk-nav-toggle {{ $active === 'orders' ? 'is-active is-open' : '' }}"
-                data-nav-toggle
-                aria-expanded="{{ $active === 'orders' ? 'true' : 'false' }}"
+            <a
+                href="{{ route('buyer.orders') }}"
+                class="lk-nav-link {{ $active === 'orders' ? 'is-active' : '' }}"
+                @if($active === 'orders') aria-current="page" @endif
             >
                 <span class="lk-nav-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -874,36 +622,18 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    My Orders
+                    Orders
                 </span>
-
-                <span class="lk-nav-arrow">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="m7 10 5 5 5-5"></path>
-                    </svg>
-                </span>
-            </button>
-
-            <div
-                class="lk-nav-submenu {{ $active === 'orders' ? 'expanded' : '' }}"
-                data-nav-submenu
-                @if($active !== 'orders') hidden @endif
-            >
-                @foreach($orderLinks as $key => $label)
-                    <a
-                        href="{{ route('buyer.orders', ['status' => $key]) }}"
-                        class="{{ $active === 'orders' && $orderStatus === $key ? 'is-active' : '' }}"
-                    >
-                        {{ $label }}
-                    </a>
-                @endforeach
-            </div>
+                @if($orderCount > 0)
+                    <span class="lk-nav-count">{{ $orderCount > 99 ? '99+' : $orderCount }}</span>
+                @endif
+            </a>
         </div>
 
-        {{-- Customer Service --}}
+        {{-- Communication --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Customer Service
+                Communication
             </span>
 
             <a
@@ -927,51 +657,22 @@
                     </span>
                 @endif
             </a>
-        </div>
 
-        {{-- Rewards --}}
-        <div class="lk-nav-section">
-            <span class="lk-nav-section-title">
-                Benefits
-            </span>
-
-            <button
-                type="button"
-                class="lk-nav-toggle {{ $active === 'rewards' ? 'is-active is-open' : '' }}"
-                data-nav-toggle
-                aria-expanded="{{ $active === 'rewards' ? 'true' : 'false' }}"
+            <a
+                href="{{ route('notifications.index') }}"
+                class="lk-nav-link {{ $active === 'notifications' ? 'is-active' : '' }}"
+                @if($active === 'notifications') aria-current="page" @endif
             >
                 <span class="lk-nav-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                        {!! $icons['rewards'] !!}
+                        {!! $icons['notifications'] !!}
                     </svg>
                 </span>
-
-                <span class="lk-nav-text">
-                    Rewards &amp; Vouchers
-                </span>
-
-                <span class="lk-nav-arrow">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="m7 10 5 5 5-5"></path>
-                    </svg>
-                </span>
-            </button>
-
-            <div
-                class="lk-nav-submenu {{ $active === 'rewards' ? 'expanded' : '' }}"
-                data-nav-submenu
-                @if($active !== 'rewards') hidden @endif
-            >
-                @foreach($rewardLinks as $key => $label)
-                    <a
-                        href="{{ route('buyer.rewards', ['tab' => $key]) }}"
-                        class="{{ $active === 'rewards' && $rewardTab === $key ? 'is-active' : '' }}"
-                    >
-                        {{ $label }}
-                    </a>
-                @endforeach
-            </div>
+                <span class="lk-nav-text">Notifications</span>
+                @if($notificationCount > 0)
+                    <span class="lk-nav-count">{{ $notificationCount > 99 ? '99+' : $notificationCount }}</span>
+                @endif
+            </a>
         </div>
 
         {{-- Account --}}
@@ -980,43 +681,50 @@
                 Account
             </span>
 
-            <button
-                type="button"
-                class="lk-nav-toggle {{ $active === 'account' ? 'is-active is-open' : '' }}"
-                data-nav-toggle
-                aria-expanded="{{ $active === 'account' ? 'true' : 'false' }}"
+            <a
+                href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}"
+                class="lk-nav-link {{ $active === 'rewards' ? 'is-active' : '' }}"
+                @if($active === 'rewards') aria-current="page" @endif
+            >
+                <span class="lk-nav-icon">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        {!! $icons['rewards'] !!}
+                    </svg>
+                </span>
+
+                <span class="lk-nav-text">
+                    Rewards
+                </span>
+            </a>
+            <a
+                href="{{ route('buyer.account', ['tab' => 'profile']) }}"
+                class="lk-nav-link {{ $active === 'account' ? 'is-active' : '' }}"
+                @if($active === 'account') aria-current="page" @endif
             >
                 <span class="lk-nav-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         {!! $icons['account'] !!}
                     </svg>
                 </span>
-
                 <span class="lk-nav-text">
-                    Account Management
+                    My Account
                 </span>
+            </a>
 
-                <span class="lk-nav-arrow">
+            <a
+                href="{{ route('buyer.settings') }}"
+                class="lk-nav-link {{ $active === 'settings' ? 'is-active' : '' }}"
+                @if($active === 'settings') aria-current="page" @endif
+            >
+                <span class="lk-nav-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="m7 10 5 5 5-5"></path>
+                        {!! $icons['settings'] !!}
                     </svg>
                 </span>
-            </button>
-
-            <div
-                class="lk-nav-submenu {{ $active === 'account' ? 'expanded' : '' }}"
-                data-nav-submenu
-                @if($active !== 'account') hidden @endif
-            >
-                @foreach($accountLinks as $key => $label)
-                    <a
-                        href="{{ route('buyer.account', ['tab' => $key]) }}"
-                        class="{{ $active === 'account' && $accountTab === $key ? 'is-active' : '' }}"
-                    >
-                        {{ $label }}
-                    </a>
-                @endforeach
-            </div>
+                <span class="lk-nav-text">
+                    System Settings
+                </span>
+            </a>
         </div>
 
     </nav>

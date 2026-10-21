@@ -135,7 +135,7 @@ class SellerProductController extends Controller
 
         $selected = $mode === 'edit' ? $sellerProducts->first() : null;
 
-        return view('Seller.products', [
+        return view('seller.products', [
             'mode' => $mode,
             'seller' => $seller,
             'products' => $products,
@@ -251,7 +251,7 @@ class SellerProductController extends Controller
         $seller = $this->seller($request);
         $products = Product::onlyTrashed()->where('seller_profile_id', $seller->id)->latest('deleted_at')->paginate(20);
 
-        return view('Seller.products-trash', compact('products'));
+        return view('seller.products-trash', compact('products'));
     }
 
     public function restore(Request $request, int $productId): RedirectResponse
@@ -316,7 +316,7 @@ class SellerProductController extends Controller
 
     public function inventoryPreview(Request $request): View
     {
-        return view('Seller.inventory-preview', $this->inventoryReportData($request));
+        return view('seller.inventory-preview', $this->inventoryReportData($request));
     }
 
     public function downloadInventoryPdf(Request $request, SellerInventoryPdfService $pdf)

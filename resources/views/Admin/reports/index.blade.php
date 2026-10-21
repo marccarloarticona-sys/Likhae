@@ -1,4 +1,4 @@
-@extends('layouts.admin')
+@extends('layouts.admin.app')
 
 @section('title', 'Reports')
 @section('subtitle', 'Explore sales and platform commission by shop, category, and product.')

@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 
 @section('title', 'Delivery Details - LIKHAE Rider')
 
@@ -32,7 +32,7 @@
                 : ['Accept this assignment or decline it with a reason.', 'You, the delivery rider'],
             'ACCEPTED' => ['Start the delivery route when ready to depart.', 'You, the delivery rider'],
             'IN_PROGRESS' => ! $parcel['has_buyer_pin']
-                ? ['Wait for the Buyer to confirm the exact destination pin; contact them if needed.', 'Buyer'],
+                ? ['Wait for the Buyer to confirm the exact destination pin; contact them if needed.', 'Buyer']
                 : ['Scan the waybill, collect the displayed COD amount if due, then upload proof or record the attempt.', 'You, the delivery rider'],
             'COMPLETED' => ['Confirm receipt in My Orders, or wait for the automatic receipt deadline.', 'Buyer'],
             default => ['Dispatch will review this assignment and route it to an eligible rider.', 'Logistics'],
@@ -56,7 +56,7 @@
     <section class="grid gap-6 lg:grid-cols-2">
         <article class="rounded-3xl border border-line bg-surface p-8">
             <h2 class="text-lg font-bold text-ink">Recipient</h2>
-            <div class="mt-5 flex flex-wrap gap-3">@foreach(($delivery->shipment?->orderItem ? collect([$delivery->shipment->orderItem]) : ($delivery->shipment?->sellerOrder?->items ?? collect())) as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
+            <div class="mt-5 flex flex-wrap gap-3">@foreach(($delivery->shipment?->orderItem ? collect([$delivery->shipment->orderItem]) : ($delivery->shipment?->sellerOrder?->items ?? collect())) as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-shared.product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
             <dl class="mt-5 grid gap-3 text-sm">
                 <div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div>
                 <div><dt class="text-muted">Contact</dt><dd class="font-semibold text-ink">{{ $parcel['contact'] }}</dd></div>
@@ -78,7 +78,7 @@
                 @elseif($parcel['status'] === 'ACCEPTED')
                     <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <x-parcel-scanner
+                    <x-shared.parcel-scanner
                         :action="route('rider.deliveries.scan', $delivery)"
                         :tracking="old('tracking', session('verified_tracking', ''))"
                         :method="request('scan_method', 'MANUAL')"

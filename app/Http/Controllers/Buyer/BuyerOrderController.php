@@ -63,7 +63,7 @@ class BuyerOrderController extends Controller
                 ->first();
         }
 
-        return view('Buyer.orders', [
+        return view('buyer.orders', [
             'mode' => 'success',
             'selectedOrder' => $order,
             'orders' => $request->user()->orders()->with(['sellerOrders.shipments', 'payments'])->latest()->paginate(10),
@@ -124,7 +124,7 @@ class BuyerOrderController extends Controller
             ])->all();
         });
 
-        return view('Buyer.orders', [
+        return view('buyer.orders', [
             'mode' => 'index',
             'filter' => $filter,
             'orders' => $orders,
@@ -240,7 +240,7 @@ class BuyerOrderController extends Controller
         $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->flatMap->shipments, includeSeller: true);
         $deliveryPinRequired = $this->canConfirmDeliveryPin($selectedOrder, $selectedOrder->address);
 
-        return view('Buyer.orders', [
+        return view('buyer.orders', [
             'mode' => 'show',
             'selectedOrder' => $selectedOrder,
             'riderRatingsByShipment' => $riderRatingsByShipment,
@@ -568,7 +568,7 @@ class BuyerOrderController extends Controller
             return redirect()->route('buyer.orders', ['status' => 'RETURNS'])->with('buyer_notice', 'Your return/refund request is already under review.');
         }
 
-        return view('Buyer.return-refund', [
+        return view('buyer.return-refund', [
             'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipments.events', 'payments']),
             'issues' => $this->returnRefundIssues(),
             'refundMethods' => $this->refundMethods($order),
@@ -763,7 +763,7 @@ class BuyerOrderController extends Controller
             ], 201);
         }
 
-        return view('Buyer.return-refund-success', ['requestRecord' => $requestRecord, 'order' => $order]);
+        return view('buyer.return-refund-success', ['requestRecord' => $requestRecord, 'order' => $order]);
     }
 
     public function returns(): RedirectResponse

@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 @section('title', 'My Orders')
 @section('active', 'orders')
 
@@ -341,10 +341,10 @@
                             <a class="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto" href="{{ $proofUrl }}" target="_blank" rel="noopener noreferrer">View Full Photo</a>
                         </section>
                     @endif
-                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
+                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
             </section>
           @empty
-            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
+            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
           @endforelse
             @if($selectedOrder->sellerOrders->count() > 1)
                 <dl class="mx-3 mt-2 divide-y divide-stone-100 rounded-xl border border-stone-100 bg-stone-50/60 px-4 text-sm sm:mx-5">
@@ -440,7 +440,7 @@
                             @csrf
                             <input type="hidden" name="review_item_id" value="{{ $item->id }}">
                             <div class="flex items-center gap-3">
-                                <x-product-thumbnail :item="$item" size="56"/>
+                                <x-shared.product-thumbnail :item="$item" size="56"/>
                                 <div>
                                     <strong class="block">{{ $item->product_name }}</strong>
                                     <small class="text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</small>
@@ -583,14 +583,14 @@
                                     @forelse($refundItems as $refundItem)
                                         @if($refundItem->orderItem)
                                             <li class="flex items-start gap-3 py-4">
-                                                <x-product-thumbnail :item="$refundItem->orderItem" size="56" class="rounded-lg border border-stone-100" />
+                                                <x-shared.product-thumbnail :item="$refundItem->orderItem" size="56" class="rounded-lg border border-stone-100" />
                                                 <div class="min-w-0 flex-1"><p class="font-medium text-stone-900">{{ $refundItem->orderItem->product_name }}</p><p class="mt-1 text-xs text-stone-500">{{ $refundItem->orderItem->variant_description ?: 'Standard' }} &#183; Qty {{ $refundItem->quantity }}</p></div>
                                                 <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $refundItem->refundable_amount, 2) }}</strong>
                                             </li>
                                         @endif
                                     @empty
                                         @foreach($refundSellerOrder->items as $item)
-                                            <li class="flex items-start gap-3 py-4"><x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" /><div class="min-w-0 flex-1"><p class="font-medium text-stone-900">{{ $item->product_name }}</p><p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p></div><strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></li>
+                                            <li class="flex items-start gap-3 py-4"><x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" /><div class="min-w-0 flex-1"><p class="font-medium text-stone-900">{{ $item->product_name }}</p><p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p></div><strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></li>
                                         @endforeach
                                     @endforelse
                                 </ul>
@@ -633,7 +633,7 @@
                                     @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
                                             <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
-                                            @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                            @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
                                 </div>
@@ -648,11 +648,11 @@
                                         @if($shipmentForItem)
                                             <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                                                 <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
-                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endif
                                         <div class="flex items-start gap-3">
-                                            <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
+                                            <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
                                             <div class="min-w-0 flex-1">
                                                 <p class="font-medium text-stone-900">{{ $item->product_name }}</p>
                                                 <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p>
@@ -713,7 +713,7 @@
                                         @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
                                                 <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
-                                                @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
                                     </div>
@@ -728,11 +728,11 @@
                                             @if($shipmentForItem)
                                                 <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                                                     <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
-                                                    @include('Buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                    @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                                 </div>
                                             @endif
                                             <div class="flex items-start gap-3">
-                                                <x-product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
+                                                <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
                                                 <div class="min-w-0 flex-1">
                                                     <p class="truncate font-medium text-stone-900">{{ $item->product_name }}</p>
                                                     <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} <span aria-hidden="true">·</span> Qty {{ $item->quantity }}</p>

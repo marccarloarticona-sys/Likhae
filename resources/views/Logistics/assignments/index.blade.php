@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title', 'Delivery Rider Assignment - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">
@@ -6,7 +6,7 @@
     <x-logistics.parcel-flow current="assign" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
-    <x-parcel-scanner :action="route('logistics.dispatch')" :tracking="request('tracking', '')" :method="request('scan_method', 'MANUAL')" title="Identify the Area Rider" description="Scan a sorted parcel to show only active riders assigned to its destination area." button="Find Parcel" />
+    <x-shared.parcel-scanner :action="route('logistics.dispatch')" :tracking="request('tracking', '')" :method="request('scan_method', 'MANUAL')" title="Identify the Area Rider" description="Scan a sorted parcel to show only active riders assigned to its destination area." button="Find Parcel" />
     <x-shared.mapbox :markers="$mapMarkers" title="Delivery assignment map" height="220px" user-location-target="destination" />
     <div class="grid gap-4">
     @forelse($shipments as $shipment)

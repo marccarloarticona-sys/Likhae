@@ -15,7 +15,7 @@
 			<strong>{{ $order?->seller_order_number }}</strong>
 		</header>
 		<div class="tracking">{{ $shipment->tracking_number }}</div>
-		<x-waybill-barcode :tracking="$shipment->tracking_number" />
+		<x-shared.waybill-barcode :tracking="$shipment->tracking_number" />
 		<section class="grid">
 			<div class="box"><strong>Seller</strong><p>{{ $order?->sellerProfile?->business_name }}<br>{{ $order?->sellerProfile?->businessAddress?->formatted() }}</p></div>
 			<div class="box"><strong>Recipient</strong><p>{{ $order?->order?->address?->recipient_name }}<br>{{ $order?->order?->address?->formatted() }}</p></div>

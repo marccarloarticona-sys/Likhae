@@ -7,7 +7,7 @@
     </style>
 </head>
 <body>
-@include('Seller.partials.waybill-label', ['sellerOrder' => $sellerOrder, 'shipment' => $shipment, 'item' => $item, 'parcelNumber' => 1, 'pageBreak' => false])
+@include('seller.partials.waybill-label', ['sellerOrder' => $sellerOrder, 'shipment' => $shipment, 'item' => $item, 'parcelNumber' => 1, 'pageBreak' => false])
 <script>window.addEventListener('load',()=>window.print())</script>
 </body>
 </html>

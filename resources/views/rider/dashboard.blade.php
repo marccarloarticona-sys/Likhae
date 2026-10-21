@@ -1,4 +1,4 @@
-@extends('Rider.app')
+@extends('layouts.rider.app')
 
 @section('title', 'Rider Dashboard - LIKHAE')
 
@@ -27,7 +27,7 @@
     @endif
 
     <section class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.8fr)]">
-        <x-parcel-scanner
+        <x-shared.parcel-scanner
             :action="route('rider.scan', ['return_to' => 'dashboard'])"
             :tracking="old('tracking', '')"
             :method="old('scan_method', 'MANUAL')"

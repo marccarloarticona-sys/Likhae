@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('title', 'Home')
 
@@ -1738,7 +1738,7 @@
         @if ($platformCampaigns->isNotEmpty())
             <div class="lk-platform-events-grid {{ $platformCampaigns->count() === 1 ? 'is-single-event' : '' }}">
                 @foreach ($platformCampaigns as $campaign)
-                    @include('Buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
+                    @include('buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
                 @endforeach
             </div>
         @else

@@ -10,11 +10,9 @@ use RuntimeException;
 
 final class ShippingRatePolicyService
 {
-    // FUTURE SHIPPING PRICING:
-    // The shipping-rate architecture is intentionally designed so a future
-    // pricing engine may select rates using location, distance, parcel weight,
-    // parcel dimensions, or service level. This capability is NOT IMPLEMENTED
-    // in the current release.
+    // Regional shipping tiers are applied by RegionShippingRateService.
+    // Distance, parcel weight, dimensions, and service-level pricing remain
+    // outside the current policy.
     public const DEFAULT_RIDER_PERCENTAGE = '60.0000';
     public const DEFAULT_LOGISTICS_PERCENTAGE = '40.0000';
     public const DEFAULT_PICKUP_WEIGHT = 8;

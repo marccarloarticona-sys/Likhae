@@ -160,7 +160,7 @@ class SellerOrderController extends Controller
         $readyPickupCount = (clone $ownedOrders)->where('status', 'READY_FOR_PICKUP')->with('shipments')->get()
             ->sum(fn (SellerOrder $order): int => $order->shipments->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'])->count());
 
-        return view('Seller.orders', [
+        return view('seller.orders', [
             'seller' => $seller,
             'orders' => $orders,
             'counts' => $counts,

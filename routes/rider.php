@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Rider\RiderController;
+use App\Http\Controllers\Rider\RiderFinanceController;
 use App\Http\Controllers\Rider\RiderPickupBatchController;
 use App\Http\Controllers\Rider\RiderParcelScanController;
 use App\Http\Controllers\Rider\RiderRemittanceController;
@@ -77,6 +78,10 @@ Route::prefix('rider')
         });
 
         Route::get('/earnings', [RiderController::class, 'earnings'])->name('earnings');
+        Route::get('/wallet', [RiderController::class, 'earnings'])->name('wallet');
+        Route::put('/wallet/payout-destination', [RiderFinanceController::class, 'updatePayoutDestination'])->name('wallet.payout-destination.update');
+        Route::post('/earnings/payout-requests', [RiderFinanceController::class, 'requestPayout'])->name('earnings.payout-requests.store');
+        Route::post('/earnings/payouts/{entry}/acknowledge', [RiderFinanceController::class, 'acknowledgePayout'])->whereNumber('entry')->name('earnings.payouts.acknowledge');
         Route::get('/remittances', [RiderRemittanceController::class, 'index'])->name('remittances');
         Route::post('/remittances', [RiderRemittanceController::class, 'store'])->name('remittances.store');
         Route::get('/profile', [RiderController::class, 'profile'])->name('profile');

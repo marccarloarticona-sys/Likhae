@@ -117,6 +117,43 @@ class ShippingRateGovernanceTest extends TestCase
         $this->assertSame($version->id, $preview['groups']->first()['shipping_rate_version_id']);
     }
 
+    public function test_logistics_can_request_a_rider_share_and_admin_approval_versions_the_complement(): void
+    {
+        $request = $this->governance->submitRequest($this->logistics, [
+            'requested_rider_pool_percentage' => '65.0000',
+            'reason_code' => 'RIDER_COMPENSATION',
+            'reason_details' => 'Request a higher Rider share for this service area.',
+        ]);
+
+        $this->assertSame('RIDER_SHARE', $request->change_type);
+        $this->assertSame('60.0000', $request->current_rider_pool_percentage);
+        $this->assertSame('65.0000', $request->requested_rider_pool_percentage);
+        $this->assertSame('50.00', $request->requested_shipping_fee);
+
+        $version = $this->governance->approve(
+            $this->admin,
+            $request,
+            expectedActiveVersionId: app(ShippingRatePolicyService::class)->currentVersion()->id,
+        );
+
+        $this->assertSame('65.0000', $version->rider_pool_percentage);
+        $this->assertSame('35.0000', $version->logistics_percentage);
+        $this->assertSame('50.00', $version->shipping_fee);
+    }
+
+    public function test_admin_can_update_logistics_shipping_share_on_the_current_version(): void
+    {
+        $oldVersion = app(ShippingRatePolicyService::class)->currentVersion();
+
+        $version = $this->governance->updateCommissionSplit($this->admin, '35.0000');
+
+        $this->assertSame('65.0000', $version->rider_pool_percentage);
+        $this->assertSame('35.0000', $version->logistics_percentage);
+        $this->assertSame('50.00', $version->shipping_fee);
+        $this->assertSame('SUPERSEDED', $oldVersion->fresh()->status);
+        $this->assertDatabaseHas('finance_audit_events', ['event_type' => 'SHIPPING_COMMISSION_SPLIT_UPDATED']);
+    }
+
     public function test_database_unique_index_rejects_a_second_active_global_version(): void
     {
         $this->expectException(\Illuminate\Database\QueryException::class);
@@ -402,7 +439,7 @@ class ShippingRateGovernanceTest extends TestCase
         $rateRoutes = collect(app('router')->getRoutes()->getRoutes())
             ->filter(fn ($route): bool => str_contains($route->getName() ?? '', 'shipping-rate'));
 
-        $this->assertCount(8, $rateRoutes);
+        $this->assertCount(9, $rateRoutes);
         $this->assertTrue($rateRoutes->every(fn ($route): bool => ! array_intersect($route->methods(), ['PUT', 'PATCH', 'DELETE'])));
     }
 
@@ -515,6 +552,8 @@ class ShippingRateGovernanceTest extends TestCase
             $table->string('change_type', 16);
             $table->decimal('change_amount', 12, 2);
             $table->decimal('change_percentage', 9, 4);
+            $table->decimal('current_rider_pool_percentage', 7, 4)->nullable();
+            $table->decimal('requested_rider_pool_percentage', 7, 4)->nullable();
             $table->string('reason_code', 48);
             $table->text('reason_details')->nullable();
             $table->timestamp('requested_effective_at')->nullable();

@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 @section('title', 'Refund Request '.$returnRequest->request_number)
 @section('active', 'orders')
 @section('content')

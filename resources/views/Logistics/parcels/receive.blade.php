@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 @section('title', 'Receive Parcels - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">
@@ -6,7 +6,7 @@
     <x-logistics.parcel-flow current="receive" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
-    <x-parcel-scanner :action="route('logistics.parcels.receive.scan')" :tracking="old('tracking', request('tracking', ''))" :method="old('scan_method', request('scan_method', 'MANUAL'))" title="Scan Incoming Parcel" description="Scan a seller pickup or an arriving hub-transfer parcel. A valid hub-transfer scan records destination receipt and sends the parcel to sorting for local delivery assignment." button="Receive Parcel" form-method="POST" input-name="tracking" input-label="Parcel tracking number" input-placeholder="Scan or enter tracking number" />
+    <x-shared.parcel-scanner :action="route('logistics.parcels.receive.scan')" :tracking="old('tracking', request('tracking', ''))" :method="old('scan_method', request('scan_method', 'MANUAL'))" title="Scan Incoming Parcel" description="Scan a seller pickup or an arriving hub-transfer parcel. A valid hub-transfer scan records destination receipt and sends the parcel to sorting for local delivery assignment." button="Receive Parcel" form-method="POST" input-name="tracking" input-label="Parcel tracking number" input-placeholder="Scan or enter tracking number" />
     <section class="space-y-4">
         <div><h2 class="text-lg font-bold text-ink">Incoming Hub Transfer Parcels</h2><p class="mt-1 text-sm text-muted">Scan these parcels with the incoming scanner above. The first valid scan also records the manifest arrival.</p></div>
         @forelse($incomingTransferItems as $item)

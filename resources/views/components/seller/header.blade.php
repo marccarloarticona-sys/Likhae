@@ -27,6 +27,6 @@
             @php($notificationCount = (int) ($sellerUiCounts['notifications'] ?? 0))
             <span class="sl-action-badge" data-seller-notification-count style="{{ $notificationCount > 0 ? '' : 'display:none' }}">{{ $notificationCount }}</span>
         </button>
-        <x-workspace-account-menu label="Seller Account" profile-route="seller.account" />
+        <x-shared.workspace.account-menu label="Seller Account" profile-route="seller.account" />
     </div>
 </header>

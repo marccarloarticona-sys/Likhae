@@ -134,7 +134,7 @@ class LogisticsPortalController extends Controller
             $finance['pending_settlement'] = (float) (clone $pools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('unresolved_share_amount');
         }
 
-        return view('Logistics.dashboard.index', [
+        return view('logistics.dashboard.index', [
             'center' => $center,
             'filters' => $filters,
             ...$shipmentData,
@@ -154,7 +154,7 @@ class LogisticsPortalController extends Controller
             ->latest()
             ->paginate(15);
 
-        return view('Logistics.riders.application.index', compact('applications', 'center'));
+        return view('logistics.riders.application.index', compact('applications', 'center'));
     }
 
     public function riderApplicationShow(Request $request, RegistrationApplication $application): View
@@ -165,7 +165,7 @@ class LogisticsPortalController extends Controller
         $application->load(['user', 'documents', 'riderData']);
         abort_unless((int) $application->riderData?->target_logistics_center_id === (int) $center->id, 403);
 
-        return view('Logistics.riders.application.show', compact('application', 'center'));
+        return view('logistics.riders.application.show', compact('application', 'center'));
     }
 
     public function approveRider(Request $request, RegistrationApplication $application): RedirectResponse
@@ -248,7 +248,7 @@ class LogisticsPortalController extends Controller
             'other' => max(0, (int) $stats[0]['value'] - $localRiderCount - $interLogisticsDriverCount),
         ];
 
-        return view('Logistics.riders.index', compact('riders', 'center', 'stats', 'classificationCounts'));
+        return view('logistics.riders.index', compact('riders', 'center', 'stats', 'classificationCounts'));
     }
 
     public function riderShow(Request $request, RiderProfile $rider, RiderRatingService $riderRatings): View
@@ -288,7 +288,7 @@ class LogisticsPortalController extends Controller
             $mapMarkers[] = $centerMarker;
         }
         $schema = app(LogisticsSchemaReadiness::class);
-        return view('Logistics.riders.show', [
+        return view('logistics.riders.show', [
             'rider' => $rider,
             'center' => $center,
             'mapMarkers' => $mapMarkers,
@@ -588,7 +588,7 @@ class LogisticsPortalController extends Controller
         });
 
         $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center)]);
-        return view('Logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'centerCanonicalMunicipality', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
+        return view('logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'centerCanonicalMunicipality', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
     }
 
     public function saveDeliveryArea(Request $request): RedirectResponse
@@ -751,7 +751,7 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
 
-        return view('Logistics.reports.index', [
+        return view('logistics.reports.index', [
             'center' => $center,
             'shipmentsByStatus' => $shipmentQuery->operationalFor($center)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
             'riderCount' => RiderProfile::where('logistics_center_id', $center->id)->count(),
@@ -802,7 +802,7 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center, 403);
 
-        return view('Logistics.profile.index', ['center' => $center, 'user' => $request->user()]);
+        return view('logistics.profile.index', ['center' => $center, 'user' => $request->user()]);
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse
@@ -897,7 +897,7 @@ class LogisticsPortalController extends Controller
         $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
             ->filterRecipients($request->user(), $contacts);
 
-        return view('Logistics.messages.index', [
+        return view('logistics.messages.index', [
             'conversations' => $conversations,
             'contacts' => $contacts,
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),

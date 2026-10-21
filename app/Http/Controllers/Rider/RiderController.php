@@ -7,6 +7,7 @@ use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Buyer\Address;
 use App\Models\Finance\CodCollection;
+use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\RiderRemittance;
@@ -130,7 +131,7 @@ class RiderController extends Controller
             ];
         });
 
-        return view('Rider.dashboard', [
+        return view('rider.dashboard', [
             'rider' => $rider,
             'riderStats' => $riderStats,
             'recentDeliveries' => $recentDeliveries,
@@ -149,7 +150,7 @@ class RiderController extends Controller
             ->latest()
             ->paginate(15);
 
-        return view('Rider.shipments', compact('assignments', 'rider'));
+        return view('rider.shipments', compact('assignments', 'rider'));
     }
 
     public function pickups(Request $request): View
@@ -186,7 +187,7 @@ class RiderController extends Controller
             'picked_up' => (clone $pickupQuery)->where('status', 'COMPLETED')->count(),
         ];
 
-        return view('Rider.pickups.index', compact('pickups', 'pickupStats', 'assignments', 'rider'));
+        return view('rider.pickups.index', compact('pickups', 'pickupStats', 'assignments', 'rider'));
     }
 
     public function pickupShow(Request $request, RiderAssignment $assignment, LogisticsSchemaReadiness $schema): RedirectResponse
@@ -244,7 +245,7 @@ class RiderController extends Controller
             'failed_today' => (clone $deliveryQuery)->whereHas('deliveryAttempts', fn ($query) => $query->whereDate('attempted_at', today())->whereIn('status', ['FAILED', 'RESCHEDULED', 'RETURNED']))->count(),
         ];
 
-        return view('Rider.deliveries.index', compact('deliveries', 'deliveryStats', 'assignments', 'rider'));
+        return view('rider.deliveries.index', compact('deliveries', 'deliveryStats', 'assignments', 'rider'));
     }
 
     public function deliveryShow(Request $request, RiderAssignment $assignment): View
@@ -276,10 +277,10 @@ class RiderController extends Controller
 
         // Delivery navigation needs only the rider and the saved buyer address.
         $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, false, $request->user());
-        return view('Rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'mapMarkers'));
+        return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'mapMarkers'));
     }
 
-    public function earnings(Request $request): View
+    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View
     {
         $rider = $this->rider($request);
         $financeSchema = app(FinanceSchemaReadiness::class);
@@ -288,8 +289,13 @@ class RiderController extends Controller
         $to = filled($filters['to']) ? \Illuminate\Support\Carbon::parse($filters['to'])->endOfDay() : null;
         $weekStart = now()->startOfWeek();
         $today = today();
+        $eligiblePayoutParticipants = collect();
+        $riderPayoutReceipts = collect();
 
         if ($financeSchema->step7Ready()) {
+            $eligiblePayoutParticipants = $payouts->eligibleRiderParticipants($rider);
+            $riderPayoutReceipts = $payouts->riderPayoutReceipts($rider);
+            $eligiblePayoutIds = $eligiblePayoutParticipants->pluck('id')->map(fn ($id): int => (int) $id)->all();
             $participantBase = RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id);
             $filteredParticipants = clone $participantBase;
             if ($from) $filteredParticipants->whereRaw('COALESCE(approved_at, created_at) >= ?', [$from]);
@@ -300,7 +306,20 @@ class RiderController extends Controller
                 ->latest()
                 ->paginate(15)
                 ->withQueryString();
+            $pageParticipantIds = $earnings->getCollection()->pluck('id')->map(fn ($id): int => (int) $id);
+            $simulatedPayoutParticipantIds = $financeSchema->parcelSettlementReady() && $pageParticipantIds->isNotEmpty()
+                ? FinancialLedgerEntry::query()
+                    ->where('entry_type', 'RIDER_PAYOUT')
+                    ->whereIn('idempotency_key', $pageParticipantIds->map(fn (int $id): string => 'rider-payout-'.$id))
+                    ->get(['metadata'])
+                    ->filter(fn (FinancialLedgerEntry $entry): bool => (bool) data_get($entry->metadata, 'is_simulated'))
+                    ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
+                    ->all()
+                : [];
             $earningsRows = $earnings->getCollection()->map(fn (RiderEarningPoolParticipant $participant): array => [
+                'participant_id' => (int) $participant->id,
+                'can_request' => in_array((int) $participant->id, $eligiblePayoutIds, true),
+                'is_simulated' => in_array((int) $participant->id, $simulatedPayoutParticipantIds, true),
                 'date' => ($participant->approved_at ?? $participant->created_at)?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
                 'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
@@ -313,6 +332,9 @@ class RiderController extends Controller
                 'schema_ready' => true,
                 'unallocated' => (float) RiderEarningPool::query()->whereHas('participants', fn ($query) => $query->where('rider_profile_id', $rider->id))->sum('unresolved_share_amount'),
                 'accrued' => $earningsTotal,
+                'available' => (float) $eligiblePayoutParticipants->sum('share_amount'),
+                'requested' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_REQUESTED')->sum('share_amount'),
+                'awaiting_ack' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_PENDING_ACK')->sum('share_amount'),
                 'paid' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAID')->sum('share_amount'),
             ];
         } else {
@@ -330,12 +352,22 @@ class RiderController extends Controller
             $earningsTotal = (float) (clone $filteredLegacy)->sum('amount');
             $dailyEarnings = (float) (clone $legacyBase)->whereRaw('DATE(COALESCE(earned_at, created_at)) = ?', [$today->toDateString()])->sum('amount');
             $weeklyEarnings = (float) (clone $legacyBase)->whereRaw('COALESCE(earned_at, created_at) BETWEEN ? AND ?', [$weekStart, now()])->sum('amount');
-            $poolSummary = ['schema_ready' => false, 'unallocated' => 0.0, 'accrued' => $earningsTotal, 'paid' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount')];
+            $poolSummary = [
+                'schema_ready' => false,
+                'unallocated' => 0.0,
+                'accrued' => $earningsTotal,
+                'available' => 0.0,
+                'requested' => 0.0,
+                'awaiting_ack' => 0.0,
+                'paid' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount'),
+            ];
         }
         $earningsNotice = 'Cash held and rider earnings are separate. Cross-hub pool shares remain pending until policy approval.';
         $financeSummary = $this->financeSummary($rider, $financeSchema);
+        $payoutDestinationReady = $destinations->readyFor('rider_profiles');
+        $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($rider);
 
-        return view('Rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary', 'filters', 'dailyEarnings', 'weeklyEarnings'));
+        return view('rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary', 'filters', 'dailyEarnings', 'weeklyEarnings', 'eligiblePayoutParticipants', 'riderPayoutReceipts', 'payoutDestinationReady', 'payoutDestinationSaved'));
     }
 
     public function history(Request $request): View
@@ -391,7 +423,7 @@ class RiderController extends Controller
             ];
         });
 
-        return view('Rider.history.index', compact('rider', 'history', 'assignments', 'filters'));
+        return view('rider.history.index', compact('rider', 'history', 'assignments', 'filters'));
     }
 
     public function profile(Request $request): View
@@ -399,7 +431,7 @@ class RiderController extends Controller
         $rider = $this->rider($request)->load(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations']);
         $residentialAddress = $rider->user->addresses()->orderByDesc('is_default')->latest()->first();
 
-        return view('Rider.profile.index', compact('rider', 'residentialAddress'));
+        return view('rider.profile.index', compact('rider', 'residentialAddress'));
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse
@@ -504,7 +536,7 @@ class RiderController extends Controller
         $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
             ->filterRecipients($request->user(), $contacts);
 
-        return view('Rider.messages', [
+        return view('rider.messages', [
             'conversations' => $conversations,
             'contacts' => $contacts,
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),

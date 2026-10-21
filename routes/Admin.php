@@ -62,6 +62,7 @@ Route::prefix('admin')
         Route::patch('/marketing/campaigns/{voucher}', [AdminMarketingController::class, 'updateCampaign'])->name('marketing.campaigns.update');
         Route::patch('/marketing/campaigns/{voucher}/toggle', [AdminMarketingController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
         Route::post('/marketing/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('marketing.announcements.store');
+        Route::patch('/marketing/announcements/{announcement}', [AdminMarketingController::class, 'updateAnnouncement'])->name('marketing.announcements.update');
         Route::patch('/marketing/announcements/{announcement}/toggle', [AdminMarketingController::class, 'toggleAnnouncement'])->name('marketing.announcements.toggle');
         Route::get('/compliance', [AdminOperationsController::class, 'compliance'])->name('compliance');
         Route::get('/compliance-export', [AdminOperationsController::class, 'exportCompliance'])->name('compliance.export');
@@ -73,6 +74,7 @@ Route::prefix('admin')
         Route::get('/finance', [AdminOperationsController::class, 'finance'])->name('finance');
         Route::get('/shipping-rate-requests', [AdminShippingRateController::class, 'index'])->name('shipping-rate-requests');
         Route::post('/shipping-rate-requests/initialize-global-rate', [AdminShippingRateController::class, 'initializeGlobalRate'])->name('shipping-rate-requests.initialize');
+        Route::post('/shipping-rate-requests/commission-split', [AdminShippingRateController::class, 'updateCommissionSplit'])->name('shipping-rate-requests.commission-split');
         Route::get('/shipping-rate-requests/{shippingRateRequest}', [AdminShippingRateController::class, 'show'])
             ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.show');
         Route::post('/shipping-rate-requests/{shippingRateRequest}/approve', [AdminShippingRateController::class, 'approve'])
@@ -85,6 +87,11 @@ Route::prefix('admin')
         Route::patch('/protection-rules/{protectionRule}/toggle', [AdminProtectionRuleController::class, 'toggle'])->name('protection-rules.toggle');
         Route::post('/finance/seller-settlements/{settlement}/authorize', [AdminFinanceController::class, 'authorizeSellerSettlement'])->name('finance.seller-settlements.authorize');
         Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
+        Route::post('/finance/seller-settlements/{settlement}/fail', [AdminFinanceController::class, 'failSellerPayout'])->name('finance.seller-settlements.fail');
+        Route::post('/finance/logistics-pools/{pool}/pay', [AdminFinanceController::class, 'payLogisticsShare'])->name('finance.logistics-pools.pay');
+        Route::post('/finance/product-proceeds/{entry}/acknowledge', [AdminFinanceController::class, 'acknowledgeProductProceeds'])->name('finance.product-proceeds.acknowledge');
+        Route::post('/finance/product-proceeds/{entry}/resolve', [AdminFinanceController::class, 'resolveProductProceeds'])->name('finance.product-proceeds.resolve');
+        Route::post('/finance/cod-collections/{collection}/resolve', [AdminFinanceController::class, 'resolveBuyerCodDiscrepancy'])->name('finance.cod-collections.resolve');
         Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');

@@ -1,4 +1,4 @@
-@extends('Logistics.app')
+@extends('layouts.logistics.app')
 
 @section('title', 'Seller Pickup Queue - LIKHAE Logistics')
 
@@ -25,8 +25,10 @@
     <section class="space-y-4" data-seller-pickup-requests>
         <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Each request keeps its selected parcels together and preserves each parcel’s own waybill and scan history.</p></div>
         @forelse($sellerPickupRequests as $pickupRequest)
-            @php($requestParcels = $pickupRequest->memberships)
-            @php($progress = $pickupRequest->progress_payload)
+            @php
+                $requestParcels = $pickupRequest->memberships;
+                $progress = $pickupRequest->progress_payload;
+            @endphp
             <article class="border border-line bg-surface p-5" data-pickup-request="{{ $pickupRequest->id }}">
                 <header class="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
@@ -165,7 +167,7 @@
                         <div><p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup Batch #P-{{ $batch->id }}</p><h3 class="mt-1 font-bold text-ink">{{ $batch->seller?->business_name }}</h3><p class="mt-1 text-sm text-muted">{{ $batch->seller?->businessAddress?->formatted() }}</p><p class="mt-1 text-sm text-muted">Rider: {{ $batch->rider?->user?->name }}</p></div>
                         <span class="font-semibold text-ink">{{ $phase }}</span>
                     </div>
-                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned Â· {{ $collected }}/{{ $total }} seller scans complete@if($collected > 0) Â· {{ $received }}/{{ $collected }} received at hub@endif</p>
+                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned Â· {{ $collected }}/{{ $total }} seller scans complete @if($collected > 0) Â· {{ $received }}/{{ $collected }} received at hub @endif</p>
                     @if($batch->reassignable_riders->isNotEmpty())
                         <form method="POST" action="{{ route('logistics.pickups.batches.reassign', $batch) }}" class="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-end" data-confirm-title="Reassign pickup batch?" data-confirm-message="Every parcel in this batch is still uncollected. The current rider's jobs will be cancelled and the selected online rider will need to accept the batch." data-confirm-label="Reassign batch">
                             @csrf

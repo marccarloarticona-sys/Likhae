@@ -158,13 +158,48 @@ class CodCollectionService
                     ],
                 );
             }
+            $shipment->loadMissing('sellerOrder.order', 'sellerOrder.items', 'orderItem');
+            $parcelAmount = $shipment->orderItem
+                ? OrderItemParcelAmount::forItem($shipment->sellerOrder, $shipment->orderItem)
+                : null;
+            $productAmountCents = $parcelAmount
+                ? max(0, FinancialRules::cents($parcelAmount['product_amount']) - FinancialRules::cents($parcelAmount['discount_amount']))
+                : $expectedCents;
+            $buyer = $shipment->sellerOrder?->order;
+            $rider = $assignment->riderProfile;
+            $receiptState = [
+                'receipt_reference' => 'RCPT-'.$reference,
+                'parcel_id' => $shipment->id,
+                'parcel_reference' => $shipment->tracking_number,
+                'seller_order_id' => $collection->seller_order_id,
+                'order_id' => $collection->order_id,
+                'order_reference' => $buyer?->order_number,
+                'currency' => 'PHP',
+                'amount_expected' => $collection->expected_amount,
+                'amount_received' => $collection->collected_amount,
+                'itemized_breakdown' => [
+                    'product_amount' => FinancialRules::amount($productAmountCents),
+                    'product_discount' => FinancialRules::amount($parcelAmount ? FinancialRules::cents($parcelAmount['discount_amount']) : 0),
+                    'shipping_fee' => FinancialRules::amount($parcelAmount ? FinancialRules::cents($parcelAmount['shipping_fee']) : 0),
+                    'protection_charge' => FinancialRules::amount($parcelAmount ? FinancialRules::cents($parcelAmount['protection_amount']) : 0),
+                ],
+                'sender' => ['user_id' => $buyer?->buyer_user_id, 'role' => 'BUYER'],
+                'collector' => ['user_id' => $actor->id, 'role' => 'RIDER', 'rider_profile_id' => $rider?->id],
+                'recipient' => ['user_id' => $actor->id, 'role' => 'RIDER', 'rider_profile_id' => $rider?->id],
+                'collected_at' => $collection->collected_at?->toIso8601String(),
+                'confirmation_status' => $status,
+                'acknowledged_by_user_id' => null,
+                'acknowledged_at' => null,
+                'discrepancy_amount' => FinancialRules::amount(abs($actualCents - $expectedCents)),
+                'discrepancy_resolution' => null,
+            ];
             FinanceAuditEvent::query()->create([
                 'event_type' => 'COD_COLLECTED',
                 'auditable_type' => CodCollection::class,
                 'auditable_id' => $collection->id,
                 'actor_user_id' => $actor->id,
                 'before_state' => $before,
-                'after_state' => $collection->only(['status', 'expected_amount', 'collected_amount', 'collection_reference']),
+                'after_state' => $receiptState,
                 'notes' => $status === CodCollection::DISCREPANCY ? 'Collection amount differs from server-calculated expected COD.' : 'Final-mile COD collection recorded.',
             ]);
 

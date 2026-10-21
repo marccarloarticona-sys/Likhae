@@ -52,7 +52,7 @@ class SellerEngagementController extends Controller
         $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
             ->filterRecipients($request->user(), $contacts);
 
-        return view('Seller.messages', [
+        return view('seller.messages', [
             'conversations' => $conversations,
             'contacts' => $contacts,
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
@@ -156,7 +156,7 @@ class SellerEngagementController extends Controller
             ->orderBy('order_items.variant_description')
             ->pluck('order_items.variant_description');
 
-        return view('Seller.reviews', compact('reviews', 'seller', 'reviewImagesById', 'products', 'variants', 'filters'));
+        return view('seller.reviews', compact('reviews', 'seller', 'reviewImagesById', 'products', 'variants', 'filters'));
     }
 
     public function replyReview(Request $request, Review $review): RedirectResponse
@@ -337,7 +337,7 @@ class SellerEngagementController extends Controller
                 ->values();
         }
 
-        return view('Seller.marketing', [
+        return view('seller.marketing', [
             'seller' => $seller,
             'vouchers' => $vouchers,
             'voucherStats' => [
@@ -469,7 +469,7 @@ class SellerEngagementController extends Controller
             $notification->setAttribute('category', $categoryFor((string) $notification->type));
         });
 
-        return view('Seller.notifications', [
+        return view('seller.notifications', [
             'notifications' => $notifications,
             'notificationCounts' => $notificationCounts,
         ]);

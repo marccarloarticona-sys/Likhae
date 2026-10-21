@@ -4,6 +4,7 @@ use App\Http\Controllers\Seller\SellerAccountController;
 use App\Http\Controllers\Seller\SellerComplianceController;
 use App\Http\Controllers\Seller\SellerEngagementController;
 use App\Http\Controllers\Seller\SellerOperationsController;
+use App\Http\Controllers\Seller\SellerFinanceController;
 use App\Http\Controllers\Seller\SellerOrderController;
 use App\Http\Controllers\Seller\SellerPickupRequestController;
 use App\Http\Controllers\Seller\SellerReturnRefundController;
@@ -27,6 +28,11 @@ Route::prefix('seller')
             ->name('ai.chat');
 
         Route::get('/dashboard', [SellerOperationsController::class, 'dashboard'])->name('dashboard');
+        Route::get('/wallet', [SellerFinanceController::class, 'index'])->name('wallet');
+        Route::get('/settlements', [SellerFinanceController::class, 'index'])->name('settlements');
+        Route::put('/settlements/payout-destination', [SellerFinanceController::class, 'updatePayoutDestination'])->name('settlements.payout-destination.update');
+        Route::post('/settlements/{settlement}/request-payout', [SellerFinanceController::class, 'requestPayout'])->name('settlements.request-payout');
+        Route::post('/settlements/{settlement}/acknowledge', [SellerFinanceController::class, 'acknowledge'])->name('settlements.acknowledge');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'seller')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'seller')->name('settings.update');
 

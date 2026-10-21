@@ -1,4 +1,4 @@
-@extends('layouts.buyer')
+@extends('layouts.buyer.app')
 
 @section('title', $campaign->name)
 @section('active', 'home')
@@ -7,7 +7,8 @@
 @push('head')
 <style>
     .lk-event-detail-page { min-height: 100%; padding: 40px clamp(18px, 2.4vw, 36px) 56px; color: #3B211B; }
-    .lk-event-detail { max-width: 1000px; margin: 26px auto 0; padding: clamp(24px, 4vw, 44px); border: 0; border-radius: 26px; background: radial-gradient(circle at 88% 14%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-detail { max-width: 1000px; margin: 26px auto 0; padding: clamp(24px, 4vw, 44px); border: 0; border-top: 4px solid var(--lk-event-accent, #E9C7A5); border-radius: 26px; background: radial-gradient(circle at 88% 14%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-detail__image { display: block; width: 100%; max-height: 390px; margin-bottom: 24px; aspect-ratio: 2.3 / 1; border-radius: 18px; object-fit: cover; background: rgba(255,248,242,.08); }
     .lk-event-detail h1 { margin: 12px 0 0; color: #FFF8F2; font: 400 clamp(38px, 5vw, 58px)/1 "Instrument Serif", Georgia, serif; letter-spacing: -.035em; }
     .lk-event-detail__benefit { display: inline-flex; margin: 15px 0 26px; padding: 10px 16px; border: 1px solid rgba(233,199,165,.45); border-radius: 999px; background: rgba(255,248,242,.1); color: #E9C7A5; font-size: 18px; font-weight: 900; }
     .lk-event-detail__terms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
@@ -36,11 +37,19 @@
     $benefit = $campaign->discount_type === 'PERCENT'
         ? rtrim(rtrim(number_format((float) $campaign->discount_value, 2, '.', ''), '0'), '.').'% off'
         : '₱'.number_format((float) $campaign->discount_value, 2).' off';
+    $campaignImageUrl = $campaign->image_path
+        && \Illuminate\Support\Facades\Storage::disk('public')->exists($campaign->image_path)
+            ? \Illuminate\Support\Facades\Storage::disk('public')->url($campaign->image_path)
+            : null;
+    $themeColor = $campaign->safe_theme_color;
 @endphp
 
 <main class="lk-event-detail-page">
     <a class="lk-text-link" href="{{ route('buyer.platform-events.index') }}">← All Platform Events</a>
-    <article class="lk-event-detail">
+    <article class="lk-event-detail" @if($themeColor) style="--lk-event-accent: {{ $themeColor }}" @endif>
+        @if($campaignImageUrl)
+            <img class="lk-event-detail__image" src="{{ $campaignImageUrl }}" alt="{{ $campaign->image_alt ?: $campaign->name }}">
+        @endif
         <span class="lk-event-status {{ $isUpcoming ? 'is-upcoming' : 'is-active' }}">{{ $isUpcoming ? 'Upcoming' : 'Active' }}</span>
         <span class="lk-kicker" style="margin-left: 10px">LIKHAE Platform Campaign</span>
         <h1>{{ $campaign->name }}</h1>
