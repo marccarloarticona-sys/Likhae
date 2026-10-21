@@ -844,7 +844,7 @@
         background-color: #f5e8da;
         background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 18%, rgba(255, 251, 246, .9) 30%, rgba(255, 251, 246, .8) 42%, rgba(255, 251, 246, .64) 54%, rgba(255, 251, 246, .45) 66%, rgba(255, 251, 246, .25) 80%, rgba(255, 251, 246, .08) 92%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
         background-position: center right, right center;
-        background-size: cover, auto 100%;
+        background-size: cover, cover;
         background-repeat: no-repeat;
         box-shadow: 0 18px 44px rgba(77, 47, 31, .1);
     }
