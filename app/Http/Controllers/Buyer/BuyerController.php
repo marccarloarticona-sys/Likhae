@@ -1701,6 +1701,34 @@ class BuyerController extends Controller
         return back()->with('buyer_notice', 'System settings updated.');
     }
 
+    public function updateThemePreference(Request $request): JsonResponse
+    {
+        $unknownFields = array_diff(array_keys($request->all()), ['theme']);
+        if ($unknownFields !== []) {
+            throw ValidationException::withMessages([
+                (string) reset($unknownFields) => 'This setting field is not allowed.',
+            ]);
+        }
+
+        $data = $request->validate([
+            'theme' => ['required', 'string', Rule::in(['light', 'dark', 'system'])],
+        ]);
+
+        DB::transaction(function () use ($request, $data): void {
+            $buyer = User::query()
+                ->whereKey($request->user()->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+            $preferences = array_merge($this->buyerPreferences($buyer), [
+                'theme' => $data['theme'],
+            ]);
+
+            $buyer->forceFill(['notification_preferences' => $preferences])->save();
+        });
+
+        return response()->json(['theme' => $data['theme']]);
+    }
+
     public function updateAiPreference(Request $request): JsonResponse
     {
         $allowedFields = ['key', 'enabled'];

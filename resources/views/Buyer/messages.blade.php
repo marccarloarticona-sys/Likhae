@@ -975,7 +975,7 @@
 
                 @if($refProduct)
                     <div class="lk-product-context" aria-label="Product context">
-                        <img src="{{ data_get($refProduct, 'primary_image') ?: asset('images/product-placeholder.svg') }}" alt="">
+                        <img src="{{ data_get($refProduct, 'primary_image.url') ?: asset('images/product-placeholder.svg') }}" alt="">
                         <span><strong>Product inquiry:</strong> {{ data_get($refProduct, 'name') }} <a class="underline" href="{{ route('buyer.product-details', data_get($refProduct, 'slug')) }}">View product</a></span>
                     </div>
                 @elseif(request()->filled('product'))

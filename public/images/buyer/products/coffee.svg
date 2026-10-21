@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 700">
-<rect width="700" height="700" rx="40" fill="#F5F0E9"/>
-<circle cx="530" cy="145" r="115" fill="#8F1719" opacity=".08"/>
-<circle cx="145" cy="555" r="145" fill="#8F1719" opacity=".06"/>
-<rect x="230" y="170" width="240" height="320" rx="30" fill="#292929"/><rect x="260" y="210" width="180" height="90" rx="18" fill="#8F1719"/><path d="M290 330h120l-20 145h-80z" fill="#E3D5C8"/><rect x="180" y="480" width="340" height="42" rx="18" fill="#171717"/>
-<text x="350" y="625" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" fill="#6f706f">Coffee Maker</text>
-</svg>

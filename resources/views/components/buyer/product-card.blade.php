@@ -711,11 +711,11 @@
     <div class="lk-product-media">
         @if($detailsUrl)
             <a href="{{ $detailsUrl }}" class="lk-product-image-link" aria-label="View {{ $name }}">
-                <img src="{{ $image }}" alt="{{ $name }}" loading="lazy" decoding="async">
+                <img src="{{ $image }}" alt="{{ $name }}" width="600" height="552" loading="lazy" decoding="async">
             </a>
         @else
             <div class="lk-product-image-link" aria-hidden="true">
-                <img src="{{ $image }}" alt="" loading="lazy" decoding="async">
+                <img src="{{ $image }}" alt="" width="600" height="552" loading="lazy" decoding="async">
             </div>
         @endif
 

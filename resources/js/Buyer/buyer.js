@@ -1,6 +1,12 @@
-import '../address/forms.js';
 import { startRealtimeFallback } from '../shared/realtime-fallback.js';
-import './hero-carousel.js';
+
+if (document.querySelector('[data-postal-address]')) {
+    import('../address/forms.js').catch((error) => console.error('Buyer address fields could not be initialized.', error));
+}
+
+if (document.querySelector('[data-hero-carousel]')) {
+    import('./hero-carousel.js').catch((error) => console.error('Buyer hero carousel could not be initialized.', error));
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
@@ -1382,7 +1388,6 @@ document.addEventListener('DOMContentLoaded', () => {
             CONFIRMED: 'Seller confirmed order',
             PREPARING: 'Preparing parcel',
             READY_FOR_PICKUP: 'Ready for pickup',
-            PICKED_UP: 'Picked up from seller',
             AT_SORTING_CENTER: 'Arrived at sorting center',
             SORTED: 'Sorted by destination',
             ASSIGNED_TO_RIDER: 'Delivery rider assigned',
@@ -1401,10 +1406,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const timeline = document.querySelector(`[data-shipment-timeline="${shipment.id}"]`);
             if (!timeline) return;
 
-            const rows = shipment.events.map((event) => ({
-                status: event.cancelled ? 'CANCELLED' : event.status,
-                event,
-            })).filter((row) => timelineLabels[row.status]);
+            const labelForRow = (row) => row.status === 'COMPLETED' && row.event?.auto_received
+                ? 'Automatically confirmed receipt'
+                : timelineLabels[row.status];
+            const rows = [];
+            shipment.events.forEach((event) => {
+                const row = {status: event.cancelled ? 'CANCELLED' : event.status, event};
+                if (!timelineLabels[row.status]) return;
+
+                const previous = rows[rows.length - 1];
+                if (previous && previous.status === row.status && labelForRow(previous) === labelForRow(row)) return;
+                rows.push(row);
+            });
             if (shipment.status === 'CANCELLED' && !rows.some((row) => row.status === 'CANCELLED')) {
                 rows.push({ status: 'CANCELLED', event: null });
             }
@@ -1440,9 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const label = document.createElement('span');
                 label.className = 'lk-shipment-step__label';
-                label.textContent = row.status === 'COMPLETED' && row.event?.auto_received
-                    ? 'Automatically confirmed receipt'
-                    : timelineLabels[row.status];
+                label.textContent = labelForRow(row);
 
                 item.append(date, dot, label);
                 return item;

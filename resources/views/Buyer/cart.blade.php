@@ -349,7 +349,11 @@
                                     <img
                                         src="{{ $item['image'] }}"
                                         alt="{{ $item['name'] }}"
+                                        width="112"
+                                        height="112"
                                         class="h-full w-full object-cover"
+                                        loading="lazy"
+                                        decoding="async"
                                         onerror="this.onerror=null;this.src='{{ asset('images/product-placeholder.svg') }}';"
                                     >
                                 </a>

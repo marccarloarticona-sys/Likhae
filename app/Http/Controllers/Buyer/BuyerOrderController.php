@@ -1208,8 +1208,8 @@ class BuyerOrderController extends Controller
                     ->where('result', 'SUCCESS'),
             ], 'scanned_at')
             ->with([
-                'originLogisticsCenter:id,business_name',
-                'destinationLogisticsCenter:id,business_name',
+                'originLogisticsCenter:id,business_name,address_id',
+                'destinationLogisticsCenter:id,business_name,address_id',
             ]);
     }
 }

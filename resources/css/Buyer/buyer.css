@@ -7981,6 +7981,389 @@ html.dark .lk-landing-body .lk-carousel__slide::before {
     }
 }
 
+/* Buyer order details: clearer journey and map-first tracking layout. */
+.lk-order-page .lk-order-progress-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin: 0 0 14px;
+}
+
+.lk-order-page .lk-order-progress-heading > div > span,
+.lk-order-page .lk-order-map-panel__eyebrow {
+    display: block;
+    color: #987865;
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .14em;
+}
+
+.lk-order-page .lk-order-progress-heading h2 {
+    margin: 3px 0 0;
+    color: #321d17;
+    font-family: "Instrument Serif", Georgia, serif;
+    font-size: 23px;
+    font-weight: 400;
+    line-height: 1.1;
+}
+
+.lk-order-page .lk-order-progress-heading__count {
+    flex: 0 0 auto;
+    padding: 7px 11px;
+    border: 1px solid #eadbce;
+    border-radius: 999px;
+    background: #fcf7f2;
+    color: #6c4936;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.lk-order-page .lk-order-progress-track {
+    scrollbar-color: #d8c4b2 transparent;
+    scrollbar-width: thin;
+}
+
+.lk-order-page .lk-order-progress {
+    padding: 4px 3px 8px;
+}
+
+.lk-order-page .lk-order-progress__label {
+    min-height: 29px;
+    max-width: 150px;
+}
+
+.lk-order-page .lk-order-progress__date {
+    display: grid;
+    justify-items: center;
+    gap: 1px;
+    margin-top: 7px;
+    padding: 5px 8px;
+    border: 1px solid #f0e4da;
+    border-radius: 9px;
+    background: #fcf8f4;
+    color: #806356;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+}
+
+.lk-order-page .lk-order-progress__date span:last-child {
+    color: #561c17;
+    font-weight: 800;
+}
+
+.lk-order-page .lk-order-map-panel {
+    margin-top: 20px;
+    overflow: hidden;
+    border: 1px solid #eadbce;
+    border-radius: 22px;
+    background: #fffdf9;
+    box-shadow: 0 14px 36px rgba(86, 28, 23, .08);
+}
+
+.lk-order-page .lk-order-map-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 23px 26px;
+    border-bottom: 1px solid #f0e4da;
+    background: radial-gradient(circle at 93% 0%, rgba(193, 151, 113, .18), transparent 29%), linear-gradient(112deg, #fbf4ec, #fffdf9 70%);
+}
+
+.lk-order-page .lk-order-map-panel__header h2 {
+    margin: 5px 0 0;
+    color: #321d17;
+    font-family: "Instrument Serif", Georgia, serif;
+    font-size: 29px;
+    font-weight: 400;
+    line-height: 1.05;
+}
+
+.lk-order-page .lk-order-map-panel__header p {
+    max-width: 640px;
+    margin: 7px 0 0;
+    color: #806356;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.lk-order-page .lk-order-map-status {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 7px 12px;
+    border: 1px solid #eadbce;
+    border-radius: 999px;
+    background: rgba(255, 253, 249, .9);
+    color: #561c17;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+.lk-order-page .lk-order-map-status > span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #c19771;
+}
+
+.lk-order-page .lk-order-map-status.is-live {
+    border-color: #bbdfc4;
+    background: #f0faf2;
+    color: #166534;
+}
+
+.lk-order-page .lk-order-map-status.is-live > span {
+    background: #22a05a;
+    box-shadow: 0 0 0 4px rgba(34, 160, 90, .13);
+}
+
+.lk-order-page .lk-order-map-panel__layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(245px, 285px);
+    align-items: stretch;
+    gap: 14px;
+    padding: 14px;
+}
+
+.lk-order-page .lk-order-map-panel__map,
+.lk-order-page .lk-order-map-panel__locations {
+    min-width: 0;
+}
+
+.lk-order-page .lk-map-shell {
+    width: 100%;
+    max-width: none;
+}
+
+.lk-order-page .lk-order-map-panel .lk-map-shell {
+    border-radius: 16px;
+    box-shadow: none;
+}
+
+.lk-order-page .lk-order-map-panel .lk-map-toolbar {
+    min-height: 62px;
+    padding: 12px 15px;
+}
+
+.lk-order-page .lk-order-map-panel .lk-map-shell:not(.is-fullscreen) .lk-map-canvas {
+    min-height: 420px;
+    height: 420px;
+}
+
+.lk-order-page .lk-order-map-panel__locations {
+    display: flex;
+    flex-direction: column;
+    padding: 17px 15px 13px;
+    border: 1px solid #f0e4da;
+    border-radius: 16px;
+    background: #fcf8f4;
+}
+
+.lk-order-page .lk-order-map-panel__locations-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 13px;
+    border-bottom: 1px solid #eadbce;
+}
+
+.lk-order-page .lk-order-map-panel__locations-head h3 {
+    margin: 3px 0 0;
+    color: #321d17;
+    font-size: 17px;
+    font-weight: 800;
+}
+
+.lk-order-page .lk-order-map-panel__locations-head > span {
+    flex: 0 0 auto;
+    padding: 5px 8px;
+    border-radius: 999px;
+    background: #f1e4d8;
+    color: #6c4936;
+    font-size: 9px;
+    font-weight: 900;
+}
+
+.lk-order-page .lk-order-map-points {
+    display: grid;
+    gap: 9px;
+    max-height: 337px;
+    margin: 13px 0 0;
+    padding: 0 3px 0 0;
+    overflow-y: auto;
+    list-style: none;
+    scrollbar-color: #d8c4b2 transparent;
+    scrollbar-width: thin;
+}
+
+.lk-order-page .lk-order-map-point {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #f0e4da;
+    border-radius: 12px;
+    background: #fffdf9;
+}
+
+.lk-order-page .lk-order-map-point__icon,
+.lk-order-page .lk-order-map-empty > span {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    place-items: center;
+    border-radius: 11px;
+    background: #f4e7dc;
+    color: #8a3d32;
+}
+
+.lk-order-page .lk-order-map-point__icon svg,
+.lk-order-page .lk-order-map-empty svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+}
+
+.lk-order-page .lk-order-map-point--center .lk-order-map-point__icon {
+    background: #e9f3ea;
+    color: #348052;
+}
+
+.lk-order-page .lk-order-map-point--rider .lk-order-map-point__icon {
+    background: #fbf0d9;
+    color: #a56b12;
+}
+
+.lk-order-page .lk-order-map-point__copy {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+    padding-top: 1px;
+}
+
+.lk-order-page .lk-order-map-point__copy strong {
+    color: #3b211b;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.lk-order-page .lk-order-map-point__copy > span {
+    color: #806356;
+    font-size: 10px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.lk-order-page .lk-order-map-panel__note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: auto 0 0;
+    padding-top: 13px;
+    color: #806356;
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+.lk-order-page .lk-order-map-panel__note > span {
+    display: grid;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    place-items: center;
+    border: 1px solid #c19771;
+    border-radius: 50%;
+    color: #8a3d32;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+.lk-order-page .lk-order-map-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    margin: 12px 0;
+    padding: 25px 12px;
+    border: 1px dashed #d8c4b2;
+    border-radius: 12px;
+    text-align: center;
+}
+
+.lk-order-page .lk-order-map-empty > span {
+    background: #f4e7dc;
+}
+
+.lk-order-page .lk-order-map-empty strong {
+    color: #3b211b;
+    font-size: 11px;
+}
+
+.lk-order-page .lk-order-map-empty p {
+    max-width: 220px;
+    margin: 0;
+    color: #806356;
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+@media (max-width: 860px) {
+    .lk-order-page .lk-order-map-panel__layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lk-order-page .lk-order-map-points {
+        max-height: 280px;
+    }
+}
+
+@media (max-width: 639px) {
+    .lk-order-page .lk-order-progress-heading {
+        align-items: flex-start;
+    }
+
+    .lk-order-page .lk-order-progress-heading h2 {
+        font-size: 21px;
+    }
+
+    .lk-order-page .lk-order-progress-heading__count {
+        padding: 6px 8px;
+        font-size: 9px;
+    }
+
+    .lk-order-page .lk-order-map-panel__header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+        padding: 19px 18px;
+    }
+
+    .lk-order-page .lk-order-map-panel__header h2 {
+        font-size: 26px;
+    }
+
+    .lk-order-page .lk-order-map-panel__layout {
+        gap: 10px;
+        padding: 10px;
+    }
+
+    .lk-order-page .lk-order-map-panel .lk-map-shell:not(.is-fullscreen) .lk-map-canvas {
+        min-height: 330px;
+        height: 330px;
+    }
+}
+
 /* Keep seller contact actions light and text-led in order cards. */
 .lk-order-contact-link.lk-btn {
     min-height: 32px;

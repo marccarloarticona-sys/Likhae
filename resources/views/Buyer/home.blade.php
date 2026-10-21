@@ -3,6 +3,7 @@
 @section('title', 'Home')
 
 @push('head')
+<link rel="preload" as="image" href="{{ asset('images/buyer/home-hero-editorial-v3.png') }}" type="image/png" fetchpriority="high">
 <style>
     :root {
         --lk-bg: #FBF7F2;
@@ -814,6 +815,489 @@
         border-radius: 999px;
         background: var(--lk-border-strong);
     }
+
+    /* Buyer Home editorial storefront. Keep these rules inside the main page content. */
+    .lk-home-page {
+        --lk-home-ivory: #fbf8f3;
+        --lk-home-paper: #fffdf9;
+        --lk-home-ink: #171311;
+        --lk-home-muted: #6b625c;
+        --lk-home-terracotta: #bd3e2b;
+        --lk-home-copy-maroon: #561c17;
+        --lk-home-button-maroon: #561c17;
+        --lk-home-button-maroon-hover: #3e130f;
+        --lk-home-line: #eadfd4;
+        padding: clamp(16px, 2vh, 24px) clamp(18px, 2vw, 30px) 32px !important;
+        background: var(--lk-home-ivory) !important;
+        color: var(--lk-home-ink) !important;
+    }
+
+    .lk-home-page .lk-home-editorial-hero {
+        position: relative;
+        display: flex;
+        align-items: center;
+        min-height: clamp(320px, 39vh, 420px);
+        overflow: hidden;
+        padding: clamp(28px, 3.2vw, 52px);
+        border: 0;
+        border-radius: 18px;
+        background-color: #f5e8da;
+        background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .92) 30%, rgba(255, 251, 246, .52) 52%, rgba(255, 251, 246, .1) 76%, rgba(255, 251, 246, .08) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        background-position: center right, right center;
+        background-size: cover, auto 100%;
+        background-repeat: no-repeat;
+        box-shadow: 0 18px 44px rgba(77, 47, 31, .1);
+    }
+
+    .lk-home-page .lk-home-editorial-copy {
+        position: relative;
+        z-index: 1;
+        width: min(50%, 520px);
+    }
+
+    .lk-home-page .lk-home-editorial-title {
+        margin: 0;
+        color: var(--lk-home-ink);
+        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-size: clamp(56px, 5.2vw, 76px);
+        font-weight: 400;
+        letter-spacing: -.055em;
+        line-height: .88;
+    }
+
+    .lk-home-page .lk-home-editorial-title span {
+        display: block;
+        color: var(--lk-home-copy-maroon);
+        font-style: normal;
+    }
+
+    .lk-home-page .lk-home-editorial-description {
+        max-width: 430px;
+        margin: 16px 0 0;
+        color: var(--lk-home-copy-maroon);
+        font-size: 14px;
+        line-height: 1.7;
+    }
+
+    .lk-home-page .lk-home-editorial-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        min-height: 46px;
+        margin-top: 17px;
+        padding: 0 24px;
+        border: 1px solid var(--lk-home-button-maroon);
+        border-radius: 6px;
+        background: var(--lk-home-button-maroon);
+        color: #fff !important;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        box-shadow: 0 8px 18px rgba(152, 52, 37, .18);
+        transition: background-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+
+    .lk-home-page .lk-home-editorial-cta:hover {
+        transform: translateY(-1px);
+        background: var(--lk-home-button-maroon-hover);
+        box-shadow: 0 11px 22px rgba(152, 52, 37, .24);
+    }
+
+    .lk-home-page .lk-home-editorial-cta svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+    }
+
+    .lk-home-page .lk-home-category-section {
+        margin-top: 16px !important;
+    }
+
+    .lk-home-page .lk-home-category-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 10px;
+    }
+
+    .lk-home-page .lk-home-category-heading h2 {
+        margin: 0;
+        color: var(--lk-home-ink);
+        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-size: clamp(25px, 2.4vw, 32px);
+        font-weight: 400;
+        letter-spacing: -.035em;
+        line-height: 1;
+    }
+
+    .lk-home-page .lk-home-category-tools {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: clamp(10px, 1.5vw, 22px);
+        color: #625b56;
+        font-size: 11px;
+        white-space: nowrap;
+    }
+
+    .lk-home-page .lk-home-category-cue,
+    .lk-home-page .lk-home-category-count {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+    }
+
+    .lk-home-page .lk-home-category-cue svg,
+    .lk-home-page .lk-home-category-count svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: #8b5143;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.6;
+    }
+
+    .lk-home-page .lk-home-category-nav {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+    }
+
+    .lk-home-page .lk-home-category-range {
+        min-width: 58px;
+        color: #4e4742;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+    }
+
+    .lk-home-page .lk-home-category-arrow {
+        display: inline-grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border: 1px solid #e5d8cc;
+        border-radius: 50%;
+        background: #fffdfa;
+        color: #342b26;
+        cursor: pointer;
+        transition: border-color .16s ease, background-color .16s ease, color .16s ease;
+    }
+
+    .lk-home-page .lk-home-category-arrow:hover:not(:disabled) {
+        border-color: #c27664;
+        background: #f9eee8;
+        color: var(--lk-home-terracotta);
+    }
+
+    .lk-home-page .lk-home-category-arrow:disabled {
+        cursor: default;
+        opacity: .45;
+    }
+
+    .lk-home-page .lk-home-category-arrow svg {
+        width: 15px;
+        height: 15px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+    }
+
+    .lk-home-page .lk-home-category-pages {
+        display: grid;
+        gap: 14px;
+    }
+
+    .lk-home-page .lk-home-category-page[hidden] {
+        display: none !important;
+    }
+
+    .lk-home-page .lk-home-category-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .lk-home-page .lk-home-category-card {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid rgba(95, 64, 43, .08);
+        border-radius: 10px;
+        background: var(--lk-home-paper);
+        color: var(--lk-home-ink);
+        box-shadow: 0 5px 16px rgba(72, 49, 35, .06);
+        text-decoration: none;
+        transition: transform .18s ease, box-shadow .18s ease;
+    }
+
+    .lk-home-page .lk-home-category-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 22px rgba(72, 49, 35, .12);
+    }
+
+    .lk-home-page .lk-home-category-visual {
+        display: grid;
+        aspect-ratio: 1.8 / 1;
+        overflow: hidden;
+        place-items: center;
+        border-radius: 9px;
+        background: #4c211d;
+    }
+
+    .lk-home-page .lk-home-category-visual picture {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    .lk-home-page .lk-home-category-visual img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover !important;
+        object-position: center;
+    }
+
+    .lk-home-page .lk-home-category-visual img.is-illustration {
+        width: 100%;
+        height: 100%;
+        padding: 8px;
+        object-fit: contain !important;
+    }
+
+    .lk-home-page .lk-home-category-card-footer {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 40px;
+        padding: 6px 10px;
+    }
+
+    .lk-home-page .lk-home-category-name {
+        min-width: 0;
+        overflow: hidden;
+        color: #211b17;
+        font-size: 11px;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .lk-home-page .lk-home-category-products {
+        flex: 0 0 auto;
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: #f8dfd8;
+        color: #a13b2d;
+        font-size: 10px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .lk-home-page .lk-home-category-link-arrow {
+        display: inline-flex;
+        flex: 0 0 auto;
+        margin-left: auto;
+        color: #382c26;
+    }
+
+    .lk-home-page .lk-home-category-link-arrow svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+    }
+
+    .lk-home-page .lk-home-category-empty {
+        padding: 24px;
+        border: 1px dashed var(--lk-home-line);
+        border-radius: 10px;
+        background: rgba(255, 253, 249, .72);
+        color: var(--lk-home-muted);
+        font-size: 12px;
+        text-align: center;
+    }
+
+    .lk-home-page .lk-home-category-pagination {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+        min-height: 8px;
+        margin-top: 8px;
+    }
+
+    .lk-home-page .lk-home-category-dot {
+        width: 7px;
+        height: 7px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: #ded8d2;
+        cursor: pointer;
+    }
+
+    .lk-home-page .lk-home-category-dot[aria-current="true"] {
+        background: var(--lk-home-terracotta);
+    }
+
+    .lk-home-page .lk-home-category-arrow:focus-visible,
+    .lk-home-page .lk-home-category-dot:focus-visible,
+    .lk-home-page .lk-home-editorial-cta:focus-visible,
+    .lk-home-page .lk-home-category-card:focus-visible {
+        outline: 2px solid #a94434;
+        outline-offset: 3px;
+    }
+
+    .lk-home-page .lk-home-category-section + .lk-section {
+        margin-top: 38px !important;
+    }
+
+    html.dark .lk-home-page {
+        --lk-home-paper: #241a17;
+        --lk-home-ink: #fff8f2;
+        --lk-home-muted: #c8b7ad;
+        --lk-home-copy-maroon: #e8b5a9;
+        --lk-home-button-maroon: #8a3a2f;
+        --lk-home-button-maroon-hover: #6f241c;
+        --lk-home-line: #49342b;
+        background: #171210 !important;
+        color: #fff8f2 !important;
+    }
+
+    html.dark .lk-home-page .lk-home-editorial-hero {
+        border-color: #49342b;
+        background-image: linear-gradient(90deg, rgba(23, 18, 16, .96) 0%, rgba(23, 18, 16, .88) 34%, rgba(23, 18, 16, .56) 56%, rgba(23, 18, 16, .42) 78%, rgba(23, 18, 16, .38) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+    }
+
+    html.dark .lk-home-page .lk-home-editorial-title,
+    html.dark .lk-home-page .lk-home-category-heading h2,
+    html.dark .lk-home-page .lk-home-category-name {
+        color: #fff8f2;
+    }
+
+    html.dark .lk-home-page .lk-home-editorial-description {
+        color: var(--lk-home-copy-maroon);
+    }
+
+    html.dark .lk-home-page .lk-home-category-tools,
+    html.dark .lk-home-page .lk-home-category-range {
+        color: #d0c2b9;
+    }
+
+    html.dark .lk-home-page .lk-home-category-card {
+        border-color: #49342b;
+        background: #241a17;
+    }
+
+    html.dark .lk-home-page .lk-home-category-visual {
+        background: #351815;
+    }
+
+    html.dark .lk-home-page .lk-home-category-arrow {
+        border-color: #59463c;
+        background: #241a17;
+        color: #fff8f2;
+    }
+
+    html.dark .lk-home-page .lk-home-category-products {
+        background: #4a2923;
+        color: #f0c0b6;
+    }
+
+    @media (max-width: 920px) {
+        .lk-home-page .lk-home-editorial-hero {
+            min-height: clamp(340px, 43vw, 420px);
+            padding: clamp(32px, 5vw, 48px);
+        }
+
+        .lk-home-page .lk-home-editorial-copy {
+            width: min(55%, 470px);
+        }
+
+        .lk-home-page .lk-home-editorial-title {
+            font-size: clamp(54px, 7vw, 76px);
+        }
+
+        .lk-home-page .lk-home-category-tools {
+            flex-wrap: wrap;
+            gap: 9px 14px;
+        }
+    }
+
+    @media (max-width: 680px) {
+        .lk-home-page {
+            padding: 18px 16px 40px !important;
+        }
+
+        .lk-home-page .lk-home-editorial-hero {
+            min-height: 380px;
+            padding: 34px 24px;
+            background-position: center right, 62% center;
+            background-size: 100% 100%, cover;
+            background-repeat: no-repeat;
+            background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .9) 48%, rgba(255, 251, 246, .48) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        }
+
+        .lk-home-page .lk-home-editorial-copy {
+            width: min(88%, 400px);
+        }
+
+        .lk-home-page .lk-home-editorial-title {
+            font-size: clamp(48px, 11vw, 64px);
+        }
+
+        .lk-home-page .lk-home-category-heading {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 11px;
+        }
+
+        .lk-home-page .lk-home-category-tools {
+            width: 100%;
+            justify-content: space-between;
+        }
+
+        .lk-home-page .lk-home-category-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .lk-home-page .lk-home-category-visual {
+            aspect-ratio: 1.2 / 1;
+        }
+
+        .lk-home-page .lk-home-category-card-footer {
+            gap: 6px;
+            padding: 7px 8px;
+        }
+
+        .lk-home-page .lk-home-category-name {
+            font-size: 10px;
+        }
+
+        .lk-home-page .lk-home-category-count {
+            display: none;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .lk-home-page .lk-home-editorial-cta,
+        .lk-home-page .lk-home-category-card,
+        .lk-home-page .lk-home-category-arrow {
+            transition: none;
+        }
+    }
 </style>
 @endpush
 
@@ -846,65 +1330,139 @@
         ? route('buyer.wishlist')
         : '#';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Categories
-    |--------------------------------------------------------------------------
-    */
-
-    $categories = [
-        [
-            'name' => 'Fashion',
-            'slug' => 'womens-apparel',
-            'icon' => '<path d="M8 4h8l4 4-3 3-2-2v11H9V9l-2 2-3-3 4-4Z"/>',
-        ],
-        [
-            'name' => 'Electronics',
-            'slug' => 'electronics-and-gadgets',
-            'icon' => '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M10 17h4"/>',
-        ],
-        [
-            'name' => 'Home',
-            'slug' => 'home-and-garden',
-            'icon' => '<path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
-        ],
-        [
-            'name' => 'Books',
-            'slug' => 'books-and-media',
-            'icon' => '<path d="M4 5a3 3 0 0 1 3-2h5v17H7a3 3 0 0 0-3 2V5Z"/><path d="M20 5a3 3 0 0 0-3-2h-5v17h5a3 3 0 0 1 3 2V5Z"/>',
-        ],
-        [
-            'name' => 'Beauty',
-            'slug' => 'health-and-beauty',
-            'icon' => '<path d="M9 3h6v5l3 4v9H6v-9l3-4V3Z"/><path d="M9 8h6M9 14h6"/>',
-        ],
-        [
-            'name' => 'Sports',
-            'slug' => 'sports-and-outdoors',
-            'icon' => '<circle cx="12" cy="12" r="9"/><path d="M5 7c4 2 10 2 14 0M5 17c4-2 10-2 14 0M12 3c-3 5-3 13 0 18"/>',
-        ],
-        [
-            'name' => 'Toys',
-            'slug' => 'kids-and-baby-toys',
-            'icon' => '<path d="M8 9V6a4 4 0 0 1 8 0v3"/><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M9 14h6M12 11v6"/>',
-        ],
-        [
-            'name' => 'Handmade Goods',
-            'slug' => 'handmade-goods',
-            'icon' => '<path d="M4 7h16v13H4z"/><path d="M8 7V4h8v3M8 12h8M8 16h5"/>',
-        ],
-    ];
+    $categoryRecords = collect($categories ?? []);
+    $homeCategories = $categoryRecords
+        ->filter(fn ($category) => data_get($category, 'parent_id') === null)
+        ->shuffle()
+        ->values();
+    $categoryChildren = $categoryRecords
+        ->filter(fn ($category) => data_get($category, 'parent_id') !== null)
+        ->groupBy(fn ($category) => data_get($category, 'parent_id'));
+    $categoryPages = $homeCategories->chunk(4)->values();
+    $categoryTotal = $homeCategories->count();
 @endphp
 
 <div class="lk-page lk-home-page">
 
-    {{-- Hero --}}
-    <x-buyer.marketplace-hero
-        :products="$heroProducts ?? collect()"
-        :browse-url="route('buyer.products')"
-        :categories-url="route('buyer.products')"
-        :orders-url="route('buyer.orders')"
-    />
+    <section class="lk-home-editorial-hero" aria-labelledby="buyer-home-editorial-title">
+        <div class="lk-home-editorial-copy">
+            <h1 class="lk-home-editorial-title" id="buyer-home-editorial-title">
+                Everything<br>for your
+                <span>everyday.</span>
+            </h1>
+            <p class="lk-home-editorial-description">Browse the things you need, and a few things you&rsquo;ll love.</p>
+            <a class="lk-home-editorial-cta" href="{{ route('buyer.products') }}">
+                <span>Shop all products</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7"/></svg>
+            </a>
+        </div>
+    </section>
+
+    <section class="lk-home-category-section" aria-labelledby="categories-heading" data-category-carousel data-category-total="{{ $categoryTotal }}">
+        <div class="lk-home-category-heading">
+            <h2 id="categories-heading">Shop by category</h2>
+            <div class="lk-home-category-tools">
+                <span class="lk-home-category-cue" title="Category order changes when you visit Home">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                    <span>Shuffled each visit</span>
+                </span>
+                <span class="lk-home-category-count">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    <span>4 at a time</span>
+                </span>
+                <div class="lk-home-category-nav" role="group" aria-label="Category carousel controls">
+                    <span class="lk-home-category-range" data-category-range aria-live="polite">{{ $categoryTotal > 0 ? '1–'.min(4, $categoryTotal).' of '.$categoryTotal : '0–0 of 0' }}</span>
+                    <button class="lk-home-category-arrow" type="button" data-category-previous aria-label="Previous categories" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                    </button>
+                    <button class="lk-home-category-arrow" type="button" data-category-next aria-label="Next categories" @disabled($categoryPages->count() < 2)>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="lk-home-category-pages" data-category-pages>
+            @forelse($categoryPages as $pageIndex => $pageCategories)
+                <div class="lk-home-category-page" data-category-page data-page-index="{{ $pageIndex }}" role="group" aria-roledescription="slide" aria-label="Page {{ $pageIndex + 1 }} of {{ $categoryPages->count() }}" @if($pageIndex > 0) hidden @endif>
+                    <div class="lk-home-category-grid">
+                        @foreach($pageCategories as $category)
+                            @php
+                                $categoryName = (string) data_get($category, 'name', 'Category');
+                                $categorySlug = (string) data_get($category, 'slug', '');
+                                $categoryId = data_get($category, 'id');
+                                $childrenCount = (int) $categoryChildren->get($categoryId, collect())->sum(fn ($child) => (int) data_get($child, 'products_count', 0));
+                                $productCount = (int) data_get($category, 'products_count', 0) + $childrenCount;
+                                $categoryImage = null;
+                                $imageCandidates = collect(['image_url', 'image_path', 'image', 'thumbnail_url', 'thumbnail_path', 'thumbnail', 'cover_image_url', 'cover_image_path', 'cover_image'])
+                                    ->map(fn ($attribute) => data_get($category, $attribute))
+                                    ->filter(fn ($candidate) => is_string($candidate) && trim($candidate) !== '' && ! preg_match('/^(?:https?:)?\/\//i', trim($candidate)) && ! preg_match('/^[a-z][a-z0-9+.-]*:/i', trim($candidate)));
+                                foreach ($imageCandidates as $candidate) {
+                                    $candidate = trim($candidate);
+                                    $publicPath = ltrim($candidate, '/');
+                                    if (str_starts_with($publicPath, 'images/') && ! str_contains($publicPath, '..') && is_file(public_path($publicPath))) {
+                                        $categoryImage = asset($publicPath);
+                                        break;
+                                    }
+                                    $storagePath = preg_replace('#^storage/#', '', $publicPath);
+                                    $storagePath = preg_replace('#^public/#', '', $storagePath);
+                                    if (! str_contains($storagePath, '..') && \Illuminate\Support\Facades\Storage::disk('public')->exists($storagePath)) {
+                                        $categoryImage = asset('storage/'.ltrim($storagePath, '/'));
+                                        break;
+                                    }
+                                }
+                                $defaultCategoryWebpPath = preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/', $categorySlug)
+                                    ? 'images/buyer/categories/'.$categorySlug.'-maroon-v2.webp'
+                                    : null;
+                                $defaultCategoryPngPath = $defaultCategoryWebpPath ? preg_replace('/\.webp$/', '.png', $defaultCategoryWebpPath) : null;
+                                $defaultCategoryImage = $defaultCategoryWebpPath && is_file(public_path($defaultCategoryWebpPath))
+                                    ? asset($defaultCategoryWebpPath)
+                                    : ($defaultCategoryPngPath && is_file(public_path($defaultCategoryPngPath)) ? asset($defaultCategoryPngPath) : null);
+                                $defaultCategoryFallback = $defaultCategoryWebpPath && $defaultCategoryPngPath
+                                    && is_file(public_path($defaultCategoryWebpPath)) && is_file(public_path($defaultCategoryPngPath))
+                                    ? asset($defaultCategoryPngPath)
+                                    : null;
+                                $categoryImage = $defaultCategoryImage ?? $categoryImage;
+                                $categoryImageFallback = $categoryImage === $defaultCategoryImage ? $defaultCategoryFallback : null;
+                                $isIllustration = $categoryImage && str_ends_with(mb_strtolower(parse_url($categoryImage, PHP_URL_PATH) ?: ''), '.svg');
+                            @endphp
+                            <a class="lk-home-category-card" href="{{ route('buyer.products', ['category' => $categorySlug]) }}">
+                                <span class="lk-home-category-visual">
+                                    @if($categoryImage)
+                                        @if($categoryImageFallback)
+                                            <picture>
+                                                <source srcset="{{ $categoryImage }}" type="image/webp">
+                                                <img src="{{ $categoryImageFallback }}" alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
+                                            </picture>
+                                        @else
+                                            <img src="{{ $categoryImage }}" alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
+                                        @endif
+                                    @else
+                                        <span aria-hidden="true"></span>
+                                    @endif
+                                </span>
+                                <span class="lk-home-category-card-footer">
+                                    <span class="lk-home-category-name">{{ $categoryName }}</span>
+                                    <span class="lk-home-category-products">{{ $productCount }}<span class="sr-only"> products</span></span>
+                                    <span class="lk-home-category-link-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+                                </span>
+                            </a>
+                        @endforeach
+                    </div>
+                </div>
+            @empty
+                <p class="lk-home-category-empty" role="status">No active categories are available right now.</p>
+            @endforelse
+        </div>
+
+        @if($categoryPages->count() > 1)
+            <div class="lk-home-category-pagination" aria-label="Choose category page">
+                @foreach($categoryPages as $pageIndex => $pageCategories)
+                    <button class="lk-home-category-dot" type="button" data-category-dot="{{ $pageIndex }}" aria-label="Show category page {{ $pageIndex + 1 }}" aria-current="{{ $pageIndex === 0 ? 'true' : 'false' }}"></button>
+                @endforeach
+            </div>
+        @endif
+    </section>
 
     {{-- Quick actions --}}
     <section class="lk-section" aria-labelledby="quick-actions-heading">
@@ -1021,52 +1579,6 @@
                     <small>Available vouchers</small>
                 </div>
             </a>
-        </div>
-    </section>
-
-    {{-- Categories --}}
-    <section
-        class="lk-section"
-        aria-labelledby="categories-heading"
-    >
-        <div class="lk-section-head">
-            <div>
-                <span class="lk-kicker">Browse</span>
-
-                <h2 id="categories-heading">
-                    Shop by Category
-                </h2>
-
-                <p>
-                    Explore products from different collections.
-                </p>
-            </div>
-
-            <a
-                href="{{ route('buyer.products') }}"
-                class="lk-text-link"
-            >
-                View All
-                <span aria-hidden="true">→</span>
-            </a>
-        </div>
-
-        <div class="lk-category-grid">
-            @foreach ($categories as $category)
-                <a
-                    href="{{ route('buyer.products', ['category' => $category['slug']]) }}"
-                    class="lk-category-card"
-                >
-                    <div class="lk-category-icon">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            {!! $category['icon'] !!}
-                        </svg>
-                    </div>
-
-                    <strong>{{ $category['name'] }}</strong>
-                    <small>Explore</small>
-                </a>
-            @endforeach
         </div>
     </section>
 
@@ -1288,3 +1800,49 @@
     </section>
 </div>
 @endsection
+
+@push('scripts')
+<script>
+    (() => {
+        document.querySelectorAll('[data-category-carousel]').forEach((carousel) => {
+            const pages = Array.from(carousel.querySelectorAll('[data-category-page]'));
+            const dots = Array.from(carousel.querySelectorAll('[data-category-dot]'));
+            const previous = carousel.querySelector('[data-category-previous]');
+            const next = carousel.querySelector('[data-category-next]');
+            const range = carousel.querySelector('[data-category-range]');
+            const total = Number(carousel.dataset.categoryTotal || 0);
+
+            carousel.querySelectorAll('.lk-home-category-visual img').forEach((image) => {
+                image.addEventListener('error', () => image.remove(), { once: true });
+            });
+
+            if (!pages.length || !previous || !next || !range) return;
+
+            let currentPage = 0;
+
+            const showPage = (requestedPage) => {
+                currentPage = Math.max(0, Math.min(requestedPage, pages.length - 1));
+                pages.forEach((page, index) => {
+                    page.hidden = index !== currentPage;
+                });
+                dots.forEach((dot, index) => {
+                    dot.setAttribute('aria-current', index === currentPage ? 'true' : 'false');
+                });
+
+                const firstCategory = currentPage * 4 + 1;
+                const lastCategory = Math.min((currentPage + 1) * 4, total);
+                range.textContent = `${firstCategory}–${lastCategory} of ${total}`;
+                previous.disabled = currentPage === 0;
+                next.disabled = currentPage === pages.length - 1;
+            };
+
+            previous.addEventListener('click', () => showPage(currentPage - 1));
+            next.addEventListener('click', () => showPage(currentPage + 1));
+            dots.forEach((dot) => {
+                dot.addEventListener('click', () => showPage(Number(dot.dataset.categoryDot || 0)));
+            });
+            showPage(0);
+        });
+    })();
+</script>
+@endpush

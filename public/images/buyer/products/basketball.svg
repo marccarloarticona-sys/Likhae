@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 700">
-<rect width="700" height="700" rx="40" fill="#F5EFE8"/>
-<circle cx="530" cy="145" r="115" fill="#8F1719" opacity=".08"/>
-<circle cx="145" cy="555" r="145" fill="#8F1719" opacity=".06"/>
-<circle cx="350" cy="350" r="190" fill="#C96E2E"/><path d="M160 350h380M350 160v380M220 205c110 70 150 210 260 290M480 205c-110 70-150 210-260 290" fill="none" stroke="#5A2A16" stroke-width="15"/>
-<text x="350" y="625" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" fill="#6f706f">Basketball</text>
-</svg>

@@ -668,6 +668,16 @@
         margin-left: var(--admin-side-collapsed);
     }
 
+    @media (min-width: 1024px) {
+        body.lk-buyer-home-sidebar-hover:not(.lk-buyer-home-sidebar-expanded) #adminSidebar {
+            width: var(--admin-side-collapsed);
+        }
+
+        body.lk-buyer-home-sidebar-hover:not(.lk-buyer-home-sidebar-expanded) [data-sidebar-content] {
+            margin-left: var(--admin-side-collapsed);
+        }
+    }
+
     @media (max-width: 1023px) {
         [data-sidebar-content] {
             margin-left: 0 !important;

@@ -85,6 +85,7 @@ Route::prefix('buyer')
         Route::get('/account', [BuyerController::class, 'account'])->name('account');
         Route::get('/settings', [BuyerController::class, 'settings'])->name('settings');
         Route::put('/settings', [BuyerController::class, 'updateSettings'])->name('settings.update');
+        Route::patch('/settings/theme', [BuyerController::class, 'updateThemePreference'])->name('settings.theme.update');
         Route::patch('/settings/ai-preferences', [BuyerController::class, 'updateAiPreference'])->name('settings.ai.update');
         Route::get('/account/profile', fn () => redirect()->route('buyer.account', ['tab' => 'profile']))->name('account.profile');
         Route::get('/account/addresses', fn () => redirect()->route('buyer.account', ['tab' => 'addresses']))->name('account.addresses');

@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 700">
-<rect width="700" height="700" rx="40" fill="#F6F1EB"/>
-<circle cx="530" cy="145" r="115" fill="#8F1719" opacity=".08"/>
-<circle cx="145" cy="555" r="145" fill="#8F1719" opacity=".06"/>
-<circle cx="350" cy="380" r="135" fill="#D7B8A2"/><circle cx="270" cy="225" r="65" fill="#D7B8A2"/><circle cx="430" cy="225" r="65" fill="#D7B8A2"/><circle cx="220" cy="325" r="55" fill="#D7B8A2"/><circle cx="480" cy="325" r="55" fill="#D7B8A2"/>
-<text x="350" y="625" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" fill="#6f706f">Pet Supplies</text>
-</svg>

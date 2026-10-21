@@ -15,6 +15,7 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Finance\FinanceSchemaReadiness;
+use App\Services\Maps\MapDataService;
 use App\Services\Reports\SellerSalesSummaryService;
 use App\Services\Reports\SellerOrderValueChartService;
 use App\Services\Reports\SellerReportPdfService;
@@ -203,6 +204,35 @@ class SellerOperationsController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
 
+        if ($request->query('view') === 'tracking') {
+            $orderNumber = $request->validate([
+                'order' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9-]+$/'],
+            ])['order'];
+            $trackingOrder = SellerOrder::query()
+                ->where('seller_profile_id', $seller->id)
+                ->where('seller_order_number', $orderNumber)
+                ->with([
+                    'order.address',
+                    'sellerProfile.businessAddress',
+                    'shipments.orderItem',
+                    'shipments.events.actor',
+                    'shipments.events.logisticsCenter',
+                    'shipments.events.riderAssignment.riderProfile.user',
+                    'shipments.riderAssignments.riderProfile.user',
+                    'shipments.riderAssignments.liveLocation',
+                    'shipments.logisticsCenter.address',
+                    'shipments.serviceArea.logisticsCenter.address',
+                ])
+                ->firstOrFail();
+            $mapMarkers = app(MapDataService::class)->forShipments($trackingOrder->shipments, includeSeller: true);
+
+            return view('Seller.logistics', [
+                'seller' => $seller,
+                'trackingOrder' => $trackingOrder,
+                'mapMarkers' => $mapMarkers,
+            ]);
+        }
+
         $pickupRequestSchemaReady = app(LogisticsSchemaReadiness::class)->sellerPickupRequestsReady();
 
         $orders = SellerOrder::query()
@@ -249,6 +279,7 @@ class SellerOperationsController extends Controller
 
         return view('Seller.logistics', [
             'seller' => $seller,
+            'trackingOrder' => null,
             'orders' => $orders,
             'pickupAddress' => $seller->businessAddress,
             'readyPickupParcels' => $readyPickupParcels,

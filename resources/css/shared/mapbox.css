@@ -64,6 +64,12 @@
 .lk-map-button:focus-visible { outline: 3px solid rgba(122, 42, 34, .2); outline-offset: 2px; }
 .lk-map-canvas { min-height: var(--lk-map-height); height: var(--lk-map-height); background: #efe8df; }
 .lk-map-shell.is-fullscreen .lk-map-canvas { flex: 1; height: auto; min-height: 0; }
+.lk-order-route-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 16px; border-top: 1px solid #f0e4da; background: #fffdf9; color: #806356; font-size: 11px; font-weight: 700; }
+.lk-order-route-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.lk-order-route-legend i { display: inline-block; width: 20px; height: 4px; border-radius: 99px; }
+.lk-order-route-legend i.is-traveled { background: #800000; }
+.lk-order-route-legend i.is-active-transfer { background: repeating-linear-gradient(90deg, #c2410c 0 6px, transparent 6px 9px); }
+.lk-order-route-legend i.is-remaining { background: #9ca3af; }
 .lk-map-navigation { padding: 13px 16px; border-top: 1px solid #eadbce; background: #fff8f1; color: #321d17; }
 .lk-map-navigation__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .lk-map-navigation__head strong { display: block; margin-top: 3px; font-size: 15px; font-weight: 800; }

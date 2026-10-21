@@ -18,7 +18,8 @@
         border: 1px solid rgba(193, 151, 113, .32) !important;
         border-radius: 28px !important;
         background-color: #fbf8f4 !important;
-        background-image: url('{{ asset('images/home-buyer.png') }}') !important;
+        background-image: url('{{ asset('images/home-buyer.jpg') }}') !important;
+        background-image: image-set(url('{{ asset('images/home-buyer.webp') }}') type('image/webp'), url('{{ asset('images/home-buyer.jpg') }}') type('image/jpeg')) !important;
         background-position: center !important;
         background-size: calc(100% + 8px) auto !important;
         background-repeat: no-repeat !important;
@@ -64,7 +65,10 @@
         background-color: #161210 !important;
         background-image:
             linear-gradient(135deg, rgba(22, 18, 16, .92), rgba(33, 27, 23, .78)),
-            url('{{ asset('images/home-buyer.png') }}') !important;
+            url('{{ asset('images/home-buyer.jpg') }}') !important;
+        background-image:
+            linear-gradient(135deg, rgba(22, 18, 16, .92), rgba(33, 27, 23, .78)),
+            image-set(url('{{ asset('images/home-buyer.webp') }}') type('image/webp'), url('{{ asset('images/home-buyer.jpg') }}') type('image/jpeg')) !important;
         color: #f5efe8 !important;
         border-color: #3b2e27 !important;
         box-shadow: 0 18px 46px rgba(0, 0, 0, .24) !important;

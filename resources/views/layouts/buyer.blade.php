@@ -6,9 +6,13 @@
     );
     $activePage = trim($__env->yieldContent('active')) ?: 'home';
     $globalErrorMessage = session('upload_error') ?: session('buyer_error') ?: session('error');
+    $buyerThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    if (! in_array($buyerThemePreference, ['light', 'dark', 'system'], true)) {
+        $buyerThemePreference = 'system';
+    }
 @endphp
 <!doctype html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" data-buyer-theme-preference="{{ $buyerThemePreference }}" data-buyer-theme-update-url="{{ route('buyer.settings.theme.update') }}">
 <head>
     <x-likhae-favicon />
     <meta charset="utf-8">
@@ -19,15 +23,31 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/modal-refresh.css', 'resources/css/Buyer/likhae-buyer-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/realtime.js', 'resources/js/Buyer/likhae-buyer-ai.js'])
-    @unless(request()->routeIs('buyer.messages'))
-        @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
-    @endunless
+    @if(request()->routeIs('buyer.orders', 'buyer.orders.show', 'tracking.show') || (request()->routeIs('buyer.account') && request()->query('tab') === 'addresses'))
+        @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js'])
+    @endif
+    @if(request()->routeIs('buyer.account') && request()->query('tab') === 'addresses')
+        @vite(['resources/js/shared/address-pin.js'])
+    @endif
     @stack('head')
     <script>
-        (function(){var t=localStorage.getItem('likhae-theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}})();
+        (function () {
+            var root = document.documentElement;
+            root.dataset.buyerThemePreference = root.dataset.buyerThemePreference || 'system';
+            var systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+            var applyTheme = function () {
+                var preference = root.dataset.buyerThemePreference;
+                root.classList.toggle('dark', preference === 'dark' || (preference === 'system' && systemTheme.matches));
+            };
+
+            applyTheme();
+            systemTheme.addEventListener('change', function () {
+                if (root.dataset.buyerThemePreference === 'system') applyTheme();
+            });
+        })();
     </script>
 </head>
-<body class="lk-buyer-body">
+<body @class(['lk-buyer-body', 'lk-buyer-home-sidebar-hover' => request()->routeIs('buyer.home')])>
     <div class="lk-buyer-app" data-lk-buyer-app data-buyer-user-id="{{ auth()->id() }}">
         <x-admin.sidebar role="buyer" :active="$activePage" />
         <div class="lk-shell" data-sidebar-content>

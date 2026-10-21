@@ -34,6 +34,7 @@
         'logistics' => ['workspace' => 'Sorting Center', 'profile' => 'Logistics Operator', 'dashboard' => 'logistics.dashboard', 'dashboard_label' => 'Dashboard'],
     ];
     $roleDetail = $roleDetails[$role];
+    $buyerHomeSidebarAutoCollapse = $role === 'buyer' && request()->routeIs('buyer.home');
 
     $icons = [
         'dashboard' => '
@@ -485,6 +486,8 @@
 
 <aside
     id="adminSidebar"
+    data-buyer-home-auto-collapse="{{ $buyerHomeSidebarAutoCollapse ? 'true' : 'false' }}"
+    @class(['is-collapsed' => $buyerHomeSidebarAutoCollapse])
     aria-label="{{ $roleDetail['workspace'] }} navigation"
 >
     <div class="ad-side-head">
@@ -493,7 +496,7 @@
             id="adminSidebarToggle"
             class="ad-side-menu"
             aria-label="Toggle admin sidebar"
-            aria-expanded="true"
+            aria-expanded="{{ $buyerHomeSidebarAutoCollapse ? 'false' : 'true' }}"
         >
             <svg viewBox="0 0 24 24" aria-hidden="true">
                 {!! $icons['menu'] !!}
@@ -694,6 +697,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const sidebarToggle =
         document.getElementById('adminSidebarToggle');
 
+    const buyerHomeAutoCollapse =
+        sidebar?.dataset.buyerHomeAutoCollapse === 'true';
+
     const themeToggle =
         document.getElementById('adminThemeToggle');
 
@@ -723,12 +729,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
     function restoreTheme() {
+        const buyerPreference = root.dataset.buyerThemePreference;
         const savedTheme =
             localStorage.getItem('likhae-theme') || 'light';
+        const theme = ['light', 'dark', 'system'].includes(buyerPreference)
+            ? buyerPreference
+            : savedTheme;
 
         root.classList.toggle(
             'dark',
-            savedTheme === 'dark'
+            theme === 'dark'
+                || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
         );
 
         syncTheme();
@@ -789,14 +800,15 @@ document.addEventListener('DOMContentLoaded', function () {
             body.classList.remove(
                 'workspace-sidebar-collapsed'
             );
+            body.classList.remove(
+                'lk-buyer-home-sidebar-expanded'
+            );
 
             return;
         }
 
-        const collapsed =
-            localStorage.getItem(
-                'likhae-admin-sidebar'
-            ) === 'collapsed';
+        const collapsed = buyerHomeAutoCollapse
+            || localStorage.getItem('likhae-admin-sidebar') === 'collapsed';
 
         sidebar.classList.toggle(
             'is-collapsed',
@@ -811,11 +823,46 @@ document.addEventListener('DOMContentLoaded', function () {
             'workspace-sidebar-collapsed',
             collapsed
         );
+        body.classList.toggle(
+            'lk-buyer-home-sidebar-expanded',
+            buyerHomeAutoCollapse && !collapsed
+        );
 
         sidebarToggle?.setAttribute(
             'aria-expanded',
             collapsed ? 'false' : 'true'
         );
+    }
+
+
+    function setBuyerHomeCollapsed(collapsed) {
+        if (!buyerHomeAutoCollapse || isMobile() || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+            return;
+        }
+
+        sidebar?.classList.toggle('is-collapsed', collapsed);
+        body.classList.toggle('admin-sidebar-collapsed', collapsed);
+        body.classList.toggle('workspace-sidebar-collapsed', collapsed);
+        body.classList.toggle('lk-buyer-home-sidebar-expanded', !collapsed);
+        sidebarToggle?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+
+        window.dispatchEvent(new CustomEvent('likhae:admin-sidebar', {
+            detail: { collapsed, width: collapsed ? 76 : 252 },
+        }));
+    }
+
+
+    if (buyerHomeAutoCollapse && sidebar) {
+        sidebar.addEventListener('pointerenter', () => setBuyerHomeCollapsed(false));
+        sidebar.addEventListener('pointerleave', () => {
+            if (!sidebar.contains(document.activeElement)) setBuyerHomeCollapsed(true);
+        });
+        sidebar.addEventListener('focusin', () => setBuyerHomeCollapsed(false));
+        sidebar.addEventListener('focusout', (event) => {
+            if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) {
+                setBuyerHomeCollapsed(true);
+            }
+        });
     }
 
 
@@ -858,11 +905,18 @@ document.addEventListener('DOMContentLoaded', function () {
             collapsed ? 'false' : 'true'
         );
 
-        localStorage.setItem(
-            'likhae-admin-sidebar',
-            collapsed
-                ? 'collapsed'
-                : 'expanded'
+        if (!buyerHomeAutoCollapse) {
+            localStorage.setItem(
+                'likhae-admin-sidebar',
+                collapsed
+                    ? 'collapsed'
+                    : 'expanded'
+            );
+        }
+
+        body.classList.toggle(
+            'lk-buyer-home-sidebar-expanded',
+            buyerHomeAutoCollapse && !collapsed
         );
 
         window.dispatchEvent(
@@ -938,6 +992,7 @@ document.addEventListener('DOMContentLoaded', function () {
         function () {
             const dark =
                 !root.classList.contains('dark');
+            const theme = dark ? 'dark' : 'light';
 
             root.classList.toggle(
                 'dark',
@@ -950,6 +1005,41 @@ document.addEventListener('DOMContentLoaded', function () {
                     ? 'dark'
                     : 'light'
             );
+
+            const buyerThemeUpdateUrl = root.dataset.buyerThemeUpdateUrl;
+            if (buyerThemeUpdateUrl) {
+                const previousTheme = root.dataset.buyerThemePreference || 'system';
+                root.dataset.buyerThemePreference = theme;
+                const settingsRadio = document.querySelector(`input[name="theme"][value="${theme}"]`);
+                if (settingsRadio) settingsRadio.checked = true;
+
+                fetch(buyerThemeUpdateUrl, {
+                    method: 'PATCH',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: JSON.stringify({ theme }),
+                }).then((response) => {
+                    if (!response.ok) throw new Error('Theme preference could not be saved.');
+                    return response.json();
+                }).then((payload) => {
+                    if (payload.theme !== theme) throw new Error('Theme preference could not be saved.');
+                }).catch(() => {
+                    root.dataset.buyerThemePreference = previousTheme;
+                    const restoredTheme = previousTheme === 'system'
+                        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                        : previousTheme;
+                    root.classList.toggle('dark', restoredTheme === 'dark');
+                    localStorage.setItem('likhae-theme', restoredTheme);
+                    const restoredRadio = document.querySelector(`input[name="theme"][value="${previousTheme}"]`);
+                    if (restoredRadio) restoredRadio.checked = true;
+                    syncTheme();
+                });
+            }
 
             syncTheme();
         }

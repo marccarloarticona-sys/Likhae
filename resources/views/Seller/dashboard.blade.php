@@ -10,6 +10,33 @@
     $stats = $dashboardStats;
     $peso = html_entity_decode('&#8369;');
     $shippingOrders = $orderStatusCounts['picked-up'] + $orderStatusCounts['in-transit'];
+    $fulfillmentStages = [
+        ['label' => 'Placed', 'count' => (int) $orderStatusCounts['placed'], 'url' => route('seller.orders', ['status' => 'placed']), 'color' => '#416f82'],
+        ['label' => 'Accepted', 'count' => (int) $orderStatusCounts['confirmed'], 'url' => route('seller.orders', ['status' => 'confirmed']), 'color' => '#6f8fa0'],
+        ['label' => 'Preparing', 'count' => (int) $orderStatusCounts['preparing'], 'url' => route('seller.orders', ['status' => 'preparing']), 'color' => '#c49259'],
+        ['label' => 'Ready for pickup', 'count' => (int) $orderStatusCounts['ready-for-pickup'], 'url' => route('seller.orders', ['status' => 'ready-for-pickup']), 'color' => '#b5a66c'],
+        ['label' => 'With courier', 'count' => (int) $shippingOrders, 'url' => route('seller.orders', ['status' => 'shipping']), 'color' => '#6e9a8d'],
+        ['label' => 'Delivered', 'count' => (int) $orderStatusCounts['delivered'], 'url' => route('seller.orders', ['status' => 'shipping']), 'color' => '#87a579'],
+        ['label' => 'Completed', 'count' => (int) $orderStatusCounts['completed'], 'url' => route('seller.orders', ['status' => 'completed']), 'color' => '#537763'],
+    ];
+    if ($orderStatusCounts['other'] > 0) {
+        $fulfillmentStages[] = ['label' => 'Other', 'count' => (int) $orderStatusCounts['other'], 'url' => route('seller.orders'), 'color' => '#8b9295'];
+    }
+    if ($orderStatusCounts['cancelled'] > 0) {
+        $fulfillmentStages[] = ['label' => 'Cancelled', 'count' => (int) $orderStatusCounts['cancelled'], 'url' => route('seller.orders', ['status' => 'cancelled']), 'color' => '#bd7968'];
+    }
+    $fulfillmentTotal = collect($fulfillmentStages)->sum('count');
+    $pieStops = [];
+    $pieCursor = 0;
+    foreach ($fulfillmentStages as $stage) {
+        if ($stage['count'] > 0 && $fulfillmentTotal > 0) {
+            $start = ($pieCursor / $fulfillmentTotal) * 100;
+            $pieCursor += $stage['count'];
+            $end = ($pieCursor / $fulfillmentTotal) * 100;
+            $pieStops[] = $stage['color'].' '.$start.'% '.$end.'%';
+        }
+    }
+    $pieBackground = $pieStops ? 'conic-gradient('.implode(', ', $pieStops).')' : 'conic-gradient(var(--sl-bg-soft) 0 100%)';
 @endphp
 <div class="sl-page sl-seller-dashboard">
     <section class="sl-welcome-panel">
@@ -108,20 +135,23 @@
             <div><span class="sl-eyebrow">Fulfillment</span><h2 id="seller-order-stages-title">Orders by stage</h2></div>
             <a href="{{ route('seller.orders') }}" class="sl-text-link">All orders</a>
         </header>
-        <div class="sl-dashboard-stage-list">
-            <a href="{{ route('seller.orders', ['status' => 'placed']) }}"><span>Placed</span><strong>{{ number_format($orderStatusCounts['placed']) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'confirmed']) }}"><span>Accepted</span><strong>{{ number_format($orderStatusCounts['confirmed']) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'preparing']) }}"><span>Preparing</span><strong>{{ number_format($orderStatusCounts['preparing']) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}"><span>Ready for pickup</span><strong>{{ number_format($orderStatusCounts['ready-for-pickup']) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><span>With courier</span><strong>{{ number_format($shippingOrders) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'shipping']) }}"><span>Delivered</span><strong>{{ number_format($orderStatusCounts['delivered']) }}</strong></a>
-            <a href="{{ route('seller.orders', ['status' => 'completed']) }}"><span>Completed</span><strong>{{ number_format($orderStatusCounts['completed']) }}</strong></a>
-            @if ($orderStatusCounts['other'] > 0)
-                <a href="{{ route('seller.orders') }}"><span>Other</span><strong>{{ number_format($orderStatusCounts['other']) }}</strong></a>
-            @endif
-            @if ($orderStatusCounts['cancelled'] > 0)
-                <a class="is-cancelled" href="{{ route('seller.orders', ['status' => 'cancelled']) }}"><span>Cancelled</span><strong>{{ number_format($orderStatusCounts['cancelled']) }}</strong></a>
-            @endif
+        <div class="sl-dashboard-stage-chart">
+            <div class="sl-dashboard-pie-wrap">
+                <div class="sl-dashboard-pie" style="--sl-orders-pie: {{ $pieBackground }}" role="img" aria-label="Orders by fulfillment stage, {{ number_format($fulfillmentTotal) }} total: {{ collect($fulfillmentStages)->map(fn ($stage) => $stage['label'].', '.number_format($stage['count']))->join('; ') }}">
+                    <div class="sl-dashboard-pie-center"><strong>{{ number_format($fulfillmentTotal) }}</strong><span>Total orders</span></div>
+                </div>
+            </div>
+            <div class="sl-dashboard-stage-list" aria-label="Order counts by stage">
+                @foreach ($fulfillmentStages as $stage)
+                    @php $stagePercent = $fulfillmentTotal > 0 ? ($stage['count'] / $fulfillmentTotal) * 100 : 0; @endphp
+                    <a href="{{ $stage['url'] }}" style="--sl-stage-color: {{ $stage['color'] }}">
+                        <i aria-hidden="true"></i>
+                        <span>{{ $stage['label'] }}</span>
+                        <strong>{{ number_format($stage['count']) }}</strong>
+                        <small>{{ number_format($stagePercent, 1) }}%</small>
+                    </a>
+                @endforeach
+            </div>
         </div>
     </section>
 

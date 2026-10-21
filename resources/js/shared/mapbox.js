@@ -105,7 +105,7 @@ function markerCoordinates(marker) {
     return [lng, lat];
 }
 
-function drawRouteGeometry(map, id, geometry, color = '#800000', dash = false) {
+function drawRouteGeometry(map, id, geometry, color = '#800000', dash = false, width = 3) {
     const sourceId = `likhae-route-source-${id}`;
     const layerId = `likhae-route-layer-${id}`;
     const data = {
@@ -116,10 +116,10 @@ function drawRouteGeometry(map, id, geometry, color = '#800000', dash = false) {
 
     if (map.getSource(sourceId)) {
         map.getSource(sourceId).setData(data);
-        return;
+        if (map.getLayer(layerId)) return;
+    } else {
+        map.addSource(sourceId, { type: 'geojson', data });
     }
-
-    map.addSource(sourceId, { type: 'geojson', data });
     map.addLayer({
         id: layerId,
         type: 'line',
@@ -127,11 +127,309 @@ function drawRouteGeometry(map, id, geometry, color = '#800000', dash = false) {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
             'line-color': color,
-            'line-width': 3,
+            'line-width': width,
             'line-opacity': 0.82,
             ...(dash ? { 'line-dasharray': [1.5, 1.5] } : {}),
         },
     });
+}
+
+function orderRouteProgress(status, stops, routeState, shipmentMarkers) {
+    const legDistances = routeState?.legDistances || [];
+    const totalDistance = legDistances.reduce((sum, distance) => sum + distance, 0);
+    if (!totalDistance) return 0;
+
+    const centerIndex = stops.findIndex((stop) => stop.kind === 'center');
+    const centerDistance = centerIndex > 0
+        ? legDistances.slice(0, centerIndex).reduce((sum, distance) => sum + distance, 0)
+        : 0;
+    let distance = 0;
+
+    switch (status) {
+        case 'AT_SORTING_CENTER':
+        case 'SORTED':
+        case 'ASSIGNED_TO_RIDER':
+        case 'OUT_FOR_DELIVERY':
+        case 'DELIVERY_FAILED':
+            distance = centerDistance;
+            break;
+        case 'DELIVERED':
+        case 'COMPLETED':
+            distance = totalDistance;
+            break;
+        case 'RETURNED':
+        case 'CANCELLED':
+            distance = 0;
+            break;
+        default:
+            distance = 0;
+    }
+
+    const rider = shipmentMarkers.find((marker) => marker.kind === 'rider'
+        && marker.active_rider
+        && markerCoordinates(marker));
+    if (rider && ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'].includes(status)) {
+        const geometry = routeState.legGeometries || [];
+        const deliveryLegIndex = centerIndex >= 0 ? centerIndex : 0;
+        const deliveryLeg = geometry[deliveryLegIndex];
+        const riderCoordinates = markerCoordinates(rider);
+        const position = deliveryLeg && riderCoordinates
+            ? nearestRoutePosition(deliveryLeg.coordinates, riderCoordinates)
+            : null;
+        if (position && position.distance <= 300) {
+            const distanceBeforeLeg = legDistances.slice(0, deliveryLegIndex)
+                .reduce((sum, legDistance) => sum + legDistance, 0);
+            distance = Math.max(distance, distanceBeforeLeg + (legDistances[deliveryLegIndex] * position.progress));
+        }
+    }
+
+    return Math.max(0, Math.min(1, distance / totalDistance));
+}
+
+function hubTransferProgressRange(stops, routeState, shipmentMarkers) {
+    if (!shipmentMarkers.some((marker) => marker.transfer_status === 'IN_TRANSIT')) return null;
+
+    const originIndex = stops.findIndex((stop) => stop.kind === 'center' && stop.center_role === 'origin');
+    const destinationIndex = stops.findIndex((stop) => stop.kind === 'center' && stop.center_role === 'destination');
+    const legDistances = routeState?.legDistances || [];
+    const totalDistance = legDistances.reduce((sum, distance) => sum + distance, 0);
+    if (originIndex < 0 || destinationIndex <= originIndex || totalDistance <= 0) return null;
+
+    const startDistance = legDistances.slice(0, originIndex).reduce((sum, distance) => sum + distance, 0);
+    const endDistance = legDistances.slice(0, destinationIndex).reduce((sum, distance) => sum + distance, 0);
+    if (endDistance <= startDistance) return null;
+
+    return {
+        start: startDistance / totalDistance,
+        end: endDistance / totalDistance,
+    };
+}
+
+function nearestRoutePosition(coordinates, point) {
+    if (!Array.isArray(coordinates) || coordinates.length < 2 || !point) return null;
+    const latitudeScale = 110540;
+    const longitudeScale = 111320 * Math.cos((point[1] * Math.PI) / 180);
+    const project = (coordinate) => [coordinate[0] * longitudeScale, coordinate[1] * latitudeScale];
+    const projectedPoint = project(point);
+    const totalLength = coordinates.slice(1).reduce((sum, coordinate, index) =>
+        sum + distanceMeters(coordinates[index], coordinate), 0);
+    if (!totalLength) return null;
+
+    let distanceBeforeSegment = 0;
+    let nearest = null;
+    for (let index = 1; index < coordinates.length; index += 1) {
+        const start = coordinates[index - 1];
+        const end = coordinates[index];
+        const projectedStart = project(start);
+        const projectedEnd = project(end);
+        const vector = [projectedEnd[0] - projectedStart[0], projectedEnd[1] - projectedStart[1]];
+        const lengthSquared = (vector[0] ** 2) + (vector[1] ** 2);
+        const ratio = lengthSquared === 0
+            ? 0
+            : Math.max(0, Math.min(1, ((projectedPoint[0] - projectedStart[0]) * vector[0]
+                + (projectedPoint[1] - projectedStart[1]) * vector[1]) / lengthSquared));
+        const closest = [projectedStart[0] + (vector[0] * ratio), projectedStart[1] + (vector[1] * ratio)];
+        const distance = Math.hypot(projectedPoint[0] - closest[0], projectedPoint[1] - closest[1]);
+        const segmentLength = distanceMeters(start, end);
+        if (!nearest || distance < nearest.distance) {
+            nearest = {
+                distance,
+                progress: (distanceBeforeSegment + (segmentLength * ratio)) / totalLength,
+            };
+        }
+        distanceBeforeSegment += segmentLength;
+    }
+
+    return nearest;
+}
+
+function splitRouteAtProgress(coordinates, progress) {
+    if (!Array.isArray(coordinates) || coordinates.length < 2) return { completed: [], future: [] };
+    const safeProgress = Math.max(0, Math.min(1, progress));
+    if (safeProgress <= 0) return { completed: [], future: coordinates };
+    if (safeProgress >= 1) return { completed: coordinates, future: [] };
+
+    const totalLength = coordinates.slice(1).reduce((sum, coordinate, index) =>
+        sum + distanceMeters(coordinates[index], coordinate), 0);
+    const targetDistance = totalLength * safeProgress;
+    const completed = [coordinates[0]];
+    let future = [];
+    let distanceBeforeSegment = 0;
+
+    for (let index = 1; index < coordinates.length; index += 1) {
+        const start = coordinates[index - 1];
+        const end = coordinates[index];
+        const segmentLength = distanceMeters(start, end);
+        if (distanceBeforeSegment + segmentLength < targetDistance) {
+            completed.push(end);
+            distanceBeforeSegment += segmentLength;
+            continue;
+        }
+
+        const ratio = segmentLength ? (targetDistance - distanceBeforeSegment) / segmentLength : 0;
+        const split = [
+            start[0] + (end[0] - start[0]) * ratio,
+            start[1] + (end[1] - start[1]) * ratio,
+        ];
+        completed.push(split);
+        future = [split, ...coordinates.slice(index)];
+        break;
+    }
+
+    return { completed, future };
+}
+
+function removeOrderProgressMarker(shell, shipmentId) {
+    const key = String(shipmentId);
+    const marker = shell._likhaeOrderProgressMarkers?.[key];
+    if (!marker) return;
+    marker.remove();
+    delete shell._likhaeOrderProgressMarkers[key];
+}
+
+function drawOrderRouteSegments(map, routeId, routeState, progress, activeTransferRange = null) {
+    const coordinates = routeState?.geometry?.coordinates || [];
+    if (coordinates.length < 2) return;
+    const drawSegment = (suffix, segment, color, dash) => {
+        const segmentId = `${routeId}-${suffix}`;
+        if (segment.length < 2) {
+            removeRouteLayer(map, segmentId);
+            return;
+        }
+        drawRouteGeometry(map, segmentId, { type: 'LineString', coordinates: segment }, color, dash, 4);
+    };
+
+    if (activeTransferRange) {
+        const beforeTransfer = splitRouteAtProgress(coordinates, activeTransferRange.start);
+        const transferProgress = (activeTransferRange.end - activeTransferRange.start) / (1 - activeTransferRange.start);
+        const transferSegments = splitRouteAtProgress(beforeTransfer.future, transferProgress);
+        drawSegment('traveled', beforeTransfer.completed, '#800000', false);
+        drawSegment('active-transfer', transferSegments.completed, '#c2410c', true);
+        drawSegment('remaining', transferSegments.future, '#9ca3af', false);
+    } else {
+        const segments = splitRouteAtProgress(coordinates, progress);
+        drawSegment('traveled', segments.completed, '#800000', false);
+        drawSegment('remaining', segments.future, '#9ca3af', false);
+        removeRouteLayer(map, `${routeId}-active-transfer`);
+    }
+    removeRouteLayer(map, routeId);
+}
+
+function removeOrderRouteLayers(map, routeId) {
+    removeRouteLayer(map, routeId);
+    removeRouteLayer(map, `${routeId}-traveled`);
+    removeRouteLayer(map, `${routeId}-active-transfer`);
+    removeRouteLayer(map, `${routeId}-remaining`);
+}
+
+function drawOrderRoutes(map, mapboxgl, markers, shell) {
+    if (shell.dataset.mapOrderRoute !== 'true') return;
+
+    const grouped = markers.reduce((groups, marker) => {
+        if (marker.shipment_id) {
+            groups[marker.shipment_id] ||= [];
+            groups[marker.shipment_id].push(marker);
+        }
+        return groups;
+    }, {});
+    const activeRouteIds = new Set();
+    const routeOrder = { seller: 0, center: 1, destination: 2 };
+    const centerRoleOrder = { origin: 0, destination: 1 };
+    const token = shell.dataset.mapToken?.trim() || '';
+    shell._likhaeOrderRouteState ||= {};
+
+    Object.entries(grouped).forEach(([shipmentId, shipmentMarkers]) => {
+        const stops = shipmentMarkers
+            .filter((marker) => Object.prototype.hasOwnProperty.call(routeOrder, marker.kind))
+            .sort((a, b) => routeOrder[a.kind] - routeOrder[b.kind]
+                || (centerRoleOrder[a.center_role] ?? 0) - (centerRoleOrder[b.center_role] ?? 0))
+            .filter((marker) => markerCoordinates(marker));
+        const stopCoordinates = stops.map(markerCoordinates);
+        if (stopCoordinates.length < 2) {
+            removeOrderProgressMarker(shell, shipmentId);
+            return;
+        }
+
+        const routeId = `order-${shipmentId}`;
+        activeRouteIds.add(routeId);
+        const signature = stopCoordinates.map(([longitude, latitude]) => `${longitude},${latitude}`).join(';');
+        const status = shipmentMarkers.find((marker) => marker.tracking_status)?.tracking_status
+            || (String(shell._likhaeCurrentTracking?.shipment_id || '') === String(shipmentId)
+                ? shell._likhaeCurrentTracking?.status
+                : null)
+            || 'PLACED';
+        let routeState = shell._likhaeOrderRouteState[shipmentId];
+
+        if (routeState?.signature !== signature) {
+            removeOrderRouteLayers(map, routeId);
+            routeState = { signature, pending: false, geometry: null, legDistances: [], legGeometries: [] };
+            shell._likhaeOrderRouteState[shipmentId] = routeState;
+        }
+
+        removeOrderProgressMarker(shell, shipmentId);
+
+        if (routeState.geometry) {
+            let progress = orderRouteProgress(status, stops, routeState, shipmentMarkers);
+            const activeTransferRange = hubTransferProgressRange(stops, routeState, shipmentMarkers);
+            if (['RETURNED', 'CANCELLED'].includes(status)) {
+                routeState.confirmedProgress = 0;
+            } else {
+                progress = Math.max(routeState.confirmedProgress || 0, progress);
+                routeState.confirmedProgress = progress;
+            }
+            drawOrderRouteSegments(map, routeId, routeState, progress, activeTransferRange);
+            return;
+        }
+
+        if (routeState.pending
+            || (!token && routeState.noToken)
+            || (routeState.failedAt && Date.now() - routeState.failedAt < ROUTE_RETRY_DELAY_MS)) return;
+
+        if (!token) {
+            routeState.noToken = true;
+            routeState.failedAt = Date.now();
+            updateStatus(shell, 'Road-following directions need a Mapbox public token. Shipment progress is shown at saved stops.', true);
+            return;
+        }
+
+        routeState.pending = true;
+        const routePromise = Promise.all(stopCoordinates.slice(1).map((coordinate, index) =>
+            fetchRoadGeometry(token, stopCoordinates[index], coordinate)));
+        routePromise.then((legs) => {
+            if (shell._likhaeOrderRouteState?.[shipmentId] !== routeState) return;
+            const coordinates = legs.reduce((joined, leg, index) => {
+                const next = leg.geometry.coordinates;
+                joined.push(...(index ? next.slice(1) : next));
+                return joined;
+            }, []);
+            if (coordinates.length < 2) throw new Error('Mapbox returned no drivable order route.');
+
+            routeState.pending = false;
+            routeState.geometry = { type: 'LineString', coordinates };
+            routeState.legDistances = legs.map((leg) => leg.distance);
+            routeState.legGeometries = legs.map((leg) => leg.geometry);
+            routeState.fetchedAt = Date.now();
+            drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || markers, shell);
+        }).catch((error) => {
+            if (shell._likhaeOrderRouteState?.[shipmentId] !== routeState) return;
+            routeState.pending = false;
+            routeState.failedAt = Date.now();
+            drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || markers, shell);
+            updateStatus(shell, error?.message || 'The road-following order route is temporarily unavailable.', true);
+        });
+    });
+
+    (shell._likhaeOrderRouteIds || [])
+        .filter((routeId) => !activeRouteIds.has(routeId))
+        .forEach((routeId) => removeOrderRouteLayers(map, routeId));
+    const activeShipmentIds = new Set(Object.keys(grouped));
+    Object.keys(shell._likhaeOrderRouteState)
+        .filter((shipmentId) => !activeShipmentIds.has(shipmentId))
+        .forEach((shipmentId) => {
+            removeOrderProgressMarker(shell, shipmentId);
+            delete shell._likhaeOrderRouteState[shipmentId];
+        });
+    shell._likhaeOrderRouteIds = [...activeRouteIds];
 }
 
 async function fetchRoadGeometry(token, from, to) {
@@ -406,7 +704,8 @@ async function drawPersistedRoutes(map, markers, shell, token) {
                         ...route,
                         arrivalAt: Date.now() + (route.duration * 1000),
                     };
-                    drawRouteGeometry(map, routeId, route.geometry, '#800000');
+                    const isOrderRoute = shell.dataset.mapOrderRoute === 'true';
+                    drawRouteGeometry(map, routeId, route.geometry, isOrderRoute ? '#9ca3af' : '#800000', isOrderRoute);
                     if (navigationEnabled && rider.active_rider) {
                         updateNavigationPanel(shell, {
                             rider,
@@ -704,7 +1003,19 @@ function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
         const coordinates = markerCoordinates(markerData);
         if (!coordinates) return;
 
-        const key = String(markerData.id || `${markerData.kind}-${markerData.latitude}-${markerData.longitude}`);
+        const normalizedTitle = String(markerData.title || markerData.label || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const normalizedAddress = String(markerData.popup || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        let key = String(markerData.id || `${markerData.kind}-${markerData.latitude}-${markerData.longitude}`);
+        if (markerData.kind === 'center') {
+            const centerId = key.replace(/-shipment-\d+$/, '');
+            key = centerId !== String(markerData.id || '')
+                ? centerId
+                : `center-${normalizedAddress || `${coordinates[0].toFixed(4)}-${coordinates[1].toFixed(4)}`}`;
+        } else if (markerData.kind === 'destination') {
+            key = `destination-${normalizedTitle}-${normalizedAddress}`;
+        } else if (markerData.kind === 'seller') {
+            key = `seller-${coordinates[0].toFixed(4)}-${coordinates[1].toFixed(4)}`;
+        }
         seen.add(key);
         let marker = shell._likhaeMarkerRefs[key];
         if (!marker) {
@@ -752,6 +1063,7 @@ async function refreshTracking(shell, map, mapboxgl, payload) {
     if (channels.length) shell._likhaeTrackingChannels = [...new Set(channels)];
     shell._likhaeCurrentMarkers = markers;
     renderMarkers(shell, map, mapboxgl, markers);
+    drawOrderRoutes(map, mapboxgl, markers, shell);
     configureRiderLocationUpdates(shell);
     await drawPersistedRoutes(map, markers, shell, shell.dataset.mapToken?.trim() || '');
 
@@ -873,6 +1185,7 @@ async function applyRiderLocationEvent(shell, map, mapboxgl, event) {
     }
 
     renderMarkers(shell, map, mapboxgl, shell._likhaeCurrentMarkers || []);
+    drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || [], shell);
     await drawPersistedRoutes(map, shell._likhaeCurrentMarkers || [], shell, shell.dataset.mapToken?.trim() || '');
     updateStatus(shell, fresh
         ? event?.local_device_gps
@@ -970,7 +1283,7 @@ function syncPollingFallback(shell, map, mapboxgl) {
     pollTracking(shell, map, mapboxgl, { fallback: true });
     shell._likhaeTrackingTimer = window.setInterval(
         () => pollTracking(shell, map, mapboxgl, { fallback: true }),
-        5000,
+        shell.dataset.mapOrderRoute === 'true' ? 12000 : 5000,
     );
 }
 
@@ -1072,6 +1385,7 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
     const map = new mapboxgl.Map({
         container: canvas,
         style: fallback ? OPENFREEMAP_STYLE : (shell.dataset.mapStyle || 'mapbox://styles/mapbox/streets-v12'),
+        ...(shell.dataset.mapProjection ? { projection: shell.dataset.mapProjection } : {}),
         center,
         zoom,
         attributionControl: true,
@@ -1130,6 +1444,7 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
             });
         }
         drawPersistedRoutes(map, markers, shell, token?.trim() || '');
+        drawOrderRoutes(map, mapboxgl, markers, shell);
         configureRiderLocationUpdates(shell);
         bindDeviceRiderLocation(shell, map, mapboxgl);
         updateStatus(shell, fallback

@@ -61,6 +61,35 @@
             $payment = $selectedOrder->payments->first();
                 $shipmentStarted = $allShipments->contains(fn ($shipment) => in_array($shipment->current_status, ['PICKUP_ASSIGNED', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'DELIVERED', 'COMPLETED', 'RETURNED'], true));
             $currentProgressIndex = $selectedOrder->status === 'COMPLETED' ? 4 : ($detailDelivered ? 3 : ($shipmentStarted ? 2 : ($payment ? 1 : 0)));
+            $mapMarkers = $mapMarkers ?? [];
+            $mapLocationList = collect($mapMarkers)->unique(function ($marker): string {
+                $kind = (string) data_get($marker, 'kind', 'destination');
+                $normalize = fn ($value): string => mb_strtolower(trim(preg_replace('/\s+/u', ' ', (string) $value)));
+                if ($kind === 'center') {
+                    $centerId = data_get($marker, 'center_id');
+                    if ($centerId) {
+                        return 'center:'.$centerId;
+                    }
+
+                    $id = (string) data_get($marker, 'id', '');
+                    $centerId = preg_replace('/-shipment-\d+$/', '', $id);
+
+                    return 'center:'.($centerId !== $id ? $centerId : $normalize(data_get($marker, 'popup')));
+                }
+                if ($kind === 'destination') {
+                    return 'destination:'.$normalize(data_get($marker, 'title', data_get($marker, 'label'))).':'.$normalize(data_get($marker, 'popup'));
+                }
+                if ($kind === 'seller') {
+                    return implode(':', [$kind, round((float) data_get($marker, 'latitude', 0), 4), round((float) data_get($marker, 'longitude', 0), 4)]);
+                }
+
+                return 'marker:'.(string) data_get($marker, 'id', $kind);
+            })->values();
+            $mapHasLiveRider = collect($mapMarkers)->contains(fn ($marker): bool => data_get($marker, 'kind') === 'rider' && data_get($marker, 'location_state') === 'live');
+            $mapDeliveryInProgress = $allShipments->contains(fn ($shipment): bool => $shipment->current_status === 'OUT_FOR_DELIVERY');
+            $mapHubTransferInProgress = $allShipments->contains(fn ($shipment): bool => $shipment->transferLegs->contains(fn ($leg): bool => $leg->status === 'IN_TRANSIT'));
+            $mapTrackingInProgress = $allShipments->isNotEmpty() && !$isTerminalOrder;
+            $mapStatusLabel = $mapHasLiveRider ? 'Rider location live' : ($mapHubTransferInProgress ? 'In Transit: Hub to Hub' : ($mapDeliveryInProgress ? 'Out for delivery' : ($detailDelivered ? 'Delivered' : 'Route overview')));
             $progressSteps = [
                 ['label' => 'Order placed', 'date' => $selectedOrder->placed_at],
                 ['label' => 'Payment info confirmed', 'date' => $payment?->initiated_at ?? $payment?->paid_at],
@@ -72,13 +101,17 @@
         <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1>@if($isCancelledOrder && $allShipments->isEmpty())<p>Cancelled · Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@elseif($isCancelledOrder)<p>Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@endif</div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to My Orders</a></div></div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             @unless($isCancelledOrder)
-                <div class="mb-5 overflow-x-auto border-b border-stone-100 pb-5" aria-label="Order progress"><ol class="lk-order-progress">
+                <div class="lk-order-progress-heading">
+                    <div><span>ORDER JOURNEY</span><h2>Delivery progress</h2></div>
+                    <span class="lk-order-progress-heading__count">Step {{ $currentProgressIndex + 1 }} of {{ count($progressSteps) }}</span>
+                </div>
+                <div class="lk-order-progress-track mb-5 overflow-x-auto border-b border-stone-100 pb-5" role="group" aria-label="Order progress"><ol class="lk-order-progress">
                     @foreach($progressSteps as $progressIndex => $progressStep)
                         @php $stepIsCurrent = $progressIndex === $currentProgressIndex; $stepIsComplete = $progressIndex <= $currentProgressIndex; @endphp
                         <li class="{{ $stepIsCurrent ? 'is-current' : ($stepIsComplete ? 'is-complete' : '') }}" data-order-progress-step="{{ $progressStep['label'] }}" @if($stepIsCurrent) aria-current="step" @endif>
-                            <span class="lk-order-progress__node" aria-hidden="true">{{ $stepIsComplete ? '&#10003;' : $progressIndex + 1 }}</span>
+                            <span class="lk-order-progress__node" aria-hidden="true">{{ $stepIsComplete ? '✓' : $progressIndex + 1 }}</span>
                             <span class="lk-order-progress__label">{{ $progressStep['label'] }}</span>
-                            @if($progressStep['date'])<time class="mt-1 text-[10px] text-stone-500" datetime="{{ $progressStep['date']->toIso8601String() }}">{{ $progressStep['date']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</time>@endif
+                            @if($progressStep['date'])<time class="lk-order-progress__date" datetime="{{ $progressStep['date']->toIso8601String() }}"><span>{{ $progressStep['date']->timezone('Asia/Manila')->format('M j, Y') }}</span><span>{{ $progressStep['date']->timezone('Asia/Manila')->format('g:i A') }}</span></time>@endif
                         </li>
                     @endforeach
                 </ol></div>
@@ -89,9 +122,6 @@
                     <div class="flex flex-wrap items-center gap-2">
                         <div data-order-received-action @if(!($selectedOrderActionState['can_confirm_received'] ?? false)) hidden @endif><form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form><p class="mt-1 text-xs text-stone-500" data-auto-receipt-deadline @if(!($selectedOrderActionState['auto_confirm_at'] ?? null)) hidden @endif>@if($selectedOrderActionState['auto_confirm_at'] ?? null)Automatic receipt on {{ $selectedOrderActionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}@endif</p></div>
                         <a class="lk-btn lk-btn-light" data-order-return-action href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}" @if(!($selectedOrderActionState['can_request_return'] ?? false)) hidden @endif>Request Return / Refund</a>
-                        @foreach($selectedOrder->sellerOrders as $sellerOrder)
-                            <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$selectedOrder, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light">{{ $selectedOrder->sellerOrders->count() === 1 ? 'Contact Seller' : 'Contact '.$sellerOrder->sellerProfile?->business_name }}</button></form>
-                        @endforeach
                     </div>
                 </div>
             @endif
@@ -120,10 +150,56 @@
                 </form>
             </section>
         @else
-            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" aria-labelledby="buyer-live-map-heading">
-                <div class="mb-4"><h2 id="buyer-live-map-heading" class="text-lg font-bold text-stone-900">Live Delivery Map</h2><p class="mt-1 text-sm text-stone-600">Saved seller, sorting center, and buyer locations are shown when available. Rider movement appears only during an active delivery phase.</p></div>
-                <x-shared.mapbox :markers="$mapMarkers" title="Live delivery locations for this order" height="280px" :allow-user-location="false" :live-tracking="$allShipments->contains(fn ($shipment) => $shipment->current_status === 'OUT_FOR_DELIVERY')" />
-                <ul class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-stone-600" aria-label="Map marker legend"><li>&#9679; Buyer destination</li><li>&#9679; Seller / sorting center</li><li>&#9679; Rider location when available</li></ul>
+            <section class="lk-order-map-panel" aria-labelledby="buyer-live-map-heading">
+                <header class="lk-order-map-panel__header">
+                    <div>
+                        <span class="lk-order-map-panel__eyebrow">TRACKING OVERVIEW</span>
+                        <h2 id="buyer-live-map-heading">Follow your delivery</h2>
+                        <p>See the saved pickup, sorting center and delivery points. Rider movement appears during active delivery.</p>
+                    </div>
+                    <span class="lk-order-map-status {{ $mapHasLiveRider ? 'is-live' : '' }}"><span aria-hidden="true"></span>{{ $mapStatusLabel }}</span>
+                </header>
+                <div class="lk-order-map-panel__layout">
+                    <div class="lk-order-map-panel__map">
+                        <x-shared.mapbox :markers="$mapMarkers" title="Order route" height="420px" :allow-user-location="false" :live-tracking="$mapTrackingInProgress" :order-route="true" class="lk-order-mapbox" />
+                    </div>
+                    <aside class="lk-order-map-panel__locations" aria-label="Locations shown on the map">
+                        <div class="lk-order-map-panel__locations-head">
+                            <div><span class="lk-order-map-panel__eyebrow">ROUTE POINTS</span><h3>Locations</h3></div>
+                            <span>{{ $mapLocationList->count() }} {{ $mapLocationList->count() === 1 ? 'pin' : 'pins' }}</span>
+                        </div>
+                        @if($mapLocationList->isNotEmpty())
+                            <ol class="lk-order-map-points">
+                                @foreach($mapLocationList as $mapMarker)
+                                    @php
+                                        $markerKind = data_get($mapMarker, 'kind', 'destination');
+                                        $markerTitle = match ($markerKind) {
+                                            'seller' => 'Seller pickup',
+                                            'center' => match (data_get($mapMarker, 'center_role')) {
+                                                'origin' => 'Origin sorting center',
+                                                'destination' => 'Destination sorting center',
+                                                default => 'Sorting center',
+                                            },
+                                            'rider' => data_get($mapMarker, 'assignment_type') === 'PICKUP' ? 'Pickup rider' : 'Delivery rider',
+                                            'destination' => 'Delivery address',
+                                            default => data_get($mapMarker, 'label', 'Route location'),
+                                        };
+                                        $markerDetail = $markerKind === 'rider'
+                                            ? (data_get($mapMarker, 'location_pending') ? 'Waiting for rider GPS' : (data_get($mapMarker, 'location_state') === 'live' ? 'Live location · '.data_get($mapMarker, 'popup', 'Recently updated') : 'Last known location · '.data_get($mapMarker, 'popup', '')))
+                                            : (data_get($mapMarker, 'popup') ?: 'Saved map location');
+                                    @endphp
+                                    <li class="lk-order-map-point lk-order-map-point--{{ $markerKind }}">
+                                        <span class="lk-order-map-point__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12Z"/><circle cx="12" cy="9" r="2.2"/></svg></span>
+                                        <span class="lk-order-map-point__copy"><strong>{{ $markerTitle }}</strong><span>{{ $markerDetail }}</span></span>
+                                    </li>
+                                @endforeach
+                            </ol>
+                        @else
+                            <div class="lk-order-map-empty"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12Z"/><circle cx="12" cy="9" r="2.2"/></svg></span><strong>No route pins yet</strong><p>Saved pickup, sorting center and delivery locations will appear as they become available.</p></div>
+                        @endif
+                        <p class="lk-order-map-panel__note"><span aria-hidden="true">i</span> Rider GPS appears when a delivery is active and the rider is sharing a location.</p>
+                    </aside>
+                </div>
             </section>
         @endif
         @foreach($selectedOrder->sellerOrders as $sellerOrder)
@@ -139,7 +215,6 @@
                     'PREPARING' => 'Preparing parcel',
                     'READY_FOR_PICKUP' => 'Ready for pickup',
                     'PICKUP_ASSIGNED' => 'Pickup rider assigned',
-                    'PICKED_UP' => 'Picked up from seller',
                     'AT_SORTING_CENTER' => 'Arrived at sorting center',
                     'SORTED' => 'Sorted by destination',
                     'ASSIGNED_TO_RIDER' => 'Assigned to delivery rider',
@@ -154,7 +229,10 @@
                     $isCancellationEvent = str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
                         || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:');
                     if ($isCancellationEvent) {
-                        $timelineRows->push(['status' => 'CANCELLED', 'label' => 'Order cancelled', 'event' => $event]);
+                        $previousTimelineRow = $timelineRows->last();
+                        if (!$previousTimelineRow || $previousTimelineRow['status'] !== 'CANCELLED' || $previousTimelineRow['label'] !== 'Order cancelled') {
+                            $timelineRows->push(['status' => 'CANCELLED', 'label' => 'Order cancelled', 'event' => $event]);
+                        }
                         continue;
                     }
 
@@ -165,7 +243,10 @@
                             : 'Buyer confirmed receipt';
                     }
                     if ($eventLabel) {
-                        $timelineRows->push(['status' => $event->status, 'label' => $eventLabel, 'event' => $event]);
+                        $previousTimelineRow = $timelineRows->last();
+                        if (!$previousTimelineRow || $previousTimelineRow['status'] !== $event->status || $previousTimelineRow['label'] !== $eventLabel) {
+                            $timelineRows->push(['status' => $event->status, 'label' => $eventLabel, 'event' => $event]);
+                        }
                     }
                 }
                 if ($isCancelledShipment) {
@@ -314,8 +395,11 @@
                 <p class="mt-3 text-sm text-stone-700">{{ $selectedOrder->cancellation_reason }}</p>
             </details>
         @endif
-        <section class="mt-5 grid gap-3 sm:grid-cols-2">
-            <form method="POST" action="{{ route('buyer.orders.support-conversation', $selectedOrder) }}">@csrf<button type="submit" class="lk-btn lk-btn-light w-full justify-center">Help Center / Admin Support</button></form>
+        <section class="mt-5 flex flex-wrap gap-3" aria-label="Order support and seller contact">
+            <form class="w-full sm:w-auto" method="POST" action="{{ route('buyer.orders.support-conversation', $selectedOrder) }}">@csrf<button type="submit" class="lk-btn lk-btn-light w-full justify-center sm:w-auto">Help Center / Admin Support</button></form>
+            @foreach($selectedOrder->sellerOrders as $sellerOrder)
+                <form class="w-full sm:w-auto" method="POST" action="{{ route('buyer.orders.seller-conversation', [$selectedOrder, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light w-full justify-center sm:w-auto">{{ $selectedOrder->sellerOrders->count() === 1 ? 'Contact Seller' : 'Contact '.$sellerOrder->sellerProfile?->business_name }}</button></form>
+            @endforeach
         </section>
         @if($selectedOrder->status === 'COMPLETED')
             <section id="reviews" class="mt-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
@@ -377,7 +461,7 @@
                             @if(isset($reviewPhotosById[$item->review?->id]))
                                 <div class="flex flex-wrap gap-2">
                                     @foreach($reviewPhotosById[$item->review->id] as $photoUrl)
-                                        <img src="{{ $photoUrl }}" alt="Current review photo" class="h-24 w-24 rounded-lg object-cover">
+                                        <img src="{{ $photoUrl }}" alt="Current review photo" class="h-24 w-24 rounded-lg object-cover" width="96" height="96" loading="lazy" decoding="async">
                                     @endforeach
                                 </div>
                             @endif

@@ -21,11 +21,11 @@
 <script>window.LIKHAE_BUYER_AI_PAGE_CONTEXT = @json($context);</script>
 <section class="likhae-buyer-ai-widget" data-likhae-buyer-ai data-chat-url="{{ route('buyer.ai.chat') }}" data-ai-assistant-enabled="{{ $visible ? '1' : '0' }}" data-ai-response-sound="{{ $aiResponseSound ? '1' : '0' }}" @unless($visible) hidden @endunless>
     <button id="likhaeBuyerAiHead" class="likhae-buyer-ai-head" type="button" aria-label="Open LIKHAE AI Assistant" aria-controls="likhaeBuyerAiWindow" aria-expanded="false" title="LIKHAE AI Assistant · Drag to move">
-        <img class="likhae-buyer-ai-head-icon" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt=""><span class="likhae-buyer-ai-online-dot" aria-hidden="true"></span>
+        <picture><source srcset="{{ asset('images/buyer/likhae-ai-logo.webp') }}" type="image/webp"><img class="likhae-buyer-ai-head-icon" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt="" width="192" height="192"></picture><span class="likhae-buyer-ai-online-dot" aria-hidden="true"></span>
     </button>
     <div id="likhaeBuyerAiWindow" class="likhae-buyer-ai-window" role="dialog" aria-modal="false" aria-label="LIKHAE AI Assistant" hidden>
         <header class="likhae-buyer-ai-header">
-            <img class="likhae-buyer-ai-avatar" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt="">
+            <picture><source srcset="{{ asset('images/buyer/likhae-ai-logo.webp') }}" type="image/webp"><img class="likhae-buyer-ai-avatar" src="{{ asset('images/buyer/likhae-ai-logo.png') }}" alt="" width="192" height="192"></picture>
             <div class="likhae-buyer-ai-title"><strong>LIKHAE AI Assistant</strong><span><i></i><b data-likhae-buyer-ai-state>Offline</b></span></div>
             <div class="likhae-buyer-ai-window-actions">
                 <button id="likhaeBuyerAiToggle" type="button" aria-label="Turn LIKHAE AI Assistant on" aria-pressed="false" title="AI is offline — turn on">&#128683;</button>

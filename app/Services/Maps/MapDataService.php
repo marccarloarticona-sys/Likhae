@@ -4,6 +4,7 @@ namespace App\Services\Maps;
 
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Rider\RiderAssignment;
 use App\Models\User;
 
@@ -31,6 +32,8 @@ class MapDataService
             'riderAssignments.liveLocation',
             'logisticsCenter.address',
             'serviceArea.logisticsCenter.address',
+            'transferLegs.originLogisticsCenter.address',
+            'transferLegs.destinationLogisticsCenter.address',
         ]);
         $tracking = $this->trackingState($shipment, $viewer);
         $markers = [];
@@ -58,12 +61,13 @@ class MapDataService
         foreach ($shipment->riderAssignments ?? [] as $assignment) {
             $canSeeLive = $this->canSeeLive($shipment, $assignment, $viewer);
             $canPublishLocation = $this->canPublishLocation($shipment, $assignment, $viewer);
-            if (! $canSeeLive && ! $canPublishLocation) {
+            $canSeePendingDeliveryLocation = $this->canSeePendingDeliveryLocation($shipment, $assignment, $tracking, $viewer);
+            if (! $canSeeLive && ! $canPublishLocation && ! $canSeePendingDeliveryLocation) {
                 continue;
             }
 
             $marker = $this->assignmentMarker($assignment);
-            if (! $marker && $canPublishLocation) {
+            if (! $marker && ($canPublishLocation || $canSeePendingDeliveryLocation)) {
                 $marker = $this->pendingAssignmentMarker($assignment);
             }
             if ($marker) {
@@ -76,13 +80,32 @@ class MapDataService
             }
         }
 
-        $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
-        $marker = $this->centerMarker($center);
-        if ($marker) {
-            $marker['id'] = 'logistics-center-'.($center?->id ?? 'unknown').'-shipment-'.$shipment->id;
-            $marker['shipment_id'] = $shipment->id;
-            $marker['target_kind'] = 'logistics';
-            $markers[] = $marker;
+        $inTransitTransferLeg = $shipment->transferLegs?->firstWhere('status', ShipmentTransferLeg::IN_TRANSIT);
+        if ($inTransitTransferLeg) {
+            foreach ([
+                ['center' => $inTransitTransferLeg->originLogisticsCenter, 'role' => 'origin'],
+                ['center' => $inTransitTransferLeg->destinationLogisticsCenter, 'role' => 'destination'],
+            ] as $transferStop) {
+                $marker = $this->transferCenterMarker(
+                    $transferStop['center'],
+                    $transferStop['role'],
+                    (int) $shipment->id,
+                    (int) $inTransitTransferLeg->id,
+                );
+                if ($marker) {
+                    $markers[] = $marker;
+                }
+            }
+        } else {
+            $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
+            $marker = $this->centerMarker($center);
+            if ($marker) {
+                $marker['id'] = 'logistics-center-'.($center?->id ?? 'unknown').'-shipment-'.$shipment->id;
+                $marker['center_id'] = $center?->id;
+                $marker['shipment_id'] = $shipment->id;
+                $marker['target_kind'] = 'logistics';
+                $markers[] = $marker;
+            }
         }
 
         $markers = $this->addNavigationDetails($markers, $shipment, $tracking, $viewer);
@@ -230,7 +253,26 @@ class MapDataService
         $marker = $this->addressMarker($center?->address, 'logistics-center-'.($center?->id ?? 'unknown'), 'Logistics center');
         if ($marker) {
             $marker['kind'] = 'center';
+            $marker['center_id'] = $center?->id;
         }
+        return $marker;
+    }
+
+    private function transferCenterMarker(?LogisticsCenter $center, string $role, int $shipmentId, int $legId): ?array
+    {
+        $marker = $this->centerMarker($center);
+        if (! $marker) {
+            return null;
+        }
+
+        $label = $role === 'origin' ? 'Origin sorting center' : 'Destination sorting center';
+        $marker['id'] = 'logistics-center-'.$center->id.'-shipment-'.$shipmentId.'-transfer-'.$legId.'-'.$role;
+        $marker['shipment_id'] = $shipmentId;
+        $marker['center_role'] = $role;
+        $marker['transfer_status'] = ShipmentTransferLeg::IN_TRANSIT;
+        $marker['label'] = $label;
+        $marker['title'] = $label;
+
         return $marker;
     }
 
@@ -472,5 +514,14 @@ class MapDataService
         return $assignment->assignment_type === RiderAssignment::TYPE_PICKUP
             && $assignment->status === 'COMPLETED'
             && $shipment->current_status === 'PICKED_UP';
+    }
+
+    private function canSeePendingDeliveryLocation(Shipment $shipment, RiderAssignment $assignment, array $tracking, ?User $viewer): bool
+    {
+        return $viewer?->isAccountType(User::TYPE_BUYER) === true
+            && $shipment->current_status === 'OUT_FOR_DELIVERY'
+            && $assignment->assignment_type === RiderAssignment::TYPE_DELIVERY
+            && (int) ($tracking['active_assignment_id'] ?? 0) === (int) $assignment->id
+            && (int) $shipment->sellerOrder?->order?->buyer_user_id === (int) $viewer->id;
     }
 }

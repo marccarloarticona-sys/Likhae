@@ -49,7 +49,6 @@
     @elseif (!$isLogistics && $currentMode === 'show')
         @if($order)
             <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Order Details</span><h2>Order #{{ $order['id'] }}</h2><p>Placed {{ $order['date'] }}</p></div><a href="{{ route('seller.orders',['status'=>$order['status_key'],'q'=>$search ?? null,'from_date'=>$fromDate ?? null,'to_date'=>$toDate ?? null]) }}" class="sl-btn sl-btn-ghost">Back to Orders</a></div>
-            <x-shared.mapbox :markers="$order['map_markers']" title="Order delivery map" height="280px" class="sl-map-seller" navigation />
             @include('Seller.partials.parcel-measurements', ['order' => $order])
             @if(filled($order['buyer_note'] ?? null))
                 <section class="sl-card" data-buyer-note><h3>Buyer Note</h3><p class="whitespace-pre-line">{{ $order['buyer_note'] }}</p></section>

@@ -166,7 +166,7 @@
                                 @endphp
                                 <article class="rounded-xl border border-stone-200 p-3 sm:p-4">
                                     <div class="flex gap-3">
-                                        <img class="h-16 w-16 shrink-0 rounded-lg border border-stone-100 bg-stone-50 object-cover" src="{{ $imageUrl($product, $variant) }}" alt="{{ $product->name }}">
+                                        <img class="h-16 w-16 shrink-0 rounded-lg border border-stone-100 bg-stone-50 object-cover" src="{{ $imageUrl($product, $variant) }}" alt="{{ $product->name }}" width="64" height="64" decoding="async">
                                         <div class="min-w-0 flex-1">
                                             <strong class="block text-sm font-semibold text-stone-900">{{ $product->name }}</strong>
                                             <span class="mt-1 block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }}</span>

@@ -1320,7 +1320,7 @@
         >
             <div class="lk-detail-gallery-main">
                 @if($images->isNotEmpty())
-                    <img src="{{ $images->first() }}" alt="{{ $name }}" data-gallery-main>
+                    <img src="{{ $images->first() }}" alt="{{ $name }}" width="900" height="900" fetchpriority="high" decoding="async" data-gallery-main>
                 @else
                     <div class="lk-detail-image-placeholder">
                         <svg
@@ -1350,6 +1350,10 @@
                             <img
                                 src="{{ $galleryImage }}"
                                 alt="{{ $name }} view {{ $index + 1 }}"
+                                width="96"
+                                height="96"
+                                loading="lazy"
+                                decoding="async"
                             >
                         </button>
                     @endforeach
@@ -1782,7 +1786,7 @@
                             @if($reviewPhotos->isNotEmpty())
                                 <div class="mt-3 flex flex-wrap gap-2">
                                     @foreach($reviewPhotos as $photoUrl)
-                                        <img class="max-h-64 max-w-full rounded-lg object-contain" src="{{ $photoUrl }}" alt="Photo shared with buyer review" loading="lazy">
+                                        <img class="max-h-64 max-w-full rounded-lg object-contain" src="{{ $photoUrl }}" alt="Photo shared with buyer review" loading="lazy" decoding="async">
                                     @endforeach
                                 </div>
                             @endif

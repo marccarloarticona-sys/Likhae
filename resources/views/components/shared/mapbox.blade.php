@@ -10,6 +10,8 @@
     'userLocationTarget' => null,
     'navigation' => false,
     'liveTracking' => true,
+    'orderRoute' => false,
+    'projection' => null,
     'pinFormId' => null,
     'class' => '',
 ])
@@ -26,6 +28,8 @@
     data-map-rider-gps="{{ $riderGps ? 'true' : 'false' }}"
     data-map-live-device-gps="{{ $liveDeviceGps ? 'true' : 'false' }}"
     data-map-live="{{ auth()->check() && $liveTracking ? 'true' : 'false' }}"
+    data-map-order-route="{{ $orderRoute ? 'true' : 'false' }}"
+    data-map-projection="{{ $projection }}"
     data-map-navigation="{{ $navigation ? 'true' : 'false' }}"
     data-map-pin-form="{{ $pinFormId }}"
     style="--lk-map-height: {{ $height }}"
@@ -44,6 +48,13 @@
         </div>
     </div>
     <div class="lk-map-canvas" data-map-canvas role="application" aria-label="{{ $title }}"></div>
+    @if($orderRoute)
+        <div class="lk-order-route-legend" aria-label="Order route legend">
+            <span><i class="is-traveled" aria-hidden="true"></i>Confirmed / traveled</span>
+            <span><i class="is-active-transfer" aria-hidden="true"></i>Hub transfer active</span>
+            <span><i class="is-remaining" aria-hidden="true"></i>Remaining road</span>
+        </div>
+    @endif
     @if($navigation)
         <div class="lk-map-navigation" data-map-navigation-panel hidden>
             <div class="lk-map-navigation__head">
