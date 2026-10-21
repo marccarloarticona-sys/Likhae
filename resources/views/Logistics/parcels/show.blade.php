@@ -1,11 +1,28 @@
 @extends('Logistics.app')
 @section('title','Parcel '.$shipment->tracking_number)
 @section('content')
+@php
+    [$nextStep, $nextActor] = match ($shipment->current_status) {
+        'PLACED', 'CONFIRMED', 'PREPARING' => ['Seller prepares and marks the parcel ready for pickup.', 'Seller'],
+        'READY_FOR_PICKUP' => ['Assign an eligible pickup rider.', 'Logistics'],
+        'PICKUP_ASSIGNED' => ['Collect the parcel from the seller and scan its waybill.', 'Pickup rider'],
+        'PICKED_UP' => ['Scan the parcel into the authorized sorting center.', 'Logistics'],
+        'AT_SORTING_CENTER' => ['Sort the parcel to its destination area.', 'Logistics'],
+        'SORTED' => ['Assign an eligible delivery rider in the destination area.', 'Logistics'],
+        'ASSIGNED_TO_RIDER' => ['Accept the delivery assignment and begin the route.', 'Delivery rider'],
+        'OUT_FOR_DELIVERY' => ['Complete the delivery or record the attempt outcome.', 'Delivery rider'],
+        'DELIVERY_FAILED' => ['Review the failed attempt and arrange the next delivery or return step.', 'Logistics'],
+        'DELIVERED' => ['Confirm receipt to complete the order.', 'Buyer'],
+        'LOST', 'DAMAGED' => ['Review the exception and record its resolution.', 'Logistics'],
+        default => ['No further fulfillment action is currently required.', 'No action pending'],
+    };
+@endphp
 <div class="space-y-6">
     <header><a class="text-sm text-primary" href="{{ route('logistics.parcels') }}">â† Back to Parcels</a><h1 class="mt-3 text-2xl font-bold text-ink">{{ $shipment->tracking_number }}</h1><p class="mt-1 text-sm font-semibold text-primary">{{ str($shipment->current_status)->headline() }}</p></header>
     @if(session('status'))<div role="status" class="rounded-lg border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div role="alert" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><strong>Action could not be completed.</strong><ul class="mt-2 list-disc pl-5">@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
     <div class="flex flex-wrap gap-2">@if($shipment->sellerOrder?->sellerProfile?->user)<a class="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-ink" href="{{ route('logistics.messages', ['recipient_user_id' => $shipment->sellerOrder->sellerProfile->user_id, 'shipment_id' => $shipment->id]) }}">Message Seller</a>@endif @php($assignedRider = $shipment->riderAssignments->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED'])->sortByDesc('id')->first()) @if($assignedRider?->riderProfile?->user)<a class="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-ink" href="{{ route('logistics.messages', ['recipient_user_id' => $assignedRider->riderProfile->user_id, 'shipment_id' => $shipment->id]) }}">Message Assigned Rider</a>@endif</div>
+    <x-shared.status-guidance :status="str($shipment->current_status)->replace('_', ' ')->title()" :next="$nextStep" :actor="$nextActor" />
     <x-shared.mapbox :markers="$mapMarkers" title="Shipment location" height="220px" user-location-target="destination" navigation />
     @if($shipment->orderItem?->hasAdditionalCare())<div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold uppercase text-amber-900">Fragile / Additional Care â€” handling flag</div>@endif
     <section class="grid gap-4 md:grid-cols-2"><article class="border border-line bg-surface p-5"><h2 class="font-semibold">Order and destination</h2><dl class="mt-4 space-y-2 text-sm"><div><dt class="text-muted">Order</dt><dd>{{ $shipment->sellerOrder?->seller_order_number }}</dd></div><div><dt class="text-muted">Seller</dt><dd>{{ $shipment->sellerOrder?->sellerProfile?->business_name }}</dd></div><div><dt class="text-muted">Buyer</dt><dd>{{ $shipment->sellerOrder?->order?->buyer?->name }}</dd></div><div><dt class="text-muted">Address</dt><dd>{{ $shipment->sellerOrder?->order?->address?->formatted() }}</dd></div><div><dt class="text-muted">Delivery area</dt><dd>{{ $shipment->serviceArea?->name ?? 'Not assigned' }}</dd></div></dl></article>

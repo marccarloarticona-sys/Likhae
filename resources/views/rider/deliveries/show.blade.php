@@ -25,6 +25,21 @@
         </div>
     </section>
 
+    @php
+        [$deliveryNextStep, $deliveryNextActor] = match ($parcel['status']) {
+            'ASSIGNED' => $parcel['offer_expired']
+                ? ['This offer expired and will return to the dispatch queue.', 'Logistics']
+                : ['Accept this assignment or decline it with a reason.', 'You, the delivery rider'],
+            'ACCEPTED' => ['Start the delivery route when ready to depart.', 'You, the delivery rider'],
+            'IN_PROGRESS' => ! $parcel['has_buyer_pin']
+                ? ['Wait for the Buyer to confirm the exact destination pin; contact them if needed.', 'Buyer'],
+                : ['Scan the waybill, collect the displayed COD amount if due, then upload proof or record the attempt.', 'You, the delivery rider'],
+            'COMPLETED' => ['Confirm receipt in My Orders, or wait for the automatic receipt deadline.', 'Buyer'],
+            default => ['Dispatch will review this assignment and route it to an eligible rider.', 'Logistics'],
+        };
+    @endphp
+    <x-shared.status-guidance :status="$parcel['shipment_status_label'].' · '.$parcel['status_label']" :next="$deliveryNextStep" :actor="$deliveryNextActor" />
+
     @if(!$parcel['has_buyer_pin'])
         <section class="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-950" aria-labelledby="rider-pin-required-heading">
             <h2 id="rider-pin-required-heading" class="font-bold">DELIVERY PIN REQUIRED</h2>

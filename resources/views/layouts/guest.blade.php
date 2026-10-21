@@ -77,7 +77,7 @@
             </div>
         </form>
     </dialog>
-    <div id="lkBuyerToast" class="lk-toast" aria-live="polite" aria-atomic="true"></div>
+    <x-shared.feedback-region workspace="guest" />
     @include('partials.confirm-action-modal')
     @include('partials.darkmode')
     @stack('scripts')

@@ -62,6 +62,7 @@
 
     @vite([
         'resources/css/logistic/app.css',
+        'resources/css/shared/status-guidance.css',
         'resources/css/shared/modal-refresh.css',
         'resources/css/shared/likhae-workspace-ai.css',
         'resources/css/shared/workspace-sidebar.css',
@@ -325,6 +326,7 @@
     @if(data_get(auth()->user()?->notification_preferences, 'logistics_ai_assistant_enabled', true))
         <x-workspace.ai-assistant workspace="logistics" :page="$workspaceAiPage" :page-title="$workspaceAiTitle" />
     @endif
+    <x-shared.feedback-region workspace="logistics" />
     @stack('scripts')
 
 </body>

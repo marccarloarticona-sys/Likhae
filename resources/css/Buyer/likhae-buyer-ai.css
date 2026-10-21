@@ -5,4 +5,5 @@
 .likhae-buyer-ai-widget[hidden]{display:none!important}
 
 .likhae-buyer-ai-head{touch-action:none;user-select:none;cursor:grab}.likhae-buyer-ai-head.is-dragging{cursor:grabbing;transform:none!important;transition:none!important}
+.likhae-buyer-ai-head.is-pressed{transform:none!important;transition:none!important}
 .likhae-buyer-ai-header{touch-action:none;user-select:none;cursor:grab}.likhae-buyer-ai-header.is-dragging{cursor:grabbing}

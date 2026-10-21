@@ -16,7 +16,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    @vite(['resources/css/seller/seller.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/seller/seller.js'])
+    @vite(['resources/css/seller/seller.css', 'resources/css/shared/status-guidance.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/seller/seller.js'])
     @unless(request()->routeIs('seller.messages'))
         @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
     @endunless
@@ -41,7 +41,7 @@
         @include('components.seller.footer')
     </div>
 
-    <div class="sl-toast" data-sl-toast data-flash="{{ session('status') }}" data-error="{{ $errors->first() }}" role="status" aria-live="polite"></div>
+    <x-shared.feedback-region workspace="seller" />
     <x-notification-popover />
     @include('partials.confirm-action-modal')
     @if($sellerAiEnabled)

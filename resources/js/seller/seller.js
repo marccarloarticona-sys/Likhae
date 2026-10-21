@@ -1,4 +1,5 @@
 import '../address/forms.js';
+import '../shared/feedback.js';
 import '../shared/echo.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
@@ -23,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const showToast = (message) => {
+        if (window.lkFeedback) return window.lkFeedback.show(message);
         const toast = select('[data-sl-toast]');
         if (!toast || !message) return;
         window.clearTimeout(toastTimer);

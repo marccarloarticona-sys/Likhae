@@ -7,7 +7,17 @@
 @endpush
 
 @section('content')
-@php($allResolved = $items->every(fn ($item) => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true)))
+@php
+    $allResolved = $items->every(fn ($item) => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
+    $pickupStatusLabel = match ($pickup->status) {
+        'LOADING' => 'Assigned',
+        'READY' => 'Accepted',
+        'IN_PROGRESS' => $pickupFinished ? 'Seller pickup complete' : 'In progress',
+        'EN_ROUTE_TO_HUB' => 'In transit to logistics center',
+        'COMPLETED' => 'Completed',
+        default => str($pickup->status)->headline(),
+    };
+@endphp
 <div class="flex flex-col gap-8">
     @if(session('status'))
         <div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>
@@ -20,7 +30,21 @@
         <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Pickup Batch #P-{{ $pickup->id }}</span>
         <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup->seller?->business_name ?? 'Seller unavailable' }}</h1>
         <p class="mt-2 text-sm font-semibold text-muted">{{ $total }} {{ str('parcel')->plural($total) }} Â· {{ $collected }}/{{ $total }} collected</p>
-        <p class="mt-4 text-sm text-muted">Status: <strong class="text-ink">{{ match($pickup->status) { 'LOADING' => 'Assigned', 'READY' => 'Accepted', 'IN_PROGRESS' => $pickupFinished ? 'Seller pickup complete' : 'In progress', 'EN_ROUTE_TO_HUB' => 'In transit to logistics center', 'COMPLETED' => 'Completed', default => str($pickup->status)->headline() } }}</strong></p>
+        <p class="mt-4 text-sm text-muted">Status: <strong class="text-ink">{{ $pickupStatusLabel }}</strong></p>
+
+        @php
+            [$pickupNextStep, $pickupNextActor] = match ($pickup->status) {
+                'LOADING' => ['Accept the pickup assignment.', 'You, the pickup rider'],
+                'READY' => ['Start the pickup trip and travel to the seller.', 'You, the pickup rider'],
+                'IN_PROGRESS' => $pickupFinished
+                    ? ['Complete the seller pickup and start the route to the logistics center.', 'You, the pickup rider']
+                    : ['Scan each assigned waybill; record a reason for parcels not collected.', 'You, the pickup rider'],
+                'EN_ROUTE_TO_HUB' => ['Hand the collected parcels to Logistics for intake scans.', 'You, the pickup rider'],
+                'COMPLETED' => ['This pickup batch is closed.', 'No action pending'],
+                default => ['Review the pickup batch for its next action.', 'Pickup rider'],
+            };
+        @endphp
+        <x-shared.status-guidance :status="$pickupStatusLabel" :next="$pickupNextStep" :actor="$pickupNextActor" />
 
         <ol class="mt-6 grid gap-2 text-xs sm:grid-cols-4">
             @foreach(['Assigned', 'Accepted', 'Scan each parcel at seller', 'Logistics intake'] as $index => $step)

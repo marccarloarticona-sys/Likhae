@@ -1,4 +1,5 @@
 import '../shared/echo.js';
+import '../shared/feedback.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
 
@@ -159,6 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const toastRegion = one('[data-toast-region]');
     const showToast = (message) => {
+        if (window.lkFeedback) return window.lkFeedback.show(message);
         if (!toastRegion || !message) return;
         const toast = document.createElement('div');
         toast.className = 'ad-toast';

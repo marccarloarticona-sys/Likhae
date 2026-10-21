@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../shared/feedback.css";
 
 @source "../../views/Admin/**/*.blade.php";
 @source "../../views/components/admin/**/*.blade.php";

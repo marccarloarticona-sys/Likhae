@@ -288,11 +288,31 @@
                 $shipmentCardMessage = $isCancelledShipment
                     ? 'This parcel was cancelled before pickup and was not handed to a rider.'
                     : null;
+                [$shipmentNextStep, $shipmentNextActor] = $isCancelledShipment
+                    ? ['No further delivery action is required for this parcel.', 'No action pending']
+                    : match ($shipmentStatus) {
+                        'PLACED', 'CONFIRMED', 'PREPARING' => ['Wait for the seller to prepare and confirm the parcel.', 'Seller'],
+                        'READY_FOR_PICKUP' => ['Logistics will assign a pickup rider.', 'Logistics'],
+                        'PICKUP_ASSIGNED' => ['The pickup rider will collect the parcel from the seller.', 'Pickup rider'],
+                        'PICKED_UP' => ['The sorting center will scan the parcel into its facility.', 'Logistics'],
+                        'AT_SORTING_CENTER' => ['The parcel will be sorted toward your delivery area.', 'Logistics'],
+                        'SORTED' => ['A delivery rider will be assigned in your area.', 'Logistics'],
+                        'ASSIGNED_TO_RIDER' => ['The delivery rider will accept and start the route.', 'Delivery rider'],
+                        'OUT_FOR_DELIVERY' => ['Keep your phone available while the rider attempts delivery.', 'Delivery rider'],
+                        'DELIVERY_FAILED' => ['Check for a new attempt or contact the delivery team if needed.', 'Logistics / delivery rider'],
+                        'DELIVERED' => ($selectedOrderActionState['can_confirm_received'] ?? false)
+                            ? ['Check the parcel, then confirm receipt for the order.', 'Buyer']
+                            : ['Wait for the remaining parcels; confirm receipt when the order is ready.', 'Buyer'],
+                        'COMPLETED' => ['You can leave a review for the delivered products.', 'Buyer'],
+                        'RETURNED' => ['Check Returns & Refunds for the seller review and refund update.', 'Seller / refund payer'],
+                        default => ['Follow the tracking timeline for the next scan.', 'Logistics'],
+                    };
             @endphp
             <section class="mt-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm" aria-labelledby="shipment-{{ $shipment->id }}-heading">
                 <div class="flex flex-wrap items-start justify-between gap-3"><div><span class="text-xs font-semibold uppercase tracking-wide text-stone-500">Store</span><h2 id="shipment-{{ $shipment->id }}-heading" class="text-lg font-bold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name }}</h2><p class="mt-1 text-sm text-stone-600">{{ $sellerOrder->seller_order_number }}</p></div></div>
                     <div class="mt-3 flex flex-wrap items-center gap-2"><span class="rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-900" data-shipment-card-status-id="{{ $shipment->id }}" data-shipment-returned-label="{{ $hasReturnRefundRequest ? 'Parcel returned to seller' : 'Returned' }}">{{ $shipmentCardStatusLabel }}</span>@unless($isTerminalOrder)<span class="text-xs text-stone-500">Tracking: <strong class="text-stone-700">{{ $shipment->tracking_number }}</strong></span>@endunless</div>
                     @if($shipmentCardMessage)<p class="mt-3 text-sm text-stone-700">{{ $shipmentCardMessage }}</p>@endif
+                    <x-shared.status-guidance :status="$shipmentCardStatusLabel" :next="$shipmentNextStep" :actor="$shipmentNextActor" :shipment-id="$shipment->id" />
                     <details class="mt-4 rounded-xl border border-stone-100 px-4 py-3"><summary class="cursor-pointer text-sm font-bold text-stone-900">{{ $isTerminalOrder ? 'Status history' : 'Tracking Timeline' }}</summary><ol class="lk-shipment-timeline mt-4" aria-label="Tracking timeline for {{ $shipment->tracking_number }}" data-shipment-timeline="{{ $shipment->id }}" data-shipment-current-status="{{ $shipmentStatus }}" data-shipment-cancelled="{{ $isCancelledShipment ? 'true' : 'false' }}">
                         @foreach($timelineRows as $timelineIndex => $timelineRow)
                             @php

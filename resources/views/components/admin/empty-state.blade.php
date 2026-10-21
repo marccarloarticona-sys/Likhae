@@ -5,9 +5,9 @@
     'href' => null,
 ])
 
-<div {{ $attributes->class('ad-empty') }}>
-    <span class="ad-empty-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg></span>
+<div {{ $attributes->class('lk-shared-empty-state ad-empty') }}>
+    <span class="lk-shared-empty-state__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v14H4zM8 3h8v3M8 11h8M8 15h5"/></svg></span>
     <h3>{{ $title }}</h3>
     <p>{{ $message }}</p>
-    @if($action && $href)<a class="ad-btn ad-btn-primary" href="{{ $href }}">{{ $action }}</a>@endif
+    @if($action && $href)<a class="ad-btn ad-btn-primary lk-shared-empty-state__action" href="{{ $href }}">{{ $action }}</a>@endif
 </div>
