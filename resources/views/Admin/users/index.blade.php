@@ -24,6 +24,9 @@
         'banned' => 'Permanently banned',
         'deactivated' => 'Deactivated',
     ];
+    if (! ($accountEnforcementReady ?? false)) {
+        unset($statuses['banned']);
+    }
     $statusClasses = [
         'pending' => 'under-review',
         'active' => 'active',
@@ -90,6 +93,12 @@
             <small>Registered logistics accounts</small>
         </div>
     </section>
+
+    @unless($accountEnforcementReady ?? false)
+        <div class="ad-note" role="status">
+            Suspension and permanent ban controls are unavailable until the account enforcement database migration is applied.
+        </div>
+    @endunless
 
     <nav class="ad-tabs" aria-label="User role">
         @foreach($roles as $key => $label)

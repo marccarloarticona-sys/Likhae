@@ -44,7 +44,10 @@ class AdminUserController extends Controller
 
     public function index(Request $request): View
     {
-        User::expireDueSuspensions();
+        $accountEnforcementReady = User::accountEnforcementSchemaReady();
+        if ($accountEnforcementReady) {
+            User::expireDueSuspensions();
+        }
 
         $accountTypes = [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_ADMIN, User::TYPE_LOGISTICS];
         $role = strtolower((string) $request->query('role', $request->query('type', 'all')));
@@ -63,19 +66,25 @@ class AdminUserController extends Controller
         $role = array_key_exists($role, $roleTypes) ? $role : 'all';
         $status = strtolower((string) $request->query('status', 'all'));
         $status = in_array($status, ['pending', 'active', 'suspended', 'deactivated', 'banned'], true) ? $status : 'all';
+        if ($status === 'banned' && ! $accountEnforcementReady) {
+            $status = 'all';
+        }
         $search = trim((string) $request->query('q', ''));
 
         $users = User::query()
             ->whereIn('account_type', $accountTypes)
             ->when($role !== 'all', fn ($query) => $query->where('account_type', $roleTypes[$role]))
-            ->when($status !== 'all', function ($query) use ($status): void {
+            ->when($status !== 'all', function ($query) use ($status, $accountEnforcementReady): void {
                 if ($status === 'banned') {
                     $query->whereNotNull('permanently_banned_at');
 
                     return;
                 }
 
-                $query->whereNull('permanently_banned_at')->where('status', strtoupper($status));
+                if ($accountEnforcementReady) {
+                    $query->whereNull('permanently_banned_at');
+                }
+                $query->where('status', strtoupper($status));
             })
             ->when($search !== '', function ($query) use ($search): void {
                 $query->where(function ($query) use ($search): void {
@@ -99,13 +108,16 @@ class AdminUserController extends Controller
             'delivery' => User::query()->where('account_type', User::TYPE_LOGISTICS)->count(),
         ];
 
-        return view('Admin.users.index', compact('users', 'role', 'status', 'search', 'stats'));
+        return view('Admin.users.index', compact('users', 'role', 'status', 'search', 'stats', 'accountEnforcementReady'));
     }
 
     public function show(User $user): View
     {
         $this->ensureViewable($user);
-        $user->isActive();
+        $accountEnforcementReady = User::accountEnforcementSchemaReady();
+        if ($accountEnforcementReady) {
+            $user->isActive();
+        }
         $user->load(['addresses', 'sellerProfile', 'logisticsCenter', 'registrationApplications.documents']);
         $changes = AuditLog::query()
             ->with('actor')
@@ -132,6 +144,7 @@ class AdminUserController extends Controller
             'warnings' => $warnings,
             'warningCount' => $warningCount,
             'warningCategories' => self::ACCOUNT_WARNING_CATEGORIES[$user->account_type] ?? [],
+            'accountEnforcementReady' => $accountEnforcementReady,
         ]);
     }
 
@@ -257,6 +270,10 @@ class AdminUserController extends Controller
     public function suspend(Request $request, User $user): RedirectResponse
     {
         $this->ensureAdminManaged($user);
+        if (! User::accountEnforcementSchemaReady()) {
+            return back()->withErrors(['account_access' => 'Suspension controls are unavailable until the account enforcement database migration is applied.']);
+        }
+
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
             'duration' => ['required', Rule::in(['week', 'month'])],
@@ -313,6 +330,10 @@ class AdminUserController extends Controller
     public function reactivate(Request $request, User $user): RedirectResponse
     {
         $this->ensureAdminManaged($user);
+        if (! User::accountEnforcementSchemaReady()) {
+            return back()->withErrors(['account_access' => 'Reactivation controls are unavailable until the account enforcement database migration is applied.']);
+        }
+
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
         ]);
@@ -359,6 +380,10 @@ class AdminUserController extends Controller
     public function permanentlyBan(Request $request, User $user): RedirectResponse
     {
         $this->ensureAdminManaged($user);
+        if (! User::accountEnforcementSchemaReady()) {
+            return back()->withErrors(['account_access' => 'Permanent ban controls are unavailable until the account enforcement database migration is applied.']);
+        }
+
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
             'reference' => ['nullable', 'string', 'max:2000'],

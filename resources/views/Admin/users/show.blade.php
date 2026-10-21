@@ -53,7 +53,9 @@
     <section class="ad-card" id="account-access">
         <header class="ad-card-head"><h2>Account access</h2></header>
         <div class="ad-card-body">
-            @if($managedAccount && in_array($status, ['active', 'suspended'], true))
+            @unless($accountEnforcementReady)
+                <p>Suspension and permanent ban controls are unavailable until the account enforcement database migration is applied.</p>
+            @elseif($managedAccount && in_array($status, ['active', 'suspended'], true))
                 @php($suspended = $user->isSuspended())
                 <p>
                     @if($suspended)
@@ -95,7 +97,7 @@
                 <p>This account is {{ $status }}. Temporary suspension controls are available for active accounts.</p>
             @endif
 
-            @if($managedAccount && ! $user->isPermanentlyBanned())
+            @if($accountEnforcementReady && $managedAccount && ! $user->isPermanentlyBanned())
                 <div class="ad-form-section" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--ad-border,#e7e1dc);">
                     <h3>Permanent ban</h3>
                     <p>Blocks this account from signing in or using LIKHAE. A permanent ban does not expire.</p>

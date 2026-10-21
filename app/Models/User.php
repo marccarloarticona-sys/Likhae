@@ -25,6 +25,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class User extends Authenticatable implements MustVerifyEmailContract
 {
@@ -143,8 +144,18 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return $this->permanently_banned_at !== null;
     }
 
+    public static function accountEnforcementSchemaReady(): bool
+    {
+        return Schema::hasColumn('users', 'suspended_until')
+            && Schema::hasColumn('users', 'permanently_banned_at');
+    }
+
     public static function expireDueSuspensions(): int
     {
+        if (! self::accountEnforcementSchemaReady()) {
+            return 0;
+        }
+
         $expired = 0;
 
         static::query()
