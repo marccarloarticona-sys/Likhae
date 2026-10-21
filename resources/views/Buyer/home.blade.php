@@ -842,7 +842,7 @@
         border: 0;
         border-radius: 18px;
         background-color: #f5e8da;
-        background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 18%, rgba(255, 251, 246, .84) 28%, rgba(255, 251, 246, .56) 38%, rgba(255, 251, 246, .28) 48%, rgba(255, 251, 246, .08) 58%, rgba(255, 251, 246, 0) 68%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 18%, rgba(255, 251, 246, .9) 30%, rgba(255, 251, 246, .8) 42%, rgba(255, 251, 246, .64) 54%, rgba(255, 251, 246, .45) 66%, rgba(255, 251, 246, .25) 80%, rgba(255, 251, 246, .08) 92%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
         background-position: center right, right center;
         background-size: cover, auto 100%;
         background-repeat: no-repeat;
@@ -1177,7 +1177,7 @@
 
     html.dark .lk-home-page .lk-home-editorial-hero {
         border-color: #49342b;
-        background-image: linear-gradient(90deg, rgba(23, 18, 16, .93) 0%, rgba(23, 18, 16, .9) 18%, rgba(23, 18, 16, .76) 28%, rgba(23, 18, 16, .52) 38%, rgba(23, 18, 16, .26) 48%, rgba(23, 18, 16, .07) 58%, rgba(23, 18, 16, 0) 68%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 18%, rgba(23, 18, 16, .84) 30%, rgba(23, 18, 16, .72) 42%, rgba(23, 18, 16, .56) 54%, rgba(23, 18, 16, .38) 66%, rgba(23, 18, 16, .22) 80%, rgba(23, 18, 16, .06) 92%, rgba(23, 18, 16, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
     }
 
     html.dark .lk-home-page .lk-home-editorial-title,
@@ -1246,11 +1246,11 @@
             background-position: center right, 62% center;
             background-size: 100% 100%, cover;
             background-repeat: no-repeat;
-            background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .95) 30%, rgba(255, 251, 246, .82) 42%, rgba(255, 251, 246, .62) 54%, rgba(255, 251, 246, .38) 66%, rgba(255, 251, 246, .16) 78%, rgba(255, 251, 246, .03) 90%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+            background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 28%, rgba(255, 251, 246, .9) 40%, rgba(255, 251, 246, .78) 52%, rgba(255, 251, 246, .6) 64%, rgba(255, 251, 246, .4) 76%, rgba(255, 251, 246, .2) 88%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
         }
 
         html.dark .lk-home-page .lk-home-editorial-hero {
-            background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .9) 30%, rgba(23, 18, 16, .76) 42%, rgba(23, 18, 16, .54) 54%, rgba(23, 18, 16, .31) 66%, rgba(23, 18, 16, .12) 78%, rgba(23, 18, 16, .02) 90%, rgba(23, 18, 16, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+            background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 28%, rgba(23, 18, 16, .84) 40%, rgba(23, 18, 16, .7) 52%, rgba(23, 18, 16, .52) 64%, rgba(23, 18, 16, .34) 76%, rgba(23, 18, 16, .16) 88%, rgba(23, 18, 16, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
         }
 
         .lk-home-page .lk-home-editorial-copy {
