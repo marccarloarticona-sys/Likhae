@@ -2639,6 +2639,13 @@ html.dark .ad-category-modal { background: rgba(0, 0, 0, .7); }
 .ad-marketing-page { display: grid; gap: 16px; }
 .ad-marketing-tabs { width: fit-content; min-width: min(100%, 260px); }
 .ad-marketing-tabs a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.ad-marketing-feature-key { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ad-marketing-feature-card { padding: 13px 15px; border: 1px solid var(--ad-border); border-top-width: 3px; border-radius: 11px; background: var(--ad-card); }
+.ad-marketing-feature-card.is-campaign { border-top-color: #8b3c34; }
+.ad-marketing-feature-card.is-announcement { border-top-color: #3d7780; }
+.ad-marketing-feature-card.is-current { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ad-text) 8%, transparent); }
+.ad-marketing-feature-card > span { color: var(--ad-text); font-size: 10px; font-weight: 800; letter-spacing: .02em; }
+.ad-marketing-feature-card > p { margin: 5px 0 0; color: var(--ad-muted); font-size: 9px; line-height: 1.5; }
 .ad-marketing-page .ad-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .ad-marketing-page .ad-card-head h2 { margin: 2px 0 4px; color: var(--ad-text); font-size: 16px; }
 .ad-marketing-page .ad-card-head p { margin: 0; color: var(--ad-muted); font-size: 9px; line-height: 1.5; }
@@ -2672,6 +2679,7 @@ html.dark .ad-category-modal { background: rgba(0, 0, 0, .7); }
 html.dark .ad-marketing-modal { background: rgba(0, 0, 0, .72); }
 
 @media (max-width: 760px) {
+    .ad-marketing-feature-key { grid-template-columns: 1fr; }
     .ad-marketing-announcement-layout { grid-template-columns: 1fr; }
     .ad-marketing-page .ad-page-head { align-items: flex-start; flex-direction: column; }
     .ad-marketing-page .ad-marketing-actions { align-items: flex-start; flex-wrap: wrap; }

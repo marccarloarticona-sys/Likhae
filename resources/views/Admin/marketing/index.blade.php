@@ -10,7 +10,7 @@
         <div>
             <span class="ad-overline">Marketplace Growth</span>
             <h2>Platform Marketing</h2>
-            <p>Manage LIKHAE platform voucher campaigns and marketplace announcements.</p>
+            <p>Campaigns create checkout discounts. Announcements send informational messages without changing prices.</p>
         </div>
         @if($section === 'campaigns' && $campaignsReady)
             <button type="button" class="ad-btn ad-btn-primary" data-marketing-campaign-open="create">+ Create Campaign</button>
@@ -25,13 +25,24 @@
         <a class="ad-tab {{ $section === 'announcements' ? 'is-active' : '' }}" href="{{ route('admin.marketing', ['section' => 'announcements']) }}" @if($section === 'announcements') aria-current="page" @endif>Announcements</a>
     </nav>
 
+    <div class="ad-marketing-feature-key" role="group" aria-label="Campaigns and announcements explained">
+        <div class="ad-marketing-feature-card is-campaign {{ $section === 'campaigns' ? 'is-current' : '' }}" role="group" aria-label="Campaigns: checkout discounts">
+            <span>Campaigns · checkout discounts</span>
+            <p>Buyers redeem voucher codes at checkout. Eligible orders receive a price discount.</p>
+        </div>
+        <div class="ad-marketing-feature-card is-announcement {{ $section === 'announcements' ? 'is-current' : '' }}" role="group" aria-label="Announcements: informational messages">
+            <span>Announcements · information messages</span>
+            <p>Send in-app updates to an audience. They do not create voucher redemptions or change order totals.</p>
+        </div>
+    </div>
+
     @if($section === 'campaigns')
         <section class="ad-card ad-card-body" aria-labelledby="marketing-campaigns-heading">
             <header class="ad-card-head">
                 <div>
                     <span class="ad-overline">Voucher Campaigns</span>
                     <h2 id="marketing-campaigns-heading">Platform Campaigns</h2>
-                    <p>Buyer vouchers owned by LIKHAE and available across participating seller shops.</p>
+                    <p>Platform-managed buyer vouchers redeemable across participating seller shops at checkout.</p>
                 </div>
             </header>
 
@@ -87,7 +98,7 @@
                     </table>
                 </div>
                 {{ $campaigns->links() }}
-                <p class="ad-marketing-finance-note">Discount funding remains unresolved and requires finance review. Campaign setup does not assign the discount to seller or platform settlement.</p>
+                <p class="ad-marketing-finance-note">Campaigns set the buyer discount and redemption rules only. Finance must review how redeemed discounts are funded and settled.</p>
             @endunless
         </section>
 
@@ -96,7 +107,7 @@
                 <div class="ad-marketing-modal-content" role="dialog" aria-modal="true" aria-labelledby="marketing-campaign-modal-title">
                     <button type="button" class="ad-marketing-modal-close" data-marketing-modal-close aria-label="Close">×</button>
                     <h3 id="marketing-campaign-modal-title">Create Platform Campaign</h3>
-                    <p class="ad-marketing-modal-help">Discounts remain unresolved for finance review after redemption.</p>
+                    <p class="ad-marketing-modal-help">Set the checkout discount and redemption rules here. Funding and settlement assignments require separate finance review.</p>
                     <form method="POST" action="{{ route('admin.marketing.campaigns.store') }}" id="marketing-campaign-form">
                         @csrf
                         <input type="hidden" name="_method" id="marketing-campaign-method" value="POST">
@@ -127,7 +138,7 @@
                 <div>
                     <span class="ad-overline">Platform Updates</span>
                     <h2 id="marketing-announcements-heading">Announcements</h2>
-                    <p>Scheduled messages are delivered through the existing in-app notification system.</p>
+                    <p>Schedule informational in-app messages for all active users or selected audiences. Announcements do not apply discounts or change checkout totals.</p>
                 </div>
             </header>
 

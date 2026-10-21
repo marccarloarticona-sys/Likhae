@@ -60,7 +60,7 @@ class AdminMarketingController extends Controller
             'is_active' => true,
         ]));
 
-        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign created. Discount funding remains unresolved for finance review.');
+        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform voucher campaign created. It defines checkout discounts only; finance must review funding and settlement.');
     }
 
     public function updateCampaign(Request $request, Voucher $voucher): RedirectResponse
