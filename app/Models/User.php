@@ -24,6 +24,7 @@ use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
 
 class User extends Authenticatable implements MustVerifyEmailContract
 {
@@ -53,6 +54,8 @@ class User extends Authenticatable implements MustVerifyEmailContract
 
     public const STATUS_DEACTIVATED = 'DEACTIVATED';
 
+    public const MAX_ACCOUNT_WARNINGS = 3;
+
     public const STATUSES = [
         self::STATUS_PENDING,
         self::STATUS_ACTIVE,
@@ -76,6 +79,8 @@ class User extends Authenticatable implements MustVerifyEmailContract
         'email_verified_at',
         'password',
         'status',
+        'suspended_until',
+        'permanently_banned_at',
         'notification_preferences',
         'profile_photo_path',
     ];
@@ -91,6 +96,8 @@ class User extends Authenticatable implements MustVerifyEmailContract
             'birthday' => 'date',
             'email_verified_at' => 'datetime',
             'api_token_expires_at' => 'datetime',
+            'suspended_until' => 'datetime',
+            'permanently_banned_at' => 'datetime',
             'notification_preferences' => 'array',
             'password' => 'hashed',
         ];
@@ -117,16 +124,56 @@ class User extends Authenticatable implements MustVerifyEmailContract
 
     public function isActive(): bool
     {
-        return strtoupper((string) $this->status) === self::STATUS_ACTIVE;
+        $this->restoreExpiredSuspensionIfDue();
+
+        return ! $this->isPermanentlyBanned()
+            && strtoupper((string) $this->status) === self::STATUS_ACTIVE;
     }
 
     public function isSuspended(): bool
     {
-        return strtoupper((string) $this->status) === self::STATUS_SUSPENDED;
+        $this->restoreExpiredSuspensionIfDue();
+
+        return ! $this->isPermanentlyBanned()
+            && strtoupper((string) $this->status) === self::STATUS_SUSPENDED;
+    }
+
+    public function isPermanentlyBanned(): bool
+    {
+        return $this->permanently_banned_at !== null;
+    }
+
+    public static function expireDueSuspensions(): int
+    {
+        $expired = 0;
+
+        static::query()
+            ->where('status', self::STATUS_SUSPENDED)
+            ->whereNull('permanently_banned_at')
+            ->whereNotNull('suspended_until')
+            ->where('suspended_until', '<=', now())
+            ->orderBy('id')
+            ->chunkById(100, function ($users) use (&$expired): void {
+                foreach ($users as $user) {
+                    $expired += $user->restoreExpiredSuspensionIfDue() ? 1 : 0;
+                }
+            });
+
+        return $expired;
     }
 
     public function inactiveMessage(): string
     {
+        if ($this->isPermanentlyBanned()) {
+            return 'Your account has been permanently banned from LIKHAE. Please contact support if you believe this decision was made in error.';
+        }
+
+        if ($this->isSuspended()) {
+            return $this->suspended_until
+                ? 'Your account is suspended until '.$this->suspended_until->format('M d, Y h:i A').'. Please contact support for assistance.'
+                : 'Your account has been suspended. Please contact support for assistance.';
+        }
+
         $latestApplication = $this->registrationApplications()->latest('submitted_at')->first();
 
         if ($latestApplication?->status === RegistrationApplication::STATUS_REJECTED) {
@@ -140,6 +187,69 @@ class User extends Authenticatable implements MustVerifyEmailContract
             self::STATUS_DEACTIVATED => 'Your account has been deactivated. Please contact support for assistance.',
             default => 'Your account is not active. Please contact support for assistance.',
         };
+    }
+
+    private function restoreExpiredSuspensionIfDue(): bool
+    {
+        if (! $this->exists
+            || $this->isPermanentlyBanned()
+            || strtoupper((string) $this->status) !== self::STATUS_SUSPENDED
+            || ! $this->suspended_until
+            || $this->suspended_until->isFuture()) {
+            return false;
+        }
+
+        $restored = DB::transaction(function (): bool {
+            $lockedUser = static::query()->whereKey($this->getKey())->lockForUpdate()->first();
+
+            if (! $lockedUser
+                || $lockedUser->isPermanentlyBanned()
+                || strtoupper((string) $lockedUser->status) !== self::STATUS_SUSPENDED
+                || ! $lockedUser->suspended_until
+                || $lockedUser->suspended_until->isFuture()) {
+                return false;
+            }
+
+            $suspendedUntil = $lockedUser->suspended_until;
+            $lockedUser->forceFill([
+                'status' => self::STATUS_ACTIVE,
+                'suspended_until' => null,
+            ])->save();
+            $lockedUser->sellerProfile()->where('status', self::STATUS_SUSPENDED)->update(['status' => self::STATUS_ACTIVE]);
+            $lockedUser->logisticsCenter()->where('status', self::STATUS_SUSPENDED)->update(['status' => self::STATUS_ACTIVE]);
+
+            AuditLog::create([
+                'event' => 'ACCOUNT_SUSPENSION_EXPIRED',
+                'auditable_type' => self::class,
+                'auditable_id' => $lockedUser->id,
+                'old_values' => [
+                    'status' => self::STATUS_SUSPENDED,
+                    'suspended_until' => $suspendedUntil->toISOString(),
+                ],
+                'new_values' => [
+                    'status' => self::STATUS_ACTIVE,
+                    'reason' => 'The temporary suspension period ended.',
+                ],
+                'created_at' => now(),
+            ]);
+            Notification::create([
+                'user_id' => $lockedUser->id,
+                'type' => 'ACCOUNT_REACTIVATED',
+                'title' => 'Suspension period ended',
+                'message' => 'Your LIKHAE account suspension ended and account access has been restored.',
+                'reference_type' => self::class,
+                'reference_id' => $lockedUser->id,
+                'action_url' => null,
+            ]);
+
+            return true;
+        });
+
+        if ($restored) {
+            $this->refresh();
+        }
+
+        return $restored;
     }
 
     public function workspaceRoute(): string

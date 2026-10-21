@@ -9,7 +9,8 @@
     $address = $user->addresses->firstWhere('is_default', true) ?? $user->addresses->first();
     $shop = $user->sellerProfile;
     $provider = $user->logisticsCenter;
-    $status = strtolower($user->status);
+    $status = $user->isPermanentlyBanned() ? 'banned' : strtolower($user->status);
+    $warningCount = $warningCount ?? 0;
 @endphp
 <div class="ad-page ad-user-details-page">
     <div class="ad-page-head">
@@ -17,12 +18,13 @@
         <a class="ad-btn ad-btn-secondary" href="{{ route('admin.users') }}">Back to users</a>
     </div>
     @if(session('success'))<div class="ad-note" role="status">{{ session('success') }}</div>@endif
+    @if(session('status'))<div class="ad-note" role="status">{{ session('status') }}</div>@endif
     @if($errors->any())
         <div class="ad-note" role="alert">@foreach($errors->all() as $error)<p>{{ $error }}</p>@endforeach</div>
     @endif
 
     <section class="ad-card">
-        <header class="ad-card-head"><h2>Account information</h2><span class="ad-status is-{{ $status }}">{{ $status === 'pending' ? 'Pending approval' : ucfirst($status) }}</span></header>
+        <header class="ad-card-head"><h2>Account information</h2><span class="ad-status is-{{ $status }}">{{ $status === 'pending' ? 'Pending approval' : ($status === 'banned' ? 'Permanently banned' : ucfirst($status)) }}</span></header>
         <div class="ad-card-body">
             <dl class="ad-application-meta">
                 <div><dt>Role</dt><dd>{{ ucfirst(strtolower($user->account_type)) }}</dd></div>
@@ -52,8 +54,14 @@
         <header class="ad-card-head"><h2>Account access</h2></header>
         <div class="ad-card-body">
             @if($managedAccount && in_array($status, ['active', 'suspended'], true))
-                @php($suspended = $status === 'suspended')
-                <p>{{ $suspended ? 'Reactivate this account to let the user sign in again.' : 'Suspending this account blocks sign-in and access to its workspace.' }}</p>
+                @php($suspended = $user->isSuspended())
+                <p>
+                    @if($suspended)
+                        This account is suspended{{ $user->suspended_until ? ' until '.$user->suspended_until->format('M d, Y h:i A') : ' with no expiry recorded' }}. You can reactivate it early.
+                    @else
+                        Choose a one-week or one-month suspension. Access will return automatically when it ends.
+                    @endif
+                </p>
                 <form method="POST" action="{{ route($suspended ? 'admin.users.reactivate' : 'admin.users.suspend', $user) }}" data-confirm-title="{{ $suspended ? 'Reactivate account?' : 'Suspend account?' }}" data-confirm-message="{{ $suspended ? 'This user will be able to access the account again.' : 'This user will lose access to their account.' }}" data-confirm-label="{{ $suspended ? 'Reactivate' : 'Suspend' }}" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}" @if(!$suspended) data-confirm-tone="danger" @endif>
                     @csrf
                     <label class="ad-field">
@@ -61,6 +69,13 @@
                         <textarea name="reason" rows="3" required maxlength="2000" placeholder="Explain why this account's access is changing.">{{ old('reason') }}</textarea>
                     </label>
                     @if(! $suspended)
+                        <label class="ad-field">
+                            <span>Suspension period</span>
+                            <select name="duration" required>
+                                <option value="week" @selected(old('duration', 'week') === 'week')>One week</option>
+                                <option value="month" @selected(old('duration') === 'month')>One month</option>
+                            </select>
+                        </label>
                         <label class="ad-field">
                             <span>Case or evidence reference (optional)</span>
                             <input name="reference" value="{{ old('reference') }}" maxlength="2000" placeholder="Complaint, order, or investigation reference">
@@ -72,18 +87,44 @@
                     @endif
                     <button class="ad-btn {{ $suspended ? 'ad-btn-primary' : 'ad-btn-danger-soft' }}" type="submit">{{ $suspended ? 'Reactivate account' : 'Suspend account' }}</button>
                 </form>
+            @elseif($user->isPermanentlyBanned())
+                <p>This account is permanently banned. Sign-in and workspace access are blocked.</p>
             @elseif($user->isAccountType(\App\Models\User::TYPE_ADMIN))
                 <p>Administrator access cannot be changed from the user directory.</p>
             @else
-                <p>This account has not been approved. Access changes are available after registration approval.</p>
+                <p>This account is {{ $status }}. Temporary suspension controls are available for active accounts.</p>
+            @endif
+
+            @if($managedAccount && ! $user->isPermanentlyBanned())
+                <div class="ad-form-section" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--ad-border,#e7e1dc);">
+                    <h3>Permanent ban</h3>
+                    <p>Blocks this account from signing in or using LIKHAE. A permanent ban does not expire.</p>
+                    <form method="POST" action="{{ route('admin.users.ban', $user) }}" data-confirm-title="Permanently ban this account?" data-confirm-message="This account will lose LIKHAE access permanently. This cannot be undone from this page." data-confirm-label="Permanently ban" data-confirm-tone="danger" data-confirm-details="{{ $user->name }} | {{ ucfirst(strtolower($user->account_type)) }}">
+                        @csrf
+                        <label class="ad-field">
+                            <span>Reason for permanent ban</span>
+                            <textarea name="reason" rows="3" required minlength="10" maxlength="2000" placeholder="Document the reason for permanently removing this account from the platform.">{{ old('reason') }}</textarea>
+                        </label>
+                        <label class="ad-field">
+                            <span>Case or evidence reference (optional)</span>
+                            <input name="reference" value="{{ old('reference') }}" maxlength="2000" placeholder="Complaint, order, or investigation reference">
+                        </label>
+                        <label class="ad-field">
+                            <span>Evidence or investigation notes (optional)</span>
+                            <textarea name="evidence" rows="3" maxlength="5000" placeholder="Record supporting evidence for this permanent decision.">{{ old('evidence') }}</textarea>
+                        </label>
+                        <button class="ad-btn ad-btn-danger-soft" type="submit">Permanently ban account</button>
+                    </form>
+                </div>
             @endif
         </div>
     </section>
 
     <section class="ad-card" id="account-warnings">
-        <header class="ad-card-head"><div><h2>Account Warnings</h2><p>Documented warnings remain separate from suspension decisions.</p></div></header>
+        <header class="ad-card-head"><div><h2>Account Warnings</h2><p>{{ $warningCount }} of {{ \App\Models\User::MAX_ACCOUNT_WARNINGS }} warnings issued. The limit applies to all warnings, including resolved or closed ones.</p></div></header>
         <div class="ad-card-body">
             @if($managedAccount)
+                @if($warningCount < \App\Models\User::MAX_ACCOUNT_WARNINGS)
                 <form method="POST" action="{{ route('admin.users.warnings.store', $user) }}" data-confirm-title="Issue account warning?" data-confirm-message="Send this documented warning and corrective action to {{ $user->name }}?" data-confirm-label="Issue warning">
                     @csrf
                     <div class="ad-form-grid">
@@ -121,8 +162,11 @@
                             <textarea name="evidence" rows="3" maxlength="5000" placeholder="Keep notes relevant to this warning.{{ $user->account_type === \App\Models\User::TYPE_BUYER ? ' Do not treat failed checkout alone as proof of misconduct.' : '' }}">{{ old('evidence') }}</textarea>
                         </label>
                     </div>
-                    <button class="ad-btn ad-btn-warning-soft" type="submit">Issue Warning</button>
+                    <button class="ad-btn ad-btn-warning-soft" type="submit">Issue Warning ({{ \App\Models\User::MAX_ACCOUNT_WARNINGS - $warningCount }} remaining)</button>
                 </form>
+                @else
+                    <p role="status">This account has reached the three-warning limit. No further warnings can be issued.</p>
+                @endif
             @elseif($user->isAccountType(\App\Models\User::TYPE_ADMIN))
                 <p>Administrator accounts cannot receive ordinary User Management warnings or suspension actions.</p>
             @else

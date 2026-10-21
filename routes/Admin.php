@@ -54,6 +54,7 @@ Route::prefix('admin')
         Route::post('/users/{user}/warnings/{warning}/review', [AdminUserController::class, 'reviewWarning'])->name('users.warnings.review');
         Route::post('/users/{user}/suspend', [AdminUserController::class, 'suspend'])->name('users.suspend');
         Route::post('/users/{user}/reactivate', [AdminUserController::class, 'reactivate'])->name('users.reactivate');
+        Route::post('/users/{user}/ban', [AdminUserController::class, 'permanentlyBan'])->name('users.ban');
 
         Route::get('/products', [AdminOperationsController::class, 'products'])->name('products');
         Route::get('/marketing', [AdminMarketingController::class, 'index'])->name('marketing');

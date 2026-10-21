@@ -41,3 +41,9 @@ Schedule::command('likhae:expire-rider-assignment-offers')
     ->withoutOverlapping()
     ->onSuccess($recordSchedulerHeartbeat('likhae:expire-rider-assignment-offers', 'success'))
     ->onFailure($recordSchedulerHeartbeat('likhae:expire-rider-assignment-offers', 'failure'));
+Schedule::command('likhae:expire-account-suspensions')
+    ->everyMinute()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping()
+    ->onSuccess($recordSchedulerHeartbeat('likhae:expire-account-suspensions', 'success'))
+    ->onFailure($recordSchedulerHeartbeat('likhae:expire-account-suspensions', 'failure'));

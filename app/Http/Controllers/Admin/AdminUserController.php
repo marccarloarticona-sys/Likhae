@@ -10,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class AdminUserController extends Controller
@@ -43,6 +44,8 @@ class AdminUserController extends Controller
 
     public function index(Request $request): View
     {
+        User::expireDueSuspensions();
+
         $accountTypes = [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_ADMIN, User::TYPE_LOGISTICS];
         $role = strtolower((string) $request->query('role', $request->query('type', 'all')));
         $roleTypes = [
@@ -59,13 +62,21 @@ class AdminUserController extends Controller
         };
         $role = array_key_exists($role, $roleTypes) ? $role : 'all';
         $status = strtolower((string) $request->query('status', 'all'));
-        $status = in_array($status, ['pending', 'active', 'suspended', 'deactivated'], true) ? $status : 'all';
+        $status = in_array($status, ['pending', 'active', 'suspended', 'deactivated', 'banned'], true) ? $status : 'all';
         $search = trim((string) $request->query('q', ''));
 
         $users = User::query()
             ->whereIn('account_type', $accountTypes)
             ->when($role !== 'all', fn ($query) => $query->where('account_type', $roleTypes[$role]))
-            ->when($status !== 'all', fn ($query) => $query->where('status', strtoupper($status)))
+            ->when($status !== 'all', function ($query) use ($status): void {
+                if ($status === 'banned') {
+                    $query->whereNotNull('permanently_banned_at');
+
+                    return;
+                }
+
+                $query->whereNull('permanently_banned_at')->where('status', strtoupper($status));
+            })
             ->when($search !== '', function ($query) use ($search): void {
                 $query->where(function ($query) use ($search): void {
                     $query->where('first_name', 'like', '%'.$search.'%')
@@ -94,6 +105,7 @@ class AdminUserController extends Controller
     public function show(User $user): View
     {
         $this->ensureViewable($user);
+        $user->isActive();
         $user->load(['addresses', 'sellerProfile', 'logisticsCenter', 'registrationApplications.documents']);
         $changes = AuditLog::query()
             ->with('actor')
@@ -108,11 +120,17 @@ class AdminUserController extends Controller
             ->where('auditable_id', $user->id)
             ->latest('created_at')
             ->paginate(10, ['*'], 'warnings_page');
+        $warningCount = AuditLog::query()
+            ->where('event', 'ACCOUNT_WARNING')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->count();
 
         return view('Admin.users.show', [
             'user' => $user,
             'changes' => $changes,
             'warnings' => $warnings,
+            'warningCount' => $warningCount,
             'warningCategories' => self::ACCOUNT_WARNING_CATEGORIES[$user->account_type] ?? [],
         ]);
     }
@@ -140,33 +158,52 @@ class AdminUserController extends Controller
             'status' => 'OPEN',
         ];
 
-        $duplicateWarning = AuditLog::query()
-            ->where('event', 'ACCOUNT_WARNING')
-            ->where('auditable_type', User::class)
-            ->where('auditable_id', $user->id)
-            ->get(['new_values'])
-            ->first(function (AuditLog $warning) use ($newValues): bool {
-                $values = $warning->new_values ?? [];
+        $result = DB::transaction(function () use ($request, $user, $newValues): string {
+            User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
 
-                return data_get($values, 'category') === $newValues['category']
-                    && trim((string) data_get($values, 'reason')) === $newValues['reason']
-                    && in_array(data_get($values, 'status', 'OPEN'), ['OPEN', 'UNDER_REVIEW'], true);
-            });
+            $warningQuery = AuditLog::query()
+                ->where('event', 'ACCOUNT_WARNING')
+                ->where('auditable_type', User::class)
+                ->where('auditable_id', $user->id);
 
-        if ($duplicateWarning) {
+            if ($warningQuery->count() >= User::MAX_ACCOUNT_WARNINGS) {
+                throw ValidationException::withMessages([
+                    'warning_limit' => 'This account has reached the limit of three warnings.',
+                ]);
+            }
+
+            $duplicateWarning = (clone $warningQuery)
+                ->get(['new_values'])
+                ->first(function (AuditLog $warning) use ($newValues): bool {
+                    $values = $warning->new_values ?? [];
+
+                    return data_get($values, 'category') === $newValues['category']
+                        && trim((string) data_get($values, 'reason')) === $newValues['reason']
+                        && in_array(data_get($values, 'status', 'OPEN'), ['OPEN', 'UNDER_REVIEW'], true);
+                });
+
+            if ($duplicateWarning) {
+                return 'duplicate';
+            }
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'ACCOUNT_WARNING',
+                'auditable_type' => User::class,
+                'auditable_id' => $user->id,
+                'new_values' => $newValues,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+
+            return 'created';
+        });
+
+        if ($result === 'duplicate') {
             return back()->with('status', 'This account warning is already recorded and remains open for review.');
         }
 
-        AuditLog::create([
-            'actor_user_id' => $request->user()->id,
-            'event' => 'ACCOUNT_WARNING',
-            'auditable_type' => User::class,
-            'auditable_id' => $user->id,
-            'new_values' => $newValues,
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'created_at' => now(),
-        ]);
         Notification::create([
             'user_id' => $user->id,
             'type' => 'ACCOUNT_WARNING',
@@ -222,26 +259,38 @@ class AdminUserController extends Controller
         $this->ensureAdminManaged($user);
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'duration' => ['required', Rule::in(['week', 'month'])],
             'reference' => ['nullable', 'string', 'max:2000'],
             'evidence' => ['nullable', 'string', 'max:5000'],
         ]);
-        abort_unless($user->status === User::STATUS_ACTIVE, 422, 'Only active accounts can be suspended.');
-        $oldStatus = $user->status;
-        DB::transaction(function () use ($request, $user, $data, $oldStatus): void {
-            $user->update(['status' => User::STATUS_SUSPENDED]);
-            $user->sellerProfile?->update(['status' => User::STATUS_SUSPENDED]);
-            $user->logisticsCenter?->update(['status' => User::STATUS_SUSPENDED]);
+        $suspendedUntil = $data['duration'] === 'week' ? now()->addWeek() : now()->addMonth();
+        DB::transaction(function () use ($request, $user, $data, $suspendedUntil): void {
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            abort_unless(
+                $lockedUser->status === User::STATUS_ACTIVE && ! $lockedUser->isPermanentlyBanned(),
+                422,
+                'Only active accounts can be suspended.',
+            );
+            $oldStatus = $lockedUser->status;
+            $lockedUser->update([
+                'status' => User::STATUS_SUSPENDED,
+                'suspended_until' => $suspendedUntil,
+            ]);
+            $lockedUser->sellerProfile?->update(['status' => User::STATUS_SUSPENDED]);
+            $lockedUser->logisticsCenter?->update(['status' => User::STATUS_SUSPENDED]);
             AuditLog::create([
                 'actor_user_id' => $request->user()->id,
                 'event' => 'ACCOUNT_SUSPENDED',
                 'auditable_type' => User::class,
-                'auditable_id' => $user->id,
+                'auditable_id' => $lockedUser->id,
                 'old_values' => ['status' => $oldStatus],
                 'new_values' => [
                     'status' => User::STATUS_SUSPENDED,
+                    'duration' => $data['duration'],
+                    'suspended_until' => $suspendedUntil->toISOString(),
                     'reason' => trim($data['reason']),
-                    'reference' => $data['reference'] ?? null,
-                    'evidence' => $data['evidence'] ?? null,
+                    'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+                    'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
                 ],
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent(),
@@ -252,13 +301,13 @@ class AdminUserController extends Controller
             'user_id' => $user->id,
             'type' => 'ACCOUNT_SUSPENDED',
             'title' => 'Account suspended',
-            'message' => 'Your LIKHAE account was suspended by Admin. Reason: '.trim($data['reason']),
+            'message' => 'Your LIKHAE account was suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reason: '.trim($data['reason']),
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
 
-        return back()->with('status', 'User suspended and the change was recorded.');
+        return back()->with('status', 'User suspended until '.$suspendedUntil->format('M d, Y h:i A').'. The change was recorded.');
     }
 
     public function reactivate(Request $request, User $user): RedirectResponse
@@ -267,18 +316,27 @@ class AdminUserController extends Controller
         $data = $request->validate([
             'reason' => ['required', 'string', 'min:10', 'max:2000'],
         ]);
-        abort_unless($user->status === User::STATUS_SUSPENDED, 422, 'Only suspended accounts can be reactivated.');
-        $oldStatus = $user->status;
-        DB::transaction(function () use ($request, $user, $data, $oldStatus): void {
-            $user->update(['status' => User::STATUS_ACTIVE]);
-            $user->sellerProfile?->update(['status' => User::STATUS_ACTIVE]);
-            $user->logisticsCenter?->update(['status' => User::STATUS_ACTIVE]);
+        DB::transaction(function () use ($request, $user, $data): void {
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            abort_unless(
+                $lockedUser->status === User::STATUS_SUSPENDED && ! $lockedUser->isPermanentlyBanned(),
+                422,
+                'Only temporarily suspended accounts can be reactivated.',
+            );
+            $oldStatus = $lockedUser->status;
+            $oldSuspendedUntil = $lockedUser->suspended_until;
+            $lockedUser->update(['status' => User::STATUS_ACTIVE, 'suspended_until' => null]);
+            $lockedUser->sellerProfile?->update(['status' => User::STATUS_ACTIVE]);
+            $lockedUser->logisticsCenter?->update(['status' => User::STATUS_ACTIVE]);
             AuditLog::create([
                 'actor_user_id' => $request->user()->id,
                 'event' => 'ACCOUNT_REACTIVATED',
                 'auditable_type' => User::class,
-                'auditable_id' => $user->id,
-                'old_values' => ['status' => $oldStatus],
+                'auditable_id' => $lockedUser->id,
+                'old_values' => [
+                    'status' => $oldStatus,
+                    'suspended_until' => $oldSuspendedUntil?->toISOString(),
+                ],
                 'new_values' => ['status' => User::STATUS_ACTIVE, 'reason' => trim($data['reason'])],
                 'ip_address' => $request->ip(),
                 'user_agent' => $request->userAgent(),
@@ -296,6 +354,67 @@ class AdminUserController extends Controller
         ]);
 
         return back()->with('status', 'User reactivated and the change was recorded.');
+    }
+
+    public function permanentlyBan(Request $request, User $user): RedirectResponse
+    {
+        $this->ensureAdminManaged($user);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'reference' => ['nullable', 'string', 'max:2000'],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
+
+        $bannedAt = now();
+        DB::transaction(function () use ($request, $user, $data, $bannedAt): void {
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            abort_unless(! $lockedUser->isPermanentlyBanned(), 422, 'This account is already permanently banned.');
+            $oldValues = [
+                'status' => $lockedUser->status,
+                'suspended_until' => $lockedUser->suspended_until?->toISOString(),
+            ];
+            $lockedUser->forceFill([
+                'status' => User::STATUS_DEACTIVATED,
+                'suspended_until' => null,
+                'permanently_banned_at' => $bannedAt,
+                'api_token_hash' => null,
+                'api_token_expires_at' => null,
+                'remember_token' => null,
+            ])->save();
+            $lockedUser->sellerProfile?->update(['status' => User::STATUS_DEACTIVATED]);
+            $lockedUser->logisticsCenter?->update(['status' => User::STATUS_DEACTIVATED]);
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'ACCOUNT_PERMANENTLY_BANNED',
+                'auditable_type' => User::class,
+                'auditable_id' => $lockedUser->id,
+                'old_values' => $oldValues,
+                'new_values' => [
+                    'status' => 'PERMANENTLY_BANNED',
+                    'account_status' => User::STATUS_DEACTIVATED,
+                    'permanently_banned_at' => $bannedAt->toISOString(),
+                    'reason' => trim($data['reason']),
+                    'reference' => filled($data['reference'] ?? null) ? trim($data['reference']) : null,
+                    'evidence' => filled($data['evidence'] ?? null) ? trim($data['evidence']) : null,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => 'ACCOUNT_PERMANENTLY_BANNED',
+            'title' => 'Account permanently banned',
+            'message' => 'Your LIKHAE account was permanently banned by Admin. Reason: '.trim($data['reason']),
+            'reference_type' => User::class,
+            'reference_id' => $user->id,
+            'action_url' => null,
+        ]);
+
+        return back()->with('status', 'User permanently banned and the change was recorded.');
     }
 
     private function ensureViewable(User $user): void

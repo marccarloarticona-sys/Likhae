@@ -21,12 +21,14 @@
         'pending' => 'Pending approval',
         'active' => 'Active',
         'suspended' => 'Suspended',
+        'banned' => 'Permanently banned',
         'deactivated' => 'Deactivated',
     ];
     $statusClasses = [
         'pending' => 'under-review',
         'active' => 'active',
         'suspended' => 'banned',
+        'banned' => 'banned',
         'deactivated' => 'banned',
     ];
 @endphp
@@ -164,8 +166,9 @@
                     @forelse($users as $user)
                         @php
                             $roleLabel = ucfirst(strtolower($user->account_type));
-                            $statusLabel = $statuses[strtolower($user->status)] ?? ucfirst(strtolower($user->status));
-                            $statusClass = $statusClasses[strtolower($user->status)] ?? strtolower(str_replace(' ', '-', $user->status));
+                            $statusKey = $user->isPermanentlyBanned() ? 'banned' : strtolower($user->status);
+                            $statusLabel = $statuses[$statusKey] ?? ucfirst($statusKey);
+                            $statusClass = $statusClasses[$statusKey] ?? strtolower(str_replace(' ', '-', $statusKey));
                             $searchText = strtolower('USR-'.$user->id.' '.$user->name.' '.$user->email.' '.$roleLabel.' '.$statusLabel);
                         @endphp
 
