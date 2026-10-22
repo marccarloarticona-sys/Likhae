@@ -141,6 +141,13 @@
                 <section class="ad-card">
                     <header class="ad-card-head"><div><span class="ad-overline">Admin decision</span><h3>Resolve this escalation</h3><p>Choose one accountable outcome. {{ $isCashCase ? 'Cash payout remains blocked until the authorized payer policy is configured.' : 'The Admin does not transfer GCash directly.' }}</p></div></header>
                     <div class="ad-card-body" style="display:grid;gap:14px">
+                        <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--ad-border)">
+                            @csrf
+                            @method('PATCH')
+                            <input type="hidden" name="status" value="UNDER_REVIEW">
+                            <label class="ad-field"><span>Investigation notes (optional)</span><textarea name="resolution" rows="3" placeholder="Record what you checked or what information is still needed.">{{ $dispute->status === 'UNDER_REVIEW' ? $dispute->resolution : '' }}</textarea></label>
+                            <button class="ad-btn ad-btn-secondary" type="submit">{{ $dispute->status === 'UNDER_REVIEW' ? 'Save Review Progress' : 'Mark Under Review' }}</button>
+                        </form>
                         <form method="POST" action="{{ route('admin.disputes.update', $dispute) }}" style="display:grid;gap:8px;padding-bottom:14px;border-bottom:1px solid var(--ad-border)" data-confirm-title="Return case to seller?" data-confirm-message="Record this resolution and require the seller to refund the eligible amount to the buyer. Verify the resolution before continuing." data-confirm-label="Return to seller">
                             @csrf
                             @method('PATCH')

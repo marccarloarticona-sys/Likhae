@@ -3,6 +3,7 @@ import '../shared/feedback.js';
 import '../shared/echo.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
+import '../shared/payout-destination.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     const select = (selector, root = document) => root.querySelector(selector);

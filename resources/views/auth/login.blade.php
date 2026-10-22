@@ -1,3 +1,10 @@
+@php
+    $savedAccounts = collect($savedAccounts ?? []);
+    $showSavedAccountPicker = $savedAccounts->isNotEmpty()
+        && blank(old('email'))
+        && blank(request('email'))
+        && ! $errors->any();
+@endphp
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -152,16 +159,31 @@
                 @endif
 
 
+                <x-auth.recent-accounts :saved-accounts="$savedAccounts" portal="marketplace" :show-saved-account-picker="$showSavedAccountPicker" />
+
                 <form
                     method="POST"
                     action="{{ route('login.post') }}"
                     class="auth-form"
+                    data-login-form
+                    @if ($showSavedAccountPicker) hidden @endif
                 >
 
                     @csrf
 
+                    <div class="auth-selected-account" data-selected-account hidden>
+                        <span class="auth-saved-account__avatar" data-selected-account-initial aria-hidden="true"></span>
+                        <span class="auth-selected-account__details">
+                            <strong data-selected-account-name></strong>
+                            <span data-selected-account-email></span>
+                        </span>
+                        <button type="button" class="auth-use-another-account" data-use-another-account>
+                            Use another account
+                        </button>
+                    </div>
 
-                    <div class="auth-field">
+
+                    <div class="auth-field auth-email-field" data-login-email-field>
 
                         <label for="email">
                             Email address
@@ -181,7 +203,7 @@
                                 placeholder="juan@email.com"
                                 autocomplete="email"
                                 required
-                                autofocus
+                                @if (! $showSavedAccountPicker) autofocus @endif
                             >
 
                         </div>
@@ -191,20 +213,9 @@
 
                     <div class="auth-field">
 
-                        <div class="auth-field__row">
-
-                            <label for="password">
-                                Password
-                            </label>
-
-                            <a
-                                href="{{ route('password.request') }}"
-                                class="auth-forgot"
-                            >
-                                Forgot password?
-                            </a>
-
-                        </div>
+                        <label for="password">
+                            Password
+                        </label>
 
 
                         <div class="auth-field__wrap">
@@ -293,6 +304,7 @@
                                 type="checkbox"
                                 name="remember"
                                 value="1"
+                                id="remember"
                                 @checked(old('remember'))
                             >
 
@@ -303,9 +315,12 @@
                         </label>
 
 
-                        <span class="auth-security-text">
-                            Secure login
-                        </span>
+                        <a
+                            href="{{ route('password.request') }}"
+                            class="auth-forgot"
+                        >
+                            Forgot password?
+                        </a>
 
                     </div>
 

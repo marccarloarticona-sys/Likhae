@@ -367,20 +367,25 @@
 
 
 
-<div
+<button
     id="adminSidebarOverlay"
+    class="lk-admin-overlay"
+    type="button"
+    tabindex="-1"
+    aria-label="Close navigation"
     aria-hidden="true"
-></div>
+></button>
 
 <aside
     id="adminSidebar"
+    class="lk-admin-navigation"
     aria-label="{{ $workspaceName }} navigation"
 >
-    <div class="ad-side-head">
+    <div class="ad-sidebar-head">
         <button
             type="button"
             id="adminSidebarToggle"
-            class="ad-side-menu"
+            class="ad-side-toggle"
             aria-label="Toggle admin sidebar"
             aria-expanded="true"
         >
@@ -391,7 +396,7 @@
 
         <a
             href="{{ route($dashboardRoute) }}"
-            class="ad-side-brand"
+            class="ad-brand"
             aria-label="LIKHAE {{ $workspaceName }}"
         >
             <x-shared.likhae-logo
@@ -433,38 +438,38 @@
     </section>
     --}}
 
-    <nav class="ad-side-scroll">
+    <nav class="ad-sidebar-scroll">
 
-        <p class="ad-side-heading">
+        <p class="ad-nav-heading">
             Navigation
         </p>
 
         <a
             href="{{ route($dashboardRoute) }}"
-            class="ad-side-link
+            class="ad-nav-link
                 {{ request()->routeIs($dashboardRoute) || $active === 'dashboard' ? 'is-active' : '' }}"
             @if(request()->routeIs($dashboardRoute) || $active === 'dashboard')
                 aria-current="page"
             @endif
         >
-            <span class="ad-side-icon">
+            <span class="ad-nav-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     {!! $icons['dashboard'] !!}
                 </svg>
             </span>
 
-            <span class="ad-side-label">
+            <span class="ad-nav-text">
                 {{ $dashboardLabel }}
             </span>
         </a>
 
         @foreach($groups as $group)
-            <section class="ad-side-group">
-                <p class="ad-side-heading">
+            <section class="ad-nav-group">
+                <p class="ad-nav-heading">
                     {{ $group['label'] }}
                 </p>
 
-                <div class="ad-side-list">
+                <div class="ad-nav-list">
                     @foreach($group['items'] as $item)
                         @php
                             $matchesRoute = $routeActive($item['active']);
@@ -477,21 +482,21 @@
 
                         <a
                             href="{{ route($item['route'], $item['parameters'] ?? []) }}"
-                            class="ad-side-link {{ $isActive ? 'is-active' : '' }}"
+                            class="ad-nav-link {{ $isActive ? 'is-active' : '' }}"
                             @if($isActive) aria-current="page" @endif
                         >
-                            <span class="ad-side-icon">
+                            <span class="ad-nav-icon">
                                 <svg viewBox="0 0 24 24" aria-hidden="true">
                                     {!! $icons[$item['icon']] !!}
                                 </svg>
                             </span>
 
-                            <span class="ad-side-label">
+                            <span class="ad-nav-text">
                                 {{ $item['label'] }}
                             </span>
 
                             @if(($item['count'] ?? 0) > 0)
-                                <span class="ad-side-badge">
+                                <span class="ad-nav-badge">
                                     {{ $item['count'] }}
                                 </span>
                             @endif
@@ -503,22 +508,22 @@
 
     </nav>
 
-    <div class="ad-side-bottom">
+    <div class="ad-sidebar-foot">
 
         <button
             type="button"
             id="adminThemeToggle"
-            class="ad-side-theme"
+            class="ad-nav-link ad-theme-toggle"
             aria-label="Toggle light and dark mode"
             aria-pressed="false"
         >
-            <span class="ad-side-icon">
+            <span class="ad-nav-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     {!! $icons['moon'] !!}
                 </svg>
             </span>
 
-            <span class="ad-side-theme-copy">
+            <span class="ad-theme-copy">
                 <strong>
                     Appearance
                 </strong>
@@ -530,7 +535,7 @@
 
             <span
                 id="adminThemeState"
-                class="ad-side-theme-state"
+                class="ad-theme-state"
             >
                 OFF
             </span>
@@ -548,15 +553,15 @@
 
                 <button
                     type="submit"
-                    class="ad-side-logout"
+                    class="ad-nav-link ad-logout"
                 >
-                    <span class="ad-side-icon">
+                    <span class="ad-nav-icon">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             {!! $icons['logout'] !!}
                         </svg>
                     </span>
 
-                    <span class="ad-side-label">
+                    <span class="ad-nav-text">
                         Logout
                     </span>
                 </button>
@@ -573,6 +578,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const body =
         document.body;
+
+    const app =
+        document.querySelector('[data-admin-shell]');
 
     const sidebar =
         document.getElementById('adminSidebar');
@@ -591,7 +599,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
     function isMobile() {
-        return window.innerWidth < 1024;
+        return window.matchMedia('(max-width: 1024px)').matches;
     }
 
 
@@ -632,9 +640,9 @@ document.addEventListener('DOMContentLoaded', function () {
     function openMobileSidebar() {
         sidebar?.classList.add('is-open');
         overlay?.classList.add('is-visible');
-        document.querySelector('.ad-app')?.classList.add('is-mobile-open');
-        body.classList.add('workspace-sidebar-open');
-        document.querySelectorAll('[data-admin-mobile-menu], [data-lk-mobile-menu], [data-sl-mobile-menu], #riderMobileSidebarToggle, #mobileSidebarToggle')
+        app?.classList.add('is-mobile-open');
+        sidebarToggle?.setAttribute('aria-expanded', 'true');
+        document.querySelectorAll('[data-admin-mobile-menu]')
             .forEach((button) => button.setAttribute('aria-expanded', 'true'));
 
         if (overlay) {
@@ -651,9 +659,9 @@ document.addEventListener('DOMContentLoaded', function () {
     function closeMobileSidebar() {
         sidebar?.classList.remove('is-open');
         overlay?.classList.remove('is-visible');
-        document.querySelector('.ad-app')?.classList.remove('is-mobile-open');
-        body.classList.remove('workspace-sidebar-open');
-        document.querySelectorAll('[data-admin-mobile-menu], [data-lk-mobile-menu], [data-sl-mobile-menu], #riderMobileSidebarToggle, #mobileSidebarToggle')
+        app?.classList.remove('is-mobile-open');
+        sidebarToggle?.setAttribute('aria-expanded', 'false');
+        document.querySelectorAll('[data-admin-mobile-menu]')
             .forEach((button) => button.setAttribute('aria-expanded', 'false'));
 
         if (overlay) {
@@ -672,38 +680,13 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        if (isMobile()) {
-            sidebar.classList.remove(
-                'is-collapsed'
-            );
+        const collapsed = !isMobile()
+            && localStorage.getItem('likhae-admin-sidebar') === 'collapsed';
 
-            body.classList.remove(
-                'admin-sidebar-collapsed'
-            );
-            body.classList.remove(
-                'workspace-sidebar-collapsed'
-            );
-            return;
-        }
-
-        const collapsed = localStorage.getItem('likhae-admin-sidebar') === 'collapsed';
-
-        sidebar.classList.toggle(
-            'is-collapsed',
-            collapsed
-        );
-
-        body.classList.toggle(
-            'admin-sidebar-collapsed',
-            collapsed
-        );
-        body.classList.toggle(
-            'workspace-sidebar-collapsed',
-            collapsed
-        );
+        app?.classList.toggle('is-collapsed', collapsed);
         sidebarToggle?.setAttribute(
             'aria-expanded',
-            collapsed ? 'false' : 'true'
+            isMobile() ? 'false' : (collapsed ? 'false' : 'true')
         );
     }
 
@@ -723,24 +706,9 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const collapsed =
-            !sidebar.classList.contains(
-                'is-collapsed'
-            );
+        const collapsed = !app?.classList.contains('is-collapsed');
 
-        sidebar.classList.toggle(
-            'is-collapsed',
-            collapsed
-        );
-
-        body.classList.toggle(
-            'admin-sidebar-collapsed',
-            collapsed
-        );
-        body.classList.toggle(
-            'workspace-sidebar-collapsed',
-            collapsed
-        );
+        app?.classList.toggle('is-collapsed', collapsed);
 
         sidebarToggle?.setAttribute(
             'aria-expanded',
@@ -754,19 +722,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 : 'expanded'
         );
 
-        window.dispatchEvent(
-            new CustomEvent(
-                'likhae:admin-sidebar',
-                {
-                    detail: {
-                        collapsed: collapsed,
-                        width: collapsed
-                            ? 76
-                            : 252
-                    }
-                }
-            )
-        );
     }
 
 
@@ -789,11 +744,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (event.key === 'Escape') closeMobileSidebar();
     });
 
-    window.addEventListener('resize', function () {
-        if (!isMobile()) closeMobileSidebar();
-    });
-
-
     document
         .querySelectorAll('[data-admin-sidebar-open]')
         .forEach(function (button) {
@@ -804,7 +754,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
     document
-        .querySelectorAll('[data-admin-mobile-menu], [data-lk-mobile-menu], [data-sl-mobile-menu], #riderMobileSidebarToggle, #mobileSidebarToggle')
+        .querySelectorAll('[data-admin-mobile-menu]')
         .forEach(function (button) {
             button.addEventListener('click', function () {
                 if (sidebar?.classList.contains('is-open')) {

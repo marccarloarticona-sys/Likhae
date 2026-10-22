@@ -68,6 +68,72 @@ class BuyerCartPreviewTest extends TestCase
         $this->assertDatabaseCount('seller_orders', 0);
     }
 
+    public function test_seller_percentage_voucher_previews_ten_percent_of_only_its_shop_subtotal(): void
+    {
+        [$buyer, $product, $variant] = $this->cartFixture();
+        $variant->update(['price' => 500, 'discount_type' => 'none', 'discount_value' => 0]);
+        $item = app(CartService::class)->add($buyer, $product, (int) $variant->id, 1);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $product->seller_profile_id,
+            'code' => 'SELLERPREVIEW10',
+            'name' => 'Seller ten percent preview',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
+
+        foreach ([1 => 50, 2 => 100] as $quantity => $expectedDiscount) {
+            $item->update(['quantity' => $quantity]);
+            $response = $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
+                'cart_item_ids' => [$item->id],
+                'voucher_code' => $voucher->code,
+            ])->assertOk()->assertJsonPath('success', true)->assertJsonPath('voucher_applied', true);
+
+            $this->assertSame(500.0 * $quantity, (float) $response->json('subtotal'));
+            $this->assertSame((float) $expectedDiscount, (float) $response->json('discount_total'));
+        }
+
+        $this->assertDatabaseCount('orders', 0);
+    }
+
+    public function test_seller_voucher_does_not_discount_another_sellers_selected_cart_items(): void
+    {
+        [$buyer, $sellerProduct, $sellerVariant] = $this->cartFixture();
+        $otherVariant = ProductVariant::query()
+            ->where('product_id', '<>', $sellerProduct->id)
+            ->whereHas('product', fn ($query) => $query->where('seller_profile_id', '<>', $sellerProduct->seller_profile_id))
+            ->where('is_active', true)
+            ->where('stock', '>', 0)
+            ->firstOrFail();
+        $otherProduct = Product::query()->findOrFail($otherVariant->product_id);
+
+        $sellerVariant->update(['price' => 500, 'discount_type' => 'none', 'discount_value' => 0]);
+        $otherVariant->update(['price' => 700, 'discount_type' => 'none', 'discount_value' => 0]);
+        $cartService = app(CartService::class);
+        $sellerItem = $cartService->add($buyer, $sellerProduct, (int) $sellerVariant->id, 1);
+        $otherSellerItem = $cartService->add($buyer, $otherProduct, (int) $otherVariant->id, 1);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $sellerProduct->seller_profile_id,
+            'code' => 'ONE-SELLER-10',
+            'name' => 'One seller only ten percent',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
+
+        $response = $this->actingAs($buyer)->postJson(route('buyer.cart.preview'), [
+            'cart_item_ids' => [$sellerItem->id, $otherSellerItem->id],
+            'voucher_code' => $voucher->code,
+        ])->assertOk()->assertJsonPath('success', true)->assertJsonPath('voucher_applied', true);
+
+        $this->assertSame(1200.0, (float) $response->json('subtotal'));
+        $this->assertSame(50.0, (float) $response->json('discount_total'));
+    }
+
     public function test_seller_voucher_preview_reports_the_minimum_for_selected_seller_items(): void
     {
         [$buyer, $product, $variant] = $this->cartFixture();

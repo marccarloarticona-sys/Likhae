@@ -18,6 +18,8 @@ use App\Models\Seller\Category;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
+use App\Models\Communication\Conversation;
+use App\Models\Communication\Message;
 use App\Services\Finance\CodCollectionService;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\FinancialAllocationService;
@@ -25,6 +27,8 @@ use App\Services\Finance\ProductProceedsService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\SellerSettlementService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ParcelSettlementFlowTest extends TestCase
@@ -85,8 +89,10 @@ class ParcelSettlementFlowTest extends TestCase
         $this->assertSame(1, FinanceAuditEvent::query()->where('event_type', 'ADMIN_ACKNOWLEDGED_PRODUCT_PROCEEDS')->count());
 
         $logisticsPool = LogisticsEarningPool::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
-        $logisticsPayout = $payouts->recordLogisticsPayout($fixture['admin'], $logisticsPool, '20.00', 'Manual', 'ADMIN-LOG-001');
+        $logisticsPayout = $payouts->recordLogisticsPayout($fixture['admin'], $logisticsPool, '20.00', 'GCash', 'ADMIN-LOG-001', null, 'payout-proofs/logistics-test.pdf', 'logistics-proof.pdf');
         $this->assertSame('PAYOUT_PENDING_ACK', $logisticsPayout->status);
+        $this->assertSame('ADMIN-LOG-001', data_get($logisticsPayout->metadata, 'payout_external_reference'));
+        $this->assertSame('payout-proofs/logistics-test.pdf', data_get($logisticsPayout->metadata, 'payout_proof_path'));
         $payouts->acknowledgeLogisticsPayout($fixture['centerUser'], $logisticsPayout, '20.00');
         $this->assertSame('PAID', $logisticsPayout->fresh()->status);
         $this->assertSame('PAID', $logisticsPool->fresh()->status);
@@ -94,9 +100,10 @@ class ParcelSettlementFlowTest extends TestCase
         $settlement = SellerSettlement::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
         $sellerService = app(SellerSettlementService::class);
         $sellerService->authorize($fixture['admin'], $settlement);
-        $sellerService->pay($fixture['admin'], $settlement->fresh(), '900.00', 'GCash', 'GC-TRANSFER-01');
+        $sellerService->pay($fixture['admin'], $settlement->fresh(), '900.00', 'GCash', 'GC-TRANSFER-01', null, 'payout-proofs/seller-test.pdf', 'seller-proof.pdf');
         $this->assertSame('PAYOUT_PENDING_ACK', $settlement->fresh()->payout_status);
         $this->assertSame('GC-TRANSFER-01', $settlement->fresh()->payout_external_reference);
+        $this->assertSame('payout-proofs/seller-test.pdf', $settlement->fresh()->payout_proof_path);
         $this->assertFinanceThrows(fn () => $sellerService->acknowledgeBySeller($fixture['otherSellerUser'], $settlement->fresh()));
         $sellerService->acknowledgeBySeller($fixture['sellerUser'], $settlement->fresh());
         $sellerService->acknowledgeBySeller($fixture['sellerUser'], $settlement->fresh());
@@ -209,18 +216,92 @@ class ParcelSettlementFlowTest extends TestCase
         $settlement = SellerSettlement::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
         $service = app(SellerSettlementService::class);
         $service->authorize($fixture['admin'], $settlement);
-        $service->pay($fixture['admin'], $settlement->fresh(), '900.00', 'Bank transfer', 'BANK-FAILED-01');
+        $service->pay($fixture['admin'], $settlement->fresh(), '900.00', 'GCash', 'BANK-FAILED-01', null, 'payout-proofs/seller-failed.pdf', 'failed-proof.pdf');
         $service->failPayout($fixture['admin'], $settlement->fresh(), 'Receiving account rejected the transfer.');
         $this->assertSame('FAILED', $settlement->fresh()->payout_status);
         $this->assertSame('Receiving account rejected the transfer.', $settlement->fresh()->payout_failure_reason);
         $this->assertFinanceThrows(fn () => $service->acknowledgeBySeller($fixture['sellerUser'], $settlement->fresh()));
 
         $service->authorize($fixture['admin'], $settlement->fresh(), 'Seller corrected the receiving account.');
-        $service->pay($fixture['admin'], $settlement->fresh(), '900.00', 'Bank transfer', 'BANK-RETRY-02');
+        $service->pay($fixture['admin'], $settlement->fresh(), '900.00', 'GCash', 'BANK-RETRY-02', null, 'payout-proofs/seller-retry.pdf', 'retry-proof.pdf');
         $service->acknowledgeBySeller($fixture['sellerUser'], $settlement->fresh());
         $this->assertSame('PAID', $settlement->fresh()->payout_status);
         $this->assertSame('BANK-RETRY-02', $settlement->fresh()->payout_external_reference);
         $this->assertDatabaseHas('finance_audit_events', ['event_type' => 'SELLER_PAYOUT_FAILED']);
+    }
+
+    public function test_manual_seller_and_logistics_transfers_keep_private_proof_and_open_support_threads(): void
+    {
+        Storage::fake('local');
+        $fixture = $this->parcelFixture();
+        $collection = $this->recordCollection($fixture, '1050.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+        $remittances = app(RemittanceService::class);
+        $remittance = $remittances->submit($fixture['riderUser'], [$collection->id], '1050.00');
+        $remittances->verify($fixture['centerUser'], $remittance, '1050.00');
+        $remittances->reconcile($fixture['centerUser'], $remittance->fresh());
+        $proceeds = FinancialLedgerEntry::query()
+            ->where('shipment_financial_allocation_id', $allocation->id)
+            ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
+            ->firstOrFail();
+        $proceedsService = app(ProductProceedsService::class);
+        $proceedsService->submitToAdmin($fixture['centerUser'], $proceeds, '1020.00');
+        $proceedsService->acknowledgeByAdmin($fixture['admin'], $proceeds->fresh(), '1020.00');
+
+        $settlement = SellerSettlement::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
+        $requestResponse = $this->actingAs($fixture['sellerUser'])->post(route('seller.settlements.request-payout', $settlement));
+        $this->assertTrue($requestResponse->isRedirect(), 'Seller request returned '.$requestResponse->status());
+        $this->actingAs($fixture['sellerUser'])->get(route('seller.wallet'))->assertViewHas('payoutBalances', fn (array $balances): bool => (float) $balances['available'] === 0.0 && (float) $balances['requested'] === 900.0);
+        app(SellerSettlementService::class)->authorize($fixture['admin'], $settlement->fresh());
+        $this->actingAs($fixture['admin'])->post(route('admin.finance.seller-settlements.pay', $settlement), [
+            'amount' => '900.00',
+            'payout_external_reference' => 'GC-SELLER-RECEIPT-77',
+            'payout_proof' => UploadedFile::fake()->create('seller-receipt.pdf', 20, 'application/pdf'),
+        ])->assertRedirect()->assertSessionHas('status');
+        $settlement->refresh();
+        $this->assertSame('GC-SELLER-RECEIPT-77', $settlement->payout_external_reference);
+        $this->assertSame('PAYOUT_PENDING_ACK', $settlement->payout_status);
+        $this->actingAs($fixture['sellerUser'])->get(route('seller.wallet'))->assertViewHas('payoutBalances', fn (array $balances): bool => (float) $balances['awaiting_ack'] === 900.0);
+        Storage::disk('local')->assertExists($settlement->payout_proof_path);
+        $this->actingAs($fixture['sellerUser'])->get(route('seller.settlements.payout-proof', $settlement))->assertOk();
+        $this->actingAs($fixture['admin'])->get(route('admin.finance.seller-settlements.proof', $settlement))->assertOk();
+        $this->actingAs($fixture['otherSellerUser'])->get(route('seller.settlements.payout-proof', $settlement))->assertForbidden();
+        $this->actingAs($fixture['sellerUser'])->get(route('seller.wallet'))->assertOk()->assertSee('GC-SELLER-RECEIPT-77')->assertSee('View transfer proof');
+        $supportResponse = $this->actingAs($fixture['sellerUser'])->post(route('seller.settlements.report-payout-issue', $settlement));
+        $this->assertTrue($supportResponse->isRedirect(), 'Seller support returned '.$supportResponse->status());
+        $this->assertTrue(Message::query()->where('sender_user_id', $fixture['sellerUser']->id)->where('body', 'like', 'PAYOUT SUPPORT%')->exists());
+
+        $pool = LogisticsEarningPool::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
+        $requestResponse = $this->actingAs($fixture['centerUser'])->post(route('logistics.wallet.payout-requests.store', $pool));
+        $this->assertTrue($requestResponse->isRedirect(), 'Logistics request returned '.$requestResponse->status());
+        $this->actingAs($fixture['centerUser'])->get(route('logistics.wallet'))->assertViewHas('payoutSummary', fn (array $summary): bool => (float) $summary['available'] === 0.0 && (float) $summary['requested'] === 20.0);
+        $response = $this->actingAs($fixture['admin'])->post(route('admin.finance.logistics-pools.pay', $pool), [
+            'amount' => '20.00',
+            'payout_external_reference' => 'GC-LOGISTICS-RECEIPT-88',
+            'payout_proof' => UploadedFile::fake()->create('logistics-receipt.pdf', 20, 'application/pdf'),
+        ]);
+        $this->assertTrue($response->isRedirect(), 'Logistics Admin payout returned '.$response->status());
+        $response->assertSessionHas('status');
+        $logisticsReceipt = FinancialLedgerEntry::query()
+            ->where('shipment_financial_allocation_id', $allocation->id)
+            ->where('entry_type', 'LOGISTICS_PAYOUT')
+            ->firstOrFail();
+        $this->assertSame('GC-LOGISTICS-RECEIPT-88', data_get($logisticsReceipt->metadata, 'payout_external_reference'));
+        $this->actingAs($fixture['centerUser'])->get(route('logistics.wallet'))->assertViewHas('payoutSummary', fn (array $summary): bool => (float) $summary['awaiting_ack'] === 20.0);
+        Storage::disk('local')->assertExists(data_get($logisticsReceipt->metadata, 'payout_proof_path'));
+        $this->actingAs($fixture['centerUser'])->get(route('logistics.wallet.payout-proof', $logisticsReceipt))->assertOk();
+        $this->actingAs($fixture['admin'])->get(route('admin.finance.logistics-payouts.proof', $logisticsReceipt))->assertOk();
+        $this->actingAs($fixture['centerUser'])->get(route('logistics.wallet'))->assertOk()->assertSee('GC-LOGISTICS-RECEIPT-88')->assertSee('View transfer proof');
+        $supportResponse = $this->actingAs($fixture['centerUser'])->post(route('logistics.wallet.payout-report-issue', $logisticsReceipt));
+        $this->assertTrue($supportResponse->isRedirect(), 'Logistics support returned '.$supportResponse->status());
+        $this->assertSame(2, Conversation::query()->count());
+        $this->actingAs($fixture['admin'])->get(route('admin.finance'))
+            ->assertOk()
+            ->assertSee('Admin payout overview')
+            ->assertSee('GC-SELLER-RECEIPT-77')
+            ->assertSee('GC-LOGISTICS-RECEIPT-88')
+            ->assertSee('View proof');
     }
 
     public function test_multiple_item_parcels_get_independent_allocations_and_shipping_split(): void
@@ -280,14 +361,15 @@ class ParcelSettlementFlowTest extends TestCase
         $riderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
         $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
         $category = Category::create(['name' => 'Finance test category', 'slug' => 'finance-test-category', 'is_active' => true]);
-        $seller = SellerProfile::create(['user_id' => $sellerUser->id, 'primary_category_id' => $category->id, 'business_name' => 'Finance test seller', 'status' => 'ACTIVE']);
+        $seller = SellerProfile::create(['user_id' => $sellerUser->id, 'primary_category_id' => $category->id, 'business_name' => 'Finance test seller', 'status' => 'ACTIVE', 'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Seller', 'payout_account_number' => '09170000002']);
         SellerProfile::create(['user_id' => $otherSellerUser->id, 'primary_category_id' => $category->id, 'business_name' => 'Other finance seller', 'status' => 'ACTIVE']);
         $center = LogisticsCenter::create([
-            'owner_user_id' => $centerUser->id, 'code' => 'FINANCE-CENTER', 'business_name' => 'Finance Center', 'status' => 'ACTIVE',
+            'owner_user_id' => $centerUser->id, 'code' => 'FINANCE-CENTER', 'business_name' => 'Finance Center', 'status' => 'ACTIVE', 'approved_by_user_id' => $admin->id, 'approved_at' => now(), 'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Center', 'payout_account_number' => '09170000003',
         ]);
         $rider = RiderProfile::create([
             'user_id' => $riderUser->id, 'logistics_center_id' => $center->id, 'vehicle_type' => 'motorcycle',
             'plate_number' => 'FIN-PLATE-01', 'drivers_license_number' => 'FIN-LICENSE-01', 'status' => 'ACTIVE',
+            'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Rider', 'payout_account_number' => '09170000001',
         ]);
         $order = Order::create(['order_number' => 'FIN-ORDER-001', 'buyer_user_id' => $buyer->id, 'status' => 'PROCESSING', 'grand_total' => '1050.00']);
         $sellerOrder = SellerOrder::create([

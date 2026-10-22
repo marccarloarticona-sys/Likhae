@@ -8,7 +8,8 @@
     <section>
         <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Logistics wallet</span>
         <h1 class="mt-2 font-display text-[32px] font-semibold text-ink">Wallet &amp; Payouts</h1>
-        <p class="mt-2 max-w-2xl text-[11px] leading-6 text-muted">Save the online destination for your shipping share. Request each reconciled share from Admin. Online payouts are simulated only; no money is transferred.</p>
+        <p class="mt-2 max-w-2xl text-[11px] leading-6 text-muted">Save where you want to receive your shipping share. Request each reconciled share from Admin; Admin transfers funds outside Likhae and records the reference and proof here.</p>
+        <a href="{{ route('logistics.messages') }}" class="mt-3 inline-flex rounded-lg border border-line px-3 py-2 text-[10px] font-semibold text-ink">Contact Support</a>
         <a href="{{ route('logistics.remittances') }}#rider-payout-requests" class="mt-3 inline-flex rounded-lg border border-line px-3 py-2 text-[10px] font-semibold text-ink">Review Rider payout requests</a>
     </section>
 
@@ -19,20 +20,19 @@
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-6">
-        <h2 class="text-[13px] font-semibold text-ink">Online payout details</h2>
-        <p class="mt-1 text-[10px] text-muted">Admin uses these details for simulated demo payouts. No money is transferred. Account name and number are encrypted at rest.</p>
-        @if($payoutDestinationReady)
-            <form method="POST" action="{{ route('logistics.wallet.payout-destination.update') }}" class="mt-4 grid gap-3 sm:grid-cols-3">
-                @csrf @method('PUT')
-                <label class="grid gap-1 text-xs font-semibold text-ink">Payment channel<select name="payout_method" required class="h-10 rounded-lg border border-line bg-white px-3"><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected($center->payout_method === $method)>{{ $method }}</option>@endforeach</select></label>
-                <label class="grid gap-1 text-xs font-semibold text-ink">Bank name (for bank transfer)<input name="payout_bank_name" maxlength="120" value="{{ $center->payout_bank_name }}" class="h-10 rounded-lg border border-line bg-white px-3"></label>
-                <label class="grid gap-1 text-xs font-semibold text-ink">Account holder name<input name="payout_account_name" maxlength="150" value="{{ $center->payout_account_name }}" required class="h-10 rounded-lg border border-line bg-white px-3"></label>
-                <label class="grid gap-1 text-xs font-semibold text-ink">Account number or mobile<input name="payout_account_number" maxlength="150" value="{{ $center->payout_account_number }}" required class="h-10 rounded-lg border border-line bg-white px-3"></label>
-                <button class="w-fit rounded-lg bg-primary px-4 py-2 text-[10px] font-semibold text-white">Save payment details</button>
-            </form>
+        <h2 class="text-[13px] font-semibold text-ink">Payment details</h2>
+        <p class="mt-1 text-[10px] text-muted">Admin sends your payout to this saved destination outside Likhae. Reference and proof are recorded here after transfer.</p>
+        @if($payoutDestinationSaved)
+            @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($center))
+            <dl class="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                <div><dt class="text-muted">Channel</dt><dd class="font-semibold text-ink">{{ $center->payout_method }}@if($center->payout_bank_name) · {{ $center->payout_bank_name }}@endif</dd></div>
+                <div><dt class="text-muted">Account holder</dt><dd class="font-semibold text-ink">{{ $center->payout_account_name }}</dd></div>
+                <div><dt class="text-muted">{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd class="font-semibold text-ink">{{ \App\Support\PayoutAccountDetails::formatNumber($center->payout_account_number, $savedPayoutType) }}</dd></div>
+            </dl>
         @else
-            <p class="mt-3 text-[10px] text-amber-700">Payout details will be available after the additive payout destination migration is installed.</p>
+            <p class="mt-3 text-[10px] text-amber-700">Add GCash, Maya, or bank details in Account settings before requesting a payout.</p>
         @endif
+        <a href="{{ route('logistics.profile') }}" class="mt-3 inline-flex rounded-lg border border-line px-3 py-2 text-[10px] font-semibold text-ink">Edit payment details in Account settings</a>
     </section>
 
     @unless($ready)
@@ -64,23 +64,32 @@
 
         <section class="rounded-xl border border-line bg-surface p-6">
             <h2 class="text-[13px] font-semibold text-ink">Admin payout receipts</h2>
-            <p class="mt-1 text-[10px] text-muted">Confirm each Admin transfer after the funds reach your saved destination.</p>
+            <p class="mt-1 text-[10px] text-muted">Review transfer proof and confirm each payout after the funds reach your saved destination. Confirmed receipts stay in this history.</p>
             <div class="mt-4 grid gap-3">
                 @forelse($receipts as $receipt)
                     @php($payout = (array) $receipt->metadata)
                     <article class="rounded-lg border border-line p-4 text-[10px]">
                         <div class="flex flex-wrap justify-between gap-3"><strong>{{ $payout['payout_reference'] ?? 'Logistics payout' }} · {{ $receipt->shipment?->tracking_number ?? 'Parcel' }}</strong><span>PHP {{ number_format((float) $receipt->amount, 2) }}</span></div>
                         <p class="mt-2 text-muted">{{ $payout['payout_method'] ?? '' }} {{ $payout['payout_external_reference'] ?? '' }} · Sent {{ $payout['paid_at'] ?? '' }}</p>
-                        @if($payout['is_simulated'] ?? false)<p class="mt-2 font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred.</p>@endif
-                        <form method="POST" action="{{ route('logistics.remittances.logistics-payouts.acknowledge', $receipt) }}" class="mt-3 flex flex-wrap items-end gap-3">
-                            @csrf
-                            <label class="grid gap-1 font-semibold">{{ ($payout['is_simulated'] ?? false) ? 'Demo amount' : 'Amount received' }}<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $receipt->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
-                            <label class="grid min-w-48 flex-1 gap-1 font-semibold">Receipt notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
-                            <button class="rounded-lg bg-primary px-3 py-2 font-semibold text-white">{{ ($payout['is_simulated'] ?? false) ? 'Acknowledge demo record' : 'Acknowledge receipt' }}</button>
-                        </form>
+                        @if(!empty($payout['payout_proof_path']))<a class="mt-2 inline-block underline" href="{{ route('logistics.wallet.payout-proof', $receipt) }}">View transfer proof</a>@endif
+                        @if(($payout['is_simulated'] ?? false) || \Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
+                            <p class="mt-2 font-semibold text-amber-700">Legacy demo receipt — no transfer proof exists. Contact Admin to correct this old record.</p>
+                        @elseif($receipt->status === 'PAYOUT_PENDING_ACK')
+                            <form method="POST" action="{{ route('logistics.remittances.logistics-payouts.acknowledge', $receipt) }}" class="mt-3 flex flex-wrap items-end gap-3">
+                                @csrf
+                                <label class="grid gap-1 font-semibold">Amount received<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $receipt->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <label class="grid min-w-48 flex-1 gap-1 font-semibold">Receipt notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
+                                <button class="rounded-lg bg-primary px-3 py-2 font-semibold text-white">Acknowledge receipt</button>
+                            </form>
+                            <form method="POST" action="{{ route('logistics.wallet.payout-report-issue', $receipt) }}" class="mt-2">
+                                @csrf<button class="rounded-lg border border-line px-3 py-2 font-semibold text-ink">Report payout not received</button>
+                            </form>
+                        @else
+                            <p class="mt-2 text-emerald-700">Receipt confirmed {{ $payout['acknowledged_at'] ?? '' }}@if(!empty($payout['receipt_notes'])) · {{ $payout['receipt_notes'] }}@endif</p>
+                        @endif
                     </article>
                 @empty
-                    <p class="text-[10px] text-muted">No Admin payouts are awaiting confirmation.</p>
+                    <p class="text-[10px] text-muted">No Admin payout receipts have been recorded yet.</p>
                 @endforelse
             </div>
             {{ $receipts->links() }}

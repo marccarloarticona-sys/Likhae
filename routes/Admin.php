@@ -11,6 +11,7 @@ use App\Http\Controllers\Admin\AdminProtectionRuleController;
 use App\Http\Controllers\Admin\AdminShippingRateController;
 use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Controllers\Admin\AdminUserController;
+use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -88,7 +89,9 @@ Route::prefix('admin')
         Route::post('/finance/seller-settlements/{settlement}/authorize', [AdminFinanceController::class, 'authorizeSellerSettlement'])->name('finance.seller-settlements.authorize');
         Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
         Route::post('/finance/seller-settlements/{settlement}/fail', [AdminFinanceController::class, 'failSellerPayout'])->name('finance.seller-settlements.fail');
+        Route::get('/finance/seller-settlements/{settlement}/proof', [PayoutProofController::class, 'adminSeller'])->name('finance.seller-settlements.proof');
         Route::post('/finance/logistics-pools/{pool}/pay', [AdminFinanceController::class, 'payLogisticsShare'])->name('finance.logistics-pools.pay');
+        Route::get('/finance/logistics-payouts/{entry}/proof', [PayoutProofController::class, 'adminLogistics'])->name('finance.logistics-payouts.proof');
         Route::post('/finance/product-proceeds/{entry}/acknowledge', [AdminFinanceController::class, 'acknowledgeProductProceeds'])->name('finance.product-proceeds.acknowledge');
         Route::post('/finance/product-proceeds/{entry}/resolve', [AdminFinanceController::class, 'resolveProductProceeds'])->name('finance.product-proceeds.resolve');
         Route::post('/finance/cod-collections/{collection}/resolve', [AdminFinanceController::class, 'resolveBuyerCodDiscrepancy'])->name('finance.cod-collections.resolve');
@@ -150,6 +153,7 @@ Route::prefix('admin')
         Route::patch('/policies/{policy}', [AdminOperationsController::class, 'updatePolicy'])->name('policies.update');
         Route::get('/audit-export', [AdminOperationsController::class, 'exportAuditLogs'])->name('audit.export');
         Route::patch('/account', [AdminOperationsController::class, 'updateAccount'])->name('account.update');
+        Route::put('/account/payout-destination', [AdminOperationsController::class, 'updateAdminPayoutDestination'])->name('account.payout-destination.update');
         Route::patch('/account/password', [AdminOperationsController::class, 'updatePassword'])->name('account.password');
         Route::patch('/account/preferences', [AdminOperationsController::class, 'updatePreferences'])->name('account.preferences');
         Route::post('/notifications/{notification}/read', [AdminOperationsController::class, 'markNotificationRead'])->name('notifications.read');

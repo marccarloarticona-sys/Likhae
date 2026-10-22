@@ -113,10 +113,18 @@
                 </div>
             @endif
 
-            <form method="POST" action="{{ $loginRoute }}" class="auth-form">
+            <x-auth.recent-accounts :saved-accounts="$savedAccounts ?? collect()" portal="logistics" :show-saved-account-picker="$showSavedAccountPicker ?? false" />
+
+            <form method="POST" action="{{ $loginRoute }}" class="auth-form" data-login-form @if($showSavedAccountPicker ?? false) hidden @endif>
                 @csrf
 
-                <div class="auth-field">
+                <div class="auth-selected-account" data-selected-account hidden>
+                    <span class="auth-saved-account__avatar" data-selected-account-initial aria-hidden="true"></span>
+                    <span class="auth-selected-account__details"><strong data-selected-account-name></strong><span data-selected-account-email></span></span>
+                    <button type="button" class="auth-use-another-account" data-use-another-account>Use another account</button>
+                </div>
+
+                <div class="auth-field auth-email-field" data-login-email-field>
                     <label for="email">Email address</label>
                     <div class="auth-input-wrap">
                         <span class="auth-input-icon">@</span>

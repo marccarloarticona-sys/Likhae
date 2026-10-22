@@ -17,6 +17,7 @@ class SellerSettlement extends Model
         'payout_amount', 'outstanding_balance', 'payout_status', 'settlement_reference',
         'authorized_by_user_id', 'authorized_at', 'paid_at', 'notes', 'payout_method',
         'payout_external_reference', 'payout_failure_reason', 'payout_failed_at',
+        'payout_proof_path', 'payout_proof_name',
         'payout_failed_by_user_id', 'seller_acknowledged_at', 'seller_acknowledged_by_user_id',
     ];
 

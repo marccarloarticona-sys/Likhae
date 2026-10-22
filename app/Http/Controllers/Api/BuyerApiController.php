@@ -7,6 +7,7 @@ use App\Models\Admin\Dispute;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Buyer\WishlistItem;
 use App\Models\Communication\Conversation;
 use App\Models\Communication\ConversationParticipant;
@@ -43,6 +44,50 @@ use Illuminate\Validation\ValidationException;
 
 class BuyerApiController extends Controller
 {
+    public function followingStores(Request $request): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+
+        $following = SellerFollower::query()
+            ->where('buyer_user_id', $request->user()->id)
+            ->whereHas('sellerProfile', fn ($query) => $query
+                ->where('status', 'ACTIVE')
+                ->where('store_visibility', true)
+                ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'ACTIVE')))
+            ->with(['sellerProfile.primaryCategory', 'sellerProfile.businessAddress'])
+            ->latest()
+            ->paginate(min(max($request->integer('per_page', 20), 1), 50));
+
+        return response()->json([
+            'success' => true,
+            'data' => $following->getCollection()
+                ->map(function (SellerFollower $follow): array {
+                    $seller = $follow->sellerProfile;
+
+                    return [
+                        'id' => $seller->id,
+                        'user_id' => $seller->user_id,
+                        'business_name' => $seller->business_name,
+                        'avatar_path' => $seller->avatar_path,
+                        'banner_path' => $seller->banner_path,
+                        'category' => $seller->primaryCategory?->name,
+                        'slug' => (string) $seller->id,
+                        'joined_at' => $seller->created_at?->toIso8601String(),
+                        'location' => $seller->businessAddress?->formatted() ?: $seller->location,
+                        'vacation_mode' => (bool) $seller->vacation_mode,
+                        'followed_at' => $follow->created_at?->toIso8601String(),
+                    ];
+                })
+                ->values(),
+            'meta' => [
+                'current_page' => $following->currentPage(),
+                'last_page' => $following->lastPage(),
+                'per_page' => $following->perPage(),
+                'total' => $following->total(),
+            ],
+        ]);
+    }
+
     public function cart(Request $request, CartService $cart): JsonResponse
     {
         $this->authorizeBuyer($request);

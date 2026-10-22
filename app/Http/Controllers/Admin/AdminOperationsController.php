@@ -42,6 +42,8 @@ use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Rules\PayoutDestinationNumber;
+use App\Support\PayoutAccountDetails;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -76,7 +78,7 @@ class AdminOperationsController extends Controller
 
     private const UNRESOLVED_COMPLIANCE_STATUSES = ['OPEN', 'UNDER_REVIEW'];
 
-    public function products(Request $request): View
+    public function products(Request $request, ProductCatalogService $catalog): View
     {
         $status = $this->productStatus($request->query('status'));
         $search = $this->productSearch($request->query('search'));
@@ -89,10 +91,13 @@ class AdminOperationsController extends Controller
             $status = 'SUSPENDED';
         }
         $products = $this->productQuery($status, $search, $aiFilter)
+            ->with('images')
             ->paginate(20)
             ->withQueryString();
-        $products->getCollection()->transform(function (Product $product): Product {
+        $products->getCollection()->transform(function (Product $product) use ($catalog): Product {
             $product->setAttribute('admin_category_mismatch', $this->productCategoryMismatch($product));
+            $primaryImage = $product->images->firstWhere('is_primary', true) ?: $product->images->first();
+            $product->setAttribute('admin_thumbnail_url', $catalog->publicUrl($primaryImage?->file_path));
 
             return $product;
         });
@@ -347,10 +352,73 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Compliance case updated.');
     }
 
-    public function complaints(): View
+    public function complaints(Request $request): View
     {
+        $statuses = ['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED', 'CLOSED'];
+        $filters = $request->validate([
+            'status' => ['nullable', 'string', Rule::in($statuses)],
+            'search' => ['nullable', 'string', 'max:120'],
+        ]);
+        $search = trim((string) ($filters['search'] ?? ''));
+        $searchTerm = '%'.$search.'%';
+
+        $query = Dispute::query()->with([
+            'openedBy',
+            'assignedAdmin',
+            'order',
+            'sellerOrder.sellerProfile',
+            'shipment',
+            'evidence',
+            'returnRefundRequest.evidence',
+            'sellerReturnRefundRequest.request.evidence',
+            'sellerReturnRefundRequest.request',
+            'sellerReturnRefundRequest.sellerProfile',
+        ]);
+
+        if (! empty($filters['status'])) {
+            $query->where('status', $filters['status']);
+        }
+
+        if ($search !== '') {
+            $query->where(function ($cases) use ($searchTerm): void {
+                $cases->where('dispute_number', 'like', $searchTerm)
+                    ->orWhere('subject', 'like', $searchTerm)
+                    ->orWhere('description', 'like', $searchTerm)
+                    ->orWhereHas('openedBy', function ($buyer) use ($searchTerm): void {
+                        $buyer->where('name', 'like', $searchTerm)
+                            ->orWhere('email', 'like', $searchTerm);
+                    })
+                    ->orWhereHas('order', fn ($order) => $order->where('order_number', 'like', $searchTerm))
+                    ->orWhereHas('sellerOrder', function ($sellerOrder) use ($searchTerm): void {
+                        $sellerOrder->where('seller_order_number', 'like', $searchTerm)
+                            ->orWhereHas('sellerProfile', fn ($seller) => $seller->where('business_name', 'like', $searchTerm));
+                    })
+                    ->orWhereHas('shipment', fn ($shipment) => $shipment->where('tracking_number', 'like', $searchTerm))
+                    ->orWhereHas('returnRefundRequest', fn ($refund) => $refund->where('request_number', 'like', $searchTerm))
+                    ->orWhereHas('sellerReturnRefundRequest', function ($sellerRefund) use ($searchTerm): void {
+                        $sellerRefund->whereHas('request', fn ($refund) => $refund->where('request_number', 'like', $searchTerm))
+                            ->orWhereHas('sellerProfile', fn ($seller) => $seller->where('business_name', 'like', $searchTerm));
+                    });
+            });
+        }
+
+        $statusCounts = Dispute::query()
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
         return view('Admin.complaints.index', [
-            'disputes' => Dispute::with(['openedBy', 'assignedAdmin', 'order', 'sellerOrder.sellerProfile', 'shipment', 'evidence', 'returnRefundRequest', 'sellerReturnRefundRequest.request.evidence', 'sellerReturnRefundRequest.request', 'sellerReturnRefundRequest.sellerProfile', 'sellerReturnRefundRequest.items.orderItem', 'sellerReturnRefundRequest.payouts'])->latest()->paginate(20),
+            'disputes' => $query
+                ->orderByRaw("CASE WHEN status IN ('OPEN', 'UNDER_REVIEW') THEN 0 ELSE 1 END")
+                ->orderByRaw("CASE WHEN status IN ('OPEN', 'UNDER_REVIEW') THEN opened_at END ASC")
+                ->orderByRaw("CASE WHEN status NOT IN ('OPEN', 'UNDER_REVIEW') THEN opened_at END DESC")
+                ->paginate(15)
+                ->withQueryString(),
+            'statusCounts' => $statusCounts,
+            'filters' => [
+                'status' => $filters['status'] ?? '',
+                'search' => $search,
+            ],
         ]);
     }
 
@@ -391,11 +459,16 @@ class AdminOperationsController extends Controller
             'logistics_allocation' => 0.0,
             'rider_allocation' => 0.0,
             'unresolved_settlements' => 0,
+            'available_payouts' => 0.0,
+            'requested_payouts' => 0.0,
+            'awaiting_payout_ack' => 0.0,
+            'paid_payouts' => 0.0,
         ];
         $sellerSettlements = null;
         $productProceeds = null;
         $codDiscrepancies = null;
         $logisticsPayouts = null;
+        $logisticsPayoutReceipts = null;
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
@@ -412,6 +485,21 @@ class AdminOperationsController extends Controller
             $financialTotals['logistics_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('logistics_allocation');
             $financialTotals['rider_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('rider_allocation');
             $financialTotals['unresolved_settlements'] = SellerSettlement::query()->where('payout_status', 'REVIEW_REQUIRED')->count();
+            $availableSeller = SellerSettlement::query()
+                ->whereIn('payout_status', ['PENDING', 'FAILED'])
+                ->whereNotNull('seller_payable')
+                ->where('seller_payable', '>', 0)
+                ->whereNotExists(function ($query): void {
+                    $query->selectRaw('1')
+                        ->from('financial_ledger_entries as proceeds')
+                        ->whereColumn('proceeds.shipment_financial_allocation_id', 'seller_settlements.shipment_financial_allocation_id')
+                        ->where('proceeds.entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
+                        ->where(fn ($status) => $status->where('proceeds.status', '<>', 'RECEIVED')->orWhereNull('proceeds.status'));
+                });
+            $financialTotals['available_payouts'] = (float) (clone $availableSeller)->sum('seller_payable');
+            $financialTotals['requested_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
+            $financialTotals['awaiting_payout_ack'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount');
+            $financialTotals['paid_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAID')->sum('payout_amount');
             $sellerSettlements = SellerSettlement::query()
                 ->with(['sellerProfile', 'allocation.shipment', 'sellerOrder.order'])
                 ->orderByRaw("CASE WHEN payout_status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
@@ -431,6 +519,13 @@ class AdminOperationsController extends Controller
                     ->select('shipment_financial_allocation_id')
                     ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
                     ->where('status', 'RECEIVED');
+                $financialTotals['available_payouts'] += (float) LogisticsEarningPool::query()
+                    ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
+                    ->whereIn('status', ['PENDING', 'APPROVED'])
+                    ->sum('total_amount');
+                $financialTotals['requested_payouts'] += (float) LogisticsEarningPool::query()->where('status', 'PAYOUT_REQUESTED')->sum('total_amount');
+                $financialTotals['awaiting_payout_ack'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->sum('amount');
+                $financialTotals['paid_payouts'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->sum('amount');
                 $logisticsPayouts = LogisticsEarningPool::query()
                     ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
                     ->where('total_amount', '>', 0)
@@ -439,6 +534,12 @@ class AdminOperationsController extends Controller
                     ->orderByRaw("CASE WHEN status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
                     ->latest()
                     ->paginate(15, ['*'], 'logistics_payouts_page');
+                $logisticsPayoutReceipts = FinancialLedgerEntry::query()
+                    ->where('entry_type', 'LOGISTICS_PAYOUT')
+                    ->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                    ->with(['shipment.sellerOrder.order'])
+                    ->latest('paid_at')
+                    ->paginate(15, ['*'], 'logistics_payout_receipts_page');
             }
         }
 
@@ -448,8 +549,10 @@ class AdminOperationsController extends Controller
             'sellerSettlements' => $sellerSettlements,
             'productProceeds' => $productProceeds,
             'logisticsPayouts' => $logisticsPayouts,
+            'logisticsPayoutReceipts' => $logisticsPayoutReceipts,
             'codDiscrepancies' => $codDiscrepancies,
             'parcelSettlementReady' => $schema->parcelSettlementReady(),
+            'payoutProofReady' => $schema->sellerPayoutProofReady(),
             'payoutDestinationReady' => $destinations->readyFor('seller_profiles') && $destinations->readyFor('logistics_centers'),
             'financialTotals' => $financialTotals,
             'totals' => [
@@ -631,13 +734,17 @@ class AdminOperationsController extends Controller
         ]);
     }
 
-    public function account(Request $request): View
+    public function account(Request $request, PayoutDestinationReadiness $destinations): View
     {
         $adminUser = $request->user();
+        $payoutDestinationReady = $destinations->readyFor('users');
+        $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($adminUser);
 
         return view('Admin.account.index', [
             'adminUser' => $adminUser,
             'preferences' => $adminUser,
+            'payoutDestinationReady' => $payoutDestinationReady,
+            'payoutDestinationSaved' => $payoutDestinationSaved,
         ]);
     }
 
@@ -1211,6 +1318,28 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Account updated.');
     }
 
+    public function updateAdminPayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse
+    {
+        $adminUser = $request->user();
+        abort_unless($adminUser->isAccountType(User::TYPE_ADMIN), 403);
+        abort_unless($destinations->readyFor('users'), 503, 'Admin payout details are unavailable until the additive payout destination migration is installed.');
+
+        $data = $request->validate([
+            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
+            'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
+            'payout_account_name' => ['required', 'string', 'max:150'],
+            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
+            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
+                $request->input('payout_account_type'),
+                $request->input('payout_method'),
+            )],
+        ]);
+        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
+        $adminUser->forceFill($data)->save();
+
+        return back()->with('status', 'Admin payout destination saved. It is reserved for future platform withdrawals.');
+    }
+
     public function updatePassword(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -1359,6 +1488,20 @@ class AdminOperationsController extends Controller
                 || ($adminAction === 'REJECT_ESCALATION' && $data['status'] === 'REJECTED'),
             422,
             'Choose a valid Admin decision for this dispute.',
+        );
+        $hasSellerRefundEscalation = $dispute->sellerReturnRefundRequest()->exists();
+        abort_unless(
+            $adminAction === null || $hasSellerRefundEscalation,
+            422,
+            'Refund escalation decisions can only be recorded for an escalated refund case.',
+        );
+        abort_unless(
+            ! $hasSellerRefundEscalation
+                || ! in_array($data['status'], ['RESOLVED', 'REJECTED'], true)
+                || ($data['status'] === 'RESOLVED' && $adminAction === 'RETURN_TO_SELLER_REFUND')
+                || ($data['status'] === 'REJECTED' && $adminAction === 'REJECT_ESCALATION'),
+            422,
+            'Choose the explicit refund or rejection action for this escalated refund case.',
         );
         $resolution = trim((string) ($data['resolution'] ?? ''));
         $isRefundRequired = $adminAction === 'RETURN_TO_SELLER_REFUND';

@@ -62,6 +62,65 @@ class BuyerStorefrontFiltersTest extends TestCase
         ));
     }
 
+    public function test_store_category_and_subcategory_filters_are_store_scoped(): void
+    {
+        [$buyer, $seller, $otherSeller] = $this->storeFixture();
+        $root = Category::query()->create([
+            'name' => 'Store Filter Root',
+            'slug' => 'store-filter-root-'.Str::lower(Str::random(8)),
+            'is_active' => true,
+        ]);
+        $subcategoryOne = Category::query()->create([
+            'parent_id' => $root->id,
+            'name' => 'Store Filter One',
+            'slug' => 'store-filter-one-'.Str::lower(Str::random(8)),
+            'is_active' => true,
+        ]);
+        $subcategoryTwo = Category::query()->create([
+            'parent_id' => $root->id,
+            'name' => 'Store Filter Two',
+            'slug' => 'store-filter-two-'.Str::lower(Str::random(8)),
+            'is_active' => true,
+        ]);
+        $productOne = $this->createStoreProduct($seller, $subcategoryOne, 'Store Subcategory One Product', 250);
+        $productTwo = $this->createStoreProduct($seller, $subcategoryTwo, 'Store Subcategory Two Product', 300);
+        $foreignProduct = $this->createStoreProduct($otherSeller, $subcategoryOne, 'Foreign Seller Same Subcategory', 250);
+
+        $categoryResponse = $this->actingAs($buyer)
+            ->get(route('buyer.shop', ['seller' => $seller->id, 'category_id' => $root->id]))
+            ->assertOk()
+            ->assertSee($productOne->name)
+            ->assertSee($productTwo->name)
+            ->assertSee($subcategoryOne->name)
+            ->assertSee($subcategoryTwo->name)
+            ->assertDontSee($foreignProduct->name);
+        $this->assertSame(2, $categoryResponse->viewData('products')->total());
+
+        $subcategoryResponse = $this->get(route('buyer.shop', [
+            'seller' => $seller->id,
+            'category_id' => $root->id,
+            'subcategory_id' => $subcategoryOne->id,
+        ]))->assertOk()->assertSee($productOne->name)->assertDontSee($productTwo->name)->assertDontSee($foreignProduct->name);
+        $this->assertSame([$productOne->id], $subcategoryResponse->viewData('products')->getCollection()->pluck('id')->all());
+
+        $this->get(route('buyer.shop', ['seller' => $seller->id, 'category_id' => $root->id, 'subcategory_id' => $subcategoryTwo->id]))
+            ->assertOk()->assertSee($productTwo->name)->assertDontSee($productOne->name);
+    }
+
+    public function test_public_seller_store_route_displays_only_that_store_catalog(): void
+    {
+        [, $seller, $otherSeller, $category] = $this->storeFixture();
+        $product = $this->createStoreProduct($seller, $category, 'Public Seller Store Product', 320);
+        $foreignProduct = $this->createStoreProduct($otherSeller, $category, 'Other Public Seller Product', 320);
+
+        $this->get(route('shops.show', ['seller' => $seller->id]))
+            ->assertOk()
+            ->assertSee($seller->business_name)
+            ->assertSee($product->name)
+            ->assertDontSee($foreignProduct->name)
+            ->assertSee(route('shops.show', ['seller' => $seller->id]), escape: false);
+    }
+
     public function test_store_profile_updates_are_visible_to_buyers_and_vacation_state_is_clear(): void
     {
         [$buyer, $seller] = $this->storeFixture();
@@ -176,7 +235,7 @@ class BuyerStorefrontFiltersTest extends TestCase
             ->assertSee('Maximum price must be greater than or equal to minimum price.')
             ->assertSee('value="401"', escape: false)
             ->assertSee('value="400"', escape: false)
-            ->assertSee('Clear Filters');
+            ->assertSee('Clear filters');
     }
 
     public function test_store_pagination_keeps_search_price_rating_and_sort_filters(): void

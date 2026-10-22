@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\ProductApiController;
 use App\Http\Controllers\Api\RiderApiController;
 use App\Http\Controllers\Api\TrackingApiController;
 use App\Http\Controllers\Api\WorkflowApiController;
+use App\Http\Controllers\Rider\RiderPickupBatchController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
@@ -61,6 +62,7 @@ Route::prefix('v1')->group(function (): void {
             ->name('api.v1.broadcasting.auth');
         Route::get('/auth/me', [MobileAuthController::class, 'me'])->name('api.v1.auth.me');
         Route::post('/auth/logout', [MobileAuthController::class, 'logout'])->name('api.v1.auth.logout');
+        Route::get('/buyer/following-stores', [BuyerApiController::class, 'followingStores'])->name('api.v1.buyer.following-stores.index');
         Route::get('/buyer/cart', [BuyerApiController::class, 'cart'])->name('api.v1.buyer.cart.index');
         Route::post('/buyer/cart', [BuyerApiController::class, 'addCartItem'])->name('api.v1.buyer.cart.store');
         Route::patch('/buyer/cart/items/{item}', [BuyerApiController::class, 'updateCartItem'])->name('api.v1.buyer.cart.update');
@@ -93,6 +95,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/rider/dashboard', [RiderApiController::class, 'dashboard'])->name('api.v1.rider.dashboard');
         Route::get('/rider/assignments', [RiderApiController::class, 'assignments'])->name('api.v1.rider.assignments.index');
         Route::get('/rider/pickups', [RiderApiController::class, 'pickups'])->name('api.v1.rider.pickups.index');
+        Route::post('/rider/pickups/batches/{trip}/scan', [RiderPickupBatchController::class, 'scan'])->name('api.v1.rider.pickups.batches.scan');
         Route::post('/rider/pickups/{assignment}/verify', [RiderApiController::class, 'verifyPickup'])->name('api.v1.rider.pickups.verify');
         Route::post('/rider/assignments/{assignment}/location', [RiderApiController::class, 'updateLocation'])->name('api.v1.rider.assignments.location');
         Route::get('/rider/history', [RiderApiController::class, 'history'])->name('api.v1.rider.history.index');

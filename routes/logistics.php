@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
 use App\Http\Controllers\Logistics\LogisticsRemittanceController;
+use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Logistics\LogisticsShippingRateController;
 use App\Http\Controllers\Logistics\RiderApplicationController;
 use App\Http\Controllers\Logistics\LocalTripController;
@@ -16,7 +17,9 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('logistics')->name('logistics.')->group(function (): void {
     Route::get('/', fn () => view('logistics.landing'))->name('home');
 
-    Route::get('/login', function () {
+    Route::get('/login', function (\Illuminate\Http\Request $request, AuthenticationController $auth) {
+        $savedAccounts = collect($auth->savedAccounts($request, 'logistics'));
+
         return view('auth.workspace-login', [
             'workspace' => 'logistics',
             'accountLabel' => 'Logistics & Rider Portal',
@@ -25,6 +28,11 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
             'homeRoute' => route('logistics.home'),
             'loginRoute' => route('logistics.login.store'),
             'registerRoute' => route('register', ['role' => 'logistics']),
+            'savedAccounts' => $savedAccounts,
+            'showSavedAccountPicker' => $savedAccounts->isNotEmpty()
+                && blank(old('email'))
+                && blank(request('email'))
+                && ! $request->session()->has('_errors'),
         ]);
     })->middleware('guest')->name('login');
 
@@ -124,6 +132,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/wallet', [LogisticsRemittanceController::class, 'wallet'])->name('wallet');
         Route::put('/wallet/payout-destination', [LogisticsRemittanceController::class, 'updatePayoutDestination'])->name('wallet.payout-destination.update');
         Route::post('/wallet/payout-requests/{pool}', [LogisticsRemittanceController::class, 'requestPayout'])->whereNumber('pool')->name('wallet.payout-requests.store');
+        Route::get('/wallet/payouts/{entry}/proof', [PayoutProofController::class, 'logistics'])->whereNumber('entry')->name('wallet.payout-proof');
+        Route::post('/wallet/payouts/{entry}/report-issue', [LogisticsRemittanceController::class, 'reportPayoutIssue'])->whereNumber('entry')->middleware('throttle:5,1')->name('wallet.payout-report-issue');
         Route::post('/remittances/rider-payouts/{entry}/record', [LogisticsRemittanceController::class, 'recordRiderPayout'])->whereNumber('entry')->name('remittances.rider-payouts.record');
         Route::post('/remittances/logistics-payouts/{entry}/acknowledge', [LogisticsRemittanceController::class, 'acknowledgeLogisticsPayout'])->whereNumber('entry')->name('remittances.logistics-payouts.acknowledge');
         Route::post('/remittances/{remittance}/verify', [LogisticsRemittanceController::class, 'verify'])->name('remittances.verify');

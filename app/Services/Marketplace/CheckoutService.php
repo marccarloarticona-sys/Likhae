@@ -46,6 +46,7 @@ class CheckoutService
         private readonly RegionShippingRateService $regionShippingRates,
         private readonly BuyerProductAvailabilityService $productAvailability,
         private readonly RewardPointsService $rewardPoints,
+        private readonly VoucherDiscountCalculator $voucherDiscounts,
     ) {}
 
     public function automaticRoutingReady(): bool
@@ -1494,15 +1495,7 @@ class CheckoutService
 
     private function discountAmount(Voucher $voucher, float $subtotal): float
     {
-        $discount = $voucher->discount_type === 'PERCENT'
-            ? $subtotal * ((float) $voucher->discount_value / 100)
-            : (float) $voucher->discount_value;
-
-        if ($voucher->maximum_discount_amount !== null) {
-            $discount = min($discount, (float) $voucher->maximum_discount_amount);
-        }
-
-        return round(min($discount, $subtotal), 2);
+        return $this->voucherDiscounts->calculate($voucher, $subtotal);
     }
 
     private function uniqueNumber(string $table, string $column, string $prefix): string

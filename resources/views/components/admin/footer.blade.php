@@ -1,4 +1,4 @@
-<footer class="ad-footer">
+<footer class="lk-admin-footer">
     <span>© {{ date('Y') }} LIKHAE Marketplace · Admin Center</span>
     <nav aria-label="Admin footer links">
         <a href="{{ route('admin.settings', ['tab' => 'policies']) }}">Policies</a>

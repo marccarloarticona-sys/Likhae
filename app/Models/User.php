@@ -89,6 +89,11 @@ class User extends Authenticatable implements MustVerifyEmailContract
     protected $hidden = [
         'password',
         'remember_token',
+        'payout_method',
+        'payout_account_type',
+        'payout_bank_name',
+        'payout_account_name',
+        'payout_account_number',
     ];
 
     protected function casts(): array
@@ -101,6 +106,8 @@ class User extends Authenticatable implements MustVerifyEmailContract
             'permanently_banned_at' => 'datetime',
             'notification_preferences' => 'array',
             'password' => 'hashed',
+            'payout_account_name' => 'encrypted',
+            'payout_account_number' => 'encrypted',
         ];
     }
 

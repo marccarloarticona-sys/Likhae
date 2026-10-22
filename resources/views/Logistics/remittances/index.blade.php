@@ -133,23 +133,29 @@
 
         <section class="rounded-xl border border-line bg-surface p-6">
             <h2 class="font-display text-xl font-semibold text-ink">Logistics share receipts</h2>
-            <p class="mt-1 text-[11px] text-muted">Acknowledge the Logistics shipping share paid by Admin.</p>
+            <p class="mt-1 text-[11px] text-muted">Review Admin transfer receipts and confirm payouts that have arrived. Confirmed receipts remain available here.</p>
             <div class="mt-4 grid gap-4">
                 @forelse($logisticsPayoutReceipts as $entry)
                     @php($payout = (array) $entry->metadata)
                     <article class="rounded-lg border border-line p-4">
                         <div class="flex flex-wrap justify-between gap-3 text-[10px]"><strong>{{ $payout['payout_reference'] ?? 'Logistics payout' }} · {{ $entry->shipment?->tracking_number ?? 'Parcel' }}</strong><span>PHP {{ number_format((float) $entry->amount, 2) }}</span></div>
                         <p class="mt-2 text-[10px] text-muted">{{ $payout['payout_method'] ?? '' }} {{ $payout['payout_external_reference'] ?? '' }} · Sent {{ $payout['paid_at'] ?? '' }}</p>
-                        @if($payout['is_simulated'] ?? false)<p class="mt-2 text-[10px] font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred.</p>@endif
-                        <form method="POST" action="{{ route('logistics.remittances.logistics-payouts.acknowledge', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2">
-                            @csrf
-                            <label class="grid gap-1 text-[10px] font-semibold">Amount received<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
-                            <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold">Receipt notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
-                            <button class="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">Acknowledge receipt</button>
-                        </form>
+                        @if(!empty($payout['payout_proof_path']))<a class="mt-2 inline-block text-[10px] underline" href="{{ route('logistics.wallet.payout-proof', $entry) }}">View transfer proof</a>@endif
+                        @if(($payout['is_simulated'] ?? false) || \Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
+                            <p class="mt-2 text-[10px] font-semibold text-amber-700">Legacy demo receipt — no transfer proof exists. Contact Admin to correct this old record.</p>
+                        @elseif($entry->status === 'PAYOUT_PENDING_ACK')
+                            <form method="POST" action="{{ route('logistics.remittances.logistics-payouts.acknowledge', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2">
+                                @csrf
+                                <label class="grid gap-1 text-[10px] font-semibold">Amount received<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold">Receipt notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
+                                <button class="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">Acknowledge receipt</button>
+                            </form>
+                        @else
+                            <p class="mt-2 text-[10px] text-emerald-700">Receipt confirmed {{ $payout['acknowledged_at'] ?? '' }}@if(!empty($payout['receipt_notes'])) · {{ $payout['receipt_notes'] }}@endif</p>
+                        @endif
                     </article>
                 @empty
-                    <p class="text-[10px] text-muted">No Logistics payouts are awaiting acknowledgment.</p>
+                    <p class="text-[10px] text-muted">No Logistics payout receipts have been recorded yet.</p>
                 @endforelse
             </div>
             {{ $logisticsPayoutReceipts->links() }}

@@ -608,7 +608,11 @@
                         </div>
 
                         @if($voucher['collected'])
-                            <a href="{{ route('buyer.products') }}" class="lk-btn lk-btn-red">Use Now</a>
+                            @if($voucher['unavailable_reason'])
+                                <button type="button" class="lk-btn lk-btn-light" disabled title="{{ $voucher['unavailable_reason'] }}">Unavailable</button>
+                            @else
+                                <a href="{{ $voucher['use_url'] }}" class="lk-btn lk-btn-red">Use Now</a>
+                            @endif
                         @else
                             <form method="POST" action="{{ route('buyer.vouchers.claim', $voucher['id']) }}">
                                 @csrf
@@ -681,7 +685,7 @@
                                     <code class="lk-voucher-code">{{ $voucher['code'] }}</code>
                                     <small class="lk-voucher-expiry">Expires {{ $voucher['expires'] }}</small>
                                 </div>
-                                <a href="{{ route('buyer.products') }}" class="lk-btn lk-btn-red">Use Now</a>
+                                <a href="{{ $voucher['use_url'] }}" class="lk-btn lk-btn-red">Use Now</a>
                             </div>
                         </article>
                     @endforeach

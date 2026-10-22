@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Schema;
 
 final class PayoutDestinationReadiness
 {
-    private const COLUMNS = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    private const COLUMNS = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
 
     public function readyFor(string $table): bool
     {

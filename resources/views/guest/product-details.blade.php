@@ -8,6 +8,9 @@
     $name = (string) data_get($product, 'name', 'Product');
     $category = (string) data_get($product, 'category.name', 'Local Find');
     $seller = (string) data_get($product, 'seller.business_name', 'LIKHAE Seller');
+    $sellerStoreId = (int) data_get($product, 'seller.id', 0);
+    $sellerStoreUrl = route('shops.show', ['seller' => $sellerStoreId ?: \Illuminate\Support\Str::slug($seller)]);
+    $productUrl = route('products.show', ['slug' => $slug]);
     $sellerAvatar = data_get($product, 'seller.avatar_path', data_get($product, 'seller_avatar'));
     $images = collect(data_get($product, 'images', []))->pluck('url')->filter()->values();
     if ($images->isEmpty()) $images = collect([data_get($product, 'primary_image.url')])->filter();
@@ -60,7 +63,19 @@
     <section class="mt-5 flex flex-col gap-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center">
         <x-shared.profile-image :path="$sellerAvatar" role="seller" class="h-16 w-16 rounded-xl object-cover" :alt="$seller" />
         <div class="min-w-0 flex-1"><span class="text-[10px] font-bold uppercase tracking-widest text-red-800">Official seller</span><h2 class="truncate text-lg font-bold text-stone-900">{{ $seller }}</h2><p class="text-xs text-stone-500">{{ data_get($product, 'location', 'Philippines') }}</p></div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{{ $sellerStoreUrl }}" class="lk-btn lk-btn-light">Visit Shop</a>
+            <button type="button" class="lk-detail-share-icon" data-share-link data-share-url="{{ $productUrl }}" data-share-title="{{ $name }}" data-share-label="Product" aria-label="Share product" title="Share product">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="m8.6 12.8 6.8 3.8M15.4 7.4l-6.8 3.8" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="6" r="3" />
+                    <circle cx="18" cy="18" r="3" />
+                </svg>
+            </button>
+        </div>
     </section>
+    <p class="mt-2 text-right text-xs text-stone-500" data-share-feedback aria-live="polite" role="status" hidden></p>
 
     <div class="mt-5 grid gap-5">
         <section class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">

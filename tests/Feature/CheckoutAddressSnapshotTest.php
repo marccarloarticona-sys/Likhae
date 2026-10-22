@@ -15,6 +15,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Marketplace\CheckoutService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class CheckoutAddressSnapshotTest extends TestCase
@@ -136,7 +137,16 @@ class CheckoutAddressSnapshotTest extends TestCase
             'is_default' => true,
         ]);
 
-        $order = app(CheckoutService::class)->placeOrder(
+        $checkout = app(CheckoutService::class);
+        try {
+            $checkout->placeOrder($buyer, $address, collect([$item]), 'ONLINE');
+            $this->fail('Online orders must remain unavailable until payment processing is implemented.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('payment_method', $exception->errors());
+        }
+        $this->assertDatabaseCount('orders', 0);
+
+        $order = $checkout->placeOrder(
             $buyer,
             $address,
             collect([$item]),
@@ -144,6 +154,12 @@ class CheckoutAddressSnapshotTest extends TestCase
             [],
             null,
         );
+
+        $this->assertSame('PENDING', $order->fresh()->payment_status);
+        $this->assertSame('COD', $order->payments()->sole()->method);
+        $this->assertSame('PENDING', $order->payments()->sole()->status);
+        $this->assertSame('50.00', (string) $order->sellerOrders()->sole()->shipping_fee);
+        $this->assertSame(4, (int) $variant->fresh()->stock);
 
         $address->update([
             'street_address' => 'Updated Street',

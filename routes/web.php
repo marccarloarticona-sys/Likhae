@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\MobileGoogleAuthenticationController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Auth\RegistrationController;
 use App\Http\Controllers\Buyer\GuestMarketplaceController;
+use App\Http\Controllers\Buyer\BuyerController;
 use App\Http\Controllers\Buyer\TrackingController;
 use App\Http\Controllers\Communication\ConversationAttachmentController;
 use App\Http\Controllers\Communication\ConversationReceiptController;
@@ -37,6 +38,7 @@ Route::get('/', [GuestMarketplaceController::class, 'home'])->name('home');
 Route::get('/guest-account', [GuestMarketplaceController::class, 'products'])->name('guest.home');
 Route::get('/products', [GuestMarketplaceController::class, 'products'])->name('products');
 Route::get('/products/{slug}', [GuestMarketplaceController::class, 'show'])->name('products.show');
+Route::get('/shops/{seller}', [BuyerController::class, 'publicShop'])->name('shops.show');
 Route::get('/marketplace/search-suggestions', [GuestMarketplaceController::class, 'searchSuggestions'])
     ->middleware('throttle:60,1')
     ->name('marketplace.search-suggestions');
@@ -78,13 +80,24 @@ Route::middleware(['auth', 'verified'])->group(function (): void {
 | the separate Logistics & Rider portal login. Rider and Courier are one workspace role.
 |
 */
-Route::get('/login', fn () => view('auth.login'))
+Route::get('/login', function (Request $request, AuthenticationController $auth) {
+    $savedAccounts = collect($auth->savedAccounts($request, 'marketplace'));
+
+    return view('auth.login', compact('savedAccounts'));
+})
     ->middleware('guest')
     ->name('login');
 
 Route::post('/login', [AuthenticationController::class, 'store'])
     ->middleware(['guest', 'throttle:30,1'])
     ->name('login.post');
+
+Route::post('/login/recent-accounts/remove', [AuthenticationController::class, 'removeRecentAccount'])
+    ->middleware('guest')
+    ->name('login.recent-accounts.remove');
+Route::post('/login/recent-accounts/clear', [AuthenticationController::class, 'clearRecentAccounts'])
+    ->middleware('guest')
+    ->name('login.recent-accounts.clear');
 
 Route::post('/switch-account', [AuthenticationController::class, 'switchAccount'])
     ->middleware('auth')

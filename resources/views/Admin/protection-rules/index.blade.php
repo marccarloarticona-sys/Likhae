@@ -1,30 +1,187 @@
 @extends('layouts.admin.app')
 @section('title', 'Additional Care Rules')
 @section('content')
-<div style="display:grid;gap:16px">
-    <div class="ad-page-head"><div><span class="ad-overline">Step 8</span><h2>Additional Care / Fragile Protection</h2><p>Rules are inactive until an administrator explicitly activates them. Existing orders keep their checkout snapshots.</p></div></div>
-    @if(session('status'))<div class="ad-card ad-card-body">{{ session('status') }}</div>@endif
-    @if($errors->any())<div class="ad-card ad-card-body" role="alert"><strong>Please correct the protection rule:</strong><ul style="margin:.5rem 0 0;padding-left:1.25rem">@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
-    @if(!$ready)<div class="ad-card ad-card-body" style="border-color:#f59e0b;background:#fffbeb;color:#92400e">Protection-rule tables are prepared but not installed. No protection fee is chargeable yet.</div>@endif
-    <div class="ad-card ad-card-body">
-        <h2>Create rule</h2><p style="margin:.35rem 0 1rem;color:#78716c">Use one target level per rule. Product overrides subcategory; subcategory overrides category. Rates remain owner-configured.</p>
-        <form method="POST" action="{{ route('admin.protection-rules.store') }}" style="display:grid;gap:12px;grid-template-columns:repeat(3,minmax(0,1fr))">
+<div class="ad-protection-page">
+    <header class="ad-page-head">
+        <div>
+            <span class="ad-overline">Step 8</span>
+            <h2>Additional Care / Fragile Protection</h2>
+            <p>Set an optional extra care fee for eligible products. Rules affect new checkouts only; existing orders keep their saved fees.</p>
+        </div>
+    </header>
+
+    @if(session('status'))
+        <div class="ad-protection-flash" role="status">{{ session('status') }}</div>
+    @endif
+    @if($errors->any())
+        <div class="ad-protection-flash ad-protection-flash--error" id="protection-rule-errors" role="alert">
+            <strong>Please review these details:</strong>
+            <ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul>
+        </div>
+    @endif
+    @if(!$ready)
+        <div class="ad-note is-warning" role="status">Protection-rule tables are not installed yet. No protection fee can be charged until they are available.</div>
+    @endif
+
+    <section class="ad-card ad-protection-create" aria-labelledby="protection-create-title">
+        <div class="ad-card-head">
+            <div>
+                <span class="ad-overline">New rule</span>
+                <h2 id="protection-create-title">Add a care fee rule</h2>
+                <p>Choose where it applies, then set the fee calculation.</p>
+            </div>
+            <span class="ad-status">Inactive by default</span>
+        </div>
+
+        <form method="POST" action="{{ route('admin.protection-rules.store') }}" class="ad-protection-form" data-protection-rule-form>
             @csrf
-            <label class="ad-field"><span>Category</span><select name="category_id"><option value="">No category</option>@foreach($categories as $category)<option value="{{ $category->id }}">{{ $category->name }}</option>@endforeach</select></label>
-            <label class="ad-field"><span>Subcategory</span><select name="subcategory_id"><option value="">No subcategory</option>@foreach($categories as $category)@foreach($category->children as $child)<option value="{{ $child->id }}">{{ $category->name }} / {{ $child->name }}</option>@endforeach @endforeach</select></label>
-            <label class="ad-field"><span>Product override</span><select name="product_id"><option value="">No product</option>@foreach($products as $product)<option value="{{ $product->id }}">{{ $product->name }}</option>@endforeach</select></label>
-            <label class="ad-field"><span>Risk level</span><input name="risk_level" maxlength="32" placeholder="Owner classification"></label>
-            <label class="ad-field"><span>Calculation</span><select name="calculation_type"><option value="PERCENTAGE">Percentage</option><option value="FLAT">Flat</option><option value="HYBRID">Hybrid</option></select></label>
-            <label class="ad-field"><span>Scope</span><select name="scope"><option value="PER_UNIT">Per unit</option><option value="PER_LINE">Per line</option></select></label>
-            <label class="ad-field"><span>Percentage rate</span><input type="number" step="0.0001" min="0" name="percentage_rate"></label>
-            <label class="ad-field"><span>Flat amount (PHP)</span><input type="number" step="0.01" min="0" name="flat_amount"></label>
-            <label class="ad-field"><span>Min / max fee</span><span style="display:flex;gap:6px"><input type="number" step="0.01" min="0" name="minimum_fee" placeholder="Min"><input type="number" step="0.01" min="0" name="maximum_fee" placeholder="Max"></span></label>
-            <label class="ad-field"><span>Price band (PHP)</span><span style="display:flex;gap:6px"><input type="number" step="0.01" min="0" name="minimum_product_price" placeholder="Min"><input type="number" step="0.01" min="0" name="maximum_product_price" placeholder="Max"></span></label>
-            <label class="ad-field"><span>Effective dates</span><span style="display:flex;gap:6px"><input type="datetime-local" name="effective_from"><input type="datetime-local" name="effective_until"></span></label>
-            <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="active" value="1"> Activate now</label>
-            <div style="grid-column:1/-1"><button class="ad-btn ad-btn-primary" @disabled(!$ready)>Save rule</button></div>
+            @include('components.admin.protection-rule-fields', ['rule' => null])
+            <div class="ad-protection-form__actions">
+                <label class="ad-protection-activate">
+                    <input type="checkbox" name="active" value="1" @checked(old('_protection_rule_edit_id') === null && old('active'))>
+                    <span><strong>Activate after saving</strong><small>New eligible checkouts can use this rule.</small></span>
+                </label>
+                <button class="ad-btn ad-btn-primary" @disabled(!$ready)>Save rule</button>
+            </div>
         </form>
-    </div>
-    @if($ready)<div class="ad-card"><div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Target</th><th>Risk / formula</th><th>Scope</th><th>Band</th><th>Status</th><th>Actions</th></tr></thead><tbody>@forelse($rules as $rule)<tr><td>{{ $rule->product?->name ?: ($rule->subcategory?->name ?: ($rule->category?->name ?: 'Unscoped')) }}</td><td>{{ $rule->risk_level ?: 'Unclassified' }} · {{ $rule->calculation_type }}</td><td>{{ $rule->scope ?: 'Pending' }}</td><td>{{ $rule->minimum_product_price !== null ? 'PHP '.number_format((float)$rule->minimum_product_price,2) : 'Any' }} – {{ $rule->maximum_product_price !== null ? 'PHP '.number_format((float)$rule->maximum_product_price,2) : 'Any' }}</td><td>{{ $rule->active ? 'Active' : 'Inactive' }}</td><td><details><summary class="ad-btn ad-btn-secondary ad-btn-sm">Edit</summary><form method="POST" action="{{ route('admin.protection-rules.update', $rule) }}" style="display:grid;gap:8px;min-width:280px;margin-top:8px">@csrf @method('PATCH')<select name="category_id"><option value="">No category</option>@foreach($categories as $category)<option value="{{ $category->id }}" @selected((int) $rule->category_id === (int) $category->id)>{{ $category->name }}</option>@endforeach</select><select name="subcategory_id"><option value="">No subcategory</option>@foreach($categories as $category)@foreach($category->children as $child)<option value="{{ $child->id }}" @selected((int) $rule->subcategory_id === (int) $child->id)>{{ $category->name }} / {{ $child->name }}</option>@endforeach @endforeach</select><select name="product_id"><option value="">No product</option>@foreach($products as $product)<option value="{{ $product->id }}" @selected((int) $rule->product_id === (int) $product->id)>{{ $product->name }}</option>@endforeach</select><input name="risk_level" value="{{ $rule->risk_level }}" maxlength="32" placeholder="Risk level"><select name="calculation_type"><option value="PERCENTAGE" @selected($rule->calculation_type === 'PERCENTAGE')>Percentage</option><option value="FLAT" @selected($rule->calculation_type === 'FLAT')>Flat</option><option value="HYBRID" @selected($rule->calculation_type === 'HYBRID')>Hybrid</option></select><select name="scope"><option value="PER_UNIT" @selected($rule->scope === 'PER_UNIT')>Per unit</option><option value="PER_LINE" @selected($rule->scope === 'PER_LINE')>Per line</option></select><input type="number" step="0.0001" min="0" name="percentage_rate" value="{{ $rule->percentage_rate }}" placeholder="Percentage rate"><input type="number" step="0.01" min="0" name="flat_amount" value="{{ $rule->flat_amount }}" placeholder="Flat amount"><input type="number" step="0.01" min="0" name="minimum_fee" value="{{ $rule->minimum_fee }}" placeholder="Minimum fee"><input type="number" step="0.01" min="0" name="maximum_fee" value="{{ $rule->maximum_fee }}" placeholder="Maximum fee"><input type="number" step="0.01" min="0" name="minimum_product_price" value="{{ $rule->minimum_product_price }}" placeholder="Minimum product price"><input type="number" step="0.01" min="0" name="maximum_product_price" value="{{ $rule->maximum_product_price }}" placeholder="Maximum product price"><input type="datetime-local" name="effective_from" value="{{ optional($rule->effective_from)->format('Y-m-d\\TH:i') }}"><input type="datetime-local" name="effective_until" value="{{ optional($rule->effective_until)->format('Y-m-d\\TH:i') }}"><label><input type="checkbox" name="active" value="1" @checked($rule->active)> Active</label><button class="ad-btn ad-btn-primary ad-btn-sm">Save changes</button></form></details><form method="POST" action="{{ route('admin.protection-rules.toggle', $rule) }}" style="margin-top:8px" data-confirm-title="{{ $rule->active ? 'Deactivate protection rule?' : 'Activate protection rule?' }}" data-confirm-message="{{ $rule->active ? 'New checkouts will stop using this fee rule. Existing orders keep their saved fee snapshots.' : 'New eligible checkouts may begin using this fee rule.' }}" data-confirm-label="{{ $rule->active ? 'Deactivate rule' : 'Activate rule' }}" @if($rule->active) data-confirm-tone="danger" @endif>@csrf @method('PATCH')<button class="ad-btn ad-btn-secondary ad-btn-sm">{{ $rule->active ? 'Deactivate' : 'Activate' }}</button></form></td></tr>@empty<tr><td colspan="6">No protection rules configured.</td></tr>@endforelse</tbody></table></div>{{ $rules->links() }}</div>@endif
+    </section>
+
+    @if($ready)
+        <section class="ad-card ad-protection-rules" aria-labelledby="protection-rules-title">
+            <div class="ad-card-head">
+                <div>
+                    <span class="ad-overline">Rules</span>
+                    <h2 id="protection-rules-title">Configured care fees</h2>
+                    <p>Product rules take priority over subcategory rules, which take priority over category rules.</p>
+                </div>
+            </div>
+            <div class="ad-protection-rule-list">
+                @forelse($rules as $rule)
+                    @php
+                        $ruleTarget = $rule->product?->name
+                            ?: ($rule->subcategory?->name
+                                ? $rule->subcategory->name . ' · ' . ($rule->subcategory->parent?->name ?? 'Subcategory')
+                                : ($rule->category?->name ?: 'Unscoped'));
+                        $percentage = number_format((float) $rule->percentage_rate, 2) . '%';
+                        $flatAmount = 'PHP ' . number_format((float) $rule->flat_amount, 2);
+                    @endphp
+                    <article class="ad-protection-rule">
+                        <header class="ad-protection-rule__header">
+                            <div>
+                                <span class="ad-protection-rule__target-type">{{ $rule->product_id ? 'Product' : ($rule->subcategory_id ? 'Subcategory' : 'Category') }}</span>
+                                <h3>{{ $ruleTarget }}</h3>
+                                <p>{{ $rule->risk_level ?: 'General care' }}</p>
+                            </div>
+                            <div class="ad-protection-rule__actions">
+                                <span class="ad-status {{ $rule->active ? 'is-active' : '' }}">{{ $rule->active ? 'Active' : 'Inactive' }}</span>
+                                <form method="POST" action="{{ route('admin.protection-rules.toggle', $rule) }}"
+                                    data-confirm-title="{{ $rule->active ? 'Deactivate protection rule?' : 'Activate protection rule?' }}"
+                                    data-confirm-message="{{ $rule->active ? 'New checkouts will stop using this fee rule. Existing orders keep their saved fee snapshots.' : 'New eligible checkouts may begin using this fee rule.' }}"
+                                    data-confirm-label="{{ $rule->active ? 'Deactivate rule' : 'Activate rule' }}"
+                                    @if($rule->active) data-confirm-tone="danger" @endif>
+                                    @csrf
+                                    @method('PATCH')
+                                    <button class="ad-btn ad-btn-secondary ad-btn-sm">{{ $rule->active ? 'Deactivate' : 'Activate' }}</button>
+                                </form>
+                            </div>
+                        </header>
+                        <div class="ad-protection-rule__details">
+                            <div><span>Fee</span><strong>
+                                @if($rule->calculation_type === 'PERCENTAGE')
+                                    {{ $percentage }} of item price
+                                @elseif($rule->calculation_type === 'FLAT')
+                                    {{ $flatAmount }}
+                                @else
+                                    {{ $percentage }} + {{ $flatAmount }}
+                                @endif
+                            </strong><small>{{ $rule->scope === 'PER_UNIT' ? 'For each item' : 'Once per order line' }}</small></div>
+                            <div><span>Item price</span><strong>
+                                @if($rule->minimum_product_price !== null || $rule->maximum_product_price !== null)
+                                    PHP {{ $rule->minimum_product_price !== null ? number_format((float) $rule->minimum_product_price, 2) : '0.00' }} – {{ $rule->maximum_product_price !== null ? number_format((float) $rule->maximum_product_price, 2) : 'no upper limit' }}
+                                @else
+                                    Any price
+                                @endif
+                            </strong>@if($rule->minimum_fee !== null || $rule->maximum_fee !== null)<small>Fee {{ $rule->minimum_fee !== null ? 'min PHP ' . number_format((float) $rule->minimum_fee, 2) : '' }}{{ $rule->minimum_fee !== null && $rule->maximum_fee !== null ? ' · ' : '' }}{{ $rule->maximum_fee !== null ? 'max PHP ' . number_format((float) $rule->maximum_fee, 2) : '' }}</small>@endif</div>
+                        </div>
+                        <details class="ad-protection-edit" @if((string) old('_protection_rule_edit_id') === (string) $rule->id) open @endif>
+                            <summary class="ad-btn ad-btn-secondary ad-btn-sm">Edit rule</summary>
+                            <div class="ad-protection-edit__panel">
+                                <form method="POST" action="{{ route('admin.protection-rules.update', $rule) }}" class="ad-protection-form" data-protection-rule-form>
+                                    @csrf
+                                    @method('PATCH')
+                                    <input type="hidden" name="_protection_rule_edit_id" value="{{ $rule->id }}">
+                                    @include('components.admin.protection-rule-fields', ['rule' => $rule])
+                                    <div class="ad-protection-form__actions">
+                                        <label class="ad-protection-activate">
+                                            <input type="checkbox" name="active" value="1" @checked((string) old('_protection_rule_edit_id') === (string) $rule->id ? old('active') : $rule->active)>
+                                            <span><strong>Rule is active</strong><small>Only new eligible checkouts are affected.</small></span>
+                                        </label>
+                                        <button class="ad-btn ad-btn-primary ad-btn-sm">Save changes</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </details>
+                    </article>
+                @empty
+                    <div class="ad-protection-empty">
+                        <span aria-hidden="true">+</span>
+                        <strong>No care fee rules yet</strong>
+                        <p>Add a rule above when a product needs extra care or fragile-item protection.</p>
+                    </div>
+                @endforelse
+            </div>
+            @if($rules->hasPages())<div class="ad-protection-pagination">{{ $rules->links() }}</div>@endif
+        </section>
+    @endif
 </div>
 @endsection
+
+@push('scripts')
+<script>
+    document.querySelectorAll('[data-protection-rule-form]').forEach(function (form) {
+        const targetOptions = form.querySelectorAll('[data-protection-target-option]');
+        const targetPanels = form.querySelectorAll('[data-protection-target-panel]');
+        const calculation = form.querySelector('[name="calculation_type"]');
+        const formulaPanels = form.querySelectorAll('[data-protection-formula-panel]');
+        const hybridNote = form.querySelector('[data-protection-hybrid-note]');
+
+        function updateTarget() {
+            const selected = form.querySelector('[name="target_level"]:checked')?.value;
+            targetPanels.forEach(function (panel) {
+                const active = panel.dataset.protectionTargetPanel === selected;
+                panel.hidden = !active;
+                panel.querySelectorAll('select').forEach(function (input) {
+                    input.required = active;
+                    if (!active) input.value = '';
+                });
+            });
+            targetOptions.forEach(function (option) {
+                const radio = option.querySelector('input[type="radio"]');
+                option.classList.toggle('is-selected', radio.checked);
+            });
+        }
+
+        function updateFormula() {
+            const selected = calculation?.value || 'PERCENTAGE';
+            if (hybridNote) hybridNote.hidden = selected !== 'HYBRID';
+            formulaPanels.forEach(function (panel) {
+                const formula = panel.dataset.protectionFormulaPanel;
+                const active = formula === selected || selected === 'HYBRID' && formula !== 'HYBRID';
+                panel.hidden = !active;
+                panel.querySelectorAll('input').forEach(function (input) {
+                    if (!active) input.value = '';
+                    input.required = active && (selected === 'PERCENTAGE' && input.name === 'percentage_rate'
+                        || selected === 'FLAT' && input.name === 'flat_amount');
+                });
+            });
+        }
+
+        targetOptions.forEach(function (option) {
+            option.querySelector('input[type="radio"]').addEventListener('change', updateTarget);
+        });
+        calculation?.addEventListener('change', updateFormula);
+        updateTarget();
+        updateFormula();
+    });
+</script>
+@endpush

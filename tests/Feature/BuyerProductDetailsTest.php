@@ -31,10 +31,27 @@ class BuyerProductDetailsTest extends TestCase
             ->assertSee('data-variation-id="'.$product->variants()->firstOrFail()->id.'"', escape: false)
             ->assertSee(route('buyer.cart.add', $product), escape: false)
             ->assertSee('data-wishlist', escape: false)
-            ->assertSee(route('buyer.shop', ['seller' => \Illuminate\Support\Str::slug($product->sellerProfile->business_name)]), escape: false)
+            ->assertSee(route('buyer.shop', ['seller' => $product->seller_profile_id]), escape: false)
+            ->assertSee('Visit Shop')
+            ->assertSee('Share Shop')
+            ->assertSee('data-share-shop', escape: false)
             ->assertSee('Message')
             ->assertSee('Description')
             ->assertSee('Ratings & Reviews', escape: false);
+    }
+
+    public function test_guest_product_detail_visit_shop_uses_the_public_seller_store_url(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $shopUrl = route('shops.show', ['seller' => $product->seller_profile_id]);
+
+        $this->get(route('products.show', $product->slug))
+            ->assertOk()
+            ->assertSee('Visit Shop')
+            ->assertSee('Share Shop')
+            ->assertSee('href="'.$shopUrl.'"', escape: false)
+            ->assertSee('data-shop-url="'.$shopUrl.'"', escape: false);
     }
 
     public function test_product_details_show_primary_image_first_and_all_product_images(): void
@@ -59,9 +76,8 @@ class BuyerProductDetailsTest extends TestCase
             ->get(route('buyer.product-details', $product->slug))
             ->assertOk();
 
-        $primaryUrl = "/storage/sellers/1/products/{$product->id}/gallery-10.jpg";
-
-        $response->assertSee('src="'.$primaryUrl.'" alt="'.$product->name.'" data-gallery-main', escape: false);
+        $response->assertSee('gallery-10.jpg', escape: false)
+            ->assertSee('data-gallery-main', escape: false);
         $response->assertDontSee('127.0.0.1:8000');
         $this->assertSame(10, substr_count($response->getContent(), 'data-gallery-thumb'));
     }

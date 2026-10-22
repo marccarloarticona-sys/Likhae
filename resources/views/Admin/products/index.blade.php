@@ -106,19 +106,31 @@
                             @endphp
                             <tr>
                                 <td>
-                                    <strong>{{ $product->name }}</strong>
-                                    <small>Product #{{ $product->id }}</small>
-                                    @if($product->complianceCases->isNotEmpty())
-                                        <span class="ad-product-flag">Compliance review</span>
-                                    @endif
-                                    @if($moderationAvailable && $product->latestModerationScan)
-                                        <span class="ad-product-flag">AI {{ str($product->latestModerationScan->overall_risk ?: $product->latestModerationScan->scan_status)->replace('_', ' ')->headline() }}</span>
-                                        @if($product->latestModerationScan->detected_categories)
-                                            <small>{{ collect($product->latestModerationScan->detected_categories)->map(fn ($category) => str($category)->replace('_', ' ')->headline()->toString())->take(2)->implode(', ') }}</small>
-                                        @endif
-                                    @elseif($moderationAvailable)
-                                        <span class="ad-product-flag">AI Not scanned</span>
-                                    @endif
+                                    <div class="ad-product-identity">
+                                        <img
+                                            class="ad-product-thumbnail"
+                                            src="{{ $product->admin_thumbnail_url ?: asset('images/product-placeholder.svg') }}"
+                                            alt="{{ $product->name }}"
+                                            width="56"
+                                            height="56"
+                                            loading="lazy"
+                                        >
+                                        <div class="ad-product-identity-copy">
+                                            <strong>{{ $product->name }}</strong>
+                                            <small>Product #{{ $product->id }}</small>
+                                            @if($product->complianceCases->isNotEmpty())
+                                                <span class="ad-product-flag">Compliance review</span>
+                                            @endif
+                                            @if($moderationAvailable && $product->latestModerationScan)
+                                                <span class="ad-product-flag">AI {{ str($product->latestModerationScan->overall_risk ?: $product->latestModerationScan->scan_status)->replace('_', ' ')->headline() }}</span>
+                                                @if($product->latestModerationScan->detected_categories)
+                                                    <small>{{ collect($product->latestModerationScan->detected_categories)->map(fn ($category) => str($category)->replace('_', ' ')->headline()->toString())->take(2)->implode(', ') }}</small>
+                                                @endif
+                                            @elseif($moderationAvailable)
+                                                <span class="ad-product-flag">AI Not scanned</span>
+                                            @endif
+                                        </div>
+                                    </div>
                                 </td>
                                 <td>{{ $product->sellerProfile?->business_name ?: 'Seller unavailable' }}</td>
                                 <td>{{ $productCategory }}</td>

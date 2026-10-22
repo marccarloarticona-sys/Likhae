@@ -2,11 +2,11 @@ import '../shared/echo.js';
 import '../shared/feedback.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
+import '../shared/payout-destination.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
-    const shell = one('[data-admin-shell]');
     const realtimeCard = one('[data-realtime-transport-card]');
     if (realtimeCard) {
         const mode = one('[data-transport-mode]', realtimeCard);
@@ -94,64 +94,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (document.visibilityState === 'visible') refreshServerStatus();
         });
     }
-    const sidebar = one('[data-admin-sidebar]');
-    const mobileMenu = one('[data-admin-mobile-menu]');
-    const overlay = one('[data-admin-overlay]');
-    const collapseToggle = one('[data-admin-sidebar-toggle]');
-    const storageKey = 'likhae-admin-sidebar-collapsed';
-
-    const setCollapsed = (collapsed) => {
-        if (!shell || window.innerWidth <= 1024) return;
-        shell.classList.toggle('is-collapsed', collapsed);
-        collapseToggle?.setAttribute('aria-expanded', String(!collapsed));
-        try { localStorage.setItem(storageKey, collapsed ? '1' : '0'); } catch (_) {}
-    };
-
-    try { setCollapsed(localStorage.getItem(storageKey) === '1'); } catch (_) {}
-
-    collapseToggle?.addEventListener('click', () => {
-        if (window.innerWidth <= 1024) {
-            shell?.classList.remove('is-mobile-open');
-            return;
-        }
-        setCollapsed(!shell?.classList.contains('is-collapsed'));
-    });
-
-    const closeMobileMenu = () => shell?.classList.remove('is-mobile-open');
-    mobileMenu?.addEventListener('click', () => shell?.classList.add('is-mobile-open'));
-    overlay?.addEventListener('click', closeMobileMenu);
-    all('.ad-sidebar a', sidebar || document).forEach((link) => link.addEventListener('click', () => {
-        if (window.innerWidth <= 1024) closeMobileMenu();
-    }));
-
-    all('[data-admin-nav-toggle]').forEach((toggle) => {
-        toggle.addEventListener('click', () => {
-            if (window.innerWidth > 1024 && shell?.classList.contains('is-collapsed')) {
-                setCollapsed(false);
-            }
-            const group = toggle.closest('.ad-nav-group');
-            const submenu = one('[data-admin-submenu]', group);
-            if (!submenu) return;
-            const willOpen = submenu.hidden;
-            all('[data-admin-nav-toggle]').forEach((other) => {
-                if (other === toggle || other.closest('.ad-nav-group')?.classList.contains('is-current')) return;
-                other.classList.remove('is-open');
-                other.setAttribute('aria-expanded', 'false');
-                const otherMenu = one('[data-admin-submenu]', other.closest('.ad-nav-group'));
-                if (otherMenu) otherMenu.hidden = true;
-            });
-            submenu.hidden = !willOpen;
-            toggle.classList.toggle('is-open', willOpen);
-            toggle.setAttribute('aria-expanded', String(willOpen));
-        });
-    });
-
-    window.addEventListener('resize', () => {
-        if (window.innerWidth > 1024) closeMobileMenu();
-    });
-
+    // The shared Admin sidebar component owns navigation and collapse state.
+    // Keeping a second controller here can offset the shell without resizing the sidebar.
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') closeMobileMenu();
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
             event.preventDefault();
             one('.ad-search input')?.focus();

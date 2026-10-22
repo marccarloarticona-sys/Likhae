@@ -10,7 +10,6 @@
         <div>
             <span class="ad-overline">Marketplace Growth</span>
             <h2>Platform Marketing</h2>
-            <p>Campaigns create checkout discounts. Announcements send informational messages without changing prices.</p>
         </div>
         @if($section === 'campaigns' && $campaignsReady)
             <button type="button" class="ad-btn ad-btn-primary" data-marketing-campaign-open="create">+ Create Campaign</button>
@@ -24,17 +23,6 @@
         <a class="ad-tab {{ $section === 'campaigns' ? 'is-active' : '' }}" href="{{ route('admin.marketing', ['section' => 'campaigns']) }}" @if($section === 'campaigns') aria-current="page" @endif>Campaigns</a>
         <a class="ad-tab {{ $section === 'announcements' ? 'is-active' : '' }}" href="{{ route('admin.marketing', ['section' => 'announcements']) }}" @if($section === 'announcements') aria-current="page" @endif>Announcements</a>
     </nav>
-
-    <div class="ad-marketing-feature-key" role="group" aria-label="Campaigns and announcements explained">
-        <div class="ad-marketing-feature-card is-campaign {{ $section === 'campaigns' ? 'is-current' : '' }}" role="group" aria-label="Campaigns: checkout discounts">
-            <span>Campaigns · checkout discounts</span>
-            <p>Buyers redeem voucher codes at checkout. Eligible orders receive a price discount.</p>
-        </div>
-        <div class="ad-marketing-feature-card is-announcement {{ $section === 'announcements' ? 'is-current' : '' }}" role="group" aria-label="Announcements: informational messages">
-            <span>Announcements · information messages</span>
-            <p>Send in-app updates to an audience. They do not create voucher redemptions or change order totals.</p>
-        </div>
-    </div>
 
     @if($section === 'campaigns')
         <section class="ad-card ad-card-body" aria-labelledby="marketing-campaigns-heading">

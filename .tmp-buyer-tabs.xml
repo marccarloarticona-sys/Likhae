@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="Tests\Feature\BuyerOrderPage8WorkflowTest" file="C:\Users\mcarl\OneDrive\Documents\Likhae-working\tests\Feature\BuyerOrderPage8WorkflowTest.php" tests="1" assertions="8" errors="0" failures="1" skipped="0" time="3.050474">
+    <testcase name="test_buyer_tabs_map_cod_online_and_fulfillment_states_exclusively" file="C:\Users\mcarl\OneDrive\Documents\Likhae-working\tests\Feature\BuyerOrderPage8WorkflowTest.php" line="27" class="Tests\Feature\BuyerOrderPage8WorkflowTest" classname="Tests.Feature.BuyerOrderPage8WorkflowTest" assertions="8" time="3.050474">
+      <failure type="PHPUnit\Framework\ExpectationFailedException">Tests\Feature\BuyerOrderPage8WorkflowTest::test_buyer_tabs_map_cod_online_and_fulfillment_states_exclusively&#13;
+Failed asserting that two arrays are identical.
+--- Expected
++++ Actual
+@@ @@
+ Array &amp;0 [
+-    0 =&gt; 'P8-ORD-COMPLETED-COMPLETED-COMPLETED-H9RSKK',
++    0 =&gt; 'P8-ORD-COMPLETED-COMPLETED-COMPLETED-H9RSKKO',
+ ]
+&#13;
+C:\Users\mcarl\OneDrive\Documents\Likhae-working\tests\Feature\BuyerOrderPage8WorkflowTest.php:76</failure>
+    </testcase>
+  </testsuite>
+</testsuites>

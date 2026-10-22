@@ -6,8 +6,8 @@
 @section('content')
 <div class="sl-page">
     <div class="sl-page-toolbar">
-        <div><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Request payout for eligible parcel proceeds. Admin reviews requests and records each payment here.</p></div>
-        <a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a>
+        <div><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Request payout for eligible parcel proceeds. Admin transfers funds outside Likhae, then records the reference and proof here.</p></div>
+        <div class="flex flex-wrap gap-2"><a href="{{ route('seller.messages') }}" class="sl-btn sl-btn-ghost">Contact Support</a><a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a></div>
     </div>
     @if($ready)
         <section class="sl-card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px">
@@ -17,19 +17,18 @@
         </section>
     @endif
     <section class="sl-card">
-        <header class="sl-card-head"><div><span class="sl-eyebrow">Payout destination</span><h2>Online payment details</h2><p>Admin uses these details for demo payout records. Online payouts are simulated only; no money is transferred. Account name and number are encrypted at rest.</p></div></header>
-        @if($payoutDestinationReady)
-            <form method="POST" action="{{ route('seller.settlements.payout-destination.update') }}" class="sl-form-grid">
-                @csrf @method('PUT')
-                <label class="sl-field"><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected($seller->payout_method === $method)>{{ $method }}</option>@endforeach</select></label>
-                <label class="sl-field"><span>Bank name (for bank transfer)</span><input name="payout_bank_name" maxlength="120" value="{{ $seller->payout_bank_name }}"></label>
-                <label class="sl-field"><span>Account holder name</span><input name="payout_account_name" maxlength="150" value="{{ $seller->payout_account_name }}" required></label>
-                <label class="sl-field"><span>Account number or mobile</span><input name="payout_account_number" maxlength="150" value="{{ $seller->payout_account_number }}" required></label>
-                <div class="sl-bi-actions"><button class="sl-btn sl-btn-primary">Save payment details</button></div>
-            </form>
+        <header class="sl-card-head"><div><span class="sl-eyebrow">Payout destination</span><h2>Payment details</h2><p>Admin sends your payout to this saved destination outside Likhae. Reference and proof are recorded here after transfer.</p></div></header>
+        @if($payoutDestinationSaved)
+            @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($seller))
+            <dl class="grid gap-3 sm:grid-cols-2">
+                <div><dt class="text-xs text-muted">Channel</dt><dd class="font-semibold">{{ $seller->payout_method }}@if($seller->payout_bank_name) · {{ $seller->payout_bank_name }}@endif</dd></div>
+                <div><dt class="text-xs text-muted">Account holder</dt><dd class="font-semibold">{{ $seller->payout_account_name }}</dd></div>
+                <div><dt class="text-xs text-muted">{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd class="font-semibold">{{ \App\Support\PayoutAccountDetails::formatNumber($seller->payout_account_number, $savedPayoutType) }}</dd></div>
+            </dl>
         @else
-            <p class="sl-empty-state">Online payout details will be available after the additive payout destination migration is installed.</p>
+            <p class="sl-empty-state">Add GCash, Maya, or bank details in Seller Account before requesting a payout.</p>
         @endif
+        <a href="{{ route('seller.account', ['tab' => 'payouts']) }}" class="sl-btn sl-btn-ghost mt-3 inline-flex">Edit payment details in Account Settings</a>
     </section>
     @unless($ready)
         <section class="sl-card"><p class="sl-empty-state">Parcel payout receipts will appear after the finance receipt migration is installed.</p></section>
@@ -37,7 +36,7 @@
         <section class="sl-card">
             <div class="sl-table-wrap">
                 <table class="sl-table">
-                    <thead><tr><th>Receipt / status</th><th>Order</th><th>Parcel</th><th>Product amount</th><th>Platform fee</th><th>Seller payable / paid</th><th>Payout method / reference</th><th>Paid / acknowledged</th><th>Action</th></tr></thead>
+                    <thead><tr><th>Receipt / status</th><th>Order</th><th>Parcel</th><th>Product amount</th><th>Platform fee</th><th>Seller payable / paid</th><th>Transfer channel / reference</th><th>Paid / acknowledged</th><th>Action</th></tr></thead>
                     <tbody>
                     @forelse($settlements as $settlement)
                         @php($isSimulatedPayout = \Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))
@@ -49,10 +48,10 @@
                             <td>{{ $settlement->allocation?->shipment?->tracking_number ?: 'Parcel '.$settlement->allocation?->shipment_id }}</td>
                             <td>₱{{ number_format((float) ($settlement->allocation?->product_amount ?? 0), 2) }}</td>
                             <td>₱{{ number_format((float) $settlement->platform_commission, 2) }}</td>
-                            <td>@if($settlement->seller_payable !== null)₱{{ number_format((float) $settlement->seller_payable, 2) }}@else Review required@endif
+                            <td>@if($settlement->seller_payable !== null)₱{{ number_format((float) $settlement->seller_payable, 2) }}@else Review required @endif
                                 @if((float) $settlement->payout_amount > 0)<br><small>Paid: ₱{{ number_format((float) $settlement->payout_amount, 2) }}</small>@endif
                             </td>
-                            <td>{{ $settlement->payout_method ?: '—' }}<br><small>{{ $settlement->payout_external_reference ?: '—' }}</small>@if($isSimulatedPayout)<br><small class="text-amber-700">SIMULATED — NO MONEY TRANSFERRED</small>@endif</td>
+                            <td>{{ $settlement->payout_method }}<br><small>{{ $settlement->payout_external_reference }}</small>@if($isSimulatedPayout)<br><small class="text-amber-700">Legacy demo record — no transfer proof</small>@elseif($settlement->payout_proof_path)<br><a href="{{ route('seller.settlements.payout-proof', $settlement) }}" class="underline">View transfer proof</a>@endif</td>
                             <td>{{ $settlement->paid_at?->format('M d, Y g:i A') ?: '—' }}<br><small>{{ $settlement->seller_acknowledged_at?->format('M d, Y g:i A') ?: 'Awaiting acknowledgment' }}</small></td>
                             <td>
                                 @if(in_array($settlement->payout_status, ['PENDING', 'FAILED'], true) && $settlement->seller_payable !== null && (float) $settlement->seller_payable > 0 && $payoutDestinationSaved)
@@ -64,10 +63,16 @@
                                 @elseif($settlement->payout_status === 'AUTHORIZED')
                                     <span>Approved · awaiting payout</span>
                                 @elseif($settlement->payout_status === 'PAYOUT_PENDING_ACK')
-                                    @if($isSimulatedPayout)<small class="text-amber-700">Demo only — no money was transferred.</small>@endif
-                                    <form method="POST" action="{{ route('seller.settlements.acknowledge', $settlement) }}" data-confirm-title="Acknowledge this payout record?" data-confirm-message="{{ $isSimulatedPayout ? 'This is a simulated demo payout. No money was transferred.' : 'Confirm that you received PHP '.number_format((float) $settlement->payout_amount, 2).' for this parcel.' }}" data-confirm-label="Acknowledge">
-                                        @csrf<button class="sl-btn sl-btn-primary">{{ $isSimulatedPayout ? 'Acknowledge demo record' : 'Acknowledge receipt' }}</button>
-                                    </form>
+                                    @if($isSimulatedPayout)
+                                        <small class="text-amber-700">Legacy demo record. No transfer proof is available; contact Support.</small>
+                                    @else
+                                        <form method="POST" action="{{ route('seller.settlements.acknowledge', $settlement) }}" data-confirm-title="Confirm payout receipt?" data-confirm-message="Confirm that PHP {{ number_format((float) $settlement->payout_amount, 2) }} arrived for this parcel." data-confirm-label="Confirm receipt">
+                                            @csrf<button class="sl-btn sl-btn-primary">Confirm receipt</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('seller.settlements.report-payout-issue', $settlement) }}" class="mt-2">
+                                            @csrf<button class="sl-btn sl-btn-ghost">Report payout not received</button>
+                                        </form>
+                                    @endif
                                 @elseif($settlement->payout_status === 'PAID')
                                     <span>Received</span>
                                 @else — @endif

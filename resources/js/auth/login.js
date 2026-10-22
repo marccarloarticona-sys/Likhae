@@ -48,11 +48,107 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
 
+    const savedAccountPicker =
+        document.querySelector(
+            '[data-saved-account-picker]'
+        );
+
+
+    const savedAccountCards =
+        document.querySelectorAll(
+            '[data-saved-account]'
+        );
+
+
+    const emailField =
+        document.querySelector(
+            '[data-login-email-field]'
+        );
+
+
+    const selectedAccount =
+        document.querySelector(
+            '[data-selected-account]'
+        );
+
+
+    const rememberCheckbox =
+        document.querySelector(
+            '#remember'
+        );
+
+
     /*
     |--------------------------------------------------------------------------
     | PASSWORD VISIBILITY
     |--------------------------------------------------------------------------
     */
+
+    function showAnotherAccountForm() {
+
+        if (savedAccountPicker) {
+            savedAccountPicker.hidden = true;
+        }
+
+        if (loginForm) {
+            loginForm.hidden = false;
+        }
+
+        if (emailField) {
+            emailField.hidden = false;
+        }
+
+        if (selectedAccount) {
+            selectedAccount.hidden = true;
+        }
+
+        if (emailInput) {
+            emailInput.value = '';
+            emailInput.focus();
+        }
+
+        if (passwordInput) {
+            passwordInput.value = '';
+        }
+
+        if (rememberCheckbox) {
+            rememberCheckbox.checked = false;
+        }
+
+    }
+
+
+    document.querySelectorAll('[data-use-another-account]').forEach((button) => {
+        button.addEventListener('click', showAnotherAccountForm);
+    });
+
+
+    savedAccountCards.forEach((card) => {
+        card.addEventListener('click', () => {
+            if (!loginForm || !emailInput || !passwordInput) {
+                return;
+            }
+
+            const accountName = card.dataset.accountName || card.dataset.accountEmail || '';
+            const accountEmail = card.dataset.accountEmail || '';
+            const displayEmail = card.dataset.accountDisplayEmail || accountEmail;
+
+            emailInput.value = accountEmail;
+            emailField && (emailField.hidden = true);
+            savedAccountPicker && (savedAccountPicker.hidden = true);
+            loginForm.hidden = false;
+
+            const nameNode = selectedAccount?.querySelector('[data-selected-account-name]');
+            const emailNode = selectedAccount?.querySelector('[data-selected-account-email]');
+            const initialNode = selectedAccount?.querySelector('[data-selected-account-initial]');
+
+            if (nameNode) nameNode.textContent = accountName;
+            if (emailNode) emailNode.textContent = displayEmail;
+            if (initialNode) initialNode.textContent = accountName.trim().charAt(0).toUpperCase();
+            if (selectedAccount) selectedAccount.hidden = false;
+            passwordInput.focus();
+        });
+    });
 
     function togglePasswordVisibility() {
 

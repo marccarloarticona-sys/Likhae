@@ -7,6 +7,7 @@ use App\Models\Buyer\Address;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
+use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
@@ -117,16 +118,21 @@ class SellerAccountController extends Controller
         return back()->with('status', 'Store profile saved.');
     }
 
-    public function account(Request $request): View
+    public function account(Request $request, PayoutDestinationReadiness $destinations): View
     {
         $shop = $this->shop($request);
         $businessAddress = $this->ownedBusinessAddress($shop);
+        $payoutDestinationReady = $destinations->readyFor('seller_profiles');
+        $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($shop);
 
         return view('seller.account', [
             'tab' => $request->input('tab', 'profile'),
             'seller' => $shop->user,
             'storeProfile' => $this->profile($shop),
             'businessAddress' => $businessAddress,
+            'payoutProfile' => $shop,
+            'payoutDestinationReady' => $payoutDestinationReady,
+            'payoutDestinationSaved' => $payoutDestinationSaved,
         ]);
     }
 

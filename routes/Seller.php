@@ -5,6 +5,7 @@ use App\Http\Controllers\Seller\SellerComplianceController;
 use App\Http\Controllers\Seller\SellerEngagementController;
 use App\Http\Controllers\Seller\SellerOperationsController;
 use App\Http\Controllers\Seller\SellerFinanceController;
+use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Seller\SellerOrderController;
 use App\Http\Controllers\Seller\SellerPickupRequestController;
 use App\Http\Controllers\Seller\SellerReturnRefundController;
@@ -33,6 +34,8 @@ Route::prefix('seller')
         Route::put('/settlements/payout-destination', [SellerFinanceController::class, 'updatePayoutDestination'])->name('settlements.payout-destination.update');
         Route::post('/settlements/{settlement}/request-payout', [SellerFinanceController::class, 'requestPayout'])->name('settlements.request-payout');
         Route::post('/settlements/{settlement}/acknowledge', [SellerFinanceController::class, 'acknowledge'])->name('settlements.acknowledge');
+        Route::get('/settlements/{settlement}/payout-proof', [PayoutProofController::class, 'seller'])->name('settlements.payout-proof');
+        Route::post('/settlements/{settlement}/report-payout-issue', [SellerFinanceController::class, 'reportPayoutIssue'])->middleware('throttle:5,1')->name('settlements.report-payout-issue');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'seller')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'seller')->name('settings.update');
 

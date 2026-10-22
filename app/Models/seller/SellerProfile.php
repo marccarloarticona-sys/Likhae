@@ -14,7 +14,7 @@ class SellerProfile extends Model
 {
     protected $table = 'seller_profiles';
 
-    protected $hidden = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
 
     protected $fillable = [
         'user_id',
@@ -40,6 +40,7 @@ class SellerProfile extends Model
         'approved_by_user_id',
         'approved_at',
         'payout_method',
+        'payout_account_type',
         'payout_bank_name',
         'payout_account_name',
         'payout_account_number',

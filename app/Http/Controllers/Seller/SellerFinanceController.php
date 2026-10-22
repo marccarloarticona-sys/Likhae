@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Finance\SellerSettlement;
+use App\Services\Finance\PayoutSupportService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\SellerSettlementService;
+use App\Rules\PayoutDestinationNumber;
+use App\Support\PayoutAccountDetails;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -70,11 +73,16 @@ class SellerFinanceController extends Controller
             'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
             'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
             'payout_account_name' => ['required', 'string', 'max:150'],
-            'payout_account_number' => ['required', 'string', 'max:150'],
+            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
+            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
+                $request->input('payout_account_type'),
+                $request->input('payout_method'),
+            )],
         ]);
+        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
         $seller->forceFill($data)->save();
 
-        return back()->with('status', 'Online payout details saved securely.');
+        return back()->with('status', 'Payout destination saved securely.');
     }
 
     public function acknowledge(Request $request, SellerSettlement $settlement, SellerSettlementService $service): RedirectResponse
@@ -97,5 +105,26 @@ class SellerFinanceController extends Controller
         }
 
         return back()->with('status', 'Payout request submitted to Admin for review.');
+    }
+
+    public function reportPayoutIssue(Request $request, SellerSettlement $settlement, PayoutSupportService $support): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $settlement->seller_profile_id === (int) $seller->id, 403);
+        abort_unless(filled($settlement->payout_external_reference), 404);
+
+        $message = implode("\n", [
+            'PAYOUT SUPPORT — seller reports this transfer has not arrived.',
+            'Store: '.$seller->business_name,
+            'Payout reference: '.$settlement->settlement_reference,
+            'Transfer reference: '.$settlement->payout_external_reference,
+            'Amount: PHP '.number_format((float) $settlement->payout_amount, 2),
+            'Payout date: '.($settlement->paid_at?->toDateTimeString() ?? 'Not recorded'),
+            'Please review the transfer and contact me about the payout status.',
+        ]);
+        $conversation = $support->contactAdmin($request->user(), $message);
+
+        return redirect()->route('seller.messages', ['conversation' => $conversation->id])
+            ->with('status', 'Payout support request sent to Admin.');
     }
 }

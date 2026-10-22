@@ -443,7 +443,8 @@
                                 <x-shared.product-thumbnail :item="$item" size="56"/>
                                 <div>
                                     <strong class="block">{{ $item->product_name }}</strong>
-                                    <small class="text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</small>
+                                    <small class="block text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</small>
+                                    <small class="block text-stone-500">Seller: {{ $item->sellerOrder?->sellerProfile?->business_name ?? 'Seller' }} &#183; Order {{ $selectedOrder->order_number }}</small>
                                 </div>
                             </div>
 

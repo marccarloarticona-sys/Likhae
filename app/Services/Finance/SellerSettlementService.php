@@ -17,7 +17,6 @@ class SellerSettlementService
     public function __construct(
         private readonly FinanceSchemaReadiness $schema,
         private readonly PayoutDestinationReadiness $destinations,
-        private readonly SimulatedPayoutGateway $simulatedPayouts,
     ) {}
 
     public function requestBySeller(User $actor, SellerSettlement $settlement): SellerSettlement
@@ -32,7 +31,7 @@ class SellerSettlementService
                 throw new RuntimeException('This parcel payout belongs to a different seller.');
             }
             if (! $this->destinations->readyFor('seller_profiles') || ! $this->destinations->hasDestination($actor->sellerProfile)) {
-                throw new RuntimeException('Save your online payout details in Wallet before requesting a payout.');
+                throw new RuntimeException('Save your GCash, Maya, or bank payout details in Account settings before requesting a payout.');
             }
             if ($locked->payout_status === 'PAYOUT_REQUESTED') {
                 return $locked;
@@ -94,12 +93,23 @@ class SellerSettlementService
         ?string $payoutMethod = null,
         ?string $externalReference = null,
         ?string $notes = null,
+        ?string $proofPath = null,
+        ?string $proofName = null,
     ): SellerSettlement {
         $this->assertReady();
         $this->assertRole($actor, User::TYPE_ADMIN);
+        if (! filled($externalReference) || ! filled($proofPath)) {
+            throw new RuntimeException('Enter the external transfer reference and upload proof of payment.');
+        }
 
-        return DB::transaction(function () use ($actor, $settlement, $amount, $payoutMethod, $externalReference, $notes): SellerSettlement {
-            $locked = SellerSettlement::query()->with(['allocation.shipment', 'sellerOrder.order'])->whereKey($settlement->id)->lockForUpdate()->firstOrFail();
+        return DB::transaction(function () use ($actor, $settlement, $amount, $payoutMethod, $externalReference, $notes, $proofPath, $proofName): SellerSettlement {
+            $locked = SellerSettlement::query()->with(['allocation.shipment', 'sellerOrder.order', 'sellerProfile'])->whereKey($settlement->id)->lockForUpdate()->firstOrFail();
+            if (! $this->destinations->readyFor('seller_profiles')
+                || ! $locked->sellerProfile
+                || ! $this->destinations->hasDestination($locked->sellerProfile)
+                || $locked->sellerProfile->payout_method !== $payoutMethod) {
+                throw new RuntimeException('The seller must save complete payout details before Admin can record a transfer.');
+            }
             $amountCents = FinancialRules::cents($amount);
             if (in_array($locked->payout_status, ['PAYOUT_PENDING_ACK', 'PAID'], true) && $locked->paid_at) {
                 if (FinancialRules::cents($locked->payout_amount) === $amountCents
@@ -120,12 +130,6 @@ class SellerSettlementService
                 throw new RuntimeException('Payout amount must match the authorized seller payable amount.');
             }
 
-            $simulation = $this->simulatedPayouts->simulate((string) $payoutMethod);
-            if ($simulation) {
-                $externalReference = $simulation['external_reference'];
-                $notes = trim(implode("\n", array_filter([$notes, $simulation['notice']])));
-            }
-
             $before = $locked->toArray();
             $reference = 'SET-'.now()->format('Ymd').'-'.Str::upper(Str::random(10));
             $updates = [
@@ -137,7 +141,12 @@ class SellerSettlementService
                 'notes' => $notes ?: $locked->notes,
             ];
             if ($this->schema->parcelSettlementReady()) {
-                $updates += ['payout_method' => $payoutMethod, 'payout_external_reference' => $externalReference];
+                $updates += [
+                    'payout_method' => $payoutMethod,
+                    'payout_external_reference' => trim($externalReference),
+                    'payout_proof_path' => $proofPath,
+                    'payout_proof_name' => $proofName,
+                ];
             }
             $locked->update($updates);
             $receipt = $this->payoutReceipt($locked, $actor);
@@ -156,9 +165,8 @@ class SellerSettlementService
                         'payout_reference' => $reference,
                         'payout_amount' => FinancialRules::amount($amountCents),
                         'payout_method' => $payoutMethod,
-                        'payout_external_reference' => $externalReference,
-                        'is_simulated' => $simulation !== null,
-                        'simulation_notice' => $simulation['notice'] ?? null,
+                        'payout_external_reference' => trim($externalReference),
+                        'payout_proof_available' => true,
                     ]),
                 ]);
             }
@@ -221,6 +229,9 @@ class SellerSettlementService
             $locked = SellerSettlement::query()->with('sellerOrder')->whereKey($settlement->id)->lockForUpdate()->firstOrFail();
             if (! $actor->sellerProfile || (int) $locked->seller_profile_id !== (int) $actor->sellerProfile->id) {
                 throw new RuntimeException('This parcel payout belongs to a different seller.');
+            }
+            if (str_starts_with((string) $locked->payout_external_reference, 'SIM-')) {
+                throw new RuntimeException('This legacy demo payout has no transfer proof and cannot be confirmed as received. Contact Admin for help.');
             }
             if ($locked->payout_status === 'PAID' && $locked->seller_acknowledged_at) {
                 return $locked;
@@ -302,10 +313,7 @@ class SellerSettlementService
             'recipient' => ['role' => 'SELLER', 'seller_profile_id' => $settlement->seller_profile_id, 'user_id' => $settlement->sellerProfile?->user_id],
             'payout_method' => $settlement->payout_method,
             'payout_reference' => $settlement->payout_external_reference,
-            'is_simulated' => $this->simulatedPayouts->isSimulationReference($settlement->payout_external_reference),
-            'simulation_notice' => $this->simulatedPayouts->isSimulationReference($settlement->payout_external_reference)
-                ? SimulatedPayoutGateway::NOTICE
-                : null,
+            'payout_proof_available' => filled($settlement->payout_proof_path),
             'payout_at' => $settlement->paid_at?->toIso8601String(),
             'confirmation_status' => $settlement->payout_status,
             'acknowledged_by_user_id' => $settlement->seller_acknowledged_by_user_id,

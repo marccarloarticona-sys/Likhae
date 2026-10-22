@@ -1,4 +1,5 @@
 import '../shared/feedback.js';
+import '../shared/shop-share.js';
 import { startRealtimeFallback } from '../shared/realtime-fallback.js';
 
 if (document.querySelector('[data-postal-address]')) {

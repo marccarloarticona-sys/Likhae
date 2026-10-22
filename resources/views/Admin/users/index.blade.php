@@ -179,6 +179,12 @@
                             $statusLabel = $statuses[$statusKey] ?? ucfirst($statusKey);
                             $statusClass = $statusClasses[$statusKey] ?? strtolower(str_replace(' ', '-', $statusKey));
                             $searchText = strtolower('USR-'.$user->id.' '.$user->name.' '.$user->email.' '.$roleLabel.' '.$statusLabel);
+                            $profilePhotoPath = $user->profile_photo_path;
+                            $profilePhotoUrl = filled($profilePhotoPath)
+                                ? (str($profilePhotoPath)->startsWith(['http://', 'https://'])
+                                    ? $profilePhotoPath
+                                    : \Illuminate\Support\Facades\Storage::disk('public')->url($profilePhotoPath))
+                                : null;
                         @endphp
 
                         <tr
@@ -195,7 +201,11 @@
                             <td>
                                 <div class="ad-cell-user">
                                     <span class="ad-avatar is-soft">
-                                        {{ mb_strtoupper(mb_substr($user->name, 0, 1)) }}
+                                        @if($profilePhotoUrl)
+                                            <img src="{{ $profilePhotoUrl }}" alt="{{ $user->name }} profile photo" loading="lazy" decoding="async">
+                                        @else
+                                            {{ mb_strtoupper(mb_substr($user->name, 0, 1)) }}
+                                        @endif
                                     </span>
 
                                     <span>

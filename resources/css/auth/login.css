@@ -652,6 +652,206 @@ html.dark .likhae-logo {
 }
 
 
+.auth-saved-accounts,
+.auth-selected-account {
+    display: grid;
+    gap: 10px;
+}
+
+
+.auth-saved-accounts[hidden],
+.auth-form[hidden],
+.auth-email-field[hidden],
+.auth-selected-account[hidden] {
+    display: none !important;
+}
+
+
+.auth-saved-accounts__label {
+    margin: 0;
+    color: #665b53;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+
+.auth-saved-accounts__list {
+    display: grid;
+    gap: 8px;
+}
+
+
+.auth-saved-accounts__heading,
+.auth-saved-account-row {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+
+
+.auth-saved-accounts__heading {
+    margin-bottom: 1px;
+}
+
+
+.auth-saved-accounts__heading form,
+.auth-saved-account-row form {
+    margin: 0;
+}
+
+
+.auth-saved-accounts__clear,
+.auth-saved-account__remove {
+    padding: 6px 8px;
+    color: #8f1719;
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+
+.auth-saved-accounts__clear:hover,
+.auth-saved-account__remove:hover {
+    background: #fff0ec;
+    text-decoration: underline;
+}
+
+
+.auth-saved-account__remove {
+    white-space: nowrap;
+}
+
+
+.auth-saved-account__avatar-image {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 50%;
+    background: var(--likhae-red-soft);
+}
+
+
+.auth-saved-accounts__privacy {
+    margin: 0;
+    color: var(--likhae-muted);
+    font-size: 10px;
+    text-align: center;
+}
+
+
+.auth-saved-account {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 12px;
+    color: var(--likhae-ink);
+    background: #fff;
+    border: 1px solid var(--likhae-border);
+    border-radius: 11px;
+    text-align: left;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+
+.auth-saved-account:hover,
+.auth-saved-account:focus-visible {
+    border-color: rgba(143, 23, 25, 0.42);
+    box-shadow: 0 5px 18px rgba(57, 40, 32, 0.08);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+
+.auth-saved-account__avatar {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    color: var(--likhae-red);
+    background: var(--likhae-red-soft);
+    border-radius: 50%;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+
+.auth-saved-account__details,
+.auth-selected-account__details {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+}
+
+
+.auth-saved-account__details strong,
+.auth-selected-account__details strong {
+    overflow: hidden;
+    color: #393531;
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+.auth-saved-account__details span,
+.auth-selected-account__details span {
+    overflow: hidden;
+    color: var(--likhae-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+.auth-saved-account__arrow {
+    color: #958980;
+    font-size: 17px;
+}
+
+
+.auth-use-another-account {
+    justify-self: center;
+    padding: 2px 4px;
+    color: var(--likhae-red);
+    background: transparent;
+    border: 0;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+
+.auth-use-another-account:hover {
+    text-decoration: underline;
+}
+
+
+.auth-selected-account {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 12px;
+    border: 1px solid var(--likhae-border);
+    border-radius: 11px;
+    background: #fffaf6;
+}
+
+
+.auth-selected-account .auth-use-another-account {
+    justify-self: end;
+    white-space: nowrap;
+}
+
+
 /* =========================================================
    FORM
 ========================================================= */
@@ -691,6 +891,9 @@ html.dark .likhae-logo {
 
 
 .auth-forgot {
+    justify-self: end;
+    margin-left: auto;
+
     color: var(--likhae-red);
 
     font-size: 11px;

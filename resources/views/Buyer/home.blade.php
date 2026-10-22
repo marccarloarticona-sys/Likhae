@@ -1616,7 +1616,7 @@
         @if ($featuredProducts->isNotEmpty())
             <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Featured products" tabindex="0">
                 @foreach ($featuredProducts as $product)
-                    <x-buyer.product-card :product="$product"/>
+                    <x-buyer.product-card :product="$product" home />
                 @endforeach
             </div>
         @else
@@ -1709,7 +1709,7 @@
         @if ($dealProducts->isNotEmpty())
             <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Current deals" tabindex="0">
                 @foreach ($dealProducts as $product)
-                    <x-buyer.product-card :product="$product" deal />
+                    <x-buyer.product-card :product="$product" deal home />
                 @endforeach
             </div>
         @else
@@ -1780,7 +1780,7 @@
         @if ($recommendedProducts->isNotEmpty())
             <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Recommended products" tabindex="0">
                 @foreach ($recommendedProducts as $product)
-                    <x-buyer.product-card :product="$product"/>
+                    <x-buyer.product-card :product="$product" home />
                 @endforeach
             </div>
         @else

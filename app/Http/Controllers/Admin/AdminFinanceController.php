@@ -8,42 +8,60 @@ use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\LogisticsEarningPool;
 use App\Services\Finance\EarningPayoutService;
+use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\FinancialAllocationService;
 use App\Services\Finance\ProductProceedsService;
+use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\SellerSettlementService;
-use App\Services\Finance\SimulatedPayoutGateway;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
+use Throwable;
 
 class AdminFinanceController extends Controller
 {
-    public function payLogisticsShare(Request $request, LogisticsEarningPool $pool, EarningPayoutService $service, SimulatedPayoutGateway $simulatedPayouts): RedirectResponse
+    public function payLogisticsShare(Request $request, LogisticsEarningPool $pool, EarningPayoutService $service, PayoutDestinationReadiness $destinations): RedirectResponse
     {
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
-            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Manual,Other'],
-            'payout_external_reference' => ['nullable', 'string', 'max:150'],
+            'payout_external_reference' => ['required', 'string', 'max:150'],
+            'payout_proof' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
+        $pool->loadMissing('logisticsCenter');
+        $center = $pool->logisticsCenter;
+        if (! $center || ! $destinations->readyFor('logistics_centers') || ! $destinations->hasDestination($center)) {
+            throw ValidationException::withMessages(['payout' => 'The Logistics center must save complete GCash, Maya, or bank details before Admin can record its payout.']);
+        }
+        $proofPath = $data['payout_proof']->store('payout-proofs', 'local');
+        if (! $proofPath) {
+            throw ValidationException::withMessages(['payout_proof' => 'The payout proof could not be saved. Please retry.']);
+        }
         try {
-            $service->recordLogisticsPayout(
+            $recorded = $service->recordLogisticsPayout(
                 $request->user(),
                 $pool,
                 $data['amount'],
-                $data['payout_method'],
-                $data['payout_external_reference'] ?? null,
+                $center->payout_method,
+                $data['payout_external_reference'],
                 $data['notes'] ?? null,
+                $proofPath,
+                $data['payout_proof']->getClientOriginalName(),
             );
+            if (data_get($recorded->metadata, 'payout_proof_path') !== $proofPath) {
+                Storage::disk('local')->delete($proofPath);
+            }
         } catch (RuntimeException $exception) {
-            throw \Illuminate\Validation\ValidationException::withMessages(['amount' => $exception->getMessage()]);
+            Storage::disk('local')->delete($proofPath);
+            throw ValidationException::withMessages(['payout' => $exception->getMessage()]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($proofPath);
+            throw $exception;
         }
 
-        $message = $simulatedPayouts->isOnlineMethod($data['payout_method'])
-            ? 'Demo payout simulated. No money was transferred; the Logistics center can acknowledge the simulated receipt.'
-            : 'Logistics shipping share payout recorded. The Logistics center must acknowledge its receipt.';
-
-        return back()->with('status', $message);
+        return back()->with('status', 'Manual Logistics payout recorded with its transfer reference and proof. The Logistics center can confirm receipt.');
     }
 
     public function authorizeSellerSettlement(Request $request, SellerSettlement $settlement, SellerSettlementService $service): RedirectResponse
@@ -57,25 +75,49 @@ class AdminFinanceController extends Controller
         return back()->with('status', 'Seller settlement authorized. Payment remains a separate action.');
     }
 
-    public function paySeller(Request $request, SellerSettlement $settlement, SellerSettlementService $service, SimulatedPayoutGateway $simulatedPayouts): RedirectResponse
+    public function paySeller(Request $request, SellerSettlement $settlement, SellerSettlementService $service, PayoutDestinationReadiness $destinations, FinanceSchemaReadiness $schema): RedirectResponse
     {
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
-            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Manual,Other'],
-            'payout_external_reference' => ['nullable', 'string', 'max:150'],
+            'payout_external_reference' => ['required', 'string', 'max:150'],
+            'payout_proof' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
+        if (! $schema->sellerPayoutProofReady()) {
+            throw ValidationException::withMessages(['payout_proof' => 'Install the additive payout proof migration before recording a seller transfer.']);
+        }
+        $settlement->loadMissing('sellerProfile');
+        $seller = $settlement->sellerProfile;
+        if (! $seller || ! $destinations->readyFor('seller_profiles') || ! $destinations->hasDestination($seller)) {
+            throw ValidationException::withMessages(['payout' => 'The seller must save complete GCash, Maya, or bank details before Admin can record this payout.']);
+        }
+        $proofPath = $data['payout_proof']->store('payout-proofs', 'local');
+        if (! $proofPath) {
+            throw ValidationException::withMessages(['payout_proof' => 'The payout proof could not be saved. Please retry.']);
+        }
         try {
-            $service->pay($request->user(), $settlement, $data['amount'], $data['payout_method'] ?? null, $data['payout_external_reference'] ?? null, $data['notes'] ?? null);
+            $recorded = $service->pay(
+                $request->user(),
+                $settlement,
+                $data['amount'],
+                $seller->payout_method,
+                $data['payout_external_reference'],
+                $data['notes'] ?? null,
+                $proofPath,
+                $data['payout_proof']->getClientOriginalName(),
+            );
+            if ($recorded->payout_proof_path !== $proofPath) {
+                Storage::disk('local')->delete($proofPath);
+            }
         } catch (RuntimeException $exception) {
-            throw \Illuminate\Validation\ValidationException::withMessages(['amount' => $exception->getMessage()]);
+            Storage::disk('local')->delete($proofPath);
+            throw ValidationException::withMessages(['payout' => $exception->getMessage()]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($proofPath);
+            throw $exception;
         }
 
-        $message = $simulatedPayouts->isOnlineMethod($data['payout_method'])
-            ? 'Demo payout simulated. No money was transferred; the seller can acknowledge the simulated receipt.'
-            : 'Seller payout recorded. It remains pending seller acknowledgment.';
-
-        return back()->with('status', $message);
+        return back()->with('status', 'Manual seller payout recorded with its transfer reference and proof. The seller can confirm receipt.');
     }
 
     public function failSellerPayout(Request $request, SellerSettlement $settlement, SellerSettlementService $service): RedirectResponse

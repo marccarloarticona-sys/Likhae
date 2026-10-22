@@ -9,10 +9,13 @@ use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Services\Finance\PayoutSupportService;
 use App\Services\Finance\ProductProceedsService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\SimulatedPayoutGateway;
+use App\Rules\PayoutDestinationNumber;
+use App\Support\PayoutAccountDetails;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -47,10 +50,8 @@ class LogisticsRemittanceController extends Controller
         $receipts = $ready
             ? FinancialLedgerEntry::query()
                 ->where('entry_type', 'LOGISTICS_PAYOUT')
-                ->where('status', 'PAYOUT_PENDING_ACK')
-                ->whereHas('shipment', fn ($query) => $query->where(function ($scope) use ($center): void {
-                    $scope->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id);
-                }))
+                ->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                ->where('metadata->logistics_center_id', $center->id)
                 ->with(['shipment.sellerOrder.order'])
                 ->latest('paid_at')->paginate(15, ['*'], 'payout_receipt_page')
             : $empty('payout_receipt_page');
@@ -60,8 +61,8 @@ class LogisticsRemittanceController extends Controller
         $payoutSummary = [
             'available' => $ready ? (float) (clone $eligiblePools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('total_amount') : 0.0,
             'requested' => $ready ? (float) (clone $eligiblePools)->where('status', 'PAYOUT_REQUESTED')->sum('total_amount') : 0.0,
-            'awaiting_ack' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->whereHas('shipment', fn ($query) => $query->where(function ($scope) use ($center): void { $scope->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id); }))->sum('amount') : 0.0,
-            'paid' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->whereHas('shipment', fn ($query) => $query->where(function ($scope) use ($center): void { $scope->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id); }))->sum('amount') : 0.0,
+            'awaiting_ack' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->where('metadata->logistics_center_id', $center->id)->sum('amount') : 0.0,
+            'paid' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->where('metadata->logistics_center_id', $center->id)->sum('amount') : 0.0,
         ];
         $payoutDestinationReady = $destinations->readyFor('logistics_centers');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($center);
@@ -78,11 +79,16 @@ class LogisticsRemittanceController extends Controller
             'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
             'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
             'payout_account_name' => ['required', 'string', 'max:150'],
-            'payout_account_number' => ['required', 'string', 'max:150'],
+            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
+            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
+                $request->input('payout_account_type'),
+                $request->input('payout_method'),
+            )],
         ]);
+        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
         $center->forceFill($data)->save();
 
-        return back()->with('status', 'Online payout details saved securely.');
+        return back()->with('status', 'Payout destination saved securely.');
     }
 
     public function requestPayout(Request $request, LogisticsEarningPool $pool, EarningPayoutService $service): RedirectResponse
@@ -94,6 +100,31 @@ class LogisticsRemittanceController extends Controller
         }
 
         return back()->with('status', 'Logistics payout request sent to Admin.');
+    }
+
+    public function reportPayoutIssue(Request $request, FinancialLedgerEntry $entry, PayoutSupportService $support): RedirectResponse
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center
+            && $entry->entry_type === 'LOGISTICS_PAYOUT'
+            && (int) data_get($entry->metadata, 'logistics_center_id') === (int) $center->id, 403);
+        abort_unless(filled(data_get($entry->metadata, 'payout_external_reference')), 404);
+
+        $metadata = (array) $entry->metadata;
+        $message = implode("\n", [
+            'PAYOUT SUPPORT — Logistics reports this transfer has not arrived.',
+            'Logistics center: '.$center->business_name,
+            'Payout reference: '.($metadata['payout_reference'] ?? 'Unavailable'),
+            'Transfer reference: '.$metadata['payout_external_reference'],
+            'Parcel: '.($entry->shipment?->tracking_number ?? 'Unavailable'),
+            'Amount: PHP '.number_format((float) $entry->amount, 2),
+            'Payout date: '.($metadata['paid_at'] ?? 'Not recorded'),
+            'Please review the transfer and contact us about the payout status.',
+        ]);
+        $conversation = $support->contactAdmin($request->user(), $message);
+
+        return redirect()->route('logistics.messages', ['conversation' => $conversation->id])
+            ->with('status', 'Payout support request sent to Admin.');
     }
 
     public function index(Request $request, FinanceSchemaReadiness $schema): View
@@ -135,10 +166,8 @@ class LogisticsRemittanceController extends Controller
         $logisticsPayoutReceipts = $schema->parcelSettlementReady()
             ? FinancialLedgerEntry::query()
                 ->where('entry_type', 'LOGISTICS_PAYOUT')
-                ->where('status', 'PAYOUT_PENDING_ACK')
-                ->whereHas('shipment', fn ($query) => $query->where(function ($query) use ($center): void {
-                    $query->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id);
-                }))
+                ->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                ->where('metadata->logistics_center_id', $center->id)
                 ->with(['shipment.sellerOrder.order', 'allocation'])
                 ->latest()->paginate(20, ['*'], 'logistics_payout_page')
             : new LengthAwarePaginator([], 0, 20, max(1, $request->integer('logistics_payout_page', 1)), [

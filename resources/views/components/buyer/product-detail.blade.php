@@ -144,11 +144,12 @@
         ->mapWithKeys(fn ($variant) => [(string) data_get($variant, 'id') => (int) data_get($variant, 'stock', 0)])
         ->all();
 
+    $sellerStoreId = (int) data_get($product, 'seller.id', 0);
     $hasBuyerShopRoute = \Illuminate\Support\Facades\Route::has('buyer.shop');
-
     $storeUrl = $guest
-        ? route('home')
-        : ($hasBuyerShopRoute ? route('buyer.shop', ['seller' => $sellerSlug]) : '#');
+        ? route('shops.show', ['seller' => $sellerStoreId ?: $sellerSlug])
+        : ($hasBuyerShopRoute ? route('buyer.shop', ['seller' => $sellerStoreId ?: $sellerSlug]) : '#');
+    $productUrl = route('products.show', ['slug' => $slug]);
 
     $hasMessagesRoute = \Illuminate\Support\Facades\Route::has('buyer.messages');
 
@@ -846,12 +847,20 @@
         font-weight: 900 !important;
     }
 
+    .lk-detail-seller-actions .lk-detail-share-icon {
+        margin-left: 0;
+    }
+
     .lk-detail-panels {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 370px;
         gap: 22px;
 
         margin-top: 22px;
+    }
+
+    .lk-detail-panels--description-only {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .lk-detail-panel {
@@ -1632,17 +1641,35 @@
         </div>
 
         <div class="lk-detail-seller-actions">
+            <button
+                type="button"
+                class="lk-detail-share-icon"
+                data-share-link
+                data-share-url="{{ $productUrl }}"
+                data-share-title="{{ $name }}"
+                data-share-label="Product"
+                aria-label="Share product"
+                title="Share product"
+            >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="m8.6 12.8 6.8 3.8M15.4 7.4l-6.8 3.8" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="6" r="3" />
+                    <circle cx="18" cy="18" r="3" />
+                </svg>
+            </button>
+
             <a
                 href="{{ $storeUrl }}"
-                class="lk-btn lk-btn-light"
+                class="lk-btn lk-btn-red"
                 @if(!$guest && !$hasBuyerShopRoute) onclick="return false;" @endif
             >
-                View Store
+                Visit Shop
             </a>
 
             @if($guest)
                 <button
-                    class="lk-btn lk-btn-red"
+                    class="lk-btn lk-btn-light"
                     type="button"
                     data-auth-required
                     data-auth-message="Sign in to message this seller."
@@ -1652,7 +1679,7 @@
             @else
                 <a
                     href="{{ $messageUrl }}"
-                    class="lk-btn lk-btn-red"
+                    class="lk-btn lk-btn-light"
                     @if(!$hasMessagesRoute) onclick="return false;" @endif
                 >
                     Message
@@ -1660,8 +1687,9 @@
             @endif
         </div>
     </section>
+    <p class="mt-2 text-right text-xs text-stone-500" data-share-feedback aria-live="polite" role="status" hidden></p>
 
-    <div class="lk-detail-panels">
+    <div class="lk-detail-panels {{ $specs->isEmpty() ? 'lk-detail-panels--description-only' : '' }}">
         <section class="lk-detail-panel">
             <h2>Description</h2>
 

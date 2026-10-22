@@ -7,6 +7,7 @@
     $image    = data_get($product, 'primary_image.url');
     $price    = data_get($product, 'min_price');
     $detailsUrl = route('products.show', ['slug' => $slug]);
+    $home = (bool) ($home ?? false);
 @endphp
 
 <article class="lk-product-card is-guest" data-product-card data-product-id="{{ $id ?? $slug }}" data-category="{{ \Illuminate\Support\Str::slug($category) }}" data-search="{{ mb_strtolower($name.' '.$category.' '.$seller) }}">
@@ -30,8 +31,13 @@
             <strong class="lk-product-price">&#8369;{{ number_format((float) $price, 2) }}</strong>
         @endif
 
-        <div class="lk-card-actions" style="grid-template-columns: 1fr;">
-            <a href="{{ $detailsUrl }}" class="lk-btn-view">View Details</a>
+        <div class="lk-card-actions {{ $home ? 'lk-card-actions--home' : '' }}" @unless($home) style="grid-template-columns: 1fr;" @endunless>
+            @if($home)
+                <button type="button" class="lk-catalog-buy-now" data-auth-required data-auth-message="Sign in to buy {{ $name }}.">Buy Now</button>
+                <button type="button" class="lk-add-cart lk-catalog-add-cart" data-auth-required data-auth-message="Sign in to add {{ $name }} to your cart.">Add to Cart</button>
+            @else
+                <a href="{{ $detailsUrl }}" class="lk-btn-view">View Details</a>
+            @endif
         </div>
     </div>
 </article>

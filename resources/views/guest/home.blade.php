@@ -11,12 +11,12 @@
     $recommendedProducts = $products->skip(6)->take(6);
 
     $categories = [
-        ['name' => 'Electronics',  'slug' => 'electronics', 'sub' => 'Laptops & gadgets',   'img' => 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=75'],
-        ['name' => 'Fashion',      'slug' => 'fashion',     'sub' => 'Clothing & handbags',  'img' => 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?auto=format&fit=crop&w=800&q=75'],
-        ['name' => 'Home & Living','slug' => 'home',        'sub' => 'Furniture & décor',    'img' => 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?auto=format&fit=crop&w=800&q=75'],
-        ['name' => 'Beauty',       'slug' => 'beauty',      'sub' => 'Skincare & wellness',  'img' => 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=800&q=75'],
-        ['name' => 'Groceries',    'slug' => 'groceries',   'sub' => 'Fresh essentials',     'img' => 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=75'],
-        ['name' => 'Sports',       'slug' => 'sports',      'sub' => 'Gear & activewear',    'img' => 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=800&q=75'],
+        ['name' => 'Electronics',  'slug' => 'electronics', 'sub' => 'Laptops & gadgets',   'image' => 'electronics'],
+        ['name' => 'Fashion',      'slug' => 'fashion',     'sub' => 'Clothing & handbags', 'image' => 'fashion'],
+        ['name' => 'Home & Living','slug' => 'home',        'sub' => 'Furniture & décor',   'image' => 'home'],
+        ['name' => 'Beauty',       'slug' => 'beauty',      'sub' => 'Skincare & wellness', 'image' => 'beauty'],
+        ['name' => 'Groceries',    'slug' => 'groceries',   'sub' => 'Fresh essentials',    'image' => 'groceries'],
+        ['name' => 'Sports',       'slug' => 'sports',      'sub' => 'Gear & activewear',   'image' => 'sports'],
     ];
 
     $trust = [
@@ -85,8 +85,8 @@
                 <a href="{{ route('products', ['category' => $cat['slug']]) }}" class="lk-ed-cat-card">
                     <img
                         class="lk-ed-cat-img"
-                        src="{{ $cat['img'] }}"
-                        srcset="{{ str_replace('w=800', 'w=400', $cat['img']) }} 400w, {{ $cat['img'] }} 800w"
+                        src="{{ asset('images/buyer/homepage-categories/'.$cat['image'].'-800.webp') }}"
+                        srcset="{{ asset('images/buyer/homepage-categories/'.$cat['image'].'-400.webp') }} 400w, {{ asset('images/buyer/homepage-categories/'.$cat['image'].'-800.webp') }} 800w"
                         sizes="(max-width: 600px) 50vw, (max-width: 1100px) 33vw, 17vw"
                         alt="{{ $cat['name'] }}"
                         width="800"
@@ -123,7 +123,7 @@
         @if($featuredProducts->isNotEmpty())
             <div class="lk-product-grid lk-ed-product-grid">
                 @foreach($featuredProducts as $product)
-                    @include('components.guest.product-card', ['product' => $product])
+                    @include('components.guest.product-card', ['product' => $product, 'home' => true])
                 @endforeach
             </div>
         @else

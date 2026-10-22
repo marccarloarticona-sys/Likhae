@@ -10,9 +10,9 @@
     $adminUiCounts = $adminUiCounts ?? ['messages' => 0, 'notifications' => 0];
 @endphp
 
-<header class="ad-header" data-admin-header role="banner">
+<header class="lk-admin-topbar" data-admin-header role="banner">
     <div class="ad-header-title">
-        <button class="ad-icon-btn ad-mobile-menu" type="button" data-admin-mobile-menu aria-label="Open navigation" aria-controls="admin-sidebar">
+        <button class="ad-icon-btn ad-mobile-menu" type="button" data-admin-mobile-menu aria-label="Open navigation" aria-controls="adminSidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
         <div>

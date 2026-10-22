@@ -1,4 +1,4 @@
-@props(['seller', 'products' => collect(), 'guest' => false, 'paginator' => null, 'storeProductCount' => null, 'storeFilterValues' => [], 'storeErrors' => null, 'storePriceRange' => []])
+@props(['seller', 'products' => collect(), 'guest' => false, 'paginator' => null, 'storeProductCount' => null, 'storeFilterValues' => [], 'storeErrors' => null, 'storePriceRange' => [], 'storeCategories' => collect(), 'storeSubcategories' => collect(), 'storeVouchers' => collect()])
 
 @php
     $sellerSlug = data_get($seller, 'id', 'store');
@@ -14,7 +14,7 @@
     $maximumPrice = $storeFilterValues['max_price'] ?? '';
     $minimumRating = (float) ($storeFilterValues['rating'] ?? 0);
     $activeSort = $storeFilterValues['sort'] ?? 'latest';
-    $searchAction = $guest ? route('home') : route('buyer.shop', ['seller' => $sellerSlug]);
+    $searchAction = $guest ? route('shops.show', ['seller' => $sellerSlug]) : route('buyer.shop', ['seller' => $sellerSlug]);
     $isFollowing = (bool) data_get($seller, 'is_following', false);
     $followerCount = max(0, (int) data_get($seller, 'followers', 0));
     $sellerRating = data_get($seller, 'rating');
@@ -61,13 +61,39 @@
         </div>
     @endif
 
-    <section class="lk-store-catalog mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
+    @if(collect($storeVouchers)->isNotEmpty())
+        <section class="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 sm:p-5" aria-label="Seller vouchers">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <span class="text-[10px] font-bold uppercase tracking-widest text-red-800">Shop promotion</span>
+                    <h2 class="mt-1 text-base font-bold text-red-950">Vouchers available for this store</h2>
+                    <p class="mt-1 text-xs text-red-900/80">Voucher discounts are confirmed at checkout after eligible items and minimum spend are checked.</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    @foreach($storeVouchers as $storeVoucher)
+                        <span class="rounded-full border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-900">
+                            @if(strtoupper((string) $storeVoucher->discount_type) === 'PERCENT')
+                                {{ rtrim(rtrim(number_format((float) $storeVoucher->discount_value, 2, '.', ''), '0'), '.') }}% OFF
+                            @else
+                                &#8369;{{ number_format((float) $storeVoucher->discount_value, 2) }} OFF
+                            @endif
+                            voucher{{ ($storeVoucher->selected_for_store ?? false) ? ' selected' : ' available' }}
+                            @if((float) $storeVoucher->minimum_order_amount > 0)
+                                &middot; Min. &#8369;{{ number_format((float) $storeVoucher->minimum_order_amount, 2) }}
+                            @endif
+                        </span>
+                    @endforeach
+                </div>
+            </div>
+        </section>
+    @endif
+
+    <section class="lk-store-catalog mt-4 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
         <form method="GET" action="{{ $searchAction }}" class="lk-store-filters" aria-label="Filter this store's products" data-live-filters data-marketplace-search data-suggestions-url="{{ route('marketplace.search-suggestions') }}" data-suggestion-seller="{{ $sellerSlug }}">
             <div class="lk-store-toolbar">
                 <div class="lk-store-toolbar__copy">
                     <span class="lk-kicker">Store collection</span>
                     <h2>Products by {{ $sellerName }}</h2>
-                    <p>Search and refine this store's catalog.</p>
                 </div>
                 <div class="lk-store-search-anchor flex min-w-0 gap-2">
                     <label class="sr-only" for="storeSearch">Search this store</label>
@@ -82,7 +108,7 @@
                 </div>
             </div>
 
-            <div class="lk-store-filter-grid mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="lk-store-filter-grid mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <x-buyer.price-range-filter prefix="store" :minimum="$minimumPrice" :maximum="$maximumPrice" :price-range="$storePriceRange" :errors="$storeErrors" class="sm:col-span-2 lg:col-span-2" />
                 <div class="lk-filter-card lk-store-filter-field">
                     <label class="lk-field-label" for="storeRating">Minimum rating</label>
@@ -113,11 +139,11 @@
         </form>
 
         <div class="lk-store-filter-footer">
-            <a class="lk-btn lk-btn-light" href="{{ route('buyer.shop', ['seller' => $sellerSlug]) }}">Clear filters</a>
+            <a class="lk-btn lk-btn-light" href="{{ $guest ? route('shops.show', ['seller' => $sellerSlug]) : route('buyer.shop', ['seller' => $sellerSlug]) }}">Clear filters</a>
             <p class="text-xs text-stone-500" aria-live="polite"><strong>{{ $paginator?->total() ?? $storeProducts->count() }}</strong> products found</p>
         </div>
         @if($storeProducts->isNotEmpty())
-            <div class="lk-product-grid mt-3">@foreach($storeProducts as $product)<x-buyer.product-card :product="$product" :guest="$guest" />@endforeach</div>
+            <div class="lk-product-grid mt-3">@foreach($storeProducts as $product)<x-buyer.product-card :product="$product" :guest="$guest" :store-vouchers="$storeVouchers" />@endforeach</div>
         @else
             <div class="mt-5"><x-buyer.empty-state title="No store products found" message="Try another keyword or adjust the price or rating filters." /></div>
         @endif

@@ -4,7 +4,9 @@
     'guest' => false,
     'deal' => false,
     'catalogListing' => false,
+    'home' => false,
     'unavailable' => false,
+    'storeVouchers' => collect(),
 ])
 
 @php
@@ -73,9 +75,9 @@
     $variants = collect(data_get($product, 'variants', []));
     $hasVariations = $variants->count() > 1;
     $singleVariant = $hasVariations ? null : $variants->first();
-    $sellerOnVacation = $catalogListing && (bool) data_get($product, 'seller.vacation_mode', false);
+    $sellerOnVacation = ($catalogListing || $home) && (bool) data_get($product, 'seller.vacation_mode', false);
     $catalogStock = max(0, (int) data_get($product, 'stock', $variants->sum('stock')));
-    $outOfStock = $catalogListing && $catalogStock < 1;
+    $outOfStock = ($catalogListing || $home) && $catalogStock < 1;
     $canAddToCart = ! $unavailable && ! $availabilityRestricted && ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
     $isWishlistSaved = false;
     if (! $guest && auth()->check() && $id !== null) {
@@ -105,9 +107,10 @@
         ? '₱'.number_format($discountValue, 2).' OFF'
         : '-'.min(100, $discount).'%';
 
+    $sellerId = (int) data_get($product, 'seller.id', 0);
     $storeUrl = $guest
-        ? route('products.show', ['slug' => $slug])
-        : route('buyer.shop', ['seller' => $sellerSlug]);
+        ? route('shops.show', ['seller' => $sellerId ?: $sellerSlug])
+        : route('buyer.shop', ['seller' => $sellerId ?: $sellerSlug]);
 @endphp
 
 @once
@@ -760,6 +763,20 @@
             {{ $category }}
         </span>
 
+        @if(collect($storeVouchers)->isNotEmpty())
+            <div class="mt-2 flex flex-wrap gap-1.5" aria-label="Available seller vouchers">
+                @foreach($storeVouchers as $storeVoucher)
+                    <span class="rounded-full bg-red-100 px-2 py-1 text-[9px] font-bold text-red-900">
+                        @if(strtoupper((string) $storeVoucher->discount_type) === 'PERCENT')
+                            {{ rtrim(rtrim(number_format((float) $storeVoucher->discount_value, 2, '.', ''), '0'), '.') }}% OFF voucher
+                        @else
+                            &#8369;{{ number_format((float) $storeVoucher->discount_value, 2) }} OFF voucher
+                        @endif
+                    </span>
+                @endforeach
+            </div>
+        @endif
+
         @if($detailsUrl)<a href="{{ $detailsUrl }}" class="lk-product-title-link">@endif
             <h3 class="lk-product-name">
                 {{ $name }}
@@ -811,14 +828,14 @@
             @endif
         </div>
 
-        <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : '') }}">
+        <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : ($home ? 'lk-card-actions--home' : '')) }}">
             @if($guest)
                 @if($detailsUrl)
                     <a href="{{ $detailsUrl }}" class="lk-btn-view">{{ $catalogListing ? 'View Details' : 'View' }}</a>
                 @else
                     <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
                 @endif
-            @elseif($catalogListing)
+            @elseif($catalogListing || $home)
                 @if($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                     <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                     <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>

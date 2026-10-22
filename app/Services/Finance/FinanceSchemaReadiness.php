@@ -57,6 +57,13 @@ final class FinanceSchemaReadiness
         return true;
     }
 
+    public function sellerPayoutProofReady(): bool
+    {
+        return Schema::hasTable('seller_settlements')
+            && Schema::hasColumn('seller_settlements', 'payout_proof_path')
+            && Schema::hasColumn('seller_settlements', 'payout_proof_name');
+    }
+
     public function ready(): bool
     {
         return $this->step6Ready() && $this->step7Ready() && $this->originalPriceSnapshotReady();

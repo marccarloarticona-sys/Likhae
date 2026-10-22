@@ -287,15 +287,26 @@ final class EarningPayoutService
         string $method,
         ?string $externalReference = null,
         ?string $notes = null,
+        ?string $proofPath = null,
+        ?string $proofName = null,
     ): FinancialLedgerEntry {
         $this->assertActiveRole($actor, User::TYPE_ADMIN);
         $method = trim($method);
         if ($method === '') {
-            throw new \RuntimeException('Record whether the Logistics payout was manual or online.');
+            throw new \RuntimeException('The Logistics payout channel is missing from its saved account details.');
+        }
+        if (! filled($externalReference) || ! filled($proofPath)) {
+            throw new \RuntimeException('Enter the external transfer reference and upload proof of payment.');
         }
 
-        return DB::transaction(function () use ($actor, $pool, $amount, $method, $externalReference, $notes): FinancialLedgerEntry {
-            $lockedPool = LogisticsEarningPool::query()->with('shipment')->whereKey($pool->id)->lockForUpdate()->firstOrFail();
+        return DB::transaction(function () use ($actor, $pool, $amount, $method, $externalReference, $notes, $proofPath, $proofName): FinancialLedgerEntry {
+            $lockedPool = LogisticsEarningPool::query()->with(['shipment', 'logisticsCenter'])->whereKey($pool->id)->lockForUpdate()->firstOrFail();
+            if (! $this->destinations->readyFor('logistics_centers')
+                || ! $lockedPool->logisticsCenter
+                || ! $this->destinations->hasDestination($lockedPool->logisticsCenter)
+                || $lockedPool->logisticsCenter->payout_method !== $method) {
+                throw new \RuntimeException('The Logistics center must save complete payout details before Admin can record a transfer.');
+            }
             $proceeds = FinancialLedgerEntry::query()
                 ->where('shipment_financial_allocation_id', $lockedPool->shipment_financial_allocation_id)
                 ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
@@ -324,10 +335,6 @@ final class EarningPayoutService
                 throw new \RuntimeException('A Logistics payout request already exists and needs review.');
             }
 
-            $simulation = $this->simulatedPayouts->simulate($method);
-            if ($simulation) {
-                $externalReference = $simulation['external_reference'];
-            }
             $before = $existing ? ['status' => $existing->status, 'metadata' => $existing->metadata] : [];
             $now = now();
             $metadata = array_merge((array) ($existing?->metadata), [
@@ -339,9 +346,9 @@ final class EarningPayoutService
                 'amount_paid' => FinancialRules::amount($amountCents),
                 'currency' => 'PHP',
                 'payout_method' => $method,
-                'payout_external_reference' => $externalReference,
-                'is_simulated' => $simulation !== null,
-                'simulation_notice' => $simulation['notice'] ?? null,
+                'payout_external_reference' => trim($externalReference),
+                'payout_proof_path' => $proofPath,
+                'payout_proof_name' => $proofName,
                 'confirmation_status' => 'PAYOUT_PENDING_ACK',
                 'paid_by_user_id' => $actor->id,
                 'paid_at' => $now->toIso8601String(),
@@ -390,6 +397,9 @@ final class EarningPayoutService
                 || (int) data_get($locked->metadata, 'logistics_center_id') !== (int) $center->id) {
                 throw new \RuntimeException('This Logistics payout receipt does not belong to your center.');
             }
+            if (data_get($locked->metadata, 'is_simulated') || str_starts_with((string) data_get($locked->metadata, 'payout_external_reference'), 'SIM-')) {
+                throw new \RuntimeException('This legacy demo payout has no transfer proof and cannot be confirmed as received. Contact Admin for help.');
+            }
             if ($locked->status === 'PAID'
                 && (int) data_get($locked->metadata, 'acknowledged_by_user_id') === (int) $actor->id
                 && FinancialRules::cents(data_get($locked->metadata, 'amount_paid', 0)) === FinancialRules::cents($amount)) {
@@ -429,7 +439,7 @@ final class EarningPayoutService
             throw new \RuntimeException('Only an active Logistics center can request a payout.');
         }
         if (! $this->destinations->readyFor('logistics_centers') || ! $this->destinations->hasDestination($center)) {
-            throw new \RuntimeException('Save your online payout details in Wallet before requesting a payout.');
+            throw new \RuntimeException('Save your GCash, Maya, or bank payout details in Account settings before requesting a payout.');
         }
 
         return DB::transaction(function () use ($actor, $center, $pool): FinancialLedgerEntry {

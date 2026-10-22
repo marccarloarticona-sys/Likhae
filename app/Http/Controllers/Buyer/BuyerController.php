@@ -14,6 +14,7 @@ use App\Models\Communication\Conversation;
 use App\Models\Communication\Message;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
+use App\Models\Seller\Category;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Account\BuyerEmailChangeOtpService;
@@ -524,7 +525,18 @@ class BuyerController extends Controller
 
     public function shop(string $seller, Request $request): View
     {
+        return $this->sellerStore($seller, $request, false);
+    }
+
+    public function publicShop(string $seller, Request $request): View
+    {
+        return $this->sellerStore($seller, $request, true);
+    }
+
+    private function sellerStore(string $seller, Request $request, bool $guest): View
+    {
         $sellerProfile = $this->catalog->sellerByRouteKey($seller);
+        abort_if($guest && (! $sellerProfile->store_visibility || $sellerProfile->user?->status !== User::STATUS_ACTIVE), 404);
         $sellerProfile->loadMissing('businessAddress');
         $sellerProfile->setAttribute('location', $this->publicStoreLocation($sellerProfile->businessAddress));
         $sellerRating = $this->catalog->sellerRating($sellerProfile);
@@ -538,17 +550,67 @@ class BuyerController extends Controller
         $sellerProfile->setAttribute('followers', SellerFollower::query()
             ->where('seller_profile_id', $sellerProfile->id)
             ->count());
-        $sellerProfile->setAttribute('is_following', SellerFollower::query()
-            ->where('seller_profile_id', $sellerProfile->id)
-            ->where('buyer_user_id', $request->user()->id)
-            ->exists());
+        $sellerProfile->setAttribute('is_following', $request->user()
+            ? SellerFollower::query()
+                ->where('seller_profile_id', $sellerProfile->id)
+                ->where('buyer_user_id', $request->user()->id)
+                ->exists()
+            : false);
 
         [$filters, $filterValues, $errors] = $this->validatedStoreFilters($request);
         $baseQuery = $this->catalog->visibleQuery()
             ->where('seller_profile_id', $sellerProfile->id);
         $storePriceRange = $this->buyerPriceRange(clone $baseQuery);
         $storeProductCount = (clone $baseQuery)->count();
+        $usedCategoryIds = (clone $baseQuery)
+            ->whereNotNull('category_id')
+            ->distinct()
+            ->pluck('category_id')
+            ->map(fn ($id): int => (int) $id)
+            ->values();
+        $productCategories = Category::query()
+            ->whereIn('id', $usedCategoryIds)
+            ->where('is_active', true)
+            ->whereNull('archived_at')
+            ->with('parent')
+            ->get();
+        $rootCategoryIds = $productCategories
+            ->map(fn (Category $category): int => (int) ($category->parent_id ?? $category->id))
+            ->unique()
+            ->values();
+        $storeCategories = Category::query()
+            ->whereIn('id', $rootCategoryIds)
+            ->whereNull('parent_id')
+            ->where('is_active', true)
+            ->whereNull('archived_at')
+            ->orderBy('name')
+            ->get();
+        $selectedCategoryId = (int) ($filters['category_id'] ?? 0);
+        $selectedSubcategoryId = (int) ($filters['subcategory_id'] ?? 0);
+        $storeSubcategories = $productCategories
+            ->filter(fn (Category $category): bool => $category->parent_id !== null
+                && ($selectedCategoryId === 0 || (int) $category->parent_id === $selectedCategoryId))
+            ->sortBy('name')
+            ->values();
         $query = clone $baseQuery;
+
+        $selectedCategoryIsAvailable = $selectedCategoryId === 0
+            || $storeCategories->contains(fn (Category $category): bool => (int) $category->id === $selectedCategoryId);
+        $selectedSubcategory = $selectedSubcategoryId > 0
+            ? $storeSubcategories->first(fn (Category $category): bool => (int) $category->id === $selectedSubcategoryId)
+            : null;
+        if (! $selectedCategoryIsAvailable || ($selectedSubcategoryId > 0 && ! $selectedSubcategory)) {
+            $query->whereRaw('1 = 0');
+        } elseif ($selectedSubcategory) {
+            $query->where('category_id', $selectedSubcategoryId);
+        } elseif ($selectedCategoryId > 0) {
+            $categoryProductIds = $productCategories
+                ->filter(fn (Category $category): bool => (int) ($category->parent_id ?? $category->id) === $selectedCategoryId)
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
+            $query->whereIn('category_id', $categoryProductIds);
+        }
 
         if ($filters['q'] !== '') {
             $escapedSearch = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($filters['q']));
@@ -576,7 +638,40 @@ class BuyerController extends Controller
             ->paginate(24, ['*'], 'page', $filters['page'])
             ->appends($filters['query_parameters']);
 
-        return view('buyer.store', [
+        $storeVouchers = collect();
+        if (! $guest && $request->user()) {
+            $claimedVouchers = Voucher::query()
+                ->where('seller_profile_id', $sellerProfile->id)
+                ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($vouchers) => $vouchers->whereNull('platform_code_key'))
+                ->where('is_active', true)
+                ->where(fn ($vouchers) => $vouchers->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+                ->where(fn ($vouchers) => $vouchers->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+                ->whereHas('buyerClaims', fn ($claims) => $claims->where('buyer_user_id', $request->user()->id))
+                ->with('sellerProfile.user')
+                ->orderBy('id')
+                ->get();
+            $globalUses = VoucherRedemptionCounter::countsFor($claimedVouchers);
+            $buyerUses = VoucherRedemptionCounter::countsFor($claimedVouchers, (int) $request->user()->id);
+            $claimService = app(BuyerVoucherClaimService::class);
+            $storeVouchers = $claimedVouchers
+                ->filter(fn (Voucher $voucher): bool => $claimService->unavailableReason(
+                    $voucher,
+                    $request->user(),
+                    $globalUses->get($voucher->id, 0),
+                    $buyerUses->get($voucher->id, 0),
+                ) === null)
+                ->values();
+
+            $selectedVoucherId = (int) ($filters['voucher'] ?? 0);
+            if ($selectedVoucherId > 0 && $storeVouchers->contains('id', $selectedVoucherId)) {
+                $storeVouchers = $storeVouchers
+                    ->sortBy(fn (Voucher $voucher): int => (int) $voucher->id === $selectedVoucherId ? 0 : 1)
+                    ->values();
+                $storeVouchers->first()->setAttribute('selected_for_store', true);
+            }
+        }
+
+        return view($guest ? 'guest.store' : 'buyer.store', [
             'seller' => $sellerProfile,
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
@@ -585,6 +680,10 @@ class BuyerController extends Controller
             'storeFilterValues' => $filterValues,
             'storeErrors' => $errors,
             'storePriceRange' => $storePriceRange,
+            'storeCategories' => $storeCategories,
+            'storeSubcategories' => $storeSubcategories,
+            'storeVouchers' => $storeVouchers,
+            'guest' => $guest,
         ]);
     }
 
@@ -648,6 +747,9 @@ class BuyerController extends Controller
             'max_price' => ['nullable', 'numeric', 'min:0'],
             'rating' => ['nullable', 'numeric', 'between:0,5'],
             'sort' => ['nullable', 'string', Rule::in(['latest', 'price-low', 'price-high', 'best-rated', 'best-selling'])],
+            'category_id' => ['nullable', 'integer', 'min:1'],
+            'subcategory_id' => ['nullable', 'integer', 'min:1'],
+            'voucher' => ['nullable', 'integer', 'min:1'],
             'page' => ['nullable', 'integer', 'min:1', 'max:1000000'],
         ]);
         $validator->after(function ($validator) use ($query): void {
@@ -673,10 +775,13 @@ class BuyerController extends Controller
             'max_price' => $valid['max_price'] ?? null,
             'rating' => (float) ($valid['rating'] ?? 0),
             'sort' => strtolower(trim((string) ($valid['sort'] ?? 'latest'))),
+            'category_id' => max(0, (int) ($valid['category_id'] ?? 0)),
+            'subcategory_id' => max(0, (int) ($valid['subcategory_id'] ?? 0)),
+            'voucher' => max(0, (int) ($valid['voucher'] ?? 0)),
             'page' => max(1, (int) ($valid['page'] ?? 1)),
         ];
         $filterValues = [];
-        foreach (['q', 'min_price', 'max_price', 'rating', 'sort'] as $key) {
+        foreach (['q', 'min_price', 'max_price', 'rating', 'sort', 'category_id', 'subcategory_id', 'voucher'] as $key) {
             $value = $query[$key] ?? '';
             $filterValues[$key] = is_scalar($value) ? trim((string) $value) : '';
         }
@@ -686,6 +791,9 @@ class BuyerController extends Controller
             'max_price' => $filterValues['max_price'],
             'rating' => $filters['rating'] > 0 ? (string) $filters['rating'] : '',
             'sort' => $filters['sort'] !== 'latest' ? $filters['sort'] : '',
+            'category_id' => $filters['category_id'] > 0 ? (string) $filters['category_id'] : '',
+            'subcategory_id' => $filters['subcategory_id'] > 0 ? (string) $filters['subcategory_id'] : '',
+            'voucher' => $filters['voucher'] > 0 ? (string) $filters['voucher'] : '',
         ], fn ($value) => $value !== '' && $value !== null);
         $filters['query_parameters'] = $queryParameters;
 
@@ -1437,6 +1545,10 @@ class BuyerController extends Controller
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
                 'collected' => $collected,
                 'unavailable_reason' => $unavailableReason,
+                'use_url' => route('buyer.shop', [
+                    'seller' => $voucher->seller_profile_id,
+                    'voucher' => $voucher->id,
+                ]),
             ];
         };
 
@@ -1484,6 +1596,7 @@ class BuyerController extends Controller
                 'code' => $voucher->code,
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
                 'collected' => false,
+                'use_url' => route('buyer.products'),
             ])
             ->values();
 

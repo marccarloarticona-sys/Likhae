@@ -15,7 +15,7 @@ class LogisticsCenter extends Model
 {
     protected $table = 'logistics_centers';
 
-    protected $hidden = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
 
     /**
      * Legacy per-center fee retained for old records only. GLOBAL approved
@@ -36,6 +36,7 @@ class LogisticsCenter extends Model
         'approved_by_user_id',
         'approved_at',
         'payout_method',
+        'payout_account_type',
         'payout_bank_name',
         'payout_account_name',
         'payout_account_number',

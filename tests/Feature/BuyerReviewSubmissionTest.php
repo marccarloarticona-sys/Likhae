@@ -32,6 +32,22 @@ class BuyerReviewSubmissionTest extends TestCase
         $this->assertSame(str_repeat('a', 500), $item->review()->value('comment'));
     }
 
+    public function test_review_form_identifies_the_purchased_variant_seller_and_order_item(): void
+    {
+        [$buyer, $order, $item] = $this->makeReviewableItem();
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee($item->product_name)
+            ->assertSee('Review variation')
+            ->assertSee('Qty '.$item->quantity)
+            ->assertSee('Seller: '.$item->sellerOrder->sellerProfile->business_name)
+            ->assertSee('Order '.$order->order_number)
+            ->assertSee(route('buyer.orders.review.store', $item), escape: false)
+            ->assertSee('name="review_item_id" value="'.$item->id.'"', escape: false);
+    }
+
     public function test_review_text_over_500_is_rejected_without_saving_a_review_and_is_preserved_as_input(): void
     {
         [$buyer, $order, $item] = $this->makeReviewableItem();
@@ -67,8 +83,17 @@ class BuyerReviewSubmissionTest extends TestCase
         $this->assertDatabaseMissing('reviews', ['order_item_id' => $item->id]);
 
         $this->actingAs($buyer)
-            ->postJson(route('buyer.orders.review.store', $item), ['rating' => 5, 'comment' => 'Owner review'])
+            ->postJson(route('buyer.orders.review.store', $item), [
+                'rating' => 5,
+                'comment' => 'Owner review',
+                'product_id' => 999999,
+                'seller_id' => 999999,
+                'order_item_id' => 999999,
+                'variation_id' => 999999,
+            ])
             ->assertOk();
+        $this->assertDatabaseHas('reviews', ['order_item_id' => $item->id, 'buyer_user_id' => $buyer->id]);
+        $this->assertDatabaseMissing('reviews', ['order_item_id' => 999999]);
         $this->actingAs($otherBuyer)
             ->postJson(route('buyer.orders.review.store', $item), ['comment' => 'Unauthorized edit'])
             ->assertForbidden();
