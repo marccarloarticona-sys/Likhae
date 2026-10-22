@@ -26,14 +26,18 @@
                     <header class="sl-card-head"><div><h2>Payout Details</h2><p>Choose where Admin should send approved Seller payouts.</p></div>@if($payoutDestinationSaved)<span class="sl-status is-success">Destination saved</span>@endif</header>
                     @if($payoutDestinationReady)
                         @if($payoutDestinationSaved)
-                            @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($payoutProfile))
+                            @php
+                                $savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($payoutProfile);
+                            @endphp
                             <dl class="mb-4 grid gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4 text-sm sm:grid-cols-2">
                                 <div><dt class="text-xs text-muted">Saved payment channel</dt><dd class="font-semibold">{{ $payoutProfile->payout_method }}@if($payoutProfile->payout_bank_name) · {{ $payoutProfile->payout_bank_name }}@endif</dd></div>
                                 <div><dt class="text-xs text-muted">Account holder</dt><dd class="font-semibold">{{ $payoutProfile->payout_account_name }}</dd></div>
                                 <div><dt class="text-xs text-muted">{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd class="font-semibold">{{ \App\Support\PayoutAccountDetails::formatNumber($payoutProfile->payout_account_number, $savedPayoutType) }}</dd></div>
                             </dl>
                         @endif
-                        @php($payoutAccountType = old('payout_account_type', \App\Support\PayoutAccountDetails::typeFor($payoutProfile)))
+                        @php
+                            $payoutAccountType = old('payout_account_type', \App\Support\PayoutAccountDetails::typeFor($payoutProfile));
+                        @endphp
                         <form method="POST" action="{{ route('seller.settlements.payout-destination.update') }}" data-payout-destination-form>
                             @csrf @method('PUT')
                             <div class="sl-form-grid">
