@@ -487,6 +487,7 @@ class DispatchController extends Controller
             $oldStatus = $locked->current_status;
             $newStatus = strtoupper($data['status']);
             abort_if(in_array($oldStatus, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'A closed or exception shipment cannot be manually overridden.');
+            abort_if(app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class)->hasOpenWorkflow($locked), 409, 'An active return-to-seller workflow controls this parcel status until seller receipt is confirmed.');
             abort_if($newStatus === 'DELIVERED' && ! in_array($oldStatus, ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'], true), 409, 'Manual delivery confirmation is only allowed for a parcel already out for delivery or awaiting a retry.');
             abort_if($oldStatus === $newStatus, 422, 'The shipment already has that status.');
 

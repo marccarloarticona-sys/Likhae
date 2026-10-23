@@ -172,6 +172,11 @@ class Shipment extends Model
         return $this->hasOne(ShipmentEvent::class)->latestOfMany();
     }
 
+    public function returnWorkflow(): HasOne
+    {
+        return $this->hasOne(ShipmentReturnWorkflow::class);
+    }
+
     public function deliveryAttempts(): HasMany
     {
         return $this->hasMany(DeliveryAttempt::class);

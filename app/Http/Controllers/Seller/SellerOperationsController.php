@@ -205,26 +205,31 @@ class SellerOperationsController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
+        $returnWorkflowSchemaReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady();
 
         if ($request->query('view') === 'tracking') {
             $orderNumber = $request->validate([
                 'order' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9-]+$/'],
             ])['order'];
+            $trackingRelations = [
+                'order.address',
+                'sellerProfile.businessAddress',
+                'shipments.orderItem',
+                'shipments.events.actor',
+                'shipments.events.logisticsCenter',
+                'shipments.events.riderAssignment.riderProfile.user',
+                'shipments.riderAssignments.riderProfile.user',
+                'shipments.riderAssignments.liveLocation',
+                'shipments.logisticsCenter.address',
+                'shipments.serviceArea.logisticsCenter.address',
+            ];
+            if ($returnWorkflowSchemaReady) {
+                $trackingRelations[] = 'shipments.returnWorkflow.returnRider.user';
+            }
             $trackingOrder = SellerOrder::query()
                 ->where('seller_profile_id', $seller->id)
                 ->where('seller_order_number', $orderNumber)
-                ->with([
-                    'order.address',
-                    'sellerProfile.businessAddress',
-                    'shipments.orderItem',
-                    'shipments.events.actor',
-                    'shipments.events.logisticsCenter',
-                    'shipments.events.riderAssignment.riderProfile.user',
-                    'shipments.riderAssignments.riderProfile.user',
-                    'shipments.riderAssignments.liveLocation',
-                    'shipments.logisticsCenter.address',
-                    'shipments.serviceArea.logisticsCenter.address',
-                ])
+                ->with($trackingRelations)
                 ->firstOrFail();
             $mapMarkers = app(MapDataService::class)->forShipments($trackingOrder->shipments, includeSeller: true);
 
@@ -232,6 +237,7 @@ class SellerOperationsController extends Controller
                 'seller' => $seller,
                 'trackingOrder' => $trackingOrder,
                 'mapMarkers' => $mapMarkers,
+                'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
             ]);
         }
 
@@ -239,7 +245,10 @@ class SellerOperationsController extends Controller
 
         $orders = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
-            ->with(['order.address', 'items', 'shipments.orderItem', 'shipments.events', 'shipments.pickupRequests', 'shipments.riderAssignments.riderProfile.user'])
+            ->with(array_merge(
+                ['order.address', 'items', 'shipments.orderItem', 'shipments.events', 'shipments.pickupRequests', 'shipments.riderAssignments.riderProfile.user'],
+                $returnWorkflowSchemaReady ? ['shipments.returnWorkflow.returnRider.user'] : [],
+            ))
             ->whereHas('shipments')
             ->latest()
             ->paginate(15);
@@ -287,6 +296,7 @@ class SellerOperationsController extends Controller
             'readyPickupParcels' => $readyPickupParcels,
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,
+            'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
         ]);
     }
 

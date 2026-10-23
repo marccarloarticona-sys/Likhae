@@ -77,6 +77,21 @@ class WorkspaceExportPdfService
         }
 
         $this->cursorY = $this->pageHeight - ($continued ? 130 : 120);
+        if (! $continued && ! empty($this->report['summary']) && is_array($this->report['summary'])) {
+            $summary = [];
+            foreach ($this->report['summary'] as $label => $value) {
+                $summary[] = (string) $label.': '.$this->value($value);
+            }
+
+            foreach (array_chunk($summary, 2) as $line) {
+                $this->text(self::MARGIN + 4, $this->cursorY, $this->truncate($line[0] ?? '', 86), 7, '4D3329');
+                if (isset($line[1])) {
+                    $this->text($this->pageWidth / 2, $this->cursorY, $this->truncate($line[1], 86), 7, '4D3329');
+                }
+                $this->cursorY -= 11;
+            }
+            $this->cursorY -= 8;
+        }
     }
 
     private function metadataLine(): string

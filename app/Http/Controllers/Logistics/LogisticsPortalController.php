@@ -9,6 +9,7 @@ use App\Models\Admin\AuditLog;
 use App\Models\Buyer\Address;
 use App\Models\Communication\Conversation;
 use App\Models\Finance\CodCollection;
+use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Logistics\LogisticsCenter;
@@ -32,6 +33,7 @@ use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\RegistrationWorkflowService;
 use App\Services\Reports\WorkspaceExportPdfService;
+use App\Services\Reports\LogisticsFinancialReportService;
 use App\Services\RiderRatingService;
 use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
@@ -752,11 +754,138 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
 
+        $financeReady = app(FinanceSchemaReadiness::class)->parcelSettlementReady();
+        $financialReports = app(LogisticsFinancialReportService::class);
+        $filters = $financeReady ? $this->financialReportFilters($request, $center) : [];
+
         return view('logistics.reports.index', [
             'center' => $center,
             'shipmentsByStatus' => $shipmentQuery->operationalFor($center)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
             'riderCount' => RiderProfile::where('logistics_center_id', $center->id)->count(),
+            'financeReady' => $financeReady,
+            'financialFilters' => $filters,
+            'financialSummary' => $financeReady ? $financialReports->summary($center, $filters) : [],
+            'financialStatuses' => $financeReady ? $financialReports->statuses($center) : [],
+            'financialRiders' => $financeReady ? $center->riders()->with('user')->orderBy('id')->get() : collect(),
+            'financialAreas' => $financeReady ? $center->serviceAreas()->orderBy('name')->get() : collect(),
+            'financialTransactions' => $financeReady
+                ? $financialReports->query($center, $filters)->paginate(25)->withQueryString()
+                    ->through(fn (FinancialLedgerEntry $entry): array => $financialReports->row($entry))
+                : null,
         ]);
+    }
+
+    public function exportFinancialTransactionsCsv(Request $request, LogisticsFinancialReportService $reports)
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center, 403);
+        abort_unless(app(FinanceSchemaReadiness::class)->parcelSettlementReady(), 503, 'Financial reporting is unavailable until the reviewed finance migrations are installed.');
+        $filters = $this->financialReportFilters($request, $center);
+        $filename = 'logistics-transactions-'.$center->id.'-'.now()->format('Ymd-His').'.csv';
+
+        return response()->streamDownload(function () use ($reports, $center, $filters): void {
+            $stream = fopen('php://output', 'w');
+            if ($stream === false) {
+                return;
+            }
+
+            $reports->writeCsvToStream($stream, $center, $filters);
+
+            fclose($stream);
+        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
+    public function exportFinancialTransactionsPdf(Request $request, LogisticsFinancialReportService $reports, WorkspaceExportPdfService $pdf)
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center, 403);
+        abort_unless(app(FinanceSchemaReadiness::class)->parcelSettlementReady(), 503, 'Financial reporting is unavailable until the reviewed finance migrations are installed.');
+        $filters = $this->financialReportFilters($request, $center);
+        $summary = $reports->summary($center, $filters);
+        $rows = $reports->query($center, $filters)
+            ->get()
+            ->map(fn (FinancialLedgerEntry $entry): array => $reports->pdfRow($entry));
+
+        $filename = 'logistics-transactions-'.$center->id.'-'.now()->format('Ymd-His').'.pdf';
+
+        return response($pdf->render([
+            'workspace' => 'Logistics Portal',
+            'title' => 'Parcel transactions and shipping share',
+            'description' => 'Persisted Logistics ledger entries for '.$center->business_name.'. Admin product commission is shown separately; no Logistics commission policy is configured.',
+            'generated_at' => now()->format('Y-m-d H:i:s T'),
+            'orientation' => 'landscape',
+            'filters' => [
+                'From' => $filters['date_from'] ?? '',
+                'To' => $filters['date_to'] ?? '',
+                'Status' => $filters['status'] ?? '',
+                'Rider ID' => $filters['rider_id'] ?? '',
+                'Area ID' => $filters['area_id'] ?? '',
+            ],
+            'summary' => [
+                'Parcels with allocation' => (string) $summary['parcel_count'],
+                'Recorded shipping fees' => 'PHP '.number_format($summary['shipping_fees'], 2),
+                'Logistics shipping share' => 'PHP '.number_format($summary['logistics_share'], 2),
+                'Admin product commission' => 'PHP '.number_format($summary['admin_product_commission'], 2),
+                'Product proceeds expected / received' => 'PHP '.number_format($summary['proceeds_expected'], 2).' / PHP '.number_format($summary['proceeds_received'], 2),
+                'Unresolved proceeds discrepancies' => (string) $summary['proceeds_discrepancies'],
+                'Payout requested / pending / paid' => implode(' / ', [
+                    'PHP '.number_format($summary['payout_requested'], 2),
+                    'PHP '.number_format($summary['payout_pending_ack'], 2),
+                    'PHP '.number_format($summary['payout_paid'], 2),
+                ]),
+            ],
+            'columns' => [
+                ['label' => 'Date', 'width' => 0.15],
+                ['label' => 'Tracking / order', 'width' => 0.18],
+                ['label' => 'Transaction', 'width' => 0.18],
+                ['label' => 'Amount', 'width' => 0.12],
+                ['label' => 'Status', 'width' => 0.12],
+                ['label' => 'Shipping fee', 'width' => 0.1],
+                ['label' => 'Logistics share', 'width' => 0.1],
+                ['label' => 'Admin commission', 'width' => 0.12],
+            ],
+            'rows' => $rows,
+            'empty_message' => 'No financial transactions match these filters.',
+        ]), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+        ]);
+    }
+
+    /** @return array{date_from:?string,date_to:?string,status:?string,rider_id:?int,area_id:?int} */
+    private function financialReportFilters(Request $request, LogisticsCenter $center): array
+    {
+        $filterKeys = ['date_from', 'date_to', 'status', 'rider_id', 'area_id'];
+        if (! collect($filterKeys)->contains(fn (string $key): bool => $request->query->has($key))) {
+            $request->merge([
+                'date_from' => now()->subDays(29)->toDateString(),
+                'date_to' => now()->toDateString(),
+            ]);
+        }
+
+        $validated = $request->validate([
+            'date_from' => ['nullable', 'date_format:Y-m-d'],
+            'date_to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'status' => ['nullable', 'string', 'max:32'],
+            'rider_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('rider_profiles', 'id')->where(fn ($query) => $query->where('logistics_center_id', $center->id)),
+            ],
+            'area_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('service_areas', 'id')->where(fn ($query) => $query->where('logistics_center_id', $center->id)),
+            ],
+        ]);
+
+        return [
+            'date_from' => filled($validated['date_from'] ?? null) ? $validated['date_from'] : null,
+            'date_to' => filled($validated['date_to'] ?? null) ? $validated['date_to'] : null,
+            'status' => filled($validated['status'] ?? null) ? $validated['status'] : null,
+            'rider_id' => filled($validated['rider_id'] ?? null) ? (int) $validated['rider_id'] : null,
+            'area_id' => filled($validated['area_id'] ?? null) ? (int) $validated['area_id'] : null,
+        ];
     }
 
     public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery, WorkspaceExportPdfService $pdf)

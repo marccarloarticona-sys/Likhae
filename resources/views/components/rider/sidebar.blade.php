@@ -12,6 +12,7 @@
         'dashboard' => ['rider.dashboard'],
         'pickups' => ['rider.pickups', 'rider.pickups.*', 'rider.parcels.*'],
         'deliveries' => ['rider.deliveries', 'rider.deliveries.*'],
+        'returns' => ['rider.returns', 'rider.returns.*'],
         'trips' => ['rider.trips', 'rider.trips.*'],
         'transfers' => ['rider.transfers', 'rider.transfers.*'],
         'history' => ['rider.history', 'rider.history.*'],
@@ -98,6 +99,12 @@
                data-title="Local Trips">
                 <span class="sl-nav-icon">{!! $icon('delivery') !!}</span>
                 <span class="sl-nav-text">Local Trips</span>
+            </a>
+            <a href="{{ route('rider.returns') }}"
+               class="sl-nav-link {{ $active === 'returns' ? 'is-active' : '' }}"
+               data-title="Return Parcels">
+                <span class="sl-nav-icon">{!! $icon('shipping') !!}</span>
+                <span class="sl-nav-text">Return Parcels</span>
             </a>
         </div>
 

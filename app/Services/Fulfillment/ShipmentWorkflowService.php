@@ -878,12 +878,13 @@ class ShipmentWorkflowService
         ?string $notes = null,
         ?RiderAssignment $assignment = null,
         ?LogisticsCenter $center = null,
+        bool $useShipmentCenterFallback = true,
     ): ShipmentEvent {
         $event = ShipmentEvent::create([
             'shipment_id' => $shipment->id,
             'status' => strtoupper($status),
             'actor_user_id' => $actor?->id,
-            'logistics_center_id' => $center?->id ?: $shipment->logistics_center_id,
+            'logistics_center_id' => $center?->id ?: ($useShipmentCenterFallback ? $shipment->logistics_center_id : null),
             'rider_assignment_id' => $assignment?->id,
             'notes' => $notes,
             'occurred_at' => now(),
@@ -1587,6 +1588,10 @@ class ShipmentWorkflowService
             ? 'RETURN_TO_SELLER_INITIATED: '.$reason.' Reverse custody handover is still required before the parcel can be marked RETURNED.'
             : $reason;
         $this->recordEvent($shipment, $shipmentStatus, $actor, $eventNote, $assignment);
+
+        if ($returnToSellerInitiated && app(LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
+            app(ShipmentReturnWorkflowService::class)->initiateFromDeliveryFailure($shipment, $assignment, $actor, $reason);
+        }
     }
 
     private function rejectAssignment(RiderAssignment $assignment, Shipment $shipment, User $actor, string $reason): void

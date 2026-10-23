@@ -72,6 +72,11 @@ final class LogisticsSchemaReadiness
             ]);
     }
 
+    public function shipmentReturnsReady(): bool
+    {
+        return $this->hasTable('shipment_return_workflows');
+    }
+
     private function hasTable(string $table): bool
     {
         try {

@@ -18,6 +18,7 @@
         'assignments' => ['logistics.assignments', 'logistics.assignments.*'],
         'dispatch' => ['logistics.dispatch', 'logistics.dispatch.*'],
         'monitoring' => ['logistics.parcels.tracking'],
+        'returns' => ['logistics.returns', 'logistics.returns.*'],
         'reports' => ['logistics.reports', 'logistics.reports.*'],
         'remittances' => ['logistics.remittances'],
         'wallet' => ['logistics.wallet'],
@@ -172,6 +173,12 @@
                 <span class="sl-nav-icon">{!! $icon('monitor') !!}</span>
                 <span class="sl-nav-text">Delivery Monitoring</span>
                 @if(($sidebarCounts['monitoring'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['monitoring'] }}</span>@endif
+            </a>
+            <a href="{{ route('logistics.returns') }}"
+               class="sl-nav-link {{ $active === 'returns' ? 'is-active' : '' }}"
+               data-title="Return to Seller">
+                <span class="sl-nav-icon">{!! $icon('parcels') !!}</span>
+                <span class="sl-nav-text">Return to Seller</span>
             </a>
         </div>
 

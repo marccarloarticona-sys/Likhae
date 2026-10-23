@@ -107,7 +107,11 @@
                         $isCancellationEvent = $status === 'CANCELLED'
                             || str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
                             || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:');
-                        $label = $isCancellationEvent ? 'Shipment cancelled' : ($timelineLabels[$status] ?? null);
+                        $label = str_starts_with((string) $event->notes, 'RETURN_CUSTODY: ')
+                            ? str($event->notes)->after('RETURN_CUSTODY: ')->toString()
+                            : (str_starts_with((string) $event->notes, 'RETURN_TO_SELLER_INITIATED: ')
+                                ? 'Return to seller initiated after failed delivery'
+                                : ($isCancellationEvent ? 'Shipment cancelled' : ($timelineLabels[$status] ?? null)));
                         if ($status === 'COMPLETED') {
                             $label = str_starts_with((string) $event->notes, 'Order automatically confirmed received after 3 days')
                                 ? 'Receipt automatically confirmed'
@@ -140,6 +144,19 @@
                         <div><span class="sl-eyebrow">Parcel {{ $loop->iteration }} of {{ $trackingShipments->count() }}</span><h3>{{ $shipment->orderItem?->product_name ?: 'Shipment' }}</h3><p>Tracking <strong>{{ $shipment->tracking_number }}</strong></p></div>
                         <span class="sl-status {{ $shipmentTone }}">{{ str($currentStatus)->replace('_', ' ')->title() }}</span>
                     </header>
+                    @if($returnWorkflowSchemaReady && $shipment->returnWorkflow)
+                        <div class="my-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            <strong>Return to seller: {{ str($shipment->returnWorkflow->status)->replace('_', ' ')->title() }}</strong>
+                            <p class="mt-1">{{ $shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION' ? 'The rider recorded the handoff. Confirm below after you have the parcel.' : 'The parcel is moving through verified return custody.' }}</p>
+                            @if($shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION')
+                                <form method="POST" action="{{ route('seller.logistics.returns.confirm', $shipment->returnWorkflow) }}" class="mt-3 flex flex-wrap items-end gap-2">
+                                    @csrf
+                                    <label class="min-w-56 flex-1 text-xs font-semibold">Receipt note (optional)<input class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-sm" name="notes" maxlength="1000" placeholder="Parcel received by the seller"></label>
+                                    <button class="rounded-lg bg-primary px-4 py-2 font-semibold text-white">Confirm seller receipt</button>
+                                </form>
+                            @endif
+                        </div>
+                    @endif
                     <ol class="sl-tracking-timeline" aria-label="Tracking timeline for {{ $shipment->tracking_number }}">
                         @foreach($timelineRows as $timelineIndex => $timelineRow)
                             @php
@@ -231,11 +248,34 @@
             })();
         </script>
     @endif
+    @if(!$returnWorkflowSchemaReady)
+        <section class="sl-card border border-amber-200 bg-amber-50 text-sm text-amber-900">Failed-delivery return tracking will be available after the additive return-workflow migration is installed.</section>
+    @endif
     <section class="sl-card"><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Tracking</th><th>Order</th><th>Destination</th><th>Rider</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
         @forelse($orders as $order)
             @foreach($order->shipments as $shipment)
                 @php($assignment = $shipment->riderAssignments?->whereIn('status',['ASSIGNED','ACCEPTED','IN_PROGRESS'])->sortByDesc('id')->first())
-                <tr id="shipment-{{ $shipment->id }}"><td><strong>{{ $shipment->tracking_number }}</strong><small class="block">{{ $shipment->orderItem?->product_name }}</small></td><td>{{ $order->seller_order_number }}</td><td>{{ $order->order?->address?->formatted() }}</td><td>{{ $assignment?->riderProfile?->user?->name ?? 'Awaiting assignment' }}</td><td><span class="sl-status is-info">{{ str($shipment->current_status)->headline() }}</span></td><td>{{ $shipment->updated_at?->diffForHumans() }}</td><td><a class="sl-btn sl-btn-ghost sl-btn-sm" href="{{ route('seller.logistics', ['view' => 'tracking', 'order' => $order->seller_order_number]) }}">Track order</a></td></tr>
+                <tr id="shipment-{{ $shipment->id }}">
+                    <td><strong>{{ $shipment->tracking_number }}</strong><small class="block">{{ $shipment->orderItem?->product_name }}</small></td>
+                    <td>{{ $order->seller_order_number }}</td>
+                    <td>{{ $order->order?->address?->formatted() }}</td>
+                    <td>{{ $assignment?->riderProfile?->user?->name ?? 'Awaiting assignment' }}</td>
+                    <td>
+                        <span class="sl-status {{ $shipment->current_status === 'RETURNED' ? 'is-danger' : 'is-info' }}">{{ str($shipment->current_status)->headline() }}</span>
+                        @if($returnWorkflowSchemaReady && $shipment->returnWorkflow)
+                            <small class="mt-1 block text-amber-800">Return: {{ str($shipment->returnWorkflow->status)->replace('_', ' ')->title() }}</small>
+                            @if($shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION')
+                                <form method="POST" action="{{ route('seller.logistics.returns.confirm', $shipment->returnWorkflow) }}" class="mt-2 grid gap-1">
+                                    @csrf
+                                    <input name="notes" maxlength="1000" class="w-full rounded border border-line p-1 text-xs" placeholder="Optional receipt note">
+                                    <button class="sl-btn sl-btn-primary sl-btn-sm">Confirm seller receipt</button>
+                                </form>
+                            @endif
+                        @endif
+                    </td>
+                    <td>{{ $shipment->updated_at?->diffForHumans() }}</td>
+                    <td><a class="sl-btn sl-btn-ghost sl-btn-sm" href="{{ route('seller.logistics', ['view' => 'tracking', 'order' => $order->seller_order_number]) }}">Track order</a></td>
+                </tr>
             @endforeach
         @empty<tr><td colspan="7">No shipments yet.</td></tr>@endforelse
     </tbody></table></div></section>{{ $orders->links() }}

@@ -4,6 +4,7 @@ use App\Http\Controllers\Seller\SellerAccountController;
 use App\Http\Controllers\Seller\SellerComplianceController;
 use App\Http\Controllers\Seller\SellerEngagementController;
 use App\Http\Controllers\Seller\SellerOperationsController;
+use App\Http\Controllers\Seller\SellerReturnWorkflowController;
 use App\Http\Controllers\Seller\SellerFinanceController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Seller\SellerOrderController;
@@ -89,6 +90,7 @@ Route::prefix('seller')
         Route::get('/orders-export', [SellerOperationsController::class, 'exportOrders'])->name('orders.export');
 
         Route::get('/logistics', [SellerOperationsController::class, 'logistics'])->name('logistics');
+        Route::post('/logistics/returns/{workflow}/confirm', [SellerReturnWorkflowController::class, 'confirm'])->whereNumber('workflow')->name('logistics.returns.confirm');
         Route::post('/logistics/pickup-requests', [SellerPickupRequestController::class, 'store'])->name('logistics.pickup-requests.store');
         Route::post('/logistics/pickup-requests/{pickupRequest}/cancel', [SellerPickupRequestController::class, 'cancel'])
             ->whereNumber('pickupRequest')->name('logistics.pickup-requests.cancel');

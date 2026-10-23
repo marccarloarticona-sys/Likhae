@@ -3,6 +3,7 @@
 use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
+use App\Http\Controllers\Logistics\LogisticsReturnWorkflowController;
 use App\Http\Controllers\Logistics\LogisticsRemittanceController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Logistics\LogisticsShippingRateController;
@@ -60,6 +61,10 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/parcels/{shipment}/status-override', [DispatchController::class, 'overrideShipmentStatus'])->name('parcels.status-override');
         Route::post('/parcels/{shipment}/exceptions', [DispatchController::class, 'reportShipmentException'])->name('parcels.exceptions.store');
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
+
+        Route::get('/returns', [LogisticsReturnWorkflowController::class, 'index'])->name('returns');
+        Route::post('/returns/{workflow}/receive', [LogisticsReturnWorkflowController::class, 'receive'])->whereNumber('workflow')->name('returns.receive');
+        Route::post('/returns/{workflow}/assign', [LogisticsReturnWorkflowController::class, 'assign'])->whereNumber('workflow')->name('returns.assign');
 
         Route::get('/pickups', [DispatchController::class, 'pickups'])->name('pickups');
         Route::post('/pickups/requests/{pickupRequest}/assign', [DispatchController::class, 'assignSellerPickupRequest'])
@@ -128,6 +133,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/messages/stream', [LogisticsPortalController::class, 'messageStream'])->name('messages.stream');
         Route::post('/messages', [LogisticsPortalController::class, 'sendMessage'])->name('messages.send');
         Route::get('/reports', [LogisticsPortalController::class, 'reports'])->name('reports');
+        Route::get('/reports/transactions.csv', [LogisticsPortalController::class, 'exportFinancialTransactionsCsv'])->name('reports.transactions.csv');
+        Route::get('/reports/transactions.pdf', [LogisticsPortalController::class, 'exportFinancialTransactionsPdf'])->name('reports.transactions.pdf');
         Route::get('/remittances', [LogisticsRemittanceController::class, 'index'])->name('remittances');
         Route::get('/wallet', [LogisticsRemittanceController::class, 'wallet'])->name('wallet');
         Route::put('/wallet/payout-destination', [LogisticsRemittanceController::class, 'updatePayoutDestination'])->name('wallet.payout-destination.update');
