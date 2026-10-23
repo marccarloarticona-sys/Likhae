@@ -118,12 +118,14 @@ class SellerAccountController extends Controller
         return back()->with('status', 'Store profile saved.');
     }
 
-    public function account(Request $request, PayoutDestinationReadiness $destinations): View
+    public function account(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager): View
     {
         $shop = $this->shop($request);
         $businessAddress = $this->ownedBusinessAddress($shop);
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($shop);
+        $payoutMultipleReady = $destinations->supportsMultipleFor('seller_profiles');
+        $payoutDestinations = $payoutMultipleReady ? $manager->accounts($shop) : [];
 
         return view('seller.account', [
             'tab' => $request->input('tab', 'profile'),
@@ -133,6 +135,8 @@ class SellerAccountController extends Controller
             'payoutProfile' => $shop,
             'payoutDestinationReady' => $payoutDestinationReady,
             'payoutDestinationSaved' => $payoutDestinationSaved,
+            'payoutMultipleReady' => $payoutMultipleReady,
+            'payoutDestinations' => $payoutDestinations,
         ]);
     }
 

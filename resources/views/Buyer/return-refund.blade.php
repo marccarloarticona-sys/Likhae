@@ -24,7 +24,7 @@
             <section class="rr-panel" data-step="3">
                 <h2 class="text-xl font-bold text-stone-900 dark:text-white">Tell us more</h2><p class="rr-muted mt-1 text-sm">Select affected items and attach evidence. New COD refunds are cash-only and are paid only after approval, return custody, and inspection.</p>
                 <div class="mt-5 grid gap-3">@foreach($order->sellerOrders->flatMap->items as $item)@php($unitRefund=(float)$item->line_total/max((int)$item->quantity,1))<label class="rr-item"><input type="checkbox" name="item_ids[]" value="{{ $item->id }}" data-item-checkbox data-item-id="{{ $item->id }}" data-unit-refund="{{ number_format($unitRefund,2,'.','') }}"><x-shared.product-thumbnail :item="$item" size="64"/><span class="min-w-0 flex-1"><strong class="block truncate">{{ $item->product_name }}</strong><small class="rr-muted block">{{ $item->variant_description ?: 'Standard' }} &middot; Purchased qty {{ $item->quantity }}</small></span><span class="flex items-center gap-2"><span class="text-xs rr-muted">Qty</span><input class="rr-field w-20 py-2 text-center" type="number" name="quantities[{{ $item->id }}]" value="1" min="1" max="{{ $item->quantity }}" data-quantity data-for-item="{{ $item->id }}" disabled></span></label>@endforeach</div>
-                <div class="mt-5 grid gap-4 sm:grid-cols-2"><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="description">Describe the issue</label><textarea class="rr-field" id="description" name="description" rows="5" maxlength="2000" required placeholder="Share details that can help the Seller review your request.">{{ old('description') }}</textarea><small class="rr-help" id="descriptionCount">0 / 2000</small></div><div class="space-y-4"><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="images">Photos <span class="rr-muted font-normal">(up to 6)</span></label><input class="rr-field" id="images" name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple><div class="rr-preview mt-2" id="imagePreview"></div><small class="rr-help">JPG, PNG, or WEBP. Maximum 8 MB each.</small></div><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="video">Video <span class="rr-muted font-normal">(optional)</span></label><input class="rr-field" id="video" name="video" type="file" accept="video/mp4,video/quicktime,video/webm"><small class="rr-help" id="videoName">MP4, MOV, or WEBM. Maximum 200 MB.</small></div></div></div>
+                <div class="mt-5 grid gap-4 sm:grid-cols-2"><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="description">Describe the issue</label><textarea class="rr-field" id="description" name="description" rows="5" minlength="10" maxlength="2000" required aria-describedby="descriptionCount descriptionValidation" placeholder="Share details that can help the Seller review your request.">{{ old('description') }}</textarea><small class="rr-help" id="descriptionCount">0 / 2000</small><small class="rr-help text-red-700" id="descriptionValidation" aria-live="polite"></small></div><div class="space-y-4"><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="images">Photos <span class="rr-muted font-normal">(required, up to 5)</span></label><input class="rr-field" id="images" name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple required aria-describedby="imageCount imageValidation"><div class="rr-preview mt-2" id="imagePreview"></div><small class="rr-help" id="imageCount" aria-live="polite">0 / 5 images selected</small><small class="rr-help">JPG, PNG, or WEBP. Maximum 5 MB each.</small><small class="rr-help text-red-700" id="imageValidation" aria-live="polite"></small></div><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="video">Video <span class="rr-muted font-normal">(optional)</span></label><input class="rr-field" id="video" name="video" type="file" accept="video/mp4,video/quicktime,video/webm"><small class="rr-help" id="videoName">MP4, MOV, or WEBM. Maximum 200 MB.</small></div></div></div>
                 <fieldset class="mt-5 rounded-xl border border-[#eadbce] bg-[#fff7f2] p-4 dark:border-[#5a443c] dark:bg-[#30211d]"><legend class="px-1 font-semibold text-stone-900 dark:text-white">Refund method</legend><div class="grid gap-3 sm:grid-cols-2"><label class="flex items-start gap-2 rounded-lg border border-[#d9b6a8] bg-white/70 p-3 text-sm dark:bg-black/10"><input class="mt-1" type="radio" checked disabled aria-label="Cash refund method, active"><span><strong class="block">Cash / Current Refund Method</strong><small class="rr-help">New COD refunds are recorded as a cash obligation.</small></span></label><label class="flex items-start gap-2 rounded-lg border border-[#eadbce] p-3 text-sm opacity-65 dark:border-[#5a443c]"><input class="mt-1" type="radio" disabled aria-label="GCash refund method, coming soon"><span><strong class="block">GCash</strong><small class="rr-help">Coming Soon</small></span></label></div><p class="rr-help mt-3">Approval does not mean payment; the return must be received and inspected first, and an authorized cash payer must be configured.</p><label class="mt-4 flex items-start gap-2 text-sm"><input class="mt-1" type="checkbox" name="confirm_cash" value="1" required><span>I understand that an approved cash refund is not paid immediately.</span></label></fieldset>
                 <div class="mt-5 grid gap-4 sm:grid-cols-2"><div><label class="mb-1 block text-sm font-semibold text-stone-800 dark:text-white" for="buyer_email">Email for updates</label><input class="rr-field" id="buyer_email" name="buyer_email" type="email" required maxlength="255" value="{{ old('buyer_email', auth()->user()->email) }}"></div><div class="rr-summary grid gap-2 p-4 text-sm"><div class="flex items-center justify-between gap-3"><span>Refundable Price</span><strong class="text-red-900 dark:text-red-200" id="refundPrice">PHP 0.00</strong></div><div class="flex items-center justify-between gap-3"><span class="font-semibold">Total Refund</span><strong class="text-lg text-red-900 dark:text-red-200" id="refundTotal">PHP 0.00</strong></div></div></div>
                 <div class="mt-6 flex justify-between"><button type="button" class="lk-btn lk-btn-light" data-back>Back</button><button type="button" class="lk-btn lk-btn-red" data-next>Review Request</button></div>
@@ -76,12 +76,63 @@ document.addEventListener('DOMContentLoaded', () => {
             .join(', ') || 'No files attached';
         refresh();
     };
+    const imagesInput = f.querySelector('#images');
+    const descriptionInput = f.querySelector('#description');
+    const imageValidation = document.getElementById('imageValidation');
+    const descriptionValidation = document.getElementById('descriptionValidation');
+    const imageCount = document.getElementById('imageCount');
     const uploadError = () => {
-        const oversizedImage = [...f.querySelector('#images').files].find((file) => file.size > 8 * 1024 * 1024);
-        if (oversizedImage) return 'Each proof image must be 8 MB or smaller.';
+        const files = [...imagesInput.files];
+        const descriptionLength = descriptionInput.value.trim().length;
+        imageValidation.textContent = files.length === 0
+            ? 'Please provide at least one evidence image.'
+            : (files.length > 5 ? 'You can upload up to 5 images only.' : '');
+        descriptionValidation.textContent = descriptionLength < 10
+            ? 'Please provide a description with at least 10 characters.'
+            : '';
+        if (files.length === 0) return imageValidation.textContent;
+        if (files.length > 5) return imageValidation.textContent;
+        if (files.some((file) => file.size > 5 * 1024 * 1024)) {
+            imageValidation.textContent = 'Each image must not exceed 5 MB.';
+            return imageValidation.textContent;
+        }
+        if (files.some((file) => file.type && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) {
+            imageValidation.textContent = 'Please upload JPEG, PNG, or WebP images only.';
+            return imageValidation.textContent;
+        }
+        if (descriptionLength < 10) return descriptionValidation.textContent;
         const video = f.querySelector('#video').files[0];
         if (video && video.size > 200 * 1024 * 1024) return 'The proof video must be 200 MB or smaller.';
         return '';
+    };
+    const renderImagePreview = () => {
+        const preview = document.getElementById('imagePreview');
+        const files = [...imagesInput.files];
+        preview.replaceChildren();
+        imageCount.textContent = `${files.length} / 5 images selected`;
+        files.forEach((file, index) => {
+            const tile = document.createElement('span');
+            tile.className = 'relative inline-flex flex-col gap-1';
+            const image = document.createElement('img');
+            image.src = URL.createObjectURL(file);
+            image.alt = file.name;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'text-xs font-semibold text-red-800 underline';
+            remove.textContent = `Remove ${file.name}`;
+            remove.addEventListener('click', () => {
+                const transfer = new DataTransfer();
+                files.forEach((selectedFile, selectedIndex) => {
+                    if (selectedIndex !== index) transfer.items.add(selectedFile);
+                });
+                imagesInput.files = transfer.files;
+                imageValidation.textContent = '';
+                renderImagePreview();
+            });
+            tile.append(image, remove);
+            preview.append(tile);
+        });
+        uploadError();
     };
     const focusInvalidField = () => {
         const invalid = [...f.elements].find((field) => !field.disabled && !field.checkValidity());
@@ -117,10 +168,16 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('Choose a reason first.');
             return;
         }
-        if (step === 3 && (!f.querySelector('[data-item-checkbox]:checked')
-            || !f.querySelector('[name="confirm_cash"]').checked)) {
-            alert('Select affected items and confirm the cash-refund policy.');
-            return;
+        if (step === 3) {
+            const mediaError = uploadError();
+            if (mediaError) {
+                alert(mediaError);
+                return;
+            }
+            if (!f.querySelector('[data-item-checkbox]:checked') || !f.querySelector('[name="confirm_cash"]').checked) {
+                alert('Select affected items and confirm the cash-refund policy.');
+                return;
+            }
         }
         if (step < 4) {
             step += 1;
@@ -134,19 +191,11 @@ document.addEventListener('DOMContentLoaded', () => {
             show(step);
         }
     }));
-    f.querySelector('#description').addEventListener('input', (event) => {
+    descriptionInput.addEventListener('input', (event) => {
         document.getElementById('descriptionCount').textContent = `${event.target.value.length} / 2000`;
+        uploadError();
     });
-    f.querySelector('#images').addEventListener('change', (event) => {
-        const preview = document.getElementById('imagePreview');
-        preview.innerHTML = '';
-        [...event.target.files].slice(0, 6).forEach((file) => {
-            const image = document.createElement('img');
-            image.src = URL.createObjectURL(file);
-            image.alt = file.name;
-            preview.append(image);
-        });
-    });
+    imagesInput.addEventListener('change', renderImagePreview);
     f.querySelector('#video').addEventListener('change', (event) => {
         document.getElementById('videoName').textContent = event.target.files[0]?.name || 'MP4, MOV, or WEBM. Maximum 200 MB.';
     });

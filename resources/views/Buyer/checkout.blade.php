@@ -17,9 +17,12 @@
     $selectedDeliveryAvailability = $deliveryAvailability[$deliveryAvailabilityKey] ?? ['available' => false, 'requires_review' => false, 'message' => 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.'];
     $groups = collect(data_get($preview ?? [], 'groups', []));
     $availableVouchers = collect($availableVouchers ?? []);
-    $sellerAvailableVouchers = $availableVouchers->except('platform');
+    $sellerAvailableVouchers = $availableVouchers->except(['platform', 'shipping']);
     $platformVouchers = collect($availableVouchers->get('platform', []));
-    $voucherSource = (string) ($voucherSource ?? 'seller');
+    $shippingVouchers = collect($availableVouchers->get('shipping', []));
+    $sellerVoucherCodes = (array) ($sellerVoucherCodes ?? []);
+    $platformVoucherCode = (string) ($platformVoucherCode ?? '');
+    $shippingVoucherCode = (string) ($shippingVoucherCode ?? '');
     $rewardPointsBalance = (int) data_get($preview ?? [], 'available_reward_points', 0);
     $maxRedeemablePoints = (int) data_get($preview ?? [], 'maximum_redeemable_points', 0);
     $selectedRewardPoints = (int) ($selectedRewardPoints ?? 0);
@@ -69,7 +72,7 @@
             </section>
         @endif
 
-        @if($errors->any() && !$errors->has('voucher_code'))
+        @if($errors->any() && !$errors->has('voucher_code') && !$errors->has('platform_voucher_code') && !$errors->has('shipping_voucher_code') && !collect($errors->keys())->contains(fn ($key) => str_starts_with($key, 'seller_voucher_codes.')))
             <section id="checkout-validation-errors" class="mt-5 rounded-2xl border border-red-300 bg-red-50 p-5 text-red-900 shadow-sm" role="alert" aria-live="assertive" tabindex="-1">
                 <h2 class="text-sm font-bold">Your order could not be placed</h2>
                 <p class="mt-1 text-xs">Please fix the following before trying again:</p>
@@ -92,7 +95,6 @@
         <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
             @csrf
             <input type="hidden" name="checkout_attempt_key" value="{{ $checkoutAttemptKey }}">
-            <input type="hidden" name="applied_voucher_code" value="{{ $voucherCode ?? '' }}">
             @foreach($cartItems as $cartItem)
                 <input type="hidden" name="cart_item_ids[]" value="{{ $cartItem->id }}">
             @endforeach
@@ -142,13 +144,16 @@
                     @php
                         $sellerSubtotal = (float) data_get($group, 'item_subtotal', 0);
                         $sellerDiscount = (float) data_get($group, 'voucher_discount', 0);
+                        $sellerSellerVoucherDiscount = (float) data_get($group, 'seller_voucher_discount', 0);
+                        $sellerPlatformVoucherDiscount = (float) data_get($group, 'platform_voucher_discount', 0);
+                        $sellerShippingVoucherDiscount = (float) data_get($group, 'shipping_voucher_discount', 0);
                         $sellerRewardPoints = (int) data_get($group, 'reward_points_redeemed', 0);
                         $sellerRewardDiscount = (float) data_get($group, 'reward_points_discount', 0);
                         $sellerShipping = (float) data_get($group, 'shipping_fee', 0);
                         $sellerProtection = (float) data_get($group, 'protection_total', 0);
                         $sellerTotal = (float) data_get($group, 'grand_total', 0);
                     @endphp
-                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}">
+                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}" data-seller-shipping-discount="{{ number_format($sellerShippingVoucherDiscount, 2, '.', '') }}">
                         <header class="border-b border-stone-100 bg-stone-50 px-5 py-4">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <h2 class="text-base font-bold uppercase tracking-wide text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
@@ -199,8 +204,14 @@
                         </div>
                         <div class="space-y-2 border-t border-stone-100 px-5 py-4 text-xs">
                             <div class="flex justify-between gap-3 text-stone-500"><span>{{ data_get($group, 'seller.business_name', 'Shop') }} subtotal</span><strong class="text-stone-700">&#8369;{{ number_format($sellerSubtotal, 2) }}</strong></div>
-                            @if(data_get($group, 'voucher'))
-                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Voucher {{ data_get($group, 'voucher.code') }} &middot; {{ data_get($group, 'seller.business_name', 'Shop') }}</span><strong>-&#8369;{{ number_format($sellerDiscount, 2) }}</strong></div>
+                            @if(data_get($group, 'seller_voucher'))
+                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Seller Voucher {{ data_get($group, 'seller_voucher.code') }}</span><strong>-&#8369;{{ number_format($sellerSellerVoucherDiscount, 2) }}</strong></div>
+                            @endif
+                            @if($sellerPlatformVoucherDiscount > 0)
+                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Platform Voucher {{ $platformVoucherCode }}</span><strong>-&#8369;{{ number_format($sellerPlatformVoucherDiscount, 2) }}</strong></div>
+                            @endif
+                            @if($sellerShippingVoucherDiscount > 0)
+                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Shipping Voucher {{ $shippingVoucherCode }}</span><strong>-&#8369;{{ number_format($sellerShippingVoucherDiscount, 2) }}</strong></div>
                             @endif
                             <div data-seller-reward-row class="flex justify-between gap-3 text-red-800" @if($sellerRewardPoints === 0) hidden @endif><span>Reward points (<span data-seller-reward-points>{{ number_format($sellerRewardPoints) }}</span>)</span><strong data-seller-reward-discount>-&#8369;{{ number_format($sellerRewardDiscount, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 text-stone-500"><span>Shipping</span><strong data-seller-shipping-total>&#8369;{{ number_format($sellerShipping, 2) }}</strong></div>
@@ -244,19 +255,27 @@
                     </div>
                     <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
                         <div>
-                            <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
-                            <p class="mt-1 text-[11px] text-stone-500">Enter a seller voucher code. Choose a LIKHAE voucher from the picker.</p>
+                            <h3 class="text-xs font-semibold text-stone-800">Seller Voucher</h3>
+                            <p class="mt-1 text-[11px] text-stone-500">Apply one eligible Seller voucher to each shop in this checkout.</p>
                         </div>
                         <label for="checkout-voucher-code" class="block text-[11px] font-semibold text-stone-700">Voucher code</label>
                         <div class="flex gap-2">
-                            <input id="checkout-voucher-code" name="voucher_code" value="{{ old('voucher_code', $voucherSource === 'seller' ? ($voucherCode ?? '') : '') }}" maxlength="80" autocomplete="off" autocapitalize="characters" class="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs uppercase" placeholder="Enter your voucher">
+                            <input id="checkout-voucher-code" name="voucher_code" value="{{ old('voucher_code') }}" maxlength="80" autocomplete="off" autocapitalize="characters" class="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs uppercase" placeholder="Enter your voucher">
                             <button type="submit" name="apply_seller_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg bg-red-900 px-3 py-2 text-xs font-semibold text-white">Apply Voucher</button>
-                            @if($voucherSource === 'seller' && filled(old('voucher_code', $voucherCode ?? '')))
-                                <button type="submit" name="clear_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-stone-600">Clear</button>
-                            @endif
                         </div>
                         @error('voucher_code')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
-                        <p class="text-[10px] text-stone-500">Seller vouchers apply to that shop. Your total updates after applying the code.</p>
+                        @error('seller_voucher_codes.*')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
+                        @if($sellerVoucherCodes !== [])
+                            <div class="space-y-2 border-t border-stone-200 pt-3">
+                                @foreach($sellerVoucherCodes as $sellerId => $code)
+                                    <div class="flex items-center justify-between gap-2 text-[10px]">
+                                        <span class="font-semibold text-emerald-800">{{ data_get($groups->get($sellerId), 'seller.business_name', 'Shop') }}: {{ $code }}</span>
+                                        <button type="submit" name="remove_seller_voucher" value="{{ $sellerId }}" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+                        <p class="text-[10px] text-stone-500">Each Seller voucher applies only to eligible products from that shop.</p>
                         @if($sellerAvailableVouchers->isNotEmpty())
                             <div class="space-y-2 border-t border-stone-200 pt-3">
                                 <p class="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Available seller vouchers</p>
@@ -265,7 +284,7 @@
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="text-[10px] text-stone-500">{{ $voucherShop }}:</span>
                                         @foreach($vouchers as $voucher)
-                                            <button type="button" data-checkout-voucher-suggestion data-voucher-code="{{ $voucher->code }}" class="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-50" aria-label="Use {{ $voucher->code }} at {{ $voucherShop }}">{{ $voucher->code }} &middot; {{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off</button>
+                                            <button type="submit" name="seller_voucher_codes[{{ $sellerId }}]" value="{{ $voucher->code }}" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-50" aria-label="Use {{ $voucher->code }} at {{ $voucherShop }}">{{ $voucher->code }} &middot; {{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off</button>
                                         @endforeach
                                     </div>
                                 @endforeach
@@ -277,21 +296,41 @@
                             <span class="flex items-center gap-3">
                                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-900 text-xs font-black tracking-wide text-white">LK</span>
                                 <span>
-                                    <strong class="block text-sm text-stone-900">LIKHAE Voucher</strong>
+                                    <strong class="block text-sm text-stone-900">Platform Voucher</strong>
                                     <small class="mt-0.5 block text-[11px] text-stone-500">{{ $platformVouchers->isEmpty() ? 'No platform vouchers available' : 'Choose from '.$platformVouchers->count().' available '.\Illuminate\Support\Str::plural('voucher', $platformVouchers->count()) }}</small>
                                 </span>
                             </span>
                             <span class="rounded-lg bg-red-900 px-3 py-2 text-[11px] font-bold text-white">{{ $platformVouchers->isEmpty() ? 'Unavailable' : 'Browse' }}</span>
                         </button>
-                        @if($voucherSource === 'platform' && filled($voucherCode ?? null))
+                        @if(filled($platformVoucherCode))
                             <div class="mt-3 flex items-center justify-between gap-3 border-t border-red-200 pt-3 text-xs">
-                                <span class="font-semibold text-emerald-800">Applied: {{ $voucherCode }}</span>
-                                <button type="submit" name="clear_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
+                                <span class="font-semibold text-emerald-800">Applied: {{ $platformVoucherCode }}</span>
+                                <button type="submit" name="remove_platform_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
                             </div>
                         @endif
                     </div>
+                    @error('platform_voucher_code')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
+                    <div class="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                        <button type="button" data-open-shipping-vouchers aria-haspopup="dialog" aria-controls="checkout-shipping-voucher-dialog" class="flex w-full items-center justify-between gap-3 text-left">
+                            <span class="flex items-center gap-3">
+                                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-700 text-xs font-black tracking-wide text-white">SHIP</span>
+                                <span><strong class="block text-sm text-stone-900">Shipping Voucher</strong><small class="mt-0.5 block text-[11px] text-stone-500">{{ $shippingVouchers->isEmpty() ? 'No shipping vouchers available' : 'Choose from '.$shippingVouchers->count().' available '.\Illuminate\Support\Str::plural('voucher', $shippingVouchers->count()) }}</small></span>
+                            </span>
+                            <span class="rounded-lg bg-amber-700 px-3 py-2 text-[11px] font-bold text-white">{{ $shippingVouchers->isEmpty() ? 'Unavailable' : 'Browse' }}</span>
+                        </button>
+                        @if(filled($shippingVoucherCode))
+                            <div class="mt-3 flex items-center justify-between gap-3 border-t border-amber-200 pt-3 text-xs">
+                                <span class="font-semibold text-emerald-800">Applied: {{ $shippingVoucherCode }}</span>
+                                <button type="submit" name="remove_shipping_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
+                            </div>
+                        @endif
+                    </div>
+                    @error('shipping_voucher_code')<p class="text-xs font-semibold text-red-700" role="alert">{{ $message }}</p>@enderror
                     <div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div>
-                    <div class="flex justify-between"><dt class="text-stone-500">Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'discount_total', 0), 2) }}</dd></div>
+                    <div class="flex justify-between text-emerald-800"><dt>Seller Voucher discount</dt><dd>-&#8369;{{ number_format($groups->sum(fn ($group) => (float) data_get($group, 'seller_voucher_discount', 0)), 2) }}</dd></div>
+                    <div class="flex justify-between text-emerald-800"><dt>Platform Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'platform_voucher_discount', 0), 2) }}</dd></div>
+                    <div class="flex justify-between text-emerald-800"><dt>Shipping Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'shipping_voucher_discount', 0), 2) }}</dd></div>
+                    <div class="flex justify-between border-t border-stone-100 pt-2 font-semibold text-stone-800"><dt>Total discount</dt><dd id="checkout-total-discount">-&#8369;{{ number_format((float) data_get($preview, 'total_discount', 0), 2) }}</dd></div>
                     <div id="checkout-reward-points-summary" class="flex justify-between text-red-800" @if($selectedRewardPoints === 0) hidden @endif><dt>Reward points (<span data-reward-points-summary-count>{{ number_format($selectedRewardPoints) }}</span>)</dt><dd id="checkout-reward-points-discount">-&#8369;{{ number_format((float) data_get($preview, 'reward_points_discount', 0), 2) }}</dd></div>
                     <div class="flex items-center justify-between gap-3 text-amber-800">
                         <dt><label for="checkout-protection-master" class="flex cursor-pointer items-center gap-2"><input id="checkout-protection-master" type="checkbox" data-protection-master aria-label="Apply Additional Care to all eligible items" @disabled($protectionEligibleItemCount === 0)><span><span>Apply Additional Care</span><small class="mt-1 block text-[10px] text-stone-500">{{ $protectionEligibleItemCount > 0 ? 'All eligible items' : 'Not available for these items' }}</small></span></label></dt>
@@ -324,7 +363,7 @@
                         <div class="grid gap-4 sm:grid-cols-2">
                             @foreach($platformVouchers as $voucher)
                                 @php
-                                    $voucherIsApplied = $voucherSource === 'platform' && mb_strtoupper((string) $voucher->code) === mb_strtoupper((string) $voucherCode);
+                                    $voucherIsApplied = mb_strtoupper((string) $voucher->code) === mb_strtoupper((string) $platformVoucherCode);
                                     $voucherDiscountLabel = $voucher->discount_type === 'PERCENT'
                                         ? number_format((float) $voucher->discount_value, 0).'% off'
                                         : 'PHP '.number_format((float) $voucher->discount_value, 2).' off';
@@ -360,6 +399,63 @@
                     @endif
                 </div>
             </dialog>
+
+            <dialog id="checkout-shipping-voucher-dialog" class="m-auto max-h-[90vh] w-[calc(100%-2rem)] max-w-3xl overflow-y-auto rounded-2xl border border-stone-200 bg-white p-0 shadow-2xl backdrop:bg-stone-950/60" aria-labelledby="checkout-shipping-voucher-title">
+                <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-stone-200 bg-white p-5 sm:p-6">
+                    <div>
+                        <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-800">LIKHAE Shipping</span>
+                        <h2 id="checkout-shipping-voucher-title" class="mt-1 text-xl font-bold text-stone-900">Choose a shipping voucher</h2>
+                        <p class="mt-1 text-xs text-stone-500">One shipping voucher can reduce eligible shipping fees for this order.</p>
+                    </div>
+                    <button type="button" data-close-shipping-vouchers class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-stone-200 text-xl leading-none text-stone-600 hover:bg-stone-50" aria-label="Close shipping voucher picker">&times;</button>
+                </div>
+                <div class="p-5 sm:p-6">
+                    @error('shipping_voucher_code')<p class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800" role="alert">{{ $message }}</p>@enderror
+                    @if($shippingVouchers->isEmpty())
+                        <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 p-8 text-center">
+                            <strong class="block text-sm text-stone-800">No shipping vouchers are available right now.</strong>
+                            <p class="mt-1 text-xs text-stone-500">Shipping fees will be shown in your order total.</p>
+                        </div>
+                    @else
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            @foreach($shippingVouchers as $voucher)
+                                @php
+                                    $voucherIsApplied = mb_strtoupper((string) $voucher->code) === mb_strtoupper((string) $shippingVoucherCode);
+                                    $voucherDiscountLabel = $voucher->discount_type === 'PERCENT'
+                                        ? number_format((float) $voucher->discount_value, 0).'% off shipping'
+                                        : 'PHP '.number_format((float) $voucher->discount_value, 2).' off shipping';
+                                @endphp
+                                <article class="relative overflow-hidden rounded-2xl border {{ $voucherIsApplied ? 'border-emerald-300 bg-emerald-50/50' : 'border-stone-200 bg-white' }} shadow-sm">
+                                    <div class="h-1.5 bg-gradient-to-r from-amber-900 via-amber-700 to-yellow-400"></div>
+                                    <div class="p-4 sm:p-5">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div>
+                                                <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide text-amber-900">Shipping benefit</span>
+                                                <h3 class="mt-3 text-base font-bold text-stone-900">{{ $voucher->name ?: 'Shipping Voucher' }}</h3>
+                                            </div>
+                                            <span class="rounded-xl bg-amber-900 px-3 py-2 text-lg font-black text-white">{{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 0) }}</span>
+                                        </div>
+                                        <p class="mt-3 text-sm font-semibold text-amber-900">{{ $voucherDiscountLabel }}</p>
+                                        <div class="mt-3 flex flex-wrap gap-2 text-[10px] text-stone-600">
+                                            <span class="rounded-full bg-stone-100 px-2.5 py-1">Min. spend &#8369;{{ number_format((float) $voucher->minimum_order_amount, 2) }}</span>
+                                            @if($voucher->maximum_discount_amount !== null)<span class="rounded-full bg-stone-100 px-2.5 py-1">Up to &#8369;{{ number_format((float) $voucher->maximum_discount_amount, 2) }} off</span>@endif
+                                            @if($voucher->ends_at)<span class="rounded-full bg-stone-100 px-2.5 py-1">Ends {{ $voucher->ends_at->format('M j, Y') }}</span>@endif
+                                        </div>
+                                        <div class="mt-4 flex items-center justify-between gap-3 border-t border-dashed border-stone-300 pt-3">
+                                            <span class="font-mono text-xs font-bold tracking-wide text-stone-800">{{ $voucher->code }}</span>
+                                            @if($voucherIsApplied)
+                                                <span class="rounded-lg bg-emerald-700 px-3 py-2 text-[11px] font-bold text-white">Applied</span>
+                                            @else
+                                                <button type="submit" name="shipping_voucher_code" value="{{ $voucher->code }}" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="rounded-lg bg-amber-800 px-3 py-2 text-[11px] font-bold text-white transition hover:bg-amber-950">Use voucher</button>
+                                            @endif
+                                        </div>
+                                    </div>
+                                </article>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+            </dialog>
         </form>
     @endif
 </div>
@@ -378,6 +474,8 @@
             const rewardCount = document.querySelector('[data-reward-points-summary-count]');
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
+            const shippingVoucherDiscount = Number(@json((float) data_get($preview, 'shipping_voucher_discount', 0)));
+            const fixedVoucherDiscount = discount + shippingVoucherDiscount;
             const maximumRewardPoints = Number(@json($maxRedeemablePoints));
             const money = (value) => `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -438,7 +536,8 @@
                     const sellerProtection = [...document.querySelectorAll('[data-protection-checkbox]:checked')]
                         .filter((checkbox) => checkbox.dataset.sellerId === sellerId)
                         .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
-                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount - sellerRewardDiscount + sellerShipping + sellerProtection);
+                    const sellerShippingDiscount = Number(card.dataset.sellerShippingDiscount || 0);
+                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount - sellerRewardDiscount + sellerShipping - sellerShippingDiscount + sellerProtection);
 
                     shippingTotal += sellerShipping;
                     protectionTotal += sellerProtection;
@@ -458,7 +557,9 @@
                 if (rewardDiscount) rewardDiscount.textContent = `-${money(rewardPoints / 100)}`;
                 if (shipping) shipping.textContent = money(shippingTotal);
                 if (protection) protection.textContent = money(protectionTotal);
-                if (total) total.textContent = money(Math.max(0, subtotal - discount - (rewardPoints / 100) + shippingTotal + protectionTotal));
+                const totalDiscount = document.getElementById('checkout-total-discount');
+                if (totalDiscount) totalDiscount.textContent = `-${money(fixedVoucherDiscount + (rewardPoints / 100))}`;
+                if (total) total.textContent = money(Math.max(0, subtotal - discount - (rewardPoints / 100) + shippingTotal - shippingVoucherDiscount + protectionTotal));
             };
 
             rewardToggle?.addEventListener('change', () => {
@@ -531,21 +632,25 @@
             const platformVoucherDialog = document.getElementById('checkout-platform-voucher-dialog');
             const openPlatformVouchers = document.querySelector('[data-open-platform-vouchers]');
             const closePlatformVouchers = platformVoucherDialog?.querySelector('[data-close-platform-vouchers]');
+            const shippingVoucherDialog = document.getElementById('checkout-shipping-voucher-dialog');
+            const openShippingVouchers = document.querySelector('[data-open-shipping-vouchers]');
+            const closeShippingVouchers = shippingVoucherDialog?.querySelector('[data-close-shipping-vouchers]');
             openPlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.showModal());
             closePlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.close());
+            openShippingVouchers?.addEventListener('click', () => shippingVoucherDialog?.showModal());
+            closeShippingVouchers?.addEventListener('click', () => shippingVoucherDialog?.close());
             platformVoucherDialog?.addEventListener('click', (event) => {
                 if (event.target === platformVoucherDialog) platformVoucherDialog.close();
+            });
+            shippingVoucherDialog?.addEventListener('click', (event) => {
+                if (event.target === shippingVoucherDialog) shippingVoucherDialog.close();
             });
             @if($errors->has('platform_voucher_code'))
                 platformVoucherDialog?.showModal();
             @endif
-            document.querySelectorAll('[data-checkout-voucher-suggestion]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    if (!voucherInput) return;
-                    voucherInput.value = button.dataset.voucherCode || '';
-                    voucherInput.focus();
-                });
-            });
+            @if($errors->has('shipping_voucher_code'))
+                shippingVoucherDialog?.showModal();
+            @endif
             updateDeliveryAvailability();
             checkoutForm?.addEventListener('submit', (event) => {
                 if (!event.submitter?.matches('[data-place-order-submit]')) return;

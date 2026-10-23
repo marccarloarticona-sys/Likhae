@@ -13,6 +13,29 @@ document.addEventListener('DOMContentLoaded', () => {
             'registrationForm'
         );
 
+    const registrationStepInput = document.getElementById('registration_step');
+    const registrationProgressStorageKey = 'likhae.registration.progress';
+
+    function readSavedRegistrationStep() {
+        const submittedStep = registrationStepInput?.value;
+        if (submittedStep !== undefined && submittedStep !== '') {
+            const parsedStep = Number.parseInt(submittedStep, 10);
+            return Number.isInteger(parsedStep) ? parsedStep : 0;
+        }
+
+        try {
+            const savedProgress = JSON.parse(sessionStorage.getItem(registrationProgressStorageKey) || 'null');
+            if (savedProgress?.role === accountTypeInput?.value) {
+                const parsedStep = Number.parseInt(savedProgress.step, 10);
+                return Number.isInteger(parsedStep) ? parsedStep : 0;
+            }
+        } catch {
+            // Continue at the first step if session storage is unavailable.
+        }
+
+        return 0;
+    }
+
     const emailInput =
         document.getElementById(
             'email'
@@ -182,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
 
-    let currentStep = 0;
+    let currentStep = readSavedRegistrationStep();
 
 
     /*
@@ -301,6 +324,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 type;
 
         }
+
+        window.likhaeSyncRegistrationPolicyRole?.(type);
 
         const sellerBranding = document.querySelector('[data-seller-branding]');
         if (sellerBranding) {
@@ -678,6 +703,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         currentStep =
             index;
+
+        if (registrationStepInput) {
+            registrationStepInput.value = String(currentStep);
+        }
+
+        try {
+            sessionStorage.setItem(registrationProgressStorageKey, JSON.stringify({
+                role: accountTypeInput?.value || 'buyer',
+                step: currentStep,
+            }));
+        } catch {
+            // The hidden form field still preserves the step across validation redirects.
+        }
 
 
         /*
@@ -1433,10 +1471,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 confirmation.reportValidity();
                 return;
             }
+            if (window.likhaeRegistrationPolicyConsentedRole !== accountTypeInput?.value) {
+                event.preventDefault();
+                if (!window.likhaeOpenRegistrationPolicyReview?.()) {
+                    showStepError('Published Terms & Conditions and Privacy Policy are required for this account type before registration can continue.');
+                }
+                return;
+            }
             if (!hasSelectedStorePhotos() || storePhotoCropComplete) {
                 if (!validateUploadLimits()) {
                     event.preventDefault();
                     return;
+                }
+                try {
+                    sessionStorage.removeItem(registrationProgressStorageKey);
+                } catch {
+                    // Submission can continue if session storage is unavailable.
                 }
                 submitButton.disabled = true;
                 submitLabel.textContent = 'Submitting application...';
@@ -2360,7 +2410,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setAccountType(
         ['buyer', 'seller', 'logistics', 'rider'].includes(initialAccountType)
             ? initialAccountType
-            : 'buyer'
+            : 'buyer',
+        true
     );
 
     const serverErrors = JSON.parse(document.getElementById('registration-validation-errors')?.textContent || '{}');

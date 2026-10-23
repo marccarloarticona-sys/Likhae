@@ -29,6 +29,7 @@ class PlatformVoucherIntegrationTest extends TestCase
             'name' => 'Platform cap voucher',
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
+            'benefit_scope' => 'PRODUCT',
             'minimum_order_amount' => 250,
             'maximum_discount_amount' => 40,
             'usage_limit' => 100,
@@ -40,6 +41,7 @@ class PlatformVoucherIntegrationTest extends TestCase
         $voucher = Voucher::query()->where('code', 'PLATFORMCAP10')->sole();
         $this->assertNull($voucher->seller_profile_id);
         $this->assertSame('PLATFORMCAP10', $voucher->platform_code_key);
+        $this->assertSame('PRODUCT', $voucher->benefit_scope);
         $this->assertSame('40.00', $voucher->maximum_discount_amount);
         $this->assertSame(1, $voucher->per_user_limit);
         $this->assertSame(100, $voucher->usage_limit);

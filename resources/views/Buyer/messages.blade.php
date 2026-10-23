@@ -1218,7 +1218,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bubble.hidden = !body || (Boolean(message.attachment_url) && ['[Photo]', '[File]'].includes(body));
         const time = document.createElement('span');
         time.className = 'lk-message-time';
-        time.textContent = message.pending ? 'Sending' : (message.time || 'Just now');
+        time.textContent = message.pending ? '' : (message.time || 'Just now');
         wrapper.appendChild(bubble);
         if (list.dataset.attachmentsEnabled === 'true' && message.attachment_url) {
             const attachment = window.lkCreateMessageAttachment?.(message);

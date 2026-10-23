@@ -29,6 +29,8 @@ class Product extends Model
         'purchase_limit_per_buyer',
         'published_at',
         'archived_at',
+        'flash_sale_starts_at',
+        'flash_sale_ends_at',
     ];
 
     protected function casts(): array
@@ -36,6 +38,8 @@ class Product extends Model
         return [
             'published_at' => 'datetime',
             'archived_at' => 'datetime',
+            'flash_sale_starts_at' => 'datetime',
+            'flash_sale_ends_at' => 'datetime',
             'purchase_limit_per_buyer' => 'integer',
         ];
     }

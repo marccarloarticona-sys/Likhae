@@ -5,8 +5,10 @@ namespace Tests\Feature;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Admin\PlatformPolicy;
 use App\Models\Seller\Category;
 use App\Models\User;
+use App\Http\Middleware\RequireMandatoryPolicyAcceptance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +18,10 @@ class RegistrationMediaWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    private PlatformPolicy $termsPolicy;
+
+    private PlatformPolicy $privacyPolicy;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -23,6 +29,27 @@ class RegistrationMediaWorkflowTest extends TestCase
         config(['services.psgc.local_first' => true]);
         Storage::fake('registrations');
         Storage::fake('public');
+        $this->withoutMiddleware(RequireMandatoryPolicyAcceptance::class);
+        $this->termsPolicy = PlatformPolicy::query()->create([
+            'title' => 'Terms & Conditions',
+            'version' => '1.0',
+            'body' => 'Test Terms & Conditions.',
+            'policy_type' => 'TERMS',
+            'audience' => 'ALL',
+            'scope_key' => 'PLATFORM:ALL',
+            'published_at' => now(),
+            'is_active' => true,
+        ]);
+        $this->privacyPolicy = PlatformPolicy::query()->create([
+            'title' => 'Privacy Policy',
+            'version' => '1.0',
+            'body' => 'Test Privacy Policy.',
+            'policy_type' => 'PRIVACY',
+            'audience' => 'ALL',
+            'scope_key' => 'PLATFORM:ALL',
+            'published_at' => now(),
+            'is_active' => true,
+        ]);
     }
 
     public function test_logistics_registration_stores_separate_private_documents_and_is_visible_to_admin(): void
@@ -223,7 +250,12 @@ class RegistrationMediaWorkflowTest extends TestCase
             'longitude' => '121.3258',
             'password' => 'StrongPass123!',
             'password_confirmation' => 'StrongPass123!',
-            'terms' => '1',
+            'terms_acknowledged' => '1',
+            'privacy_acknowledged' => '1',
+            'policy_acceptances' => [
+                $this->termsPolicy->id => $this->termsPolicy->version,
+                $this->privacyPolicy->id => $this->privacyPolicy->version,
+            ],
         ], $overrides);
     }
 }

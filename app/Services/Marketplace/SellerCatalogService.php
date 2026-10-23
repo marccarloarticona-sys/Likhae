@@ -14,6 +14,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -51,7 +52,7 @@ class SellerCatalogService
                     $status = 'SUSPENDED';
                 }
 
-                $product->fill([
+                $productAttributes = [
                     'seller_profile_id' => $seller->id,
                     'category_id' => (int) $request->input('category_id'),
                     'name' => $request->string('name')->toString(),
@@ -61,7 +62,13 @@ class SellerCatalogService
                     'purchase_limit_per_buyer' => $request->input('purchase_limit_per_buyer'),
                     'published_at' => $status === 'ACTIVE' ? ($product->published_at ?: now()) : $product->published_at,
                     'archived_at' => $status === 'ARCHIVED' ? now() : null,
-                ]);
+                ];
+                if (Schema::hasColumn('products', 'flash_sale_starts_at')
+                    && Schema::hasColumn('products', 'flash_sale_ends_at')) {
+                    $productAttributes['flash_sale_starts_at'] = $request->input('flash_sale_starts_at') ?: null;
+                    $productAttributes['flash_sale_ends_at'] = $request->input('flash_sale_ends_at') ?: null;
+                }
+                $product->fill($productAttributes);
 
                 $product->save();
 
@@ -99,6 +106,8 @@ class SellerCatalogService
             }
         }
 
+        $this->syncFlashSaleReminders($savedProduct);
+
         $newModerationFingerprint = $this->moderation->revisionFingerprint($savedProduct);
         if ($previousModerationFingerprint === null || ! hash_equals($previousModerationFingerprint, $newModerationFingerprint)) {
             $this->moderation->queueAutomatic($savedProduct);
@@ -118,6 +127,8 @@ class SellerCatalogService
             'archived_at' => $newStatus === 'ARCHIVED' ? now() : null,
             'published_at' => $newStatus === 'ACTIVE' ? ($product->published_at ?: now()) : $product->published_at,
         ]);
+
+        $this->syncFlashSaleReminders($product->fresh());
 
         return $product;
     }
@@ -140,6 +151,8 @@ class SellerCatalogService
             abort_unless($variants->count() === 1, 409, 'Edit variant stock from the product editor.');
             $variants->first()->update(['stock' => $stock]);
         }, attempts: 3);
+
+        $this->syncFlashSaleReminders($product->fresh());
     }
 
     public function updateVariantStock(
@@ -151,7 +164,7 @@ class SellerCatalogService
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
         abort_unless((int) $variant->product_id === (int) $product->id, 404);
 
-        return DB::transaction(function () use ($seller, $product, $variant, $stock): ProductVariant {
+        $updatedVariant = DB::transaction(function () use ($seller, $product, $variant, $stock): ProductVariant {
             $isOwned = Product::query()
                 ->whereKey($product->id)
                 ->where('seller_profile_id', $seller->id)
@@ -166,6 +179,17 @@ class SellerCatalogService
 
             return $lockedVariant;
         }, attempts: 3);
+
+        $this->syncFlashSaleReminders($product->fresh());
+
+        return $updatedVariant;
+    }
+
+    private function syncFlashSaleReminders(Product $product): void
+    {
+        if (Schema::hasTable('flash_sale_reminders')) {
+            app(FlashSaleReminderService::class)->syncProduct($product);
+        }
     }
 
     /** @return array<string, ProductOptionValue> */

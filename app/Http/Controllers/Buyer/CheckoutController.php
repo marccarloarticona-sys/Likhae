@@ -33,25 +33,14 @@ class CheckoutController extends Controller
         }
 
         if ($this->containsVacationSeller($items)) {
-            $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_reward_points']);
+            $request->session()->forget(['checkout_cart_item_ids', 'checkout_reward_points']);
+            $this->storeVoucherSelection($request, ['seller' => [], 'platform' => '', 'shipping' => '']);
 
             return redirect()->route('buyer.cart')->with('buyer_notice', 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.');
         }
 
-        $voucherCode = trim((string) $request->session()->get('checkout_voucher_code', ''));
-        $legacyVoucherCodes = collect((array) $request->session()->get('checkout_voucher_codes', []))
-            ->map(fn ($code) => mb_strtoupper(trim((string) $code)))
-            ->filter()
-            ->values();
-
-        if ($voucherCode === '' && $legacyVoucherCodes->count() === 1) {
-            $voucherCode = $legacyVoucherCodes->first();
-            $request->session()->put('checkout_voucher_code', $voucherCode);
-            $request->session()->forget('checkout_voucher_codes');
-        } elseif ($legacyVoucherCodes->count() > 1) {
-            $request->session()->forget('checkout_voucher_codes');
-            $request->session()->flash('buyer_notice', 'Checkout now accepts one voucher code. Choose one code to continue.');
-        }
+        $availableVouchers = $this->checkoutService->availableVouchers($items, $request->user());
+        $voucherSelection = $this->currentVoucherSelection($request, $items);
 
         $addresses = $request->user()->addresses()->orderByDesc('is_default')->latest()->get();
         $automaticRouting = $this->checkoutService->automaticRoutingReady();
@@ -76,7 +65,7 @@ class CheckoutController extends Controller
         try {
             $preview = $this->checkoutService->preview(
                 $items,
-                $voucherCode,
+                $voucherSelection,
                 $request->user(),
                 null,
                 $previewAddress,
@@ -90,7 +79,19 @@ class CheckoutController extends Controller
                 $request->session()->put('checkout_reward_points', 0);
             }
             if (! $rewardPointsInvalid) {
-                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids']);
+                $errors = $exception->errors();
+                foreach (array_keys($errors) as $field) {
+                    if ($field === 'platform_voucher_code') {
+                        $voucherSelection['platform'] = '';
+                    } elseif ($field === 'shipping_voucher_code') {
+                        $voucherSelection['shipping'] = '';
+                    } elseif (str_starts_with($field, 'seller_voucher_codes.')) {
+                        unset($voucherSelection['seller'][(int) substr($field, strlen('seller_voucher_codes.'))]);
+                    } elseif ($field === 'voucher_code' || $field === 'voucher_codes') {
+                        $voucherSelection = ['seller' => [], 'platform' => '', 'shipping' => ''];
+                    }
+                }
+                $this->storeVoucherSelection($request, $voucherSelection);
             }
 
             // Do not redirect back to this same GET action when the preview
@@ -104,7 +105,6 @@ class CheckoutController extends Controller
                 $previewError = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
             }
             if (! $rewardPointsInvalid) {
-                $voucherCode = '';
                 $selectedProtectionIds = [];
             }
             $checkoutBlocked = array_key_exists('cart', $exception->errors());
@@ -121,7 +121,7 @@ class CheckoutController extends Controller
                 try {
                     $preview = $this->checkoutService->preview(
                         $items,
-                        $voucherCode,
+                        ['seller' => [], 'platform' => '', 'shipping' => ''],
                         $request->user(),
                         null,
                         $previewAddress,
@@ -134,18 +134,6 @@ class CheckoutController extends Controller
                         ?: 'Checkout could not be prepared. Return to your cart and review the selected items.';
                 }
             }
-        }
-
-        $availableVouchers = $this->checkoutService->availableVouchers($items, $request->user());
-        $sessionVoucherSource = (string) $request->session()->get('checkout_voucher_source', '');
-        $sessionVoucherCode = mb_strtoupper(trim((string) $request->session()->get('checkout_voucher_code', '')));
-        $voucherSource = $voucherCode !== ''
-            && $sessionVoucherCode === mb_strtoupper($voucherCode)
-            && in_array($sessionVoucherSource, ['seller', 'platform'], true)
-                ? $sessionVoucherSource
-                : ($this->isPlatformVoucherCode($voucherCode) ? 'platform' : 'seller');
-        if ($voucherCode !== '') {
-            $request->session()->put('checkout_voucher_source', $voucherSource);
         }
 
         // Stock can change after an item is added to the cart. Keep the
@@ -187,8 +175,9 @@ class CheckoutController extends Controller
             'availableVouchers' => $availableVouchers,
             'logisticsProviders' => $logisticsProviders,
             'preview' => $preview,
-            'voucherCode' => $voucherCode,
-            'voucherSource' => $voucherSource,
+            'sellerVoucherCodes' => $voucherSelection['seller'],
+            'platformVoucherCode' => $voucherSelection['platform'],
+            'shippingVoucherCode' => $voucherSelection['shipping'],
             'hasUnavailableStock' => $hasUnavailableStock,
             'automaticRouting' => $automaticRouting,
             'selectedProtectionIds' => $selectedProtectionIds,
@@ -221,56 +210,82 @@ class CheckoutController extends Controller
         $sellerNotes = $this->checkoutService->normalizeSellerNotes($items, (array) ($noteData['seller_notes'] ?? []));
         $request->session()->put('checkout_seller_notes', $sellerNotes);
 
-        if ($request->boolean('clear_voucher')) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
-
-            return back()->with('buyer_notice', 'Voucher removed.');
-        }
-
-        $platformSelection = $request->filled('platform_voucher_code');
-        $data = $request->validate($platformSelection
-            ? ['platform_voucher_code' => ['required', 'string', 'max:80']]
-            : ['voucher_code' => ['required', 'string', 'max:80']]);
-        $code = mb_strtoupper(trim((string) ($platformSelection ? $data['platform_voucher_code'] : $data['voucher_code'])));
-        $errorField = $platformSelection ? 'platform_voucher_code' : 'voucher_code';
-
-        if ($platformSelection && ! $this->isPlatformVoucherCode($code)) {
-            throw ValidationException::withMessages([
-                'platform_voucher_code' => 'That LIKHAE voucher is no longer available. Choose another voucher.',
-            ]);
-        }
-        if (! $platformSelection && $this->isPlatformVoucherCode($code)) {
-            throw ValidationException::withMessages([
-                'voucher_code' => 'Choose LIKHAE vouchers from the picker in Order Summary.',
-            ]);
-        }
+        $data = $request->validate([
+            'seller_voucher_codes' => ['nullable', 'array'],
+            'seller_voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'platform_voucher_code' => ['nullable', 'string', 'max:80'],
+            'shipping_voucher_code' => ['nullable', 'string', 'max:80'],
+            'voucher_code' => ['nullable', 'string', 'max:80'],
+            'remove_seller_voucher' => ['nullable', 'integer'],
+            'remove_platform_voucher' => ['nullable', 'boolean'],
+            'remove_shipping_voucher' => ['nullable', 'boolean'],
+            'clear_voucher' => ['nullable', 'boolean'],
+        ]);
 
         if ($items->isEmpty()) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_reward_points']);
+            $this->storeVoucherSelection($request, ['seller' => [], 'platform' => '', 'shipping' => '']);
+            $request->session()->forget('checkout_reward_points');
 
             throw ValidationException::withMessages([
-                $errorField => 'Your checkout selection expired. Return to your cart and choose your items again.',
+                'voucher_code' => 'Your checkout selection expired. Return to your cart and choose your items again.',
             ]);
         }
 
-        try {
-            $this->checkoutService->preview($items, $code, $request->user(), rewardPointsToRedeem: $requestedRewardPoints);
-        } catch (ValidationException $exception) {
-            if (! array_key_exists('reward_points', $exception->errors())) {
-                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+        $selection = $this->currentVoucherSelection($request, $items);
+        if ($request->boolean('clear_voucher')) {
+            $selection = ['seller' => [], 'platform' => '', 'shipping' => ''];
+        } else {
+            if ($request->filled('remove_seller_voucher')) {
+                unset($selection['seller'][(int) $data['remove_seller_voucher']]);
             }
-            $errors = $exception->errors();
-            if ($errorField !== 'voucher_code' && array_key_exists('voucher_code', $errors)) {
-                throw ValidationException::withMessages([$errorField => $errors['voucher_code']]);
+            if ($request->boolean('remove_platform_voucher')) {
+                $selection['platform'] = '';
             }
-            throw $exception;
+            if ($request->boolean('remove_shipping_voucher')) {
+                $selection['shipping'] = '';
+            }
+            foreach ((array) ($data['seller_voucher_codes'] ?? []) as $sellerId => $code) {
+                $sellerId = (int) $sellerId;
+                $code = mb_strtoupper(trim((string) $code));
+                if ($code === '') {
+                    unset($selection['seller'][$sellerId]);
+                } else {
+                    $selection['seller'][$sellerId] = $code;
+                }
+            }
+            if (filled($data['platform_voucher_code'] ?? null)) {
+                $selection['platform'] = mb_strtoupper(trim((string) $data['platform_voucher_code']));
+            }
+            if (filled($data['shipping_voucher_code'] ?? null)) {
+                $selection['shipping'] = mb_strtoupper(trim((string) $data['shipping_voucher_code']));
+            }
+            if (filled($data['voucher_code'] ?? null)) {
+                $code = mb_strtoupper(trim((string) $data['voucher_code']));
+                $available = $this->checkoutService->availableVouchers($items, $request->user())->except(['platform', 'shipping']);
+                $matches = $available->flatMap(fn ($vouchers, $sellerId) => collect($vouchers)
+                    ->filter(fn (Voucher $voucher): bool => mb_strtoupper((string) $voucher->code) === $code)
+                    ->map(fn (Voucher $voucher) => (int) $sellerId));
+                if ($matches->count() !== 1) {
+                    throw ValidationException::withMessages([
+                        'voucher_code' => $matches->isEmpty()
+                            ? 'That Seller voucher is not available for the selected items.'
+                            : 'This code is available at more than one selected shop. Choose it from the correct Seller section.',
+                    ]);
+                }
+                $selection['seller'][$matches->first()] = $code;
+            }
         }
 
-        $request->session()->put('checkout_voucher_code', $code);
-        $request->session()->put('checkout_voucher_source', $platformSelection ? 'platform' : 'seller');
-        $request->session()->forget('checkout_voucher_codes');
+        ksort($selection['seller']);
+        $this->checkoutService->preview($items, $selection, $request->user(), rewardPointsToRedeem: $requestedRewardPoints);
+        $this->storeVoucherSelection($request, $selection);
 
-        return back()->with('buyer_notice', $platformSelection ? 'LIKHAE voucher applied to your order.' : 'Seller voucher applied to the eligible shop.');
+        $notice = $request->boolean('remove_platform_voucher')
+            ? 'Platform voucher removed.'
+            : ($request->boolean('remove_shipping_voucher') ? 'Shipping voucher removed.'
+                : ($request->filled('remove_seller_voucher') ? 'Seller voucher removed.' : 'Voucher selection updated.'));
+
+        return back()->with('buyer_notice', $notice);
     }
 
     public function select(Request $request): RedirectResponse
@@ -313,6 +328,7 @@ class CheckoutController extends Controller
         }
 
         $selectedItems = $this->cartService->selectedItems($request->user(), $ownedIds);
+        $request->session()->forget(['checkout_seller_voucher_codes', 'checkout_platform_voucher_code', 'checkout_shipping_voucher_code']);
         if ($this->containsVacationSeller($selectedItems)) {
             throw ValidationException::withMessages([
                 'cart_item_ids' => 'A seller in your selected items is on vacation and is not accepting purchases. Remove those items to continue.',
@@ -411,39 +427,10 @@ class CheckoutController extends Controller
                 'cart' => 'Your checkout selection changed. Return to your cart and choose your items again.',
             ]);
         }
-        $legacyVoucherCodes = collect((array) $request->input('voucher_codes', []))
-            ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
-            ->filter()
-            ->all();
-        $voucherValue = array_key_exists('applied_voucher_code', $data)
-            ? $data['applied_voucher_code']
-            : ($data['voucher_code'] ?? '');
-        $voucherCode = mb_strtoupper(trim((string) $voucherValue));
-
-        if ($voucherCode === '' && count($legacyVoucherCodes) > 1) {
-            throw ValidationException::withMessages([
-                'voucher_code' => 'Enter one voucher code for checkout.',
-            ]);
-        }
-
-        $voucherCode = $voucherCode !== ''
-            ? $voucherCode
-            : (count($legacyVoucherCodes) === 1 ? (string) reset($legacyVoucherCodes) : '');
+        $voucherSelection = $this->currentVoucherSelection($request, $selectedItems);
         $rewardPointsToRedeem = $request->boolean('use_reward_points')
             ? (int) ($data['reward_points'] ?? 0)
             : 0;
-
-        if ($voucherCode !== '' && $this->isPlatformVoucherCode($voucherCode)) {
-            $sessionVoucherCode = mb_strtoupper(trim((string) $request->session()->get('checkout_voucher_code', '')));
-            $platformPickerSelectedCode = $request->session()->get('checkout_voucher_source') === 'platform'
-                ? $sessionVoucherCode
-                : '';
-            if ($platformPickerSelectedCode !== $voucherCode) {
-                throw ValidationException::withMessages([
-                    'voucher_code' => 'Choose LIKHAE vouchers from the picker in Order Summary.',
-                ]);
-            }
-        }
 
         $priceSnapshots = (array) $request->session()->get('checkout_price_snapshots', []);
         $expectedPriceSnapshot = $priceSnapshots[$data['checkout_attempt_key']] ?? null;
@@ -454,7 +441,7 @@ class CheckoutController extends Controller
                 (int) $data['address_id'],
                 $selectedIds,
                 $data['payment_method'],
-                $voucherCode,
+                $voucherSelection,
                 isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null,
                 array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
                 (array) ($data['seller_notes'] ?? []),
@@ -463,8 +450,22 @@ class CheckoutController extends Controller
                 $rewardPointsToRedeem,
             );
         } catch (ValidationException $exception) {
-            if (array_key_exists('voucher_code', $exception->errors())) {
-                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            foreach (array_keys($exception->errors()) as $field) {
+                if ($field === 'platform_voucher_code') {
+                    $voucherSelection['platform'] = '';
+                } elseif ($field === 'shipping_voucher_code') {
+                    $voucherSelection['shipping'] = '';
+                } elseif (str_starts_with($field, 'seller_voucher_codes.')) {
+                    unset($voucherSelection['seller'][(int) substr($field, strlen('seller_voucher_codes.'))]);
+                } elseif ($field === 'voucher_code') {
+                    $voucherSelection = ['seller' => [], 'platform' => '', 'shipping' => ''];
+                }
+            }
+            if (array_key_exists('platform_voucher_code', $exception->errors())
+                || array_key_exists('shipping_voucher_code', $exception->errors())
+                || collect(array_keys($exception->errors()))->contains(fn ($field): bool => str_starts_with($field, 'seller_voucher_codes.'))
+                || array_key_exists('voucher_code', $exception->errors())) {
+                $this->storeVoucherSelection($request, $voucherSelection);
             }
             if (array_key_exists('price_changed', $exception->errors())) {
                 unset($priceSnapshots[$data['checkout_attempt_key']]);
@@ -475,7 +476,8 @@ class CheckoutController extends Controller
             throw $exception;
         }
 
-        $request->session()->forget(['checkout_cart_item_ids', 'checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source', 'checkout_protection_item_ids', 'checkout_reward_points', 'checkout_seller_notes', 'checkout_price_snapshots']);
+        $request->session()->forget(['checkout_cart_item_ids', 'checkout_protection_item_ids', 'checkout_reward_points', 'checkout_seller_notes', 'checkout_price_snapshots']);
+        $this->storeVoucherSelection($request, ['seller' => [], 'platform' => '', 'shipping' => '']);
 
         return redirect()
             ->route('buyer.orders.success', ['order' => $order->order_number])
@@ -487,16 +489,78 @@ class CheckoutController extends Controller
         return $items->contains(fn ($item): bool => (bool) $item->productVariant?->product?->sellerProfile?->vacation_mode);
     }
 
-    private function isPlatformVoucherCode(string $code): bool
+    /** @return array{seller:array<int,string>,platform:string,shipping:string} */
+    private function currentVoucherSelection(Request $request, \Illuminate\Support\Collection $items): array
     {
-        if (! Schema::hasColumn('vouchers', 'platform_code_key')) {
-            return false;
+        $session = $request->session();
+        $hasNewSelection = $session->has('checkout_seller_voucher_codes')
+            || $session->has('checkout_platform_voucher_code')
+            || $session->has('checkout_shipping_voucher_code');
+        $selection = [
+            'seller' => (array) $session->get('checkout_seller_voucher_codes', []),
+            'platform' => (string) $session->get('checkout_platform_voucher_code', ''),
+            'shipping' => (string) $session->get('checkout_shipping_voucher_code', ''),
+        ];
+
+        if (! $hasNewSelection) {
+            $legacySellerCodes = (array) $session->get('checkout_voucher_codes', []);
+            foreach ($legacySellerCodes as $sellerId => $code) {
+                $selection['seller'][(int) $sellerId] = mb_strtoupper(trim((string) $code));
+            }
+
+            $legacyCode = mb_strtoupper(trim((string) $session->get('checkout_voucher_code', '')));
+            if ($legacyCode !== '') {
+                $source = (string) $session->get('checkout_voucher_source', 'seller');
+                if ($source === 'platform' && Schema::hasColumn('vouchers', 'platform_code_key')) {
+                    $voucher = Voucher::query()
+                        ->whereNull('seller_profile_id')
+                        ->whereRaw('UPPER(code) = ?', [$legacyCode])
+                        ->first();
+                    if ($voucher && strtoupper((string) ($voucher->benefit_scope ?? 'PRODUCT')) === 'SHIPPING') {
+                        $selection['shipping'] = $legacyCode;
+                    } else {
+                        $selection['platform'] = $legacyCode;
+                    }
+                } else {
+                    $sellerIds = $items->map(fn ($item): int => (int) ($item->productVariant?->product?->seller_profile_id ?? 0))
+                        ->filter()
+                        ->unique()
+                        ->values();
+                    $voucher = Voucher::query()
+                        ->whereIn('seller_profile_id', $sellerIds)
+                        ->whereRaw('UPPER(code) = ?', [$legacyCode])
+                        ->first();
+                    $sellerId = (int) ($voucher?->seller_profile_id ?? ($sellerIds->count() === 1 ? $sellerIds->first() : 0));
+                    if ($sellerId > 0) {
+                        $selection['seller'][$sellerId] = $legacyCode;
+                    }
+                }
+            }
         }
 
-        return Voucher::query()
-            ->whereNull('seller_profile_id')
-            ->whereNotNull('platform_code_key')
-            ->whereRaw('UPPER(code) = ?', [mb_strtoupper($code)])
-            ->exists();
+        $selection['seller'] = collect($selection['seller'])
+            ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+            ->filter()
+            ->all();
+        $selection['platform'] = mb_strtoupper(trim((string) $selection['platform']));
+        $selection['shipping'] = mb_strtoupper(trim((string) $selection['shipping']));
+        ksort($selection['seller']);
+        $this->storeVoucherSelection($request, $selection);
+
+        return $selection;
+    }
+
+    /** @param array{seller?:array<int|string,string>,platform?:string,shipping?:string} $selection */
+    private function storeVoucherSelection(Request $request, array $selection): void
+    {
+        $sellerCodes = collect((array) ($selection['seller'] ?? []))
+            ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+            ->filter()
+            ->all();
+        ksort($sellerCodes);
+        $request->session()->put('checkout_seller_voucher_codes', $sellerCodes);
+        $request->session()->put('checkout_platform_voucher_code', mb_strtoupper(trim((string) ($selection['platform'] ?? ''))));
+        $request->session()->put('checkout_shipping_voucher_code', mb_strtoupper(trim((string) ($selection['shipping'] ?? ''))));
+        $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
     }
 }

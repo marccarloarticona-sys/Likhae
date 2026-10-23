@@ -15,7 +15,7 @@ class LogisticsCenter extends Model
 {
     protected $table = 'logistics_centers';
 
-    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number', 'payout_destinations'];
 
     /**
      * Legacy per-center fee retained for old records only. GLOBAL approved
@@ -40,6 +40,7 @@ class LogisticsCenter extends Model
         'payout_bank_name',
         'payout_account_name',
         'payout_account_number',
+        'payout_destinations',
     ];
 
     protected function casts(): array
@@ -49,6 +50,7 @@ class LogisticsCenter extends Model
             'shipping_fee' => 'decimal:2',
             'payout_account_name' => 'encrypted',
             'payout_account_number' => 'encrypted',
+            'payout_destinations' => 'encrypted:array',
         ];
     }
 

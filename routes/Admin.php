@@ -50,6 +50,7 @@ Route::prefix('admin')
         Route::get('/sellers/approvals', [AdminOnboardingController::class, 'sellers'])->name('sellers.approvals');
 
         Route::get('/users', [AdminUserController::class, 'index'])->name('users');
+        Route::post('/users/sessions/revoke', [AdminUserController::class, 'revokeSessions'])->name('users.sessions.revoke');
         Route::get('/users/{user}', [AdminUserController::class, 'show'])->name('users.show');
         Route::post('/users/{user}/warnings', [AdminUserController::class, 'issueWarning'])->name('users.warnings.store');
         Route::post('/users/{user}/warnings/{warning}/review', [AdminUserController::class, 'reviewWarning'])->name('users.warnings.review');

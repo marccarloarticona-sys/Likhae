@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\GoogleAuthenticationController;
 use App\Http\Controllers\Auth\MobileGoogleAuthenticationController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Auth\RegistrationController;
+use App\Http\Controllers\PolicyAcceptanceController;
 use App\Http\Controllers\Buyer\GuestMarketplaceController;
 use App\Http\Controllers\Buyer\BuyerController;
 use App\Http\Controllers\Buyer\TrackingController;
@@ -14,6 +15,7 @@ use App\Http\Controllers\Communication\ConversationReceiptController;
 use App\Http\Controllers\Communication\ConversationReadController;
 use App\Http\Controllers\Communication\MessagePresenceController;
 use App\Http\Controllers\NotificationCenterController;
+use App\Models\User;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -81,11 +83,22 @@ Route::middleware(['auth', 'verified'])->group(function (): void {
 |
 */
 Route::get('/login', function (Request $request, AuthenticationController $auth) {
+    $user = $request->user();
+    if ($user) {
+        if ($user->isAccountType(User::TYPE_LOGISTICS, User::TYPE_RIDER)) {
+            return redirect()->route('logistics.login');
+        }
+
+        $pendingPolicies = $request->attributes->get('mandatory_policy_documents');
+        if (! $pendingPolicies instanceof \Illuminate\Support\Collection || $pendingPolicies->isEmpty()) {
+            return redirect()->route($user->workspaceRoute());
+        }
+    }
+
     $savedAccounts = collect($auth->savedAccounts($request, 'marketplace'));
 
     return view('auth.login', compact('savedAccounts'));
 })
-    ->middleware('guest')
     ->name('login');
 
 Route::post('/login', [AuthenticationController::class, 'store'])
@@ -164,6 +177,9 @@ Route::prefix('address/philippines')
     });
 
 Route::post('/logout', [AuthenticationController::class, 'destroy'])->name('logout');
+Route::post('/policy-acceptance', [PolicyAcceptanceController::class, 'store'])
+    ->middleware('auth')
+    ->name('policies.accept');
 
 /* Google is retained for Buyer convenience without adding social-token tables. */
 Route::get('/auth/google', [GoogleAuthenticationController::class, 'redirect'])

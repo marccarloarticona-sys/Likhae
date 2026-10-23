@@ -132,6 +132,7 @@ class AdminMarketingController extends Controller
         $rules = [
             'name' => ['required', 'string', 'max:150'],
             'code' => ['required', 'string', 'max:80'],
+            'benefit_scope' => ['required', Rule::in(['PRODUCT', 'SHIPPING'])],
             'discount_type' => ['required', Rule::in(['PERCENT', 'FIXED'])],
             'discount_value' => ['required', 'numeric', 'gt:0', 'max:9999999999.99'],
             'minimum_order_amount' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],

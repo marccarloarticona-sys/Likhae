@@ -40,10 +40,11 @@ use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
+use App\Services\PolicyAcceptanceService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
-use App\Rules\PayoutDestinationNumber;
-use App\Support\PayoutAccountDetails;
+use App\Services\Finance\PayoutDestinationManager;
+use App\Support\PayoutDestinationInput;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -716,7 +717,7 @@ class AdminOperationsController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function settings(): View
+    public function settings(PolicyAcceptanceService $policyAcceptance): View
     {
         return view('Admin.settings.index', [
             'settings' => [
@@ -729,22 +730,29 @@ class AdminOperationsController extends Controller
                 'shipping_region_tiers' => PlatformSetting::valueOf('shipping_region_tiers', ''),
                 'registration_enabled' => (bool) PlatformSetting::valueOf('registration_enabled', true),
             ],
-            'policies' => PlatformPolicy::latest()->get(),
+            'policies' => $policyAcceptance->schemaReady()
+                ? PlatformPolicy::query()->whereNull('logistics_center_id')->latest()->get()
+                : PlatformPolicy::latest()->get(),
+            'policySchemaReady' => $policyAcceptance->schemaReady(),
             'announcements' => Announcement::latest()->get(),
         ]);
     }
 
-    public function account(Request $request, PayoutDestinationReadiness $destinations): View
+    public function account(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager): View
     {
         $adminUser = $request->user();
         $payoutDestinationReady = $destinations->readyFor('users');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($adminUser);
+        $payoutMultipleReady = $destinations->supportsMultipleFor('users');
+        $payoutDestinations = $payoutMultipleReady ? $manager->accounts($adminUser) : [];
 
         return view('Admin.account.index', [
             'adminUser' => $adminUser,
             'preferences' => $adminUser,
             'payoutDestinationReady' => $payoutDestinationReady,
             'payoutDestinationSaved' => $payoutDestinationSaved,
+            'payoutMultipleReady' => $payoutMultipleReady,
+            'payoutDestinations' => $payoutDestinations,
         ]);
     }
 
@@ -1274,35 +1282,76 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Settings updated.');
     }
 
-    public function storePolicy(Request $request): RedirectResponse
+    public function storePolicy(Request $request, PolicyAcceptanceService $policyAcceptance): RedirectResponse
     {
+        abort_unless($policyAcceptance->schemaReady(), 503, 'Run the policy scope migration before publishing mandatory policies.');
+
         $data = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'version' => ['required', 'string', 'max:50'],
+            'policy_type' => ['required', Rule::in(['TERMS', 'PRIVACY', 'PLATFORM', 'CUSTOM'])],
+            'audience' => ['required', Rule::in(['ALL', 'BUYER', 'SELLER', 'LOGISTICS', 'RIDER'])],
             'body' => ['required', 'string'],
             'effective_at' => ['nullable', 'date'],
         ]);
 
-        PlatformPolicy::create($data + [
+        $scopeKey = 'PLATFORM:'.$data['audience'];
+        validator($data, [
+            'version' => [Rule::unique('platform_policies', 'version')
+                ->where(fn ($query) => $query->where('title', $data['title'])->where('scope_key', $scopeKey))],
+        ])->validate();
+
+        $policy = PlatformPolicy::create($data + [
+            'scope_key' => $scopeKey,
             'published_by_user_id' => $request->user()->id,
             'published_at' => now(),
             'is_active' => true,
         ]);
 
-        return back()->with('status', 'Policy saved.');
+        AuditLog::query()->create([
+            'actor_user_id' => $request->user()->id,
+            'event' => 'PLATFORM_POLICY_PUBLISHED',
+            'auditable_type' => PlatformPolicy::class,
+            'auditable_id' => $policy->id,
+            'new_values' => [
+                'policy_id' => $policy->id,
+                'title' => $policy->title,
+                'version' => $policy->version,
+                'policy_type' => $policy->policy_type,
+                'audience' => $policy->audience,
+                'scope_key' => $policy->scope_key,
+                'effective_at' => $policy->effective_at?->toIso8601String(),
+            ],
+            'ip_address' => $request->ip(),
+            'user_agent' => mb_substr((string) $request->userAgent(), 0, 5000),
+            'created_at' => now(),
+        ]);
+
+        return back()->with('status', 'Policy version published. Existing sessions for affected accounts will be required to sign in again when the policy takes effect.');
     }
 
     public function updatePolicy(Request $request, PlatformPolicy $policy): RedirectResponse
     {
-        $policy->update($request->validate([
-            'title' => ['required', 'string', 'max:255'],
-            'version' => ['required', 'string', 'max:50'],
-            'body' => ['required', 'string'],
-            'effective_at' => ['nullable', 'date'],
-            'is_active' => ['nullable', 'boolean'],
-        ]));
+        abort_if($policy->logistics_center_id !== null, 404);
+        $data = $request->validate(['is_active' => ['required', 'boolean']]);
+        $wasActive = (bool) $policy->is_active;
+        $policy->update($data);
 
-        return back()->with('status', 'Policy updated.');
+        if ($wasActive !== (bool) $policy->is_active) {
+            AuditLog::query()->create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'PLATFORM_POLICY_STATUS_CHANGED',
+                'auditable_type' => PlatformPolicy::class,
+                'auditable_id' => $policy->id,
+                'old_values' => ['is_active' => $wasActive],
+                'new_values' => ['is_active' => (bool) $policy->is_active, 'version' => $policy->version],
+                'ip_address' => $request->ip(),
+                'user_agent' => mb_substr((string) $request->userAgent(), 0, 5000),
+                'created_at' => now(),
+            ]);
+        }
+
+        return back()->with('status', 'Policy status updated. Published content and version remain unchanged.');
     }
 
     public function updateAccount(Request $request): RedirectResponse
@@ -1318,23 +1367,44 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Account updated.');
     }
 
-    public function updateAdminPayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse
+    public function updateAdminPayoutDestination(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager, PayoutDestinationInput $input): RedirectResponse
     {
         $adminUser = $request->user();
         abort_unless($adminUser->isAccountType(User::TYPE_ADMIN), 403);
         abort_unless($destinations->readyFor('users'), 503, 'Admin payout details are unavailable until the additive payout destination migration is installed.');
 
-        $data = $request->validate([
-            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
-            'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
-            'payout_account_name' => ['required', 'string', 'max:150'],
-            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
-            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
-                $request->input('payout_account_type'),
-                $request->input('payout_method'),
-            )],
-        ]);
-        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
+        if ($destinations->supportsMultipleFor('users')) {
+            $action = (string) $request->input('destination_action', 'add');
+            if (in_array($action, ['set_default', 'remove', 'update'], true)) {
+                $data = $request->validate(['destination_id' => ['required', 'string', 'max:80']]);
+                if ($action === 'set_default') {
+                    $manager->setDefault($adminUser, $data['destination_id']);
+
+                    return back()->with('status', 'Default platform withdrawal destination updated.');
+                }
+
+                if ($action === 'remove') {
+                    $manager->remove($adminUser, $data['destination_id']);
+
+                    return back()->with('status', 'Payout destination removed.');
+                }
+
+                $destination = $input->validate($request, true);
+                $manager->update($adminUser, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
+
+                return back()->with('status', 'Payout destination updated.');
+            }
+            abort_unless($action === 'add', 422, 'Unsupported payout destination action.');
+
+            $data = $input->validate($request, true);
+            $manager->add($adminUser, $data, (bool) ($data['make_default'] ?? false));
+
+            return back()->with('status', 'Payout destination saved securely. The selected default will be used for future platform withdrawals.');
+        }
+
+        abort_unless($request->input('destination_action', 'add') === 'add', 503, 'Multiple payout destinations are unavailable until the migration is installed.');
+
+        $data = $input->validate($request);
         $adminUser->forceFill($data)->save();
 
         return back()->with('status', 'Admin payout destination saved. It is reserved for future platform withdrawals.');

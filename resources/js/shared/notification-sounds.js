@@ -25,6 +25,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const config = window.LIKHAE_NOTIFICATION_SOUND_CONFIG;
     if (!config?.userId) return;
 
+    if (window.Echo) {
+        window.Echo.private(`App.Models.User.${config.userId}`)
+            .listen('.notification.created', (notification) => {
+                if (String(notification?.type || '').toUpperCase() === 'SESSION_SUSPENDED') {
+                    window.location.replace(config.loginUrl || '/login');
+                    return;
+                }
+
+                window.likhaePlayNotificationSound?.(notification?.type);
+            });
+    }
+
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
 
@@ -92,8 +104,4 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    if (config.enabled && window.Echo) {
-        window.Echo.private(`App.Models.User.${config.userId}`)
-            .listen('.notification.created', notification => window.likhaePlayNotificationSound(notification?.type));
-    }
 });

@@ -161,7 +161,10 @@ class StoreRegistrationRequest extends FormRequest
             'store_banner' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
 
             'password' => ['required', 'confirmed', 'max:72', Password::min(8)->mixedCase()->numbers()->symbols()],
-            'terms' => ['accepted'],
+            'terms_acknowledged' => ['required', 'accepted'],
+            'privacy_acknowledged' => ['required', 'accepted'],
+            'policy_acceptances' => ['required', 'array', 'min:2'],
+            'policy_acceptances.*' => ['required', 'string', 'max:50'],
         ];
     }
 

@@ -94,6 +94,9 @@ class User extends Authenticatable implements MustVerifyEmailContract
         'payout_bank_name',
         'payout_account_name',
         'payout_account_number',
+        'payout_destinations',
+        'api_token_hash',
+        'api_token_policy_snapshot',
     ];
 
     protected function casts(): array
@@ -108,6 +111,7 @@ class User extends Authenticatable implements MustVerifyEmailContract
             'password' => 'hashed',
             'payout_account_name' => 'encrypted',
             'payout_account_number' => 'encrypted',
+            'payout_destinations' => 'encrypted:array',
         ];
     }
 

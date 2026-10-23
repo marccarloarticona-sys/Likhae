@@ -12,6 +12,16 @@
 		<header class="payout-section-head"><div><span class="payout-overline">Payout destination</span><h2 class="font-semibold">Payment details</h2><p>Set where Admin should send approved Logistics payouts outside Likhae. The transfer reference and proof will appear in your wallet.</p></div>@if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif</header>
 		<div class="payout-section-body">
 		@if($payoutDestinationReady)
+			@if($payoutMultipleReady)
+				@include('components.shared.payout-destination-manager', [
+					'payoutDestinationRoute' => 'logistics.wallet.payout-destination.update',
+					'payoutChangeDescription' => 'Changes apply to future Logistics payouts.',
+					'payoutPurpose' => 'Logistics payouts',
+					'payoutSecurityCopy' => 'Admin uses your default destination for approved Logistics payouts and records each transfer in your wallet.',
+					'payoutHelpId' => 'logistics-multiple-payout-number-help',
+					'payoutButtonClass' => 'rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white',
+				])
+			@else
 			@if($payoutDestinationSaved)
 				@php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($center))
 				<dl class="payout-summary">
@@ -35,6 +45,7 @@
 				<div class="payout-form-actions is-wide"><small>Check the number carefully before saving.</small><button type="submit" class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white">Save payout details</button></div>
 			</form>
 			</div>
+			@endif
 		@else
 			<p class="payout-empty-state">Payout details are temporarily unavailable while the payout setup is being updated.</p>
 		@endif

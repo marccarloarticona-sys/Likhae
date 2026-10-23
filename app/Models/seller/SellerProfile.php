@@ -14,7 +14,7 @@ class SellerProfile extends Model
 {
     protected $table = 'seller_profiles';
 
-    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    protected $hidden = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number', 'payout_destinations'];
 
     protected $fillable = [
         'user_id',
@@ -44,6 +44,7 @@ class SellerProfile extends Model
         'payout_bank_name',
         'payout_account_name',
         'payout_account_number',
+        'payout_destinations',
     ];
 
     protected function casts(): array
@@ -56,6 +57,7 @@ class SellerProfile extends Model
             'store_visibility' => 'boolean',
             'payout_account_name' => 'encrypted',
             'payout_account_number' => 'encrypted',
+            'payout_destinations' => 'encrypted:array',
         ];
     }
 

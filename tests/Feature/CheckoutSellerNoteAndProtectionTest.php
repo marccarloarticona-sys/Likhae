@@ -150,6 +150,173 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(100.00, $preview['shipping_total']);
     }
 
+    public function test_seller_platform_and_shipping_vouchers_stack_with_separate_order_accounting(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $sellerVoucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'SELLERA10',
+            'name' => 'Seller A ten off',
+            'discount_type' => 'FIXED',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $sellerVoucher->id]);
+        $platformVoucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'PLATFORM10',
+            'benefit_scope' => 'PRODUCT',
+            'code' => 'PLATFORM10',
+            'name' => 'Platform ten percent',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'maximum_discount_amount' => 20,
+            'is_active' => true,
+        ]);
+        $shippingVoucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'SHIP30',
+            'benefit_scope' => 'SHIPPING',
+            'code' => 'SHIP30',
+            'name' => 'Shipping thirty off',
+            'discount_type' => 'FIXED',
+            'discount_value' => 30,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        $selection = [
+            'seller' => [$fixture['sellerA']->id => 'SELLERA10'],
+            'platform' => 'PLATFORM10',
+            'shipping' => 'SHIP30',
+        ];
+
+        $preview = app(CheckoutService::class)->preview(
+            collect([$fixture['itemA'], $fixture['itemB']]),
+            $selection,
+            $fixture['buyer'],
+        );
+
+        $this->assertEquals(10.00, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
+        $this->assertEquals(6.21, $preview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
+        $this->assertEquals(13.79, $preview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
+        $this->assertEquals(60.00, $preview['total_discount']);
+        $this->assertEquals(340.00, $preview['grand_total']);
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id, $fixture['itemB']->id],
+            'COD',
+            $selection,
+            null,
+            [],
+            [],
+            '00000000-0000-4000-8000-000000000061',
+        );
+
+        $this->assertSame('PLATFORM10', $order->platformVoucher?->code);
+        $this->assertSame('SHIP30', $order->shippingVoucher?->code);
+        $this->assertEquals(20.00, $order->platform_voucher_discount);
+        $this->assertEquals(30.00, $order->shipping_voucher_discount);
+        $this->assertEquals(60.00, $order->discount_total);
+        $this->assertEquals(340.00, $order->grand_total);
+        $this->assertSame($sellerVoucher->id, (int) $order->sellerOrders()->where('seller_profile_id', $fixture['sellerA']->id)->value('voucher_id'));
+        $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($sellerVoucher->id));
+        $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
+        $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
+
+        $order->update(['status' => 'CANCELLED']);
+        $order->sellerOrders()->update(['status' => 'CANCELLED']);
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($sellerVoucher->id));
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
+    }
+
+    public function test_voucher_scope_and_minimum_spend_are_validated_server_side(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $sellerVoucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'MINIMUM200',
+            'name' => 'Minimum spend voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 200,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $sellerVoucher->id]);
+        Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'WRONGSCOPE',
+            'benefit_scope' => 'PRODUCT',
+            'code' => 'WRONGSCOPE',
+            'name' => 'Shipping only',
+            'discount_type' => 'FIXED',
+            'discount_value' => 20,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+
+        try {
+            app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [
+                'seller' => [$fixture['sellerA']->id => 'MINIMUM200'],
+            ], $fixture['buyer']);
+            $this->fail('Seller voucher minimum spend must be enforced.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('seller_voucher_codes.'.$fixture['sellerA']->id, $exception->errors());
+        }
+
+        try {
+            app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [
+                'shipping' => 'WRONGSCOPE',
+            ], $fixture['buyer']);
+            $this->fail('A shipping voucher must not be accepted in the wrong category.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('shipping_voucher_code', $exception->errors());
+        }
+    }
+
+    public function test_stacked_fixed_vouchers_are_capped_at_eligible_amounts_and_never_make_total_negative(): void
+    {
+        $fixture = $this->checkoutFixture();
+        Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'PLATFORM999',
+            'benefit_scope' => 'PRODUCT',
+            'code' => 'PLATFORM999',
+            'name' => 'Large product discount',
+            'discount_type' => 'FIXED',
+            'discount_value' => 999,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'SHIP999',
+            'benefit_scope' => 'SHIPPING',
+            'code' => 'SHIP999',
+            'name' => 'Large shipping discount',
+            'discount_type' => 'FIXED',
+            'discount_value' => 999,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+
+        $preview = app(CheckoutService::class)->preview(collect([$fixture['itemA'], $fixture['itemB']]), [
+            'platform' => 'PLATFORM999',
+            'shipping' => 'SHIP999',
+        ], $fixture['buyer']);
+
+        $this->assertEquals(300.00, $preview['platform_voucher_discount']);
+        $this->assertEquals(100.00, $preview['shipping_voucher_discount']);
+        $this->assertEquals(0.00, $preview['grand_total']);
+        $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
+    }
+
     public function test_reward_points_require_100_minimum_and_each_100_points_discount_one_peso(): void
     {
         $fixture = $this->checkoutFixture();
@@ -791,6 +958,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'contact_number' => '09170000000',
             'province_code' => 'P-NOTE',
             'province_name' => 'Note Province',
+            'region_name' => 'NCR',
             'municipality_code' => 'M-NOTE',
             'municipality_name' => 'Note Municipality',
             'barangay_code' => 'B-NOTE',
@@ -845,6 +1013,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'contact_number' => $buyer->contact_number,
             'province_code' => 'P-NOTE',
             'province_name' => 'Note Province',
+            'region_name' => 'NCR',
             'municipality_code' => 'M-NOTE',
             'municipality_name' => 'Note Municipality',
             'barangay_code' => 'B-NOTE',
@@ -873,6 +1042,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'contact_number' => '09170000000',
             'province_code' => 'P-NOTE',
             'province_name' => 'Note Province',
+            'region_name' => 'NCR',
             'municipality_code' => 'M-NOTE',
             'municipality_name' => 'Note Municipality',
             'barangay_code' => 'B-NOTE',

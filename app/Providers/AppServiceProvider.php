@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Listeners\CapturePolicySessionSnapshot;
 use App\Models\Admin\Notification;
 use App\Models\Admin\Dispute;
 use App\Models\Admin\SellerComplianceCase;
@@ -37,6 +38,7 @@ use App\Policies\SellerProfilePolicy;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\Facades\View;
@@ -63,6 +65,8 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        Event::listen(\Illuminate\Auth\Events\Login::class, CapturePolicySessionSnapshot::class);
+
         ResetPassword::createUrlUsing(function ($notifiable, string $token): string {
             $request = request();
             $portal = $request->hasSession()

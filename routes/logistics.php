@@ -8,17 +8,32 @@ use App\Http\Controllers\Logistics\LogisticsRemittanceController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Logistics\LogisticsShippingRateController;
 use App\Http\Controllers\Logistics\RiderApplicationController;
+use App\Http\Controllers\Logistics\RiderPolicyController;
 use App\Http\Controllers\Logistics\LocalTripController;
 use App\Http\Controllers\Logistics\TransferController;
 use App\Http\Controllers\WorkspaceAiController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
+use App\Models\User;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('logistics')->name('logistics.')->group(function (): void {
     Route::get('/', fn () => view('logistics.landing'))->name('home');
 
     Route::get('/login', function (\Illuminate\Http\Request $request, AuthenticationController $auth) {
+        $user = $request->user();
+        if ($user) {
+            if (! $user->isAccountType(User::TYPE_LOGISTICS, User::TYPE_RIDER)) {
+                return redirect()->route('login');
+            }
+
+            $pendingPolicies = $request->attributes->get('mandatory_policy_documents');
+            if (! $pendingPolicies instanceof Collection || $pendingPolicies->isEmpty()) {
+                return redirect()->route($user->workspaceRoute());
+            }
+        }
+
         $savedAccounts = collect($auth->savedAccounts($request, 'logistics'));
 
         return view('auth.workspace-login', [
@@ -35,7 +50,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
                 && blank(request('email'))
                 && ! $request->session()->has('_errors'),
         ]);
-    })->middleware('guest')->name('login');
+    })->name('login');
 
     Route::post('/login', [AuthenticationController::class, 'store'])->middleware(['guest', 'throttle:30,1'])->name('login.store');
 
@@ -48,6 +63,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/dashboard', [LogisticsPortalController::class, 'dashboard'])->name('dashboard');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'logistics')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'logistics')->name('settings.update');
+        Route::post('/policies/rider', [RiderPolicyController::class, 'store'])->name('policies.rider.store');
         Route::get('/shipping-rate', [LogisticsShippingRateController::class, 'index'])->name('shipping-rate');
         Route::post('/shipping-rate-requests', [LogisticsShippingRateController::class, 'store'])->name('shipping-rate-requests.store');
         Route::post('/shipping-rate-requests/{shippingRateRequest}/cancel', [LogisticsShippingRateController::class, 'cancel'])

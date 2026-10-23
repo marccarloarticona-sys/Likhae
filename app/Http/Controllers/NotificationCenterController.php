@@ -17,16 +17,15 @@ class NotificationCenterController extends Controller
     {
         $user = $request->user();
 
-        $layout = match ($user->account_type) {
-            'ADMIN' => 'layouts.admin.app',
-            'SELLER' => 'layouts.seller.app',
-            'RIDER' => 'layouts.rider.app',
-            'LOGISTICS' => 'layouts.logistics.app',
-            default => 'layouts.buyer.app',
+        $view = match ($user->account_type) {
+            'ADMIN' => 'admin.notifications.center',
+            'SELLER' => 'seller.notifications.center',
+            'RIDER' => 'rider.notifications.center',
+            'LOGISTICS' => 'logistics.notifications.center',
+            default => 'buyer.notifications.center',
         };
 
-        return view('notifications.index', [
-            'layout' => $layout,
+        return view($view, [
             'unreadCount' => $user->notifications()->whereNull('read_at')->count(),
             'notifications' => $user->notifications()
                 ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])

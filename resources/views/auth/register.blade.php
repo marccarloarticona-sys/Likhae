@@ -590,6 +590,8 @@
 
                 @csrf
 
+                <input type="hidden" id="registration_step" name="registration_step" value="{{ old('registration_step', '') }}">
+
                 <input
                     type="hidden"
                     id="accountType"
@@ -1487,24 +1489,6 @@
 
                         </div>
 
-                        {{-- TERMS --}}
-                        <label class="register-terms">
-
-                            <input
-                                type="checkbox"
-                                name="terms"
-                                value="1"
-                                required
-                            >
-
-                            <span>
-                                I confirm that the information provided
-                                is correct and I agree to LIKHAE's terms
-                                and marketplace policies.
-                            </span>
-
-                        </label>
-
                     </div>
 
                 </section>
@@ -1606,6 +1590,133 @@
     </main>
 
 </div>
+
+<script>
+    window.likhaeRegistrationPolicies = {!! \Illuminate\Support\Js::from($registrationPoliciesByRole ?? []) !!};
+    window.likhaePolicySchemaReady = {{ ($policySchemaReady ?? false) ? 'true' : 'false' }};
+</script>
+<style>
+    .register-policy-backdrop{position:fixed;inset:0;z-index:10000;display:grid;place-items:center;padding:16px;background:rgba(31,22,20,.76);backdrop-filter:blur(5px)}.register-policy-backdrop[hidden]{display:none!important}
+    .register-policy-dialog{display:flex;flex-direction:column;width:min(100%,780px);max-height:min(92vh,940px);overflow:hidden;border:1px solid #eadbd1;border-radius:22px;background:#fffdf9;color:#2d1b15;box-shadow:0 28px 90px rgba(0,0,0,.32)}
+    .register-policy-header{padding:22px 26px 16px;border-bottom:1px solid #eee3dc}.register-policy-header small{color:#994638;font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.register-policy-header h2{margin:7px 0 4px;font-size:22px}.register-policy-header p{margin:0;color:#725d54;font-size:13px;line-height:1.5}
+    .register-policy-content{overflow:auto;overscroll-behavior:contain;padding:6px 26px 18px}.register-policy-document{padding:15px 0;border-bottom:1px solid #eee3dc}.register-policy-document:last-child{border:0}.register-policy-document h3{margin:0;font-size:16px}.register-policy-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin:5px 0 12px;color:#806b61;font-size:11px;font-weight:700}.register-policy-body{white-space:pre-wrap;overflow-wrap:anywhere;color:#43322c;font-size:13px;line-height:1.68}
+    .register-policy-footer{padding:16px 26px 19px;border-top:1px solid #eee3dc;background:#fffaf5}.register-policy-ack{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;color:#43322c;font-size:12px;line-height:1.5}.register-policy-ack input{width:16px;height:16px;margin:1px 0 0;accent-color:#963d31;flex:0 0 auto}.register-policy-error{margin:0 0 12px;color:#aa2e27;font-size:12px;line-height:1.5}.register-policy-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:15px}.register-policy-actions a{color:#795f54;font-size:12px;font-weight:700;text-underline-offset:3px}.register-policy-actions button{border:0;border-radius:11px;background:#963d31;color:#fff;padding:11px 16px;font-size:12px;font-weight:800;cursor:pointer}.register-policy-actions button:disabled{background:#d9c6bc;cursor:not-allowed}
+    .dark .register-policy-dialog{border-color:#4b3831;background:#211916;color:#f8eee9}.dark .register-policy-header,.dark .register-policy-footer,.dark .register-policy-document{border-color:#49352d}.dark .register-policy-header p,.dark .register-policy-meta{color:#c2aba0}.dark .register-policy-body,.dark .register-policy-ack{color:#eadbd3}.dark .register-policy-footer{background:#261c18}
+    @media(max-width:600px){.register-policy-backdrop{padding:9px}.register-policy-dialog{max-height:95vh;border-radius:17px}.register-policy-header{padding:18px 17px 14px}.register-policy-content{padding:5px 17px 14px}.register-policy-footer{padding:13px 17px 16px}.register-policy-actions{align-items:stretch;flex-direction:column-reverse}.register-policy-actions button{width:100%}.register-policy-actions a{align-self:center}}
+</style>
+<div class="register-policy-backdrop" data-registration-policy-modal hidden>
+    <section class="register-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="register-policy-title" aria-describedby="register-policy-description" tabindex="-1">
+        <header class="register-policy-header">
+            <small>Registration agreements</small>
+            <h2 id="register-policy-title">Review Terms &amp; Conditions and Privacy Policy</h2>
+            <p id="register-policy-description">Review the policies for your selected account type. Scroll to the end of each policy to enable its checkbox. Acknowledging both is the final step before submitting your registration.</p>
+        </header>
+        <div class="register-policy-content" data-registration-policy-content tabindex="0" aria-label="Scrollable policy contents">
+            @foreach(($registrationPoliciesByRole[$preselectedRole ?? 'buyer'] ?? []) as $policy)
+                <article class="register-policy-document" data-policy-document="{{ $policy['id'] }}" data-policy-type="{{ $policy['policy_type'] }}">
+                    <h3>{{ $policy['title'] }}</h3>
+                    <div class="register-policy-meta"><span>Version {{ $policy['version'] }}</span><span>Effective {{ $policy['effective_date'] ?? 'Immediately' }}</span></div>
+                    <div class="register-policy-body">{{ $policy['body'] }}</div>
+                </article>
+            @endforeach
+        </div>
+        <footer class="register-policy-footer">
+            @if($errors->has('policy_acceptances') || $errors->has('terms_acknowledged') || $errors->has('privacy_acknowledged'))
+                <p class="register-policy-error" role="alert">{{ $errors->first('policy_acceptances') ?: ($errors->first('terms_acknowledged') ?: $errors->first('privacy_acknowledged')) }}</p>
+            @endif
+            <p class="register-policy-error" data-registration-policy-error @if(($policySchemaReady ?? false) && !empty($registrationPoliciesByRole[$preselectedRole ?? 'buyer'])) hidden @endif>
+                @if(!($policySchemaReady ?? false)) Policy storage is not available yet. Registration can continue after the policy update is installed.
+                @else Published Terms &amp; Conditions and Privacy Policy are required for this account type before registration can continue. @endif
+            </p>
+            <label class="register-policy-ack"><input type="checkbox" form="registrationForm" name="terms_acknowledged" value="1" required disabled data-registration-terms-ack data-policy-acknowledgement-type="TERMS"><span>I have read and agree to the applicable Terms &amp; Conditions.</span></label>
+            <label class="register-policy-ack"><input type="checkbox" form="registrationForm" name="privacy_acknowledged" value="1" required disabled data-registration-privacy-ack data-policy-acknowledgement-type="PRIVACY"><span>I have read and acknowledge the applicable Privacy Policy.</span></label>
+            <div data-registration-policy-hidden-inputs></div>
+            <div class="register-policy-actions"><a href="{{ route('home') }}">Decline &amp; exit</a><button type="button" data-registration-policy-agree disabled>I agree</button></div>
+        </footer>
+    </section>
+</div>
+<script>
+    (()=>{
+        const backdrop=document.querySelector('[data-registration-policy-modal]');
+        const dialog=backdrop?.querySelector('[role="dialog"]');
+        const content=backdrop?.querySelector('[data-registration-policy-content]');
+        const agree=backdrop?.querySelector('[data-registration-policy-agree]');
+        const error=backdrop?.querySelector('[data-registration-policy-error]');
+        const terms=backdrop?.querySelector('[data-registration-terms-ack]');
+        const privacy=backdrop?.querySelector('[data-registration-privacy-ack]');
+        if(!backdrop||!dialog||!content||!agree)return;
+        window.likhaeRenderRegistrationPolicySet=function(role,docs){
+            const list=Array.isArray(docs)?docs:[];
+            content.replaceChildren();
+            let hasTerms=false,hasPrivacy=false;
+            list.forEach(policy=>{
+                hasTerms ||= policy.policy_type==='TERMS';hasPrivacy ||= policy.policy_type==='PRIVACY';
+                const article=document.createElement('article');article.className='register-policy-document';article.dataset.policyDocument=String(policy.id);article.dataset.policyType=policy.policy_type;
+                const title=document.createElement('h3');title.textContent=policy.title;
+                const meta=document.createElement('div');meta.className='register-policy-meta';
+                const version=document.createElement('span');version.textContent=`Version ${policy.version}`;
+                const date=document.createElement('span');date.textContent=`Effective ${policy.effective_date||'Immediately'}`;
+                const body=document.createElement('div');body.className='register-policy-body';body.textContent=policy.body;
+                meta.append(version,date);article.append(title,meta,body);content.append(article);
+            });
+            content.scrollTop=0;
+            const ready=Boolean(window.likhaePolicySchemaReady&&hasTerms&&hasPrivacy);
+            if(error){error.hidden=ready;if(!ready&&window.likhaePolicySchemaReady)error.textContent='Published Terms & Conditions and Privacy Policy are required for this account type before registration can continue.'}
+            backdrop.dataset.activeRole=role;backdrop.dataset.policyReady=ready?'true':'false';
+            if(terms){terms.checked=false;terms.disabled=true}if(privacy){privacy.checked=false;privacy.disabled=true}
+            backdrop.querySelector('[data-registration-policy-hidden-inputs]')?.replaceChildren();
+            window.likhaeRegistrationPolicyConsentedRole=null;
+            updateAgree();
+        };
+        function updateAgree(){agree.disabled=backdrop.dataset.policyReady!=='true'||!terms||!privacy||terms.disabled||privacy.disabled||!terms.checked||!privacy.checked}
+        function unlockReachedPolicies(){
+            const contentBottom=content.getBoundingClientRect().bottom;
+            [terms,privacy].forEach(input=>{
+                const article=[...content.querySelectorAll('[data-policy-document]')].find(item=>item.dataset.policyType===input?.dataset.policyAcknowledgementType);
+                if(input&&article&&article.getBoundingClientRect().bottom<=contentBottom+2)input.disabled=false;
+            });
+            updateAgree();
+        }
+        terms?.addEventListener('change',updateAgree);privacy?.addEventListener('change',updateAgree);
+        content.addEventListener('scroll',unlockReachedPolicies,{passive:true});
+        window.addEventListener('resize',unlockReachedPolicies);
+        window.likhaeOpenRegistrationPolicyReview=function(){
+            if(backdrop.dataset.policyReady!=='true')return false;
+            backdrop.hidden=false;
+            document.querySelectorAll('body > *:not([data-registration-policy-modal])').forEach(node=>node.inert=true);
+            dialog.focus();
+            requestAnimationFrame(unlockReachedPolicies);
+            return true;
+        };
+        agree.addEventListener('click',()=>{
+            if(agree.disabled)return;
+            const role=backdrop.dataset.activeRole;const docs=window.likhaeRegistrationPolicies?.[role]||[];const fields=backdrop.querySelector('[data-registration-policy-hidden-inputs]');
+            fields.replaceChildren();docs.forEach(policy=>{const input=document.createElement('input');input.type='hidden';input.name=`policy_acceptances[${policy.id}]`;input.value=policy.version;input.setAttribute('form','registrationForm');fields.append(input)});
+            terms.disabled=false;privacy.disabled=false;terms.checked=true;privacy.checked=true;
+            window.likhaeRegistrationPolicyConsentedRole=role;
+            backdrop.hidden=true;document.querySelectorAll('body > *:not([data-registration-policy-modal])').forEach(node=>node.inert=false);
+            const form=document.getElementById('registrationForm');const submitButton=form?.querySelector('[data-submit-button]');
+            if(submitButton)form.requestSubmit(submitButton);else form?.requestSubmit();
+        });
+        document.addEventListener('keydown',event=>{
+            if(backdrop.hidden)return;
+            if(event.key==='Escape'){event.preventDefault();event.stopPropagation();return}
+            if(event.key!=='Tab')return;
+            const focusable=[...dialog.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),[tabindex="0"]')];
+            if(!focusable.length)return;const first=focusable[0],last=focusable[focusable.length-1];
+            if(event.shiftKey&&(document.activeElement===first||document.activeElement===dialog)){event.preventDefault();last.focus()}
+            else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===dialog)){event.preventDefault();first.focus()}
+        },true);
+        window.likhaeSyncRegistrationPolicyRole=function(role){
+            if(backdrop.dataset.activeRole===role)return;
+            const docs=window.likhaeRegistrationPolicies?.[role]||[];
+            window.likhaeRenderRegistrationPolicySet(role,docs);
+            if(!backdrop.hidden){unlockReachedPolicies();dialog.focus()}
+        };
+        const initialRole=document.getElementById('accountType')?.value||'buyer';
+        window.likhaeRenderRegistrationPolicySet(initialRole,window.likhaeRegistrationPolicies?.[initialRole]||[]);
+    })();
+</script>
 
 </body>
 </html>

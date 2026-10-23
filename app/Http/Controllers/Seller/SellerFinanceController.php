@@ -7,9 +7,9 @@ use App\Models\Finance\SellerSettlement;
 use App\Services\Finance\PayoutSupportService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Finance\SellerSettlementService;
-use App\Rules\PayoutDestinationNumber;
-use App\Support\PayoutAccountDetails;
+use App\Support\PayoutDestinationInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -64,22 +64,44 @@ class SellerFinanceController extends Controller
         return view('seller.settlements.index', compact('seller', 'ready', 'settlements', 'payoutBalances', 'payoutDestinationReady', 'payoutDestinationSaved'));
     }
 
-    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse
+    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager, PayoutDestinationInput $input): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
         abort_unless($destinations->readyFor('seller_profiles'), 503, 'Payout details are unavailable until the finance migration is installed.');
-        $data = $request->validate([
-            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
-            'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
-            'payout_account_name' => ['required', 'string', 'max:150'],
-            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
-            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
-                $request->input('payout_account_type'),
-                $request->input('payout_method'),
-            )],
-        ]);
-        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
+
+        if ($destinations->supportsMultipleFor('seller_profiles')) {
+            $action = (string) $request->input('destination_action', 'add');
+            if (in_array($action, ['set_default', 'remove', 'update'], true)) {
+                $data = $request->validate(['destination_id' => ['required', 'string', 'max:80']]);
+                if ($action === 'set_default') {
+                    $manager->setDefault($seller, $data['destination_id']);
+
+                    return back()->with('status', 'Default Seller payout destination updated.');
+                }
+
+                if ($action === 'remove') {
+                    $manager->remove($seller, $data['destination_id']);
+
+                    return back()->with('status', 'Payout destination removed.');
+                }
+
+                $destination = $input->validate($request, true);
+                $manager->update($seller, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
+
+                return back()->with('status', 'Payout destination updated.');
+            }
+            abort_unless($action === 'add', 422, 'Unsupported payout destination action.');
+
+            $data = $input->validate($request, true);
+            $manager->add($seller, $data, (bool) ($data['make_default'] ?? false));
+
+            return back()->with('status', 'Payout destination saved securely. The selected default will be used for future Seller payouts.');
+        }
+
+        abort_unless($request->input('destination_action', 'add') === 'add', 503, 'Multiple payout destinations are unavailable until the migration is installed.');
+
+        $data = $input->validate($request);
         $seller->forceFill($data)->save();
 
         return back()->with('status', 'Payout destination saved securely.');

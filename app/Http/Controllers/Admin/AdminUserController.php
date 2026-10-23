@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin\AuditLog;
 use App\Models\Admin\Notification;
 use App\Models\User;
+use App\Services\Admin\AdminUserSessionManager;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -51,7 +52,7 @@ class AdminUserController extends Controller
         'half_year' => ['label' => '6 months', 'unit' => 'month', 'count' => 6],
     ];
 
-    public function index(Request $request): View
+    public function index(Request $request, AdminUserSessionManager $sessions): View
     {
         $accountEnforcementReady = User::accountEnforcementSchemaReady();
         if ($accountEnforcementReady) {
@@ -117,7 +118,66 @@ class AdminUserController extends Controller
             'delivery' => User::query()->where('account_type', User::TYPE_LOGISTICS)->count(),
         ];
 
-        return view('Admin.users.index', compact('users', 'role', 'status', 'search', 'stats', 'accountEnforcementReady'));
+        $sessionManagementAvailable = $sessions->available();
+        $sessionSummaries = $sessions->summaries($users->getCollection());
+
+        return view('Admin.users.index', compact(
+            'users',
+            'role',
+            'status',
+            'search',
+            'stats',
+            'accountEnforcementReady',
+            'sessionManagementAvailable',
+            'sessionSummaries',
+        ));
+    }
+
+    public function revokeSessions(Request $request, AdminUserSessionManager $sessions): RedirectResponse
+    {
+        if (! $sessions->available()) {
+            return back()->withErrors([
+                'sessions' => 'Session controls are unavailable because the configured session driver or session table is not supported.',
+            ]);
+        }
+
+        $data = $request->validate([
+            'single_user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'user_ids' => ['required_without:single_user_id', 'array', 'min:1', 'max:100'],
+            'user_ids.*' => ['integer', 'distinct', 'exists:users,id'],
+        ]);
+
+        $isSingle = filled($data['single_user_id'] ?? null);
+        $requestedIds = $isSingle
+            ? [(int) $data['single_user_id']]
+            : collect($data['user_ids'] ?? [])->map(fn ($id): int => (int) $id)->unique()->values()->all();
+        $actorId = (int) $request->user()->id;
+        if ($isSingle && in_array($actorId, $requestedIds, true)) {
+            return back()->withErrors(['sessions' => 'You cannot suspend your own current session from the user directory.']);
+        }
+
+        $skippedSelf = in_array($actorId, $requestedIds, true);
+        $targetIds = array_values(array_diff($requestedIds, [$actorId]));
+        if ($targetIds === []) {
+            return back()->withErrors(['sessions' => 'Select at least one other account to suspend its active sessions.']);
+        }
+
+        $users = User::query()
+            ->whereIn('id', $targetIds)
+            ->whereIn('account_type', [User::TYPE_BUYER, User::TYPE_SELLER, User::TYPE_ADMIN, User::TYPE_LOGISTICS])
+            ->get();
+        if ($users->count() !== count($targetIds)) {
+            return back()->withErrors(['sessions' => 'One or more selected accounts are no longer available in the user directory.']);
+        }
+
+        $revokedCount = $sessions->revoke($request, $users->all());
+        $accountCount = $users->count();
+        $message = 'Suspended sessions for '.$accountCount.' account'.($accountCount === 1 ? '' : 's').'; revoked '.$revokedCount.' active browser session'.($revokedCount === 1 ? '' : 's').'. Each account was notified to sign in again.';
+        if ($skippedSelf) {
+            $message .= ' Your own account was skipped.';
+        }
+
+        return back()->with('status', $message);
     }
 
     public function show(User $user): View

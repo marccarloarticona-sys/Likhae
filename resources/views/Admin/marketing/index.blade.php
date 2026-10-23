@@ -64,7 +64,7 @@
                                     <td>
                                         <div class="ad-marketing-campaign-name">
                                             @if($campaignImageUrl)<img src="{{ $campaignImageUrl }}" alt="{{ $campaign->image_alt ?: $campaign->name }}">@endif
-                                            <span><strong>{{ $campaign->name }}</strong><small>{{ $campaign->code }}</small></span>
+                                                <span><strong>{{ $campaign->name }}</strong><small>{{ $campaign->code }} · {{ $campaign->benefit_scope === 'SHIPPING' ? 'Shipping voucher' : 'Product voucher' }}</small></span>
                                         </div>
                                     </td>
                                     <td>{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 2).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off<small>Max discount: {{ $campaign->maximum_discount_amount === null ? 'No cap' : '₱'.number_format((float) $campaign->maximum_discount_amount, 2) }}</small></td>
@@ -78,7 +78,7 @@
                                                 data-campaign-id="{{ $campaign->id }}"
                                                 data-action="{{ route('admin.marketing.campaigns.update', $campaign) }}"
                                                 data-name="{{ $campaign->name }}" data-code="{{ $campaign->code }}"
-                                                data-discount-type="{{ $campaign->discount_type }}" data-discount-value="{{ $campaign->discount_value }}"
+                                                data-benefit-scope="{{ $campaign->benefit_scope ?: 'PRODUCT' }}" data-discount-type="{{ $campaign->discount_type }}" data-discount-value="{{ $campaign->discount_value }}"
                                                 data-minimum="{{ $campaign->minimum_order_amount }}" data-maximum="{{ $campaign->maximum_discount_amount }}"
                                                 data-usage-limit="{{ $campaign->usage_limit }}" data-per-user-limit="{{ $campaign->per_user_limit }}"
                                                 data-starts-at="{{ $campaign->starts_at?->format('Y-m-d\TH:i') }}" data-ends-at="{{ $campaign->ends_at?->format('Y-m-d\TH:i') }}"
@@ -114,6 +114,7 @@
                         <div class="ad-form-grid">
                             <label class="ad-field"><span>Campaign name</span><input id="campaign-name" name="name" value="{{ old('name') }}" maxlength="150" required></label>
                             <label class="ad-field"><span>Voucher code</span><input id="campaign-code" name="code" value="{{ old('code') }}" maxlength="80" required></label>
+                            <label class="ad-field"><span>Applies to</span><select id="campaign-benefit-scope" name="benefit_scope" required><option value="PRODUCT" @selected(old('benefit_scope', 'PRODUCT') === 'PRODUCT')>Eligible product amounts</option><option value="SHIPPING" @selected(old('benefit_scope') === 'SHIPPING')>Shipping fees</option></select></label>
                             <label class="ad-field"><span>Discount type</span><select id="campaign-discount-type" name="discount_type" required><option value="PERCENT" @selected(old('discount_type', 'PERCENT') === 'PERCENT')>Percent</option><option value="FIXED" @selected(old('discount_type') === 'FIXED')>Fixed amount</option></select></label>
                             <label class="ad-field"><span>Discount value</span><input id="campaign-discount-value" name="discount_value" type="number" min="0.01" step="0.01" value="{{ old('discount_value', '10') }}" required></label>
                             <label class="ad-field"><span>Minimum spend</span><input id="campaign-minimum" name="minimum_order_amount" type="number" min="0" step="0.01" value="{{ old('minimum_order_amount', '0') }}"></label>
@@ -309,6 +310,7 @@
             const fields = {
                 name: document.getElementById('campaign-name'),
                 code: document.getElementById('campaign-code'),
+                benefitScope: document.getElementById('campaign-benefit-scope'),
                 discountType: document.getElementById('campaign-discount-type'),
                 discountValue: document.getElementById('campaign-discount-value'),
                 minimum: document.getElementById('campaign-minimum'),
@@ -383,6 +385,7 @@
                 if (editing) {
                     fields.name.value = button.dataset.name || '';
                     fields.code.value = button.dataset.code || '';
+                    fields.benefitScope.value = button.dataset.benefitScope || 'PRODUCT';
                     fields.discountType.value = button.dataset.discountType || 'PERCENT';
                     fields.discountValue.value = button.dataset.discountValue || '';
                     fields.minimum.value = button.dataset.minimum || '0';
@@ -414,7 +417,7 @@
             modal.querySelectorAll('[data-marketing-modal-close]').forEach((button) => button.addEventListener('click', close));
             modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
             document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal.classList.contains('is-open')) close(); });
-            @if($errors->has('name') || $errors->has('code') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color'))
+            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color'))
                 const failedCampaignId = @json(old('editing_campaign'));
                 const editButton = Array.from(document.querySelectorAll('[data-marketing-campaign-open="edit"]'))
                     .find((button) => button.dataset.campaignId === String(failedCampaignId));

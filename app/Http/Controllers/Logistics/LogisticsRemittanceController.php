@@ -9,13 +9,13 @@ use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Finance\PayoutSupportService;
 use App\Services\Finance\ProductProceedsService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\SimulatedPayoutGateway;
-use App\Rules\PayoutDestinationNumber;
-use App\Support\PayoutAccountDetails;
+use App\Support\PayoutDestinationInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -70,22 +70,44 @@ class LogisticsRemittanceController extends Controller
         return view('logistics.wallet.index', compact('center', 'ready', 'pools', 'receipts', 'payoutSummary', 'payoutDestinationReady', 'payoutDestinationSaved'));
     }
 
-    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse
+    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager, PayoutDestinationInput $input): RedirectResponse
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
         abort_unless($destinations->readyFor('logistics_centers'), 503, 'Payout details are unavailable until the finance migration is installed.');
-        $data = $request->validate([
-            'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Other'],
-            'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
-            'payout_account_name' => ['required', 'string', 'max:150'],
-            'payout_account_type' => ['required', 'string', 'in:MOBILE_NUMBER,ACCOUNT_NUMBER'],
-            'payout_account_number' => ['required', 'string', 'max:150', new PayoutDestinationNumber(
-                $request->input('payout_account_type'),
-                $request->input('payout_method'),
-            )],
-        ]);
-        $data['payout_account_number'] = PayoutAccountDetails::normalizeNumber($data['payout_account_number'], $data['payout_account_type']);
+
+        if ($destinations->supportsMultipleFor('logistics_centers')) {
+            $action = (string) $request->input('destination_action', 'add');
+            if (in_array($action, ['set_default', 'remove', 'update'], true)) {
+                $data = $request->validate(['destination_id' => ['required', 'string', 'max:80']]);
+                if ($action === 'set_default') {
+                    $manager->setDefault($center, $data['destination_id']);
+
+                    return back()->with('status', 'Default Logistics payout destination updated.');
+                }
+
+                if ($action === 'remove') {
+                    $manager->remove($center, $data['destination_id']);
+
+                    return back()->with('status', 'Payout destination removed.');
+                }
+
+                $destination = $input->validate($request, true);
+                $manager->update($center, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
+
+                return back()->with('status', 'Payout destination updated.');
+            }
+            abort_unless($action === 'add', 422, 'Unsupported payout destination action.');
+
+            $data = $input->validate($request, true);
+            $manager->add($center, $data, (bool) ($data['make_default'] ?? false));
+
+            return back()->with('status', 'Payout destination saved securely. The selected default will be used for future Logistics payouts.');
+        }
+
+        abort_unless($request->input('destination_action', 'add') === 'add', 503, 'Multiple payout destinations are unavailable until the migration is installed.');
+
+        $data = $input->validate($request);
         $center->forceFill($data)->save();
 
         return back()->with('status', 'Payout destination saved securely.');

@@ -29,6 +29,7 @@ use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Fulfillment\LocalRiderEligibilityService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\RegistrationWorkflowService;
@@ -927,15 +928,17 @@ class LogisticsPortalController extends Controller
         ]);
     }
 
-    public function profile(Request $request, PayoutDestinationReadiness $destinations): View
+    public function profile(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager): View
     {
         $user = $request->user();
         $center = $user->logisticsCenter?->load('address');
         abort_unless($center, 403);
         $payoutDestinationReady = $destinations->readyFor('logistics_centers');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($center);
+        $payoutMultipleReady = $destinations->supportsMultipleFor('logistics_centers');
+        $payoutDestinations = $payoutMultipleReady ? $manager->accounts($center) : [];
 
-        return view('logistics.profile.index', compact('center', 'user', 'payoutDestinationReady', 'payoutDestinationSaved'));
+        return view('logistics.profile.index', compact('center', 'user', 'payoutDestinationReady', 'payoutDestinationSaved', 'payoutMultipleReady', 'payoutDestinations'));
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse

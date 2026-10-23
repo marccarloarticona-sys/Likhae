@@ -65,6 +65,16 @@
         </div>
         <div class="ad-card-body payout-section-body">
             @if($payoutDestinationReady)
+                @if($payoutMultipleReady)
+                    @include('components.shared.payout-destination-manager', [
+                        'payoutDestinationRoute' => 'admin.account.payout-destination.update',
+                        'payoutChangeDescription' => 'Changes apply to future platform withdrawals.',
+                        'payoutPurpose' => 'platform withdrawals',
+                        'payoutSecurityCopy' => 'This destination is for future platform withdrawals. Seller and Logistics transfers use their own saved default details.',
+                        'payoutHelpId' => 'admin-multiple-payout-number-help',
+                        'payoutButtonClass' => 'ad-btn ad-btn-primary',
+                    ])
+                @else
                 @if($payoutDestinationSaved)
                     @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($adminUser))
                     <dl class="payout-summary">
@@ -88,6 +98,7 @@
                     <div class="payout-form-actions is-wide"><small>Card numbers and security codes are never collected.</small><button type="submit" class="ad-btn ad-btn-primary">Save payout details</button></div>
                 </form>
                 </div>
+                @endif
             @else
                 <p class="payout-empty-state">Admin payout details are temporarily unavailable while the payout setup is being updated.</p>
             @endif

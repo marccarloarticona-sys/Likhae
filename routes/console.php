@@ -47,3 +47,9 @@ Schedule::command('likhae:expire-account-suspensions')
     ->withoutOverlapping()
     ->onSuccess($recordSchedulerHeartbeat('likhae:expire-account-suspensions', 'success'))
     ->onFailure($recordSchedulerHeartbeat('likhae:expire-account-suspensions', 'failure'));
+Schedule::command('likhae:send-flash-sale-reminders')
+    ->everyMinute()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping()
+    ->onSuccess($recordSchedulerHeartbeat('likhae:send-flash-sale-reminders', 'success'))
+    ->onFailure($recordSchedulerHeartbeat('likhae:send-flash-sale-reminders', 'failure'));

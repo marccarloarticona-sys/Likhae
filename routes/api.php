@@ -11,7 +11,9 @@ use App\Http\Controllers\Api\WorkflowApiController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
+use App\Http\Controllers\PolicyAcceptanceController;
 use App\Http\Middleware\AuthenticateApiToken;
+use App\Http\Middleware\RequireApiPolicyAcceptance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Route;
@@ -45,6 +47,9 @@ Route::prefix('v1')->group(function (): void {
         ->middleware('throttle:10,1')
         ->name('api.v1.auth.register.email-verification.verify');
     Route::post('/auth/register', [MobileAuthController::class, 'register'])->middleware('throttle:5,1')->name('api.v1.auth.register');
+    Route::get('/auth/registration-policies', [PolicyAcceptanceController::class, 'registration'])
+        ->middleware('throttle:30,1')
+        ->name('api.v1.policies.registration');
 
     Route::get('/categories', [LookupApiController::class, 'categories'])->name('api.v1.categories.index');
     Route::get('/logistics-centers', [LookupApiController::class, 'logisticsCenters'])->name('api.v1.logistics-centers.index');
@@ -56,7 +61,8 @@ Route::prefix('v1')->group(function (): void {
 
     Route::get('/tracking/{trackingNumber}', [TrackingApiController::class, 'show'])->name('api.v1.tracking.show');
 
-    Route::middleware(AuthenticateApiToken::class)->group(function (): void {
+    Route::middleware([AuthenticateApiToken::class, RequireApiPolicyAcceptance::class])->group(function (): void {
+        Route::post('/policies/accept', [PolicyAcceptanceController::class, 'apiStore'])->name('api.v1.policies.accept');
         Route::post('/broadcasting/auth', fn (Request $request) => Broadcast::auth($request))
             ->name('api.v1.broadcasting.auth');
         Route::get('/auth/me', [MobileAuthController::class, 'me'])->name('api.v1.auth.me');

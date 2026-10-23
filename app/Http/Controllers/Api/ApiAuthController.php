@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\PolicyAcceptanceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -11,7 +12,7 @@ use Illuminate\Support\Str;
 
 class ApiAuthController extends Controller
 {
-    public function login(Request $request): JsonResponse
+    public function login(Request $request, PolicyAcceptanceService $policies): JsonResponse
     {
         $credentials = $request->validate([
             'email' => ['required', 'email'],
@@ -29,16 +30,21 @@ class ApiAuthController extends Controller
 
         $token = Str::random(64);
         $expiresAt = now()->addDays(30);
-        $user->forceFill([
+        $tokenAttributes = [
             'api_token_hash' => hash('sha256', $token),
             'api_token_expires_at' => $expiresAt,
-        ])->save();
+        ];
+        if ($policies->schemaReady()) {
+            $tokenAttributes['api_token_policy_snapshot'] = $policies->fingerprintFor($user);
+        }
+        $user->forceFill($tokenAttributes)->save();
 
         return response()->json([
             'success' => true,
             'token_type' => 'Bearer',
             'access_token' => $token,
             'expires_at' => $expiresAt->toIso8601String(),
+            'pending_policies' => $policies->serializePolicies($policies->pendingPolicies($user)),
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -67,10 +73,14 @@ class ApiAuthController extends Controller
 
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->forceFill([
+        $tokenAttributes = [
             'api_token_hash' => null,
             'api_token_expires_at' => null,
-        ])->save();
+        ];
+        if (app(PolicyAcceptanceService::class)->schemaReady()) {
+            $tokenAttributes['api_token_policy_snapshot'] = null;
+        }
+        $request->user()->forceFill($tokenAttributes)->save();
 
         return response()->json(['success' => true, 'message' => 'Signed out.']);
     }

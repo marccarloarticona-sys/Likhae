@@ -4,6 +4,7 @@ namespace App\Services\Marketplace;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class VoucherRedemptionCounter
 {
@@ -16,20 +17,29 @@ class VoucherRedemptionCounter
         }
 
         $query = DB::table('seller_orders')
+            ->join('orders', 'orders.id', '=', 'seller_orders.order_id')
             ->whereIn('seller_orders.voucher_id', $voucherIds)
             ->where('seller_orders.status', '<>', 'CANCELLED');
-
-        if ($buyerUserId !== null) {
-            $query->join('orders', 'orders.id', '=', 'seller_orders.order_id')
-                ->where('orders.buyer_user_id', $buyerUserId);
+        $rows = $query->get([
+            'seller_orders.voucher_id',
+            'seller_orders.order_id',
+            'orders.buyer_user_id',
+        ]);
+        foreach (['platform_voucher_id', 'shipping_voucher_id'] as $column) {
+            if (! Schema::hasColumn('orders', $column)) {
+                continue;
+            }
+            $rows = $rows->merge(DB::table('orders')
+                ->whereIn($column, $voucherIds)
+                ->where('status', '<>', 'CANCELLED')
+                ->get(['id as order_id', 'buyer_user_id', $column.' as voucher_id']));
         }
+        $rows = $rows
+            ->filter(fn ($row): bool => $buyerUserId === null || (int) $row->buyer_user_id === $buyerUserId)
+            ->unique(fn ($row): string => $row->voucher_id.':'.$row->order_id);
 
-        return $query
-            ->select('seller_orders.voucher_id')
-            ->selectRaw('COUNT(DISTINCT seller_orders.order_id) AS redemption_count')
-            ->groupBy('seller_orders.voucher_id')
-            ->get()
-            ->mapWithKeys(fn ($row): array => [(int) $row->voucher_id => (int) $row->redemption_count]);
+        return $rows->groupBy(fn ($row): int => (int) $row->voucher_id)
+            ->map(fn (Collection $uses): int => $uses->pluck('order_id')->unique()->count());
     }
 
     public static function count(int $voucherId, ?int $buyerUserId = null): int
@@ -52,7 +62,21 @@ class VoucherRedemptionCounter
             ->where('seller_orders.status', '<>', 'CANCELLED')
             ->orderBy('seller_orders.id')
             ->lockForUpdate()
-            ->get(['seller_orders.order_id', 'orders.buyer_user_id']);
+            ->get(['seller_orders.order_id', 'seller_orders.voucher_id', 'orders.buyer_user_id']);
+        foreach (['platform_voucher_id', 'shipping_voucher_id'] as $column) {
+            if (! Schema::hasColumn('orders', $column)) {
+                continue;
+            }
+            $rows = $rows->merge(DB::table('orders')
+                ->where($column, $voucherId)
+                ->where('status', '<>', 'CANCELLED')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->select(['id as order_id', 'buyer_user_id'])
+                ->selectRaw('? as voucher_id', [$voucherId])
+                ->get());
+        }
+        $rows = $rows->unique(fn ($row): string => $row->voucher_id.':'.$row->order_id);
 
         return [
             'redemptions' => $rows->pluck('order_id')->unique()->count(),

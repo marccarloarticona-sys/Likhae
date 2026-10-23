@@ -201,5 +201,7 @@
     </section>
 </div>
 
+@include('components.policies.mandatory-modal')
+
 </body>
 </html>

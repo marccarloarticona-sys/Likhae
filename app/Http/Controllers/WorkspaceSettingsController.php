@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Admin\PlatformPolicy;
+use App\Services\PolicyAcceptanceService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -11,13 +13,27 @@ use Illuminate\View\View;
 
 class WorkspaceSettingsController extends Controller
 {
-    public function show(Request $request, string $workspace): View
+    public function show(Request $request, string $workspace, PolicyAcceptanceService $policyAcceptance): View
     {
         $config = $this->config($workspace);
+        $policySchemaReady = $policyAcceptance->schemaReady();
+        $riderPolicies = collect();
+        if ($workspace === 'logistics' && $policySchemaReady) {
+            $centerId = $request->user()->logisticsCenter?->id;
+            $riderPolicies = $centerId
+                ? PlatformPolicy::query()
+                    ->where('logistics_center_id', $centerId)
+                    ->where('policy_type', 'RIDER_OPERATIONAL')
+                    ->latest('published_at')
+                    ->get()
+                : collect();
+        }
 
         return view($config['view'], [
             'settingsConfig' => $config,
             'preferences' => array_merge($this->defaults($config), (array) $request->user()->notification_preferences),
+            'policySchemaReady' => $policySchemaReady,
+            'riderPolicies' => $riderPolicies,
         ]);
     }
 

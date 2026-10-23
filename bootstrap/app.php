@@ -3,7 +3,9 @@
 use App\Http\Middleware\EnsureWorkspaceRole;
 use App\Http\Middleware\EnsureActiveAccount;
 use App\Http\Middleware\PreventPrivatePageCache;
+use App\Http\Middleware\TrackAdminManagedUserSessions;
 use App\Http\Middleware\EnsureRiderOperationalType;
+use App\Http\Middleware\RequireMandatoryPolicyAcceptance;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -22,7 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Railway and Cloudflare terminate TLS before forwarding to Laravel.
         $middleware->trustProxies(at: '*');
-        $middleware->web(append: [EnsureActiveAccount::class, PreventPrivatePageCache::class]);
+        $middleware->web(append: [EnsureActiveAccount::class, TrackAdminManagedUserSessions::class, PreventPrivatePageCache::class, RequireMandatoryPolicyAcceptance::class]);
         $middleware->redirectGuestsTo(fn (Request $request) => route(
             $request->is('logistics/*', 'rider', 'rider/*') ? 'logistics.login' : 'login'
         ));

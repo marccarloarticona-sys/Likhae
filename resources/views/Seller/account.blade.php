@@ -26,6 +26,16 @@
                     <header class="sl-card-head payout-section-head"><div><span class="payout-overline">Payout destination</span><h2>Payment details</h2><p>Choose where Admin should send approved Seller payouts.</p></div>@if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif</header>
                     <div class="payout-section-body">
                     @if($payoutDestinationReady)
+                        @if($payoutMultipleReady)
+                            @include('components.shared.payout-destination-manager', [
+                                'payoutDestinationRoute' => 'seller.settlements.payout-destination.update',
+                                'payoutChangeDescription' => 'Changes apply to future Seller payouts.',
+                                'payoutPurpose' => 'Seller payouts',
+                                'payoutSecurityCopy' => 'Admin uses your default destination for approved Seller payouts and records each transfer in your wallet.',
+                                'payoutHelpId' => 'seller-multiple-payout-number-help',
+                                'payoutButtonClass' => 'sl-btn sl-btn-primary',
+                            ])
+                        @else
                         @if($payoutDestinationSaved)
                             @php
                                 $savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($payoutProfile);
@@ -79,6 +89,7 @@
                             <div class="sl-form-actions payout-form-actions"><small>Check the number carefully before saving.</small><button type="submit" class="sl-btn sl-btn-primary">Save payout details</button></div>
                         </form>
                         </div>
+                        @endif
                     @else
                         <p class="payout-empty-state">Payout details are temporarily unavailable while the payout setup is being updated.</p>
                     @endif

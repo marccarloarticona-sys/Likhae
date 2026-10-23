@@ -9,6 +9,7 @@ use App\Mail\RegistrationEmailVerificationCode;
 use App\Models\Admin\PlatformSetting;
 use App\Models\User;
 use App\Services\RegistrationWorkflowService;
+use App\Services\PolicyAcceptanceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -28,6 +29,7 @@ class MobileAuthController extends Controller
     public function register(
         StoreRegistrationRequest $request,
         RegistrationWorkflowService $workflow,
+        PolicyAcceptanceService $policies,
     ): JsonResponse {
         if (! (bool) PlatformSetting::valueOf('registration_enabled', true)) {
             return response()->json([
@@ -78,7 +80,12 @@ class MobileAuthController extends Controller
             $registrationOverrides['postal_code'] = $expectedPostalCode;
         }
 
+        $acceptedPolicies = $policies->validateRegistrationConsent(
+            $request->accountTypeConstant(),
+            $request->validated(),
+        );
         $application = $workflow->submit($request, $registrationOverrides);
+        $policies->recordRegistrationAcceptances($application->user, $acceptedPolicies, $request);
         Cache::forget($this->emailVerificationTokenCacheKey($email));
 
         return response()->json([
@@ -176,7 +183,7 @@ class MobileAuthController extends Controller
         ]);
     }
 
-    public function exchangeGoogle(Request $request): JsonResponse
+    public function exchangeGoogle(Request $request, PolicyAcceptanceService $policies): JsonResponse
     {
         $data = $request->validate([
             'code' => ['required', 'string', 'size:64'],
@@ -257,10 +264,14 @@ class MobileAuthController extends Controller
 
         $plainTextToken = Str::random(64);
         $expiresAt = now()->addDays(30);
-        $user->forceFill([
+        $tokenAttributes = [
             'api_token_hash' => hash('sha256', $plainTextToken),
             'api_token_expires_at' => $expiresAt,
-        ])->save();
+        ];
+        if ($policies->schemaReady()) {
+            $tokenAttributes['api_token_policy_snapshot'] = $policies->fingerprintFor($user);
+        }
+        $user->forceFill($tokenAttributes)->save();
 
         return response()->json([
             'success' => true,
@@ -269,6 +280,7 @@ class MobileAuthController extends Controller
             'token' => $plainTextToken,
             'access_token' => $plainTextToken,
             'expires_at' => $expiresAt->toIso8601String(),
+            'pending_policies' => $policies->serializePolicies($policies->pendingPolicies($user)),
             'device_name' => trim((string) ($data['device_name'] ?? '')) ?: 'likhae-mobile',
             'user' => $this->userPayload($user, $mobileRoles),
         ]);
@@ -297,7 +309,7 @@ class MobileAuthController extends Controller
             'message' => 'If an account exists with this email, a password reset link will be sent.',
         ]);
     }
-    public function login(Request $request): JsonResponse
+    public function login(Request $request, PolicyAcceptanceService $policies): JsonResponse
     {
         $credentials = $request->validate([
             'email' => ['required', 'string', 'email', 'max:255'],
@@ -349,10 +361,14 @@ class MobileAuthController extends Controller
 
         $plainTextToken = Str::random(64);
         $expiresAt = now()->addDays(30);
-        $user->forceFill([
+        $tokenAttributes = [
             'api_token_hash' => hash('sha256', $plainTextToken),
             'api_token_expires_at' => $expiresAt,
-        ])->save();
+        ];
+        if ($policies->schemaReady()) {
+            $tokenAttributes['api_token_policy_snapshot'] = $policies->fingerprintFor($user);
+        }
+        $user->forceFill($tokenAttributes)->save();
 
         return response()->json([
             'success' => true,
@@ -361,6 +377,7 @@ class MobileAuthController extends Controller
             'token' => $plainTextToken,
             'access_token' => $plainTextToken,
             'expires_at' => $expiresAt->toIso8601String(),
+            'pending_policies' => $policies->serializePolicies($policies->pendingPolicies($user)),
             'device_name' => trim((string) ($credentials['device_name'] ?? '')) ?: 'likhae-mobile',
             'user' => $this->userPayload($user, $mobileRoles),
         ]);
@@ -386,15 +403,22 @@ class MobileAuthController extends Controller
         return response()->json([
             'success' => true,
             'user' => $this->userPayload($user, $mobileRoles),
+            'pending_policies' => app(PolicyAcceptanceService::class)->serializePolicies(
+                app(PolicyAcceptanceService::class)->pendingPolicies($user),
+            ),
         ]);
     }
 
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->forceFill([
+        $tokenAttributes = [
             'api_token_hash' => null,
             'api_token_expires_at' => null,
-        ])->save();
+        ];
+        if (app(PolicyAcceptanceService::class)->schemaReady()) {
+            $tokenAttributes['api_token_policy_snapshot'] = null;
+        }
+        $request->user()->forceFill($tokenAttributes)->save();
 
         return response()->json([
             'success' => true,

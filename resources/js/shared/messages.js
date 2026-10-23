@@ -336,7 +336,7 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     }
     const time = document.createElement('span');
     time.className = 'lk-message-time';
-    time.textContent = pending ? 'Sending' : formatMessageTime(payload);
+    time.textContent = pending ? '' : formatMessageTime(payload);
     const meta = document.createElement('div');
     meta.className = 'lk-message-meta';
     meta.appendChild(time);

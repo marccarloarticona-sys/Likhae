@@ -51,7 +51,9 @@ class RegistrationEmailVerificationTest extends TestCase
             'valid_id' => UploadedFile::fake()->create('valid-id.pdf', 10, 'application/pdf'),
             'password' => 'StrongPass123!',
             'password_confirmation' => 'StrongPass123!',
-            'terms' => '1',
+            'terms_acknowledged' => '1',
+            'privacy_acknowledged' => '1',
+            'policy_acceptances' => ['1' => '1', '2' => '1'],
         ])->assertSessionHasErrors('birthday');
 
         $this->assertDatabaseMissing('users', ['email' => 'underage@example.com']);
@@ -125,7 +127,9 @@ class RegistrationEmailVerificationTest extends TestCase
             'valid_id' => UploadedFile::fake()->create('valid-id.pdf', 10, 'application/pdf'),
             'password' => 'StrongPass123!',
             'password_confirmation' => 'StrongPass123!',
-            'terms' => '1',
+            'terms_acknowledged' => '1',
+            'privacy_acknowledged' => '1',
+            'policy_acceptances' => ['1' => '1', '2' => '1'],
         ])->assertSessionHasErrors('email');
 
         $this->assertDatabaseMissing('users', ['email' => $email]);

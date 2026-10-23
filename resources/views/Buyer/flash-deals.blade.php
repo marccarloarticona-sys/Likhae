@@ -2,7 +2,7 @@
 
 @section('title', 'Discounted Products')
 @section('active', 'products')
-@section('subtitle', 'Shop products with current seller discounts.')
+@section('subtitle', 'Shop current discounts and set reminders for upcoming flash sales.')
 
 @push('head')
 <style>
@@ -58,7 +58,7 @@
                     Discounted Products
                 </h1>
                 <p class="mt-2 text-sm text-[#987865]">
-                    Available products with a current discount on at least one variant.
+                    Current discounts and scheduled sales from LIKHAE sellers.
                 </p>
             </div>
 
@@ -77,7 +77,7 @@
             <div class="mt-8">
                 {{ $products->links() }}
             </div>
-        @else
+        @elseif($upcomingDealProducts->isEmpty())
             <div class="rounded-2xl border border-dashed border-[#DBCEC1] bg-[#FFFDF9] px-6 py-12 text-center">
                 <h2 class="text-base font-semibold text-[#3B211B]">
                     No discounted products are available right now
@@ -91,5 +91,20 @@
             </div>
         @endif
     </section>
+
+    @if($upcomingDealProducts->isNotEmpty())
+        <section class="mt-12" aria-labelledby="upcoming-flash-sales-heading">
+            <div class="mb-6">
+                <span class="mb-2 inline-flex text-[10px] font-extrabold uppercase tracking-[0.22em] text-amber-800">Coming soon</span>
+                <h2 id="upcoming-flash-sales-heading" class="lk-deals-heading">Upcoming flash sales</h2>
+                <p class="mt-2 text-sm text-[#987865]">Set a reminder and we’ll let you know about 10 minutes before a sale begins.</p>
+            </div>
+            <div class="lk-deals-grid">
+                @foreach($upcomingDealProducts as $product)
+                    <x-buyer.product-card :product="$product" deal flash-reminder :reminder-active="isset($flashSaleReminderStates[$product['id']])" :reminder-available="$product['flash_sale_reminder_available']" />
+                @endforeach
+            </div>
+        </section>
+    @endif
 </div>
 @endsection

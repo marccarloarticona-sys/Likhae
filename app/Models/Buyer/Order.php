@@ -7,6 +7,7 @@ use App\Models\Communication\Conversation;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Models\Buyer\ReturnRefundRequest;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -28,6 +29,10 @@ class Order extends Model
         'currency',
         'subtotal',
         'discount_total',
+        'platform_voucher_id',
+        'platform_voucher_discount',
+        'shipping_voucher_id',
+        'shipping_voucher_discount',
         'reward_points_redeemed',
         'reward_points_discount',
         'shipping_total',
@@ -45,6 +50,8 @@ class Order extends Model
         return [
             'subtotal' => 'decimal:2',
             'discount_total' => 'decimal:2',
+            'platform_voucher_discount' => 'decimal:2',
+            'shipping_voucher_discount' => 'decimal:2',
             'reward_points_redeemed' => 'integer',
             'reward_points_discount' => 'decimal:2',
             'shipping_total' => 'decimal:2',
@@ -74,6 +81,16 @@ class Order extends Model
     public function sellerOrders(): HasMany
     {
         return $this->hasMany(SellerOrder::class);
+    }
+
+    public function platformVoucher(): BelongsTo
+    {
+        return $this->belongsTo(Voucher::class, 'platform_voucher_id');
+    }
+
+    public function shippingVoucher(): BelongsTo
+    {
+        return $this->belongsTo(Voucher::class, 'shipping_voucher_id');
     }
 
     public function items(): HasManyThrough

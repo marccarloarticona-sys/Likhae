@@ -7,6 +7,9 @@
     'home' => false,
     'unavailable' => false,
     'storeVouchers' => collect(),
+    'flashReminder' => false,
+    'reminderActive' => false,
+    'reminderAvailable' => true,
 ])
 
 @php
@@ -835,6 +838,12 @@
                 @else
                     <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
                 @endif
+            @elseif($flashReminder)
+                @if($detailsUrl)
+                    <a href="{{ $detailsUrl }}" class="lk-btn-view">View Details</a>
+                @else
+                    <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
+                @endif
             @elseif($catalogListing || $home)
                 @if($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                     <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
@@ -898,6 +907,27 @@
                 @endif
             @endif
         </div>
+
+        @if($flashReminder && ! $guest && $id)
+            <div class="mt-3 border-t border-[#EADCCC] pt-3">
+                @if($reminderActive)
+                    <span class="mb-2 block text-center text-xs font-semibold text-emerald-800" role="status">Reminder Set</span>
+                    <form method="POST" action="{{ route('buyer.flash-deals.reminder.destroy', ['product' => $id]) }}">
+                        @csrf
+                        @method('DELETE')
+                        <button type="submit" class="w-full rounded-xl border border-[#DBCEC1] bg-white px-3 py-2 text-xs font-semibold text-[#6C4936] transition hover:border-[#C19771] hover:bg-[#FBF7F2]">Cancel reminder</button>
+                    </form>
+                @elseif(! $reminderAvailable)
+                    <button type="button" disabled aria-disabled="true" class="w-full cursor-not-allowed rounded-xl border border-[#DBCEC1] bg-[#F6EFE7] px-3 py-2 text-xs font-semibold text-[#987865]">Too close to set a reminder</button>
+                @else
+                    <form method="POST" action="{{ route('buyer.flash-deals.reminder.store', ['product' => $id]) }}">
+                        @csrf
+                        <button type="submit" class="w-full rounded-xl bg-[#561C17] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#3E130F]">Remind Me</button>
+                    </form>
+                @endif
+                <p class="mt-2 text-center text-[10px] text-[#987865]">Sale starts {{ \Illuminate\Support\Carbon::parse(data_get($product, 'flash_sale_starts_at'))->timezone('Asia/Manila')->format('M j, g:i A') }}</p>
+            </div>
+        @endif
 
         @if($catalogListing && ! $guest)
             <div class="lk-catalog-list-purchase" data-catalog-purchase>

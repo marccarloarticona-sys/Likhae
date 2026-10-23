@@ -164,6 +164,7 @@ class FinancialAllocationService
             $combinedDiscount,
             $sellerOrder->shipping_fee,
             (string) $riderPoolPercentage,
+            $sellerOrder->shipping_voucher_discount ?? 0,
         );
 
         $attributes = [
@@ -210,6 +211,7 @@ class FinancialAllocationService
             $parcelAmounts['discount_amount'],
             $parcelAmounts['shipping_fee'],
             $riderPoolPercentage,
+            $parcelAmounts['shipping_discount'],
         );
 
         $attributes = [

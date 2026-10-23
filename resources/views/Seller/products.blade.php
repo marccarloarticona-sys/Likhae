@@ -161,6 +161,14 @@
                         <div class="sl-variation-assignment-help">Choose an image in a row, or use the Image control below to apply the same existing image to all or selected variants.</div>
                     </div>
                     </div>
+                    @if(\Illuminate\Support\Facades\Schema::hasColumn('products', 'flash_sale_starts_at') && \Illuminate\Support\Facades\Schema::hasColumn('products', 'flash_sale_ends_at'))
+                        <div class="mt-5 border-t border-stone-200 pt-4">
+                            <div class="sl-form-grid sl-form-grid-2">
+                                <label class="sl-field"><span>Flash sale starts at</span><input name="flash_sale_starts_at" type="datetime-local" value="{{ old('flash_sale_starts_at', data_get($product, 'flash_sale_starts_at')?->format('Y-m-d\\TH:i')) }}"><small>Leave blank for an immediate seller discount.</small></label>
+                                <label class="sl-field"><span>Flash sale ends at</span><input name="flash_sale_ends_at" type="datetime-local" value="{{ old('flash_sale_ends_at', data_get($product, 'flash_sale_ends_at')?->format('Y-m-d\\TH:i')) }}"><small>Optional. The discount stops at this time.</small></label>
+                            </div>
+                        </div>
+                    @endif
                 </section>
             </div>
             @if($errors->any())<div class="sl-form-errors" role="alert"><strong>Product could not be saved.</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif

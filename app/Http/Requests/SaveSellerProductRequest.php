@@ -43,6 +43,8 @@ class SaveSellerProductRequest extends FormRequest
             'description' => ['nullable', 'string', 'max:10000'],
             'purchase_limit_per_buyer' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'ARCHIVED'])],
+            'flash_sale_starts_at' => ['nullable', 'date'],
+            'flash_sale_ends_at' => ['nullable', 'date'],
 
             'price' => ['required_if:product_type,single', 'nullable', 'numeric', 'min:0', 'max:999999.99'],
             'stock' => ['required_if:product_type,single', 'nullable', 'integer', 'min:0', 'max:999999'],
@@ -114,6 +116,25 @@ class SaveSellerProductRequest extends FormRequest
                 'discount_value' => $this->input('discount_value'),
                 'price' => $this->input('price'),
             ]], '', $this->input('price'));
+
+            $startsAt = $this->input('flash_sale_starts_at');
+            $endsAt = $this->input('flash_sale_ends_at');
+            if ($startsAt && $endsAt && strtotime((string) $endsAt) <= strtotime((string) $startsAt)) {
+                $validator->errors()->add('flash_sale_ends_at', 'The sale end time must be after its start time.');
+            }
+            if ($startsAt || $endsAt) {
+                $rows = $this->input('product_type') === 'variations'
+                    ? (array) $this->input('variants', [])
+                    : [[
+                        'discount_value' => $this->input('discount_value'),
+                        'discount_type' => $this->input('discount_type'),
+                    ]];
+                $hasDiscount = collect($rows)->contains(fn ($row): bool => (float) ($row['discount_value'] ?? 0) > 0
+                    && strtolower((string) ($row['discount_type'] ?? 'none')) !== 'none');
+                if (! $hasDiscount) {
+                    $validator->errors()->add('flash_sale_starts_at', 'Set a product discount before scheduling a flash sale.');
+                }
+            }
         });
     }
 

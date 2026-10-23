@@ -469,7 +469,7 @@ class SellerEngagementController extends Controller
             $notification->setAttribute('category', $categoryFor((string) $notification->type));
         });
 
-        return view('seller.notifications', [
+        return view('seller.notifications.index', [
             'notifications' => $notifications,
             'notificationCounts' => $notificationCounts,
         ]);

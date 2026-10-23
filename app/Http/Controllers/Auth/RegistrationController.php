@@ -10,6 +10,7 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Seller\Category;
 use App\Models\User;
 use App\Services\RegistrationWorkflowService;
+use App\Services\PolicyAcceptanceService;
 use App\Support\AddressCoordinateValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -30,7 +31,7 @@ class RegistrationController extends Controller
     ) {
     }
 
-    public function create(Request $request): View
+    public function create(Request $request, PolicyAcceptanceService $policies): View
     {
         abort_unless(
             (bool) PlatformSetting::valueOf('registration_enabled', true),
@@ -46,6 +47,8 @@ class RegistrationController extends Controller
         return view('auth.register', [
             'preselectedRole' => $preselectedRole,
             'googleBuyerRegistration' => $request->session()->get('google_buyer_registration'),
+            'policySchemaReady' => $policies->schemaReady(),
+            'registrationPoliciesByRole' => $policies->registrationPoliciesByRole(),
             'sellerLineOfBusinessCategories' => Category::query()
                 ->where('is_active', true)
                 ->whereNull('archived_at')
@@ -142,7 +145,7 @@ class RegistrationController extends Controller
         ]);
     }
 
-    public function store(StoreRegistrationRequest $request): RedirectResponse
+    public function store(StoreRegistrationRequest $request, PolicyAcceptanceService $policies): RedirectResponse
     {
         abort_unless(
             (bool) PlatformSetting::valueOf('registration_enabled', true),
@@ -165,20 +168,27 @@ class RegistrationController extends Controller
             ]);
         }
 
-        abort_unless(
-            PhilippineAddressController::selectionIsValid(
-                (string) $data['region_code'],
-                (string) $data['region'],
-                (string) $data['province_code'],
-                (string) $data['province'],
-                (string) $data['municipality_code'],
-                (string) $data['municipality'],
-                (string) $data['barangay_code'],
-                (string) $data['barangay'],
-            ),
-            422,
-            'The selected Philippine address is invalid.',
+        $acceptedPolicies = $policies->validateRegistrationConsent(
+            $request->accountTypeConstant(),
+            $data,
         );
+
+        $addressIsValid = PhilippineAddressController::selectionIsValid(
+            (string) $data['region_code'],
+            (string) $data['region'],
+            (string) $data['province_code'],
+            (string) $data['province'],
+            (string) $data['municipality_code'],
+            (string) $data['municipality'],
+            (string) $data['barangay_code'],
+            (string) $data['barangay'],
+        );
+
+        if (! $addressIsValid) {
+            throw ValidationException::withMessages([
+                'barangay_code' => 'The selected Philippine address is invalid. Choose the region, province, municipality, and barangay again.',
+            ]);
+        }
 
         $expectedPostalCode = PhilippineAddressController::expectedPostalCodeFor(
             (string) $data['province_code'],
@@ -196,6 +206,7 @@ class RegistrationController extends Controller
         AddressCoordinateValidator::assertValid($data);
 
         $application = $this->workflow->submit($request);
+        $policies->recordRegistrationAcceptances($application->user, $acceptedPolicies, $request);
         $request->session()->forget(['google_buyer_registration', 'registration_email_verified']);
 
         $type = strtolower((string) $application->user->account_type);

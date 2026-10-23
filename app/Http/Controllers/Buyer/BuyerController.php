@@ -28,6 +28,7 @@ use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\BuyerProductAvailabilityService;
 use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Marketplace\FlashSaleReminderService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\PurchaseLimitService;
 use App\Services\Marketplace\ProductCatalogService;
@@ -91,7 +92,7 @@ class BuyerController extends Controller
         ]);
     }
 
-    public function flashDeals(Request $request): View
+    public function flashDeals(Request $request, FlashSaleReminderService $reminders): View
     {
         $query = $this->catalog->applyFilters($this->discountedProductsQuery(), $request);
         $products = $this->catalog->applySort(
@@ -104,15 +105,12 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('buyer.flash-deals', [
-            'products' => $products,
-            'dealProducts' => $dealProducts,
-        ]);
-    }
-
-    private function discountedProductsQuery(): Builder
-    {
-        return $this->catalog->visibleQuery()
+        $upcomingQuery = $this->catalog->visibleQuery()
+            ->whereNotNull('flash_sale_starts_at')
+            ->where('flash_sale_starts_at', '>', now())
+            ->where(function (Builder $query): void {
+                $query->whereNull('flash_sale_ends_at')->orWhereColumn('flash_sale_ends_at', '>', 'flash_sale_starts_at');
+            })
             ->whereHas('variants', fn (Builder $variants) => $variants
                 ->where('is_active', true)
                 ->where('stock', '>', 0)
@@ -122,6 +120,86 @@ class BuyerController extends Controller
                     $discountType->whereNull('discount_type')
                         ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
                 }));
+        $upcomingProducts = $this->catalog->applySort(
+            $this->catalog->applyFilters($upcomingQuery, $request),
+            $request->query('sort', 'latest')
+        )->limit(24)->get()
+            ->map(fn (Product $product) => $this->upcomingDealProductPayload($product))
+            ->filter()
+            ->values();
+        $reminderStates = $reminders->reminderStatesFor($request->user(), $upcomingProducts);
+
+        return view('buyer.flash-deals', [
+            'products' => $products,
+            'dealProducts' => $dealProducts,
+            'upcomingDealProducts' => $upcomingProducts,
+            'flashSaleReminderStates' => $reminderStates,
+        ]);
+    }
+
+    private function discountedProductsQuery(): Builder
+    {
+        $query = $this->catalog->visibleQuery()
+            ->whereHas('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('price', '>', 0)
+                ->where('discount_value', '>', 0)
+                ->where(function (Builder $discountType): void {
+                    $discountType->whereNull('discount_type')
+                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
+                }));
+
+        if (Schema::hasColumn('products', 'flash_sale_starts_at')) {
+            $query->where(function (Builder $scheduled): void {
+                $scheduled->whereNull('flash_sale_starts_at')->orWhere('flash_sale_starts_at', '<=', now());
+            });
+        }
+        if (Schema::hasColumn('products', 'flash_sale_ends_at')) {
+            $query->where(function (Builder $scheduled): void {
+                $scheduled->whereNull('flash_sale_ends_at')->orWhere('flash_sale_ends_at', '>', now());
+            });
+        }
+
+        return $query;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function upcomingDealProductPayload(Product $product): ?array
+    {
+        $product->loadMissing(['variants', 'sellerProfile', 'category']);
+        $variant = $product->variants
+            ->filter(fn (ProductVariant $variant): bool => $variant->is_active && $variant->stock > 0)
+            ->map(function (ProductVariant $variant): array {
+                $type = $variant->resolved_discount_type;
+                $rawPrice = (float) $variant->price;
+                $value = max(0.0, (float) $variant->discount_value);
+                $amount = match ($type) {
+                    'fixed' => round(min($rawPrice, $value), 2),
+                    'percentage' => round(min($rawPrice, $rawPrice * min(100, $value) / 100), 2),
+                    default => 0.0,
+                };
+
+                return ['variant' => $variant, 'discount_amount' => $amount, 'final_price' => max(0.0, $rawPrice - $amount)];
+            })
+            ->filter(fn (array $row): bool => $row['discount_amount'] > 0)
+            ->sortBy('final_price')
+            ->first();
+
+        if (! $variant) {
+            return null;
+        }
+
+        $dealVariant = array_merge($this->catalog->variantPayload($variant['variant']), [
+            'price' => number_format($variant['final_price'], 2, '.', ''),
+            'discount_amount' => number_format($variant['discount_amount'], 2, '.', ''),
+        ]);
+        $payload = $this->catalog->productPayload($product);
+        $payload['deal_variant'] = $dealVariant;
+        $payload['flash_sale_starts_at'] = $product->flash_sale_starts_at?->toIso8601String();
+        $payload['flash_sale_reminder_available'] = $product->flash_sale_starts_at?->greaterThan(now()->addMinutes(FlashSaleReminderService::LEAD_MINUTES)) ?? false;
+
+        return $payload;
     }
 
     /** @return array<string, mixed>|null */
@@ -1652,7 +1730,7 @@ class BuyerController extends Controller
 
     public function notifications(Request $request): View
     {
-        return view('buyer.notifications', [
+        return view('buyer.notifications.index', [
             'notifications' => $request->user()->notifications()
                 ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', ['ANNOUNCEMENT'])
                 ->latest('created_at')

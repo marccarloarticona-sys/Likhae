@@ -18,6 +18,13 @@ Use an inspect, plan, implement workflow:
 
 When auditing or improving an interface, look for clear opportunities in visual hierarchy, layout, spacing, typography, responsive behavior, accessibility, and consistency. Make focused improvements that preserve the product's intent and established visual language; avoid unnecessary redesigns.
 
+### View file placement
+
+- Keep full page views inside the matching workspace folder, such as `admin`, `buyer`, `seller`, `logistics`, `rider`, or `guest`. Group related pages in feature folders such as `notifications/index.blade.php`.
+- Keep reusable UI under `resources/views/components/{role}` or `resources/views/components/shared`; place related components in nested folders when that improves navigation.
+- Avoid adding new page or component files directly under generic root folders such as `resources/views/shared` or `resources/views/notifications`.
+- When moving a view, update its controller or component references and preserve the route behavior.
+
 ### Preserve the existing UI
 
 Treat the current interface as the baseline to protect. Make the smallest targeted change that fulfills the request, and preserve unrelated layout, styling, content, navigation, interactions, state, accessibility, and responsive behavior. Do not replace a page or component wholesale, remove existing controls, or alter shared styles in ways that can unexpectedly change other screens. Before changing shared components or styles, trace their other uses and keep their existing behavior intact. Review the affected screen after the change and check for accidental visual or behavioral regressions at relevant viewport sizes when preview is available. Change broader UI only when the user asks for it or the requested feature requires it.

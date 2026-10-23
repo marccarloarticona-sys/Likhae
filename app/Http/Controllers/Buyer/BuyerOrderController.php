@@ -42,6 +42,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Illuminate\Support\Str;
@@ -582,7 +583,13 @@ class BuyerOrderController extends Controller
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
 
         if (! $request->filled('issue_category')) {
-            return $this->returnRefundLegacy($request, $order);
+            if ($request->routeIs('api.v1.buyer.orders.return-refund')) {
+                return $this->returnRefundLegacy($request, $order);
+            }
+
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'issue_category' => 'Choose the issue type and submit the return/refund form with evidence.',
+            ]);
         }
 
         if (! $this->returnRefundStorageReady()) {
@@ -601,9 +608,51 @@ class BuyerOrderController extends Controller
             'item_ids' => ['required', 'array', 'min:1'],
             'item_ids.*' => ['integer'],
             'quantities' => ['required', 'array'],
-            'description' => ['required', 'string', 'min:1', 'max:2000'],
-            'images' => ['nullable', 'array', 'max:6'],
-            'images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
+            'description' => [
+                'required',
+                'string',
+                'max:2000',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    $trimmed = preg_replace('/^\s+|\s+$/u', '', (string) $value) ?? trim((string) $value);
+                    if (mb_strlen($trimmed) < 10) {
+                        $fail('Please provide a description with at least 10 characters.');
+                    }
+                },
+            ],
+            'images' => ['required', 'array', 'min:1', 'max:5'],
+            'images.*' => [
+                'bail',
+                'required',
+                'file',
+                'image',
+                'mimes:jpg,jpeg,png,webp',
+                'mimetypes:image/jpeg,image/png,image/webp',
+                'extensions:jpg,jpeg,png,webp',
+                'max:5120',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (! $value instanceof UploadedFile) {
+                        return;
+                    }
+
+                    $path = $value->getRealPath();
+                    $metadata = $path ? @getimagesize($path) : false;
+                    $mime = $path ? (new \finfo(FILEINFO_MIME_TYPE))->file($path) : false;
+                    $image = match ($mime) {
+                        'image/jpeg' => $path && function_exists('imagecreatefromjpeg') ? @imagecreatefromjpeg($path) : false,
+                        'image/png' => $path && function_exists('imagecreatefrompng') ? @imagecreatefrompng($path) : false,
+                        'image/webp' => $path && function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($path) : false,
+                        default => false,
+                    };
+
+                    if (! is_array($metadata) || ! $image) {
+                        $fail('Each evidence file must be a valid JPEG, PNG, or WebP image.');
+
+                        return;
+                    }
+
+                    imagedestroy($image);
+                },
+            ],
             'video' => ['nullable', 'file', 'mimes:mp4,mov,webm', 'max:204800'],
             'buyer_email' => ['required', 'email', 'max:255'],
             'confirm_cash' => ['required', 'accepted'],
@@ -630,7 +679,9 @@ class BuyerOrderController extends Controller
             $totalRefund += $amount;
         }
 
-        $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs): ReturnRefundRequest {
+        $storedProofPaths = [];
+        try {
+            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $requestNumber = 'RR-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
@@ -723,6 +774,7 @@ class BuyerOrderController extends Controller
 
             foreach ((array) $request->file('images', []) as $image) {
                 $stored = $proofs->storeImage($image, 'return-refund-evidence/'.$returnRequest->id);
+                $storedProofPaths[] = [$stored['disk'], $stored['path']];
                 ReturnRefundEvidence::create([
                     'return_refund_request_id' => $returnRequest->id,
                     'uploaded_by_user_id' => $request->user()->id,
@@ -736,6 +788,7 @@ class BuyerOrderController extends Controller
             }
             if ($request->hasFile('video')) {
                 $stored = $proofs->storeFile($request->file('video'), 'return-refund-evidence/'.$returnRequest->id, ['video/mp4', 'video/quicktime', 'video/webm']);
+                $storedProofPaths[] = [$stored['disk'], $stored['path']];
                 ReturnRefundEvidence::create([
                     'return_refund_request_id' => $returnRequest->id,
                     'uploaded_by_user_id' => $request->user()->id,
@@ -751,7 +804,14 @@ class BuyerOrderController extends Controller
             $workflow->recordEvent($returnRequest, 'REQUEST_SUBMITTED', $request->user(), null, null, $returnRequest->status, 'Buyer submitted the return/refund request.');
 
             return $returnRequest->load(['items.orderItem', 'sellerRequests']);
-        });
+            });
+        } catch (\Throwable $exception) {
+            foreach ($storedProofPaths as [$disk, $path]) {
+                Storage::disk($disk)->delete($path);
+            }
+
+            throw $exception;
+        }
 
         if ($request->expectsJson()) {
             return response()->json([

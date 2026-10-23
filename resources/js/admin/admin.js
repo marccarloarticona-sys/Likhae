@@ -135,7 +135,40 @@ document.addEventListener('DOMContentLoaded', () => {
     all('[data-select-all]').forEach((control) => {
         control.addEventListener('change', () => {
             const table = control.closest('table');
-            all('tbody input[type="checkbox"]', table || document).forEach((checkbox) => { checkbox.checked = control.checked; });
+            all('tbody input[type="checkbox"]', table || document)
+                .filter((checkbox) => !checkbox.disabled)
+                .forEach((checkbox) => { checkbox.checked = control.checked; });
+            control.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+        });
+    });
+
+    all('[data-session-revocation-form]').forEach((form) => {
+        const selectAll = one('[data-select-all]', form);
+        const userCheckboxes = all('[data-session-user-checkbox]', form);
+        const selectedCount = one('[data-session-selected-count]', form);
+        const bulkSubmit = one('[data-session-bulk-submit]', form);
+
+        const updateSelection = () => {
+            const selectable = userCheckboxes.filter((checkbox) => !checkbox.disabled);
+            const selected = selectable.filter((checkbox) => checkbox.checked);
+            if (selectedCount) selectedCount.textContent = String(selected.length);
+            if (bulkSubmit) bulkSubmit.disabled = selected.length === 0 || bulkSubmit.dataset.unavailable === 'true';
+            if (selectAll) {
+                selectAll.checked = selectable.length > 0 && selected.length === selectable.length;
+                selectAll.indeterminate = selected.length > 0 && selected.length < selectable.length;
+            }
+        };
+
+        form.addEventListener('change', updateSelection);
+        selectAll?.addEventListener('selectionchange', updateSelection);
+        updateSelection();
+
+        form.addEventListener('submit', (event) => {
+            const isSingle = event.submitter?.matches('[data-session-single-submit]') === true;
+            const confirmed = window.confirm(isSingle
+                ? 'Suspend this account’s active sessions and sign them out? They will need to sign in again.'
+                : 'Suspend the selected accounts’ active sessions and sign them out? They will need to sign in again.');
+            if (!confirmed) event.preventDefault();
         });
     });
 

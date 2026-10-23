@@ -48,7 +48,7 @@
             </h2>
 
             <p>
-                Search registered accounts and open a profile to review or manage access.
+                Search registered accounts, review their latest sign-in location, or end their active sessions.
             </p>
         </div>
 
@@ -98,6 +98,16 @@
         <div class="ad-note" role="status">
             Suspension and permanent ban controls are unavailable until the account enforcement database migration is applied.
         </div>
+    @endunless
+
+    @unless($sessionManagementAvailable ?? false)
+        <div class="ad-note" role="status">
+            Active session details and sign-out controls are unavailable for the configured session driver or until the existing sessions table is installed.
+        </div>
+    @else
+        <p class="ad-muted" style="margin:0 0 16px">
+            IP and browser details update when an account makes an authenticated request. Older sessions may show “Not captured” until then.
+        </p>
     @endunless
 
     <nav class="ad-tabs" aria-label="User role">
@@ -151,114 +161,158 @@
             </div>
         </form>
 
-        <div class="ad-table-wrap">
-            <table class="ad-table">
-                <thead>
-                    <tr>
-                        <th>
-                            <input
-                                type="checkbox"
-                                data-select-all
-                                aria-label="Select all users"
-                            >
-                        </th>
-                        <th>User</th>
-                        <th>Role</th>
-                        <th>Joined</th>
-                        <th>Orders / jobs</th>
-                        <th>Status</th>
-                        <th style="text-align:right">Actions</th>
-                    </tr>
-                </thead>
+        <form
+            method="POST"
+            action="{{ route('admin.users.sessions.revoke') }}"
+            data-session-revocation-form
+        >
+            @csrf
 
-                <tbody>
-                    @forelse($users as $user)
-                        @php
-                            $roleLabel = ucfirst(strtolower($user->account_type));
-                            $statusKey = $user->isPermanentlyBanned() ? 'banned' : strtolower($user->status);
-                            $statusLabel = $statuses[$statusKey] ?? ucfirst($statusKey);
-                            $statusClass = $statusClasses[$statusKey] ?? strtolower(str_replace(' ', '-', $statusKey));
-                            $searchText = strtolower('USR-'.$user->id.' '.$user->name.' '.$user->email.' '.$roleLabel.' '.$statusLabel);
-                            $profilePhotoPath = $user->profile_photo_path;
-                            $profilePhotoUrl = filled($profilePhotoPath)
-                                ? (str($profilePhotoPath)->startsWith(['http://', 'https://'])
-                                    ? $profilePhotoPath
-                                    : \Illuminate\Support\Facades\Storage::disk('public')->url($profilePhotoPath))
-                                : null;
-                        @endphp
+            <div class="ad-inline-actions" style="justify-content:space-between; padding:16px 20px 0">
+                <span class="ad-muted" aria-live="polite">
+                    <strong data-session-selected-count>0</strong> selected on this page
+                </span>
+                <button
+                    class="ad-btn ad-btn-secondary ad-btn-sm"
+                    type="submit"
+                    data-session-bulk-submit
+                    disabled
+                    @disabled(! ($sessionManagementAvailable ?? false))
+                >
+                    Suspend selected sessions
+                </button>
+            </div>
 
-                        <tr
-                            data-filter-item
-                            data-search="{{ $searchText }}"
-                        >
-                            <td>
+            <div class="ad-table-wrap">
+                <table class="ad-table">
+                    <thead>
+                        <tr>
+                            <th>
                                 <input
                                     type="checkbox"
-                                    aria-label="Select {{ $user->name }}"
+                                    data-select-all
+                                    aria-label="Select all users on this page"
+                                    @disabled(! ($sessionManagementAvailable ?? false))
                                 >
-                            </td>
+                            </th>
+                            <th>User</th>
+                            <th>Role</th>
+                            <th>Joined</th>
+                            <th>Orders / jobs</th>
+                            <th>IP address</th>
+                            <th>Browser / sessions</th>
+                            <th>Status</th>
+                            <th style="text-align:right">Actions</th>
+                        </tr>
+                    </thead>
 
-                            <td>
-                                <div class="ad-cell-user">
-                                    <span class="ad-avatar is-soft">
-                                        @if($profilePhotoUrl)
-                                            <img src="{{ $profilePhotoUrl }}" alt="{{ $user->name }} profile photo" loading="lazy" decoding="async">
-                                        @else
-                                            {{ mb_strtoupper(mb_substr($user->name, 0, 1)) }}
-                                        @endif
-                                    </span>
+                    <tbody>
+                        @forelse($users as $user)
+                            @php
+                                $roleLabel = ucfirst(strtolower($user->account_type));
+                                $statusKey = $user->isPermanentlyBanned() ? 'banned' : strtolower($user->status);
+                                $statusLabel = $statuses[$statusKey] ?? ucfirst($statusKey);
+                                $statusClass = $statusClasses[$statusKey] ?? strtolower(str_replace(' ', '-', $statusKey));
+                                $searchText = strtolower('USR-'.$user->id.' '.$user->name.' '.$user->email.' '.$roleLabel.' '.$statusLabel);
+                                $profilePhotoPath = $user->profile_photo_path;
+                                $profilePhotoUrl = filled($profilePhotoPath)
+                                    ? (str($profilePhotoPath)->startsWith(['http://', 'https://'])
+                                        ? $profilePhotoPath
+                                        : \Illuminate\Support\Facades\Storage::disk('public')->url($profilePhotoPath))
+                                    : null;
+                                $sessionSummary = $sessionSummaries[$user->id] ?? ['ip_address' => null, 'browser' => 'Not captured', 'session_count' => 0];
+                                $isCurrentAdmin = (int) auth()->id() === (int) $user->id;
+                            @endphp
 
-                                    <span>
-                                        <strong>
-                                            {{ $user->name }}
-                                        </strong>
-
-                                        <small>
-                                            USR-{{ $user->id }} - {{ $user->email }}
-                                        </small>
-                                    </span>
-                                </div>
-                            </td>
-
-                            <td>
-                                {{ $roleLabel }}
-                            </td>
-
-                            <td>
-                                {{ $user->created_at->format('M d, Y') }}
-                            </td>
-
-                            <td>
-                                0
-                            </td>
-
-                            <td>
-                                <span class="ad-status is-{{ $statusClass }}">
-                                    {{ $statusLabel }}
-                                </span>
-                            </td>
-
-                            <td>
-                                <div class="ad-row-actions">
-                                    <a
-                                        class="ad-btn ad-btn-secondary ad-btn-sm"
-                                        href="{{ route('admin.users.show', $user) }}"
+                            <tr
+                                data-filter-item
+                                data-search="{{ $searchText }}"
+                            >
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        name="user_ids[]"
+                                        value="{{ $user->id }}"
+                                        aria-label="Select {{ $user->name }}"
+                                        data-session-user-checkbox
+                                        @disabled($isCurrentAdmin || ! ($sessionManagementAvailable ?? false))
                                     >
-                                        View
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                    @empty
-                        <tr>
-                            <td colspan="7">
-                                No accounts match your search.
-                            </td>
-                        </tr>
-                    @endforelse
-                </tbody>
-            </table>
-        </div>
+                                </td>
+
+                                <td>
+                                    <div class="ad-cell-user">
+                                        <span class="ad-avatar is-soft">
+                                            @if($profilePhotoUrl)
+                                                <img src="{{ $profilePhotoUrl }}" alt="{{ $user->name }} profile photo" loading="lazy" decoding="async">
+                                            @else
+                                                {{ mb_strtoupper(mb_substr($user->name, 0, 1)) }}
+                                            @endif
+                                        </span>
+
+                                        <span>
+                                            <strong>
+                                                {{ $user->name }}
+                                            </strong>
+
+                                            <small>
+                                                USR-{{ $user->id }} - {{ $user->email }}
+                                            </small>
+                                        </span>
+                                    </div>
+                                </td>
+
+                                <td>{{ $roleLabel }}</td>
+                                <td>{{ $user->created_at->format('M d, Y') }}</td>
+                                <td>0</td>
+                                <td>{{ $sessionSummary['ip_address'] ?? 'Not captured' }}</td>
+                                <td>
+                                    @if(($sessionSummary['session_count'] ?? 0) > 0)
+                                        <strong>{{ $sessionSummary['browser'] }}</strong>
+                                        <small>{{ $sessionSummary['session_count'] }} active {{ \Illuminate\Support\Str::plural('session', $sessionSummary['session_count']) }}</small>
+                                    @else
+                                        <span>-</span>
+                                        <small>No active sessions detected</small>
+                                    @endif
+                                </td>
+                                <td>
+                                    <span class="ad-status is-{{ $statusClass }}">
+                                        {{ $statusLabel }}
+                                    </span>
+                                </td>
+
+                                <td>
+                                    <div class="ad-row-actions">
+                                        <a
+                                            class="ad-btn ad-btn-secondary ad-btn-sm"
+                                            href="{{ route('admin.users.show', $user) }}"
+                                        >
+                                            View
+                                        </a>
+                                        <button
+                                            class="ad-btn ad-btn-secondary ad-btn-sm"
+                                            type="submit"
+                                            name="single_user_id"
+                                            value="{{ $user->id }}"
+                                            data-session-single-submit
+                                            @disabled($isCurrentAdmin || ! ($sessionManagementAvailable ?? false))
+                                            @if($isCurrentAdmin) title="You cannot suspend your own current session." @endif
+                                        >
+                                            Suspend session
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="9">
+                                    No accounts match your search.
+                                </td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </form>
 
         <div class="ad-pagination">
             <span>

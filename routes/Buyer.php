@@ -7,6 +7,7 @@ use App\Http\Controllers\Buyer\BuyerPlatformEventController;
 use App\Http\Controllers\Buyer\BuyerReturnRefundController;
 use App\Http\Controllers\Buyer\BuyerVoucherClaimController;
 use App\Http\Controllers\Buyer\CheckoutController;
+use App\Http\Controllers\Buyer\FlashSaleReminderController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
 
@@ -35,6 +36,14 @@ Route::prefix('buyer')
         Route::delete('/shop/{seller}/follow', [BuyerController::class, 'unfollowShop'])->name('shop.unfollow');
 
         Route::get('/flash-deals', [BuyerController::class, 'flashDeals'])->name('flash-deals');
+        Route::post('/flash-deals/{product}/reminder', [FlashSaleReminderController::class, 'store'])
+            ->middleware('throttle:20,1')
+            ->whereNumber('product')
+            ->name('flash-deals.reminder.store');
+        Route::delete('/flash-deals/{product}/reminder', [FlashSaleReminderController::class, 'destroy'])
+            ->middleware('throttle:20,1')
+            ->whereNumber('product')
+            ->name('flash-deals.reminder.destroy');
         Route::get('/local-finds', fn () => redirect()->route('buyer.products', ['focus' => 'local']))->name('local-finds');
 
         Route::get('/cart', [BuyerController::class, 'cart'])->name('cart');

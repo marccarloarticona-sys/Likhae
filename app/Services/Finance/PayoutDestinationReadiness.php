@@ -24,6 +24,11 @@ final class PayoutDestinationReadiness
         return true;
     }
 
+    public function supportsMultipleFor(string $table): bool
+    {
+        return $this->readyFor($table) && Schema::hasColumn($table, 'payout_destinations');
+    }
+
     public function hasDestination(Model $profile): bool
     {
         return filled($profile->payout_method)

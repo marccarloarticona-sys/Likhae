@@ -1,10 +1,5 @@
-@extends($layout)
 
-@section('title', 'Notifications')
-@section('subtitle', 'Review the latest updates for your account.')
-@section('active', 'notifications')
 
-@section('content')
     @php
         $notificationUser = auth()->user();
         $isSeller = $notificationUser->isAccountType(\App\Models\User::TYPE_SELLER);
@@ -231,4 +226,3 @@
             <div class="nc-pagination">{{ $notifications->links() }}</div>
         @endif
     </div>
-@endsection

@@ -61,6 +61,7 @@ final class FinancialRules
         string|int|float $voucherDiscount = 0,
         string|int|float $shippingFee = 50,
         string|int|float $riderPoolPercentage = self::DEFAULT_RIDER_POOL_PERCENTAGE,
+        string|int|float $shippingVoucherDiscount = 0,
     ): array
     {
         $original = 0;
@@ -73,7 +74,8 @@ final class FinancialRules
         }
 
         $voucher = self::cents($voucherDiscount);
-        $discount = max(0, $original - $charged) + $voucher;
+        $shippingDiscount = self::cents($shippingVoucherDiscount);
+        $discount = max(0, $original - $charged) + $voucher + $shippingDiscount;
         $commission = self::commissionCents($original);
         $shipping = self::cents($shippingFee);
         $allocation = self::shippingAllocationCents($shipping, $riderPoolPercentage);

@@ -517,6 +517,8 @@ class SellerProductController extends Controller
                 default => 'is-neutral',
             },
             'description' => $product->description,
+            'flash_sale_starts_at' => $product->flash_sale_starts_at,
+            'flash_sale_ends_at' => $product->flash_sale_ends_at,
             'image' => $firstImage?->file_path
                 ? $this->catalog->publicUrl($firstImage->file_path)
                 : asset('images/product-placeholder.svg'),

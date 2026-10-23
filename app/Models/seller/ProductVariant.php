@@ -68,6 +68,13 @@ class ProductVariant extends Model
 
     public function getDiscountAmountAttribute(): float
     {
+        $product = $this->relationLoaded('product') ? $this->getRelation('product') : $this->product;
+        $startsAt = $product?->flash_sale_starts_at;
+        $endsAt = $product?->flash_sale_ends_at;
+        if (($startsAt && $startsAt->isFuture()) || ($endsAt && $endsAt->isPast())) {
+            return 0.0;
+        }
+
         $price = (float) $this->price;
         $value = max(0, (float) ($this->discount_value ?? 0));
 

@@ -61,6 +61,113 @@ class SellerFirstRefundWorkflowTest extends TestCase
         $this->assertSame(0, ReturnRefundRequest::query()->count());
     }
 
+    public function test_return_request_requires_at_least_one_evidence_image(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item);
+        unset($payload['images']);
+
+        $this->actingAs($buyer)
+            ->post(route('buyer.orders.return-refund', $order), $payload)
+            ->assertSessionHasErrors('images');
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+    }
+
+    public function test_return_request_accepts_five_images_and_ten_character_description(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item);
+        $payload['description'] = '1234567890';
+        $payload['images'] = array_map(
+            fn (int $index) => UploadedFile::fake()->image('evidence-'.$index.'.jpg', 30, 30),
+            range(1, 5),
+        );
+
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertStatus(200);
+
+        $this->assertSame(5, ReturnRefundEvidence::query()->where('evidence_type', 'BUYER_PHOTO')->count());
+        $this->assertSame('1234567890', ReturnRefundRequest::query()->sole()->description);
+    }
+
+    public function test_return_request_rejects_six_images_and_descriptions_under_ten_characters(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item);
+        $payload['images'] = array_map(
+            fn (int $index) => UploadedFile::fake()->image('evidence-'.$index.'.jpg', 20, 20),
+            range(1, 6),
+        );
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('images');
+
+        $payload['images'] = [UploadedFile::fake()->image('valid.jpg', 20, 20)];
+        $payload['description'] = '123456789';
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('description');
+        $payload['description'] = " \t\n ";
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('description');
+
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+    }
+
+    public function test_return_request_enforces_the_five_megabyte_per_image_limit(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item);
+        $payload['images'] = [UploadedFile::fake()->image('oversized.jpg', 20, 20)->size(5121)];
+
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('images.0');
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+
+        $payload['images'] = [UploadedFile::fake()->image('limit.jpg', 20, 20)->size(5120)];
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertStatus(200);
+        $this->assertSame(1, ReturnRefundEvidence::query()->where('evidence_type', 'BUYER_PHOTO')->count());
+    }
+
+    public function test_return_request_rejects_unsupported_and_corrupted_image_files(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        $payload = $this->requestPayload($item);
+        $payload['images'] = [UploadedFile::fake()->createWithContent('proof.txt', 'not an image')];
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('images.0');
+
+        $payload['images'] = [UploadedFile::fake()->createWithContent('corrupt.jpg', 'not an encoded image')];
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertSessionHasErrors('images.0');
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+    }
+
+    public function test_another_buyer_cannot_submit_return_evidence_for_the_order(): void
+    {
+        [$owner, , $order, $item] = $this->createDeliveredOrder();
+        $otherBuyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+
+        $this->actingAs($otherBuyer)
+            ->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item))
+            ->assertForbidden();
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+    }
+
+    public function test_failed_video_storage_rolls_back_return_records_and_removes_stored_image(): void
+    {
+        [$buyer, , $order, $item] = $this->createDeliveredOrder();
+        Storage::fake('local');
+        $imagePath = 'return-refund-evidence/partial/image.enc';
+        $proofs = \Mockery::mock(RefundProofStorageService::class);
+        $proofs->shouldReceive('storeImage')->once()->andReturnUsing(function () use ($imagePath): array {
+            Storage::disk('local')->put($imagePath, 'encrypted-image');
+
+            return ['disk' => 'local', 'path' => $imagePath, 'original_name' => 'proof.jpg', 'mime' => 'image/webp', 'encrypted' => true];
+        });
+        $proofs->shouldReceive('storeFile')->once()->andThrow(new \RuntimeException('Simulated storage failure.'));
+        $this->instance(RefundProofStorageService::class, $proofs);
+
+        $payload = $this->requestPayload($item);
+        $payload['video'] = UploadedFile::fake()->create('proof.mp4', 2, 'video/mp4');
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $payload)->assertStatus(500);
+
+        $this->assertSame(0, ReturnRefundRequest::query()->count());
+        $this->assertSame(0, ReturnRefundEvidence::query()->count());
+        Storage::disk('local')->assertMissing($imagePath);
+    }
+
     public function test_manipulated_gcash_fields_cannot_change_the_cash_refund_method(): void
     {
         [$buyer, , $order, $item] = $this->createDeliveredOrder();
@@ -274,8 +381,12 @@ class SellerFirstRefundWorkflowTest extends TestCase
             ->assertHeader('Content-Type', 'image/png')
             ->assertSee('protected-admin-evidence', false);
 
-        $this->actingAs($admin)->patch(route('admin.disputes.update', $dispute), ['status' => 'RESOLVED', 'resolution' => 'Admin recorded the investigation outcome.'])->assertRedirect();
-        $this->assertSame(SellerReturnRefundRequest::STATUS_DISPUTE_RESOLVED, $sellerRequest->fresh()->status);
+        $this->actingAs($admin)->patch(route('admin.disputes.update', $dispute), [
+            'status' => 'REJECTED',
+            'admin_action' => 'REJECT_ESCALATION',
+            'resolution' => 'Admin rejected the escalation after reviewing the investigation outcome.',
+        ])->assertRedirect();
+        $this->assertSame(SellerReturnRefundRequest::STATUS_REJECTED, $sellerRequest->fresh()->status);
     }
 
     public function test_admin_can_return_an_escalation_to_the_seller_with_refund_required(): void
@@ -326,6 +437,7 @@ class SellerFirstRefundWorkflowTest extends TestCase
             'item_ids' => [$item->id],
             'quantities' => [$item->id => 1],
             'description' => 'The item arrived with a visible scratch on the front panel.',
+            'images' => [UploadedFile::fake()->image('evidence.jpg', 40, 40)],
             'buyer_email' => 'buyer@example.test',
             'confirm_cash' => 1,
             'confirm_request' => 1,
