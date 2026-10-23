@@ -30,19 +30,36 @@
         @php($firstBatchScan = true)
         @forelse($receivedBatches as $batch)
             @php($collectedItems = $batch->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED'))
-            @php($receivedItems = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER'))
+            @php($receivedItems = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->hasReachedSortingCenter()))
             @php($pendingItems = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'PICKED_UP'))
             <article class="border border-line bg-surface p-5" data-receive-batch="{{ $batch->id }}">
                 <header class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup Batch #P-{{ $batch->id }}</p><h3 class="mt-1 font-bold text-ink">{{ $batch->seller?->business_name }}</h3><p class="mt-1 text-sm text-muted">Rider: {{ $batch->rider?->user?->name }} · {{ $batch->seller?->businessAddress?->formatted() }}</p></div><strong class="text-sm text-ink" data-receive-count data-expected="{{ $collectedItems->count() }}">Expected: {{ $collectedItems->count() }} · Received: {{ $receivedItems->count() }}/{{ $collectedItems->count() }}</strong></header>
                 <div class="mt-4 grid gap-3">
                     @foreach($collectedItems as $item)
                         @php($shipment = $item->riderAssignment?->shipment)
-                        <div class="flex flex-col gap-3 border border-line p-3 sm:flex-row sm:items-center sm:justify-between" data-receive-row data-tracking="{{ $shipment?->tracking_number }}" data-receive-state="{{ $shipment?->current_status === 'AT_SORTING_CENTER' ? 'received' : 'pending' }}">
-                            <div><strong class="text-sm text-ink">{{ $shipment?->tracking_number }}</strong><p class="mt-1 text-xs text-muted" data-receive-status>{{ $shipment?->current_status === 'AT_SORTING_CENTER' ? 'Received' : 'Pending intake scan' }}</p></div>
+                        @php($receivedAtCenter = $shipment?->hasReachedSortingCenter() ?? false)
+                        <div class="flex flex-col gap-3 border border-line p-3 sm:flex-row sm:items-center sm:justify-between" data-receive-row data-tracking="{{ $shipment?->tracking_number }}" data-receive-state="{{ $receivedAtCenter ? 'received' : 'pending' }}">
+                            <div>
+                                <strong class="text-sm text-ink">{{ $shipment?->tracking_number }}</strong>
+                                <p class="mt-1 text-xs text-muted" data-receive-status>
+                                    @if($receivedAtCenter)
+                                        Received at Sorting Center
+                                        @if($shipment?->current_status !== 'AT_SORTING_CENTER')
+                                            · Current status: {{ str($shipment?->current_status)->headline() }}
+                                        @endif
+                                    @elseif($shipment?->current_status === 'PICKED_UP')
+                                        Pending intake scan
+                                    @else
+                                        Needs review · Current status: {{ str($shipment?->current_status)->headline() }}
+                                    @endif
+                                </p>
+                            </div>
                             @if($shipment?->current_status === 'PICKED_UP')
                                 <form method="POST" action="{{ route('logistics.parcels.receive.confirm', $shipment) }}" class="flex flex-wrap gap-2" data-scanner-async data-receive-form data-confirm-title="Confirm parcel intake?" data-confirm-message="Accept this parcel into the sorting center's custody after checking the waybill." data-confirm-label="Receive parcel">@csrf<input type="hidden" name="scan_method" value="BARCODE"><input name="scanned_code" required autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" data-batch-scan-input data-expected-tracking="{{ $shipment?->tracking_number }}" @if($firstBatchScan) autofocus @php($firstBatchScan = false) @endif class="min-h-11 min-w-0 border border-line px-3 py-2 text-sm" placeholder="Scan this waybill" aria-label="Scan waybill {{ $shipment?->tracking_number }}"><button class="min-h-11 bg-primary px-4 py-2 text-sm font-semibold text-white">Receive Parcel</button></form>
-                            @else
+                            @elseif($receivedAtCenter)
                                 <span class="text-sm font-semibold text-green-700">✓ Received at Sorting Center</span>
+                            @else
+                                <span class="text-sm font-semibold text-amber-700">Intake requires PICKED_UP</span>
                             @endif
                         </div>
                     @endforeach

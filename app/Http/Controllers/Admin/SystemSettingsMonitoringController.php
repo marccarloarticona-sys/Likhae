@@ -10,11 +10,13 @@ use App\Services\Monitoring\LaravelLogReader;
 use App\Services\Monitoring\StorageCapacityMonitor;
 use App\Services\Monitoring\SystemHealthMonitor;
 use App\Services\Moderation\ProductModerationService;
+use App\Services\Reports\AdminReportPdfService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Pagination\LengthAwarePaginator as Paginator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -179,14 +181,7 @@ class SystemSettingsMonitoringController extends Controller
 
     public function auditLogs(Request $request): View
     {
-        $filters = $request->validate([
-            'actor' => ['nullable', 'integer', 'min:1'],
-            'action' => ['nullable', 'string', 'max:120'],
-            'entity' => ['nullable', 'string', 'max:150'],
-            'from' => ['nullable', 'date_format:Y-m-d'],
-            'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
-            'q' => ['nullable', 'string', 'max:100'],
-        ]);
+        $filters = $this->validatedAuditLogFilters($request);
         $available = true;
         $entries = new Paginator([], 0, 25, Paginator::resolveCurrentPage(), ['path' => $request->url(), 'query' => $request->query()]);
 
@@ -194,28 +189,7 @@ class SystemSettingsMonitoringController extends Controller
             if (! Schema::hasTable('audit_logs')) {
                 $available = false;
             } else {
-                $query = $this->auditQuery()->with('actor')
-                    ->when($filters['actor'] ?? null, fn (Builder $builder, string $actor) => $builder->where('actor_user_id', $actor))
-                    ->when($filters['action'] ?? null, fn (Builder $builder, string $action) => $builder->where('event', $action))
-                    ->when($filters['entity'] ?? null, fn (Builder $builder, string $entity) => $builder->where('auditable_type', $entity))
-                    ->when($filters['from'] ?? null, fn (Builder $builder, string $date) => $builder->where('created_at', '>=', Carbon::parse($date)->startOfDay()))
-                    ->when($filters['to'] ?? null, fn (Builder $builder, string $date) => $builder->where('created_at', '<=', Carbon::parse($date)->endOfDay()))
-                    ->when($filters['q'] ?? null, function (Builder $builder, string $search): void {
-                        $search = trim(mb_substr(strip_tags($search), 0, 100));
-                        if ($search === '') {
-                            return;
-                        }
-                        $like = '%'.$search.'%';
-                        $builder->where(function (Builder $nested) use ($like): void {
-                            $nested->where('event', 'like', $like)
-                                ->orWhere('auditable_type', 'like', $like)
-                                ->orWhere('auditable_id', 'like', $like)
-                                ->orWhereHas('actor', fn (Builder $actor) => $actor->where('first_name', 'like', $like)->orWhere('last_name', 'like', $like));
-                        });
-                    })
-                    ->latest('created_at')->latest('id');
-
-                $entries = $query->paginate(25)->withQueryString();
+                $entries = $this->filteredAuditLogQuery($filters)->paginate(25)->withQueryString();
             }
         } catch (Throwable) {
             $available = false;
@@ -237,6 +211,152 @@ class SystemSettingsMonitoringController extends Controller
         $checkedAt = now();
 
         return view('Admin.system-settings.audit-logs', compact('entries', 'filters', 'available', 'actors', 'actions', 'entities', 'checkedAt'));
+    }
+
+    public function previewAuditLogsPdf(Request $request, AdminReportPdfService $pdf): Response
+    {
+        return $this->auditLogsPdfResponse($request, $pdf, false);
+    }
+
+    public function exportAuditLogsPdf(Request $request, AdminReportPdfService $pdf): Response
+    {
+        return $this->auditLogsPdfResponse($request, $pdf, true);
+    }
+
+    private function auditLogsPdfResponse(Request $request, AdminReportPdfService $pdf, bool $download): Response
+    {
+        $filters = $this->validatedAuditLogFilters($request);
+
+        try {
+            $available = Schema::hasTable('audit_logs');
+        } catch (Throwable) {
+            $available = false;
+        }
+
+        abort_unless($available, 503, 'Audit history is unavailable.');
+
+        try {
+            $query = $this->filteredAuditLogQuery($filters);
+            $totalCount = (clone $query)->count();
+            $logs = (clone $query)->limit(1000)->get();
+        } catch (Throwable) {
+            abort(503, 'Audit history is unavailable.');
+        }
+
+        $rows = $logs->map(function (AuditLog $log): array {
+            $entityType = $log->auditable_type ? class_basename($log->auditable_type) : '-';
+
+            return [
+                $log->created_at?->timezone(config('app.timezone'))->format('M j, Y g:i:s A T') ?: '-',
+                $log->actor?->name ?: 'System / removed account',
+                $log->actor ? 'Admin' : '-',
+                str($log->event)->replace(['.', '_'], ' ')->headline(),
+                $entityType,
+                $log->auditable_id ?? '-',
+                'Recorded event',
+            ];
+        })->all();
+
+        $includedCount = count($rows);
+        $footnote = $totalCount > 1000
+            ? 'This report includes the 1,000 most recent matching events. Private payloads, protected documents, IP addresses, and user-agent strings are withheld.'
+            : 'Private payloads, protected documents, IP addresses, and user-agent strings are withheld.';
+
+        $content = $pdf->render([
+            'title' => 'Administrative audit logs',
+            'description' => 'Read-only activity history attributed to Admin accounts.',
+            'generated_at' => now()->format('M j, Y g:i A T'),
+            'generated_by' => $request->user()?->name ?: 'Authorized Admin',
+            'orientation' => 'landscape',
+            'filters' => $this->auditLogPdfFilters($filters),
+            'summary' => [
+                ['label' => 'Entries included', 'value' => number_format($includedCount)],
+                ['label' => 'Matching records', 'value' => number_format($totalCount)],
+            ],
+            'table_title' => 'Audit events',
+            'columns' => [
+                ['label' => 'Timestamp', 'width' => 140],
+                ['label' => 'Actor', 'width' => 95],
+                ['label' => 'Actor role', 'width' => 60],
+                ['label' => 'Action', 'width' => 125],
+                ['label' => 'Entity type', 'width' => 125],
+                ['label' => 'Reference', 'width' => 80],
+                ['label' => 'Outcome', 'width' => 95],
+            ],
+            'rows' => $rows,
+            'empty_message' => 'No recorded Admin actor events match these filters.',
+            'footnote' => $footnote,
+        ]);
+
+        $filename = 'likhae-admin-audit-logs-'.now()->format('Ymd-His').'.pdf';
+        $disposition = $download ? 'attachment' : 'inline';
+
+        return response($content, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => $disposition.'; filename="'.$filename.'"',
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    private function validatedAuditLogFilters(Request $request): array
+    {
+        return $request->validate([
+            'actor' => ['nullable', 'integer', 'min:1'],
+            'action' => ['nullable', 'string', 'max:120'],
+            'entity' => ['nullable', 'string', 'max:150'],
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'q' => ['nullable', 'string', 'max:100'],
+        ]);
+    }
+
+    private function filteredAuditLogQuery(array $filters): Builder
+    {
+        return $this->auditQuery()->with('actor')
+            ->when($filters['actor'] ?? null, fn (Builder $builder, string $actor) => $builder->where('actor_user_id', $actor))
+            ->when($filters['action'] ?? null, fn (Builder $builder, string $action) => $builder->where('event', $action))
+            ->when($filters['entity'] ?? null, fn (Builder $builder, string $entity) => $builder->where('auditable_type', $entity))
+            ->when($filters['from'] ?? null, fn (Builder $builder, string $date) => $builder->where('created_at', '>=', Carbon::parse($date)->startOfDay()))
+            ->when($filters['to'] ?? null, fn (Builder $builder, string $date) => $builder->where('created_at', '<=', Carbon::parse($date)->endOfDay()))
+            ->when($filters['q'] ?? null, function (Builder $builder, string $search): void {
+                $search = trim(mb_substr(strip_tags($search), 0, 100));
+                if ($search === '') {
+                    return;
+                }
+                $like = '%'.$search.'%';
+                $builder->where(function (Builder $nested) use ($like): void {
+                    $nested->where('event', 'like', $like)
+                        ->orWhere('auditable_type', 'like', $like)
+                        ->orWhere('auditable_id', 'like', $like)
+                        ->orWhereHas('actor', fn (Builder $actor) => $actor->where('first_name', 'like', $like)->orWhere('last_name', 'like', $like));
+                });
+            })
+            ->latest('created_at')->latest('id');
+    }
+
+    private function auditLogPdfFilters(array $filters): array
+    {
+        $pdfFilters = [];
+        if (filled($filters['actor'] ?? null)) {
+            $actor = User::query()->where('account_type', User::TYPE_ADMIN)->find($filters['actor']);
+            $pdfFilters[] = ['label' => 'Actor', 'value' => $actor?->name ?: 'Admin #'.$filters['actor']];
+        }
+        if (filled($filters['action'] ?? null)) {
+            $pdfFilters[] = ['label' => 'Action', 'value' => str($filters['action'])->replace(['.', '_'], ' ')->headline()];
+        }
+        if (filled($filters['entity'] ?? null)) {
+            $pdfFilters[] = ['label' => 'Entity type', 'value' => class_basename($filters['entity'])];
+        }
+        foreach (['from' => 'From', 'to' => 'To'] as $field => $label) {
+            if (filled($filters[$field] ?? null)) {
+                $pdfFilters[] = ['label' => $label, 'value' => Carbon::parse($filters[$field])->format('M j, Y')];
+            }
+        }
+        if (filled($filters['q'] ?? null)) {
+            $pdfFilters[] = ['label' => 'Search', 'value' => trim(strip_tags($filters['q']))];
+        }
+
+        return $pdfFilters;
     }
 
     private function settingsConfig(): array

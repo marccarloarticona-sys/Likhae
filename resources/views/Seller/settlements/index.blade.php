@@ -4,23 +4,26 @@
 @section('subtitle', 'Review your seller payable balance, request payouts, and acknowledge receipts.')
 
 @section('content')
-<div class="sl-page">
-    <div class="sl-page-toolbar">
-        <div><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Request payout for eligible parcel proceeds. Admin transfers funds outside Likhae, then records the reference and proof here.</p></div>
-        <div class="flex flex-wrap gap-2"><a href="{{ route('seller.messages') }}" class="sl-btn sl-btn-ghost">Contact Support</a><a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a></div>
+<div class="sl-page lk-wallet-page">
+    @if(session('status'))<div class="lk-wallet-alert lk-wallet-alert--success" role="status">{{ session('status') }}</div>@endif
+    @if($errors->any())<div class="lk-wallet-alert lk-wallet-alert--error" role="alert">{{ $errors->first() }}</div>@endif
+    <div class="sl-page-toolbar lk-wallet-header">
+        <div class="lk-wallet-header__copy"><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Request payout for eligible parcel proceeds. Admin transfers funds outside Likhae, then records the reference and proof here.</p></div>
+        <div class="lk-wallet-actions"><a href="{{ route('seller.messages') }}" class="sl-btn sl-btn-ghost">Contact Support</a><a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a></div>
     </div>
     @if($ready)
-        <section class="sl-card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px">
+        <section class="sl-card lk-wallet-metrics" aria-label="Payout balance summary">
             @foreach([['Available to request', 'available'], ['Requested from Admin', 'requested'], ['Awaiting receipt confirmation', 'awaiting_ack'], ['Paid', 'paid']] as [$label, $key])
-                <div><small style="display:block;color:var(--sl-muted);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em">{{ $label }}</small><strong style="display:block;margin-top:7px;font-size:20px;color:var(--sl-ink)">₱{{ number_format((float) $payoutBalances[$key], 2) }}</strong></div>
+                <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">{{ $label }}</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances[$key], 2) }}</strong></article>
             @endforeach
         </section>
     @endif
-    <section class="sl-card">
-        <header class="sl-card-head"><div><span class="sl-eyebrow">Payout destination</span><h2>Payment details</h2><p>Admin sends your payout to this saved destination outside Likhae. Reference and proof are recorded here after transfer.</p></div></header>
+    <section class="sl-card payout-section">
+        <header class="sl-card-head payout-section-head"><div><span class="payout-overline">Payout destination</span><h2>Payment details</h2><p>Admin sends your payout to this saved destination outside Likhae. Reference and proof are recorded here after transfer.</p></div>@if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif</header>
+        <div class="payout-section-body">
         @if($payoutDestinationSaved)
             @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($seller))
-            <dl class="grid gap-3 sm:grid-cols-2">
+            <dl class="payout-summary">
                 <div><dt class="text-xs text-muted">Channel</dt><dd class="font-semibold">{{ $seller->payout_method }}@if($seller->payout_bank_name) · {{ $seller->payout_bank_name }}@endif</dd></div>
                 <div><dt class="text-xs text-muted">Account holder</dt><dd class="font-semibold">{{ $seller->payout_account_name }}</dd></div>
                 <div><dt class="text-xs text-muted">{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd class="font-semibold">{{ \App\Support\PayoutAccountDetails::formatNumber($seller->payout_account_number, $savedPayoutType) }}</dd></div>
@@ -29,13 +32,15 @@
             <p class="sl-empty-state">Add GCash, Maya, or bank details in Seller Account before requesting a payout.</p>
         @endif
         <a href="{{ route('seller.account', ['tab' => 'payouts']) }}" class="sl-btn sl-btn-ghost mt-3 inline-flex">Edit payment details in Account Settings</a>
+        </div>
     </section>
     @unless($ready)
-        <section class="sl-card"><p class="sl-empty-state">Parcel payout receipts will appear after the finance receipt migration is installed.</p></section>
+        <section class="sl-card lk-wallet-panel"><p class="sl-empty-state">Parcel payout receipts will appear after the finance receipt migration is installed.</p></section>
     @else
-        <section class="sl-card">
-            <div class="sl-table-wrap">
-                <table class="sl-table">
+        <section class="sl-card lk-wallet-panel">
+            <p class="lk-wallet-table-hint">Scroll horizontally to see all payout details.</p>
+            <div class="sl-table-wrap lk-wallet-table-clip" role="region" aria-label="Parcel payout history table" tabindex="0">
+                <table class="sl-table lk-wallet-table" aria-label="Parcel payout history">
                     <thead><tr><th>Receipt / status</th><th>Order</th><th>Parcel</th><th>Product amount</th><th>Platform fee</th><th>Seller payable / paid</th><th>Transfer channel / reference</th><th>Paid / acknowledged</th><th>Action</th></tr></thead>
                     <tbody>
                     @forelse($settlements as $settlement)
@@ -52,7 +57,7 @@
                                 @if((float) $settlement->payout_amount > 0)<br><small>Paid: ₱{{ number_format((float) $settlement->payout_amount, 2) }}</small>@endif
                             </td>
                             <td>{{ $settlement->payout_method }}<br><small>{{ $settlement->payout_external_reference }}</small>@if($isSimulatedPayout)<br><small class="text-amber-700">Legacy demo record — no transfer proof</small>@elseif($settlement->payout_proof_path)<br><a href="{{ route('seller.settlements.payout-proof', $settlement) }}" class="underline">View transfer proof</a>@endif</td>
-                            <td>{{ $settlement->paid_at?->format('M d, Y g:i A') ?: '—' }}<br><small>{{ $settlement->seller_acknowledged_at?->format('M d, Y g:i A') ?: 'Awaiting acknowledgment' }}</small></td>
+                            <td>{{ $settlement->paid_at?->format('M d, Y g:i A') ?: '—' }}@if($settlement->seller_acknowledged_at)<br><small>Receipt confirmed {{ $settlement->seller_acknowledged_at->format('M d, Y g:i A') }}</small>@elseif($settlement->payout_status === 'PAYOUT_PENDING_ACK')<br><small>Awaiting acknowledgment</small>@endif</td>
                             <td>
                                 @if(in_array($settlement->payout_status, ['PENDING', 'FAILED'], true) && $settlement->seller_payable !== null && (float) $settlement->seller_payable > 0 && $payoutDestinationSaved)
                                     <form method="POST" action="{{ route('seller.settlements.request-payout', $settlement) }}" data-confirm-title="Request this payout?" data-confirm-message="Send a payout request for ₱{{ number_format((float) $settlement->seller_payable, 2) }} for parcel {{ $settlement->allocation?->shipment?->tracking_number }} to Admin for review." data-confirm-label="Request payout">

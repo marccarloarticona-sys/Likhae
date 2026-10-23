@@ -628,7 +628,9 @@ class ShipmentWorkflowService
                 throw ValidationException::withMessages(['scanned_code' => 'The scanned parcel code does not match the shipment tracking number.']);
             }
 
-            if ($shipment->current_status === 'AT_SORTING_CENTER') {
+            if ($shipment->hasReachedSortingCenter()) {
+                $this->localTrips->syncPickupIntake($shipment);
+
                 return $shipment;
             }
             $dropoffRequest = $shipment->pickupRequests

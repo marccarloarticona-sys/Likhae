@@ -124,11 +124,26 @@
                                     ->map(fn ($part) => mb_substr($part, 0, 1))
                                     ->implode('');
                                 $accountType = $user?->account_type ?? 'UNKNOWN';
+                                $profilePhotoPath = $user?->profile_photo_path;
+                                $profilePhotoUrl = null;
+                                if (filled($profilePhotoPath)) {
+                                    if (str($profilePhotoPath)->startsWith(['http://', 'https://'])) {
+                                        $profilePhotoUrl = $profilePhotoPath;
+                                    } elseif (\Illuminate\Support\Facades\Storage::disk('public')->exists($profilePhotoPath)) {
+                                        $profilePhotoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($profilePhotoPath);
+                                    }
+                                }
                             @endphp
                             <tr>
                                 <td data-label="Applicant">
                                     <div class="ad-registration-person">
-                                        <span class="ad-registration-avatar" aria-hidden="true">{{ $initials ?: '?' }}</span>
+                                        <span class="ad-registration-avatar" aria-hidden="true">
+                                            @if($profilePhotoUrl)
+                                                <img src="{{ $profilePhotoUrl }}" alt="">
+                                            @else
+                                                {{ $initials ?: '?' }}
+                                            @endif
+                                        </span>
                                         <span class="ad-registration-person-copy">
                                             <strong>{{ $applicantName }}</strong>
                                             <small class="ad-registration-id">{{ $application->application_number }}</small>

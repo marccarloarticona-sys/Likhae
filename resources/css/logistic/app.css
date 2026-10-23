@@ -12,6 +12,8 @@
 
 @import "tailwindcss";
 @import "../shared/feedback.css";
+@import "../shared/payout-destination.css";
+@import "../shared/wallet-pages.css";
 
 
 /* =========================================================

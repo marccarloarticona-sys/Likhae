@@ -975,7 +975,7 @@ class DispatchController extends Controller
             ->flatMap->localTripItems
             ->first(fn ($item) => $item->trip?->trip_type === RiderLocalTrip::TYPE_PICKUP);
 
-        $alreadyReceived = $shipment->current_status === 'AT_SORTING_CENTER';
+        $alreadyReceived = $shipment->hasReachedSortingCenter();
         try {
             $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
         } catch (\RuntimeException $exception) {
@@ -1005,7 +1005,7 @@ class DispatchController extends Controller
         if ($pickupItem?->trip) {
             $trip = $pickupItem->trip->fresh();
             $trip->load('items.riderAssignment.shipment');
-            $receivedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER')->count();
+            $receivedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->shipment?->hasReachedSortingCenter())->count();
             $expectedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED')->count();
             $message = $trip?->status === RiderLocalTrip::COMPLETED
                 ? 'Parcel received. All collected parcels in pickup batch #P-'.$trip->id.' have reached the sorting center.'

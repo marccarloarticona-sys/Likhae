@@ -41,6 +41,16 @@ class Shipment extends Model
         'DAMAGED',
     ];
 
+    public const CENTER_RECEIVED_STATUSES = [
+        'AT_SORTING_CENTER',
+        'SORTED',
+        'ASSIGNED_TO_RIDER',
+        'OUT_FOR_DELIVERY',
+        'DELIVERED',
+        'COMPLETED',
+        'DELIVERY_FAILED',
+    ];
+
     protected $fillable = [
         'seller_order_id',
         'order_item_id',
@@ -77,6 +87,11 @@ class Shipment extends Model
     public function sellerOrder(): BelongsTo
     {
         return $this->belongsTo(SellerOrder::class);
+    }
+
+    public function hasReachedSortingCenter(): bool
+    {
+        return in_array($this->current_status, self::CENTER_RECEIVED_STATUSES, true);
     }
 
     public function orderItem(): BelongsTo

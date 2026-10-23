@@ -1755,12 +1755,29 @@ class BuyerController extends Controller
     {
         $buyer = $request->user();
         $addresses = $buyer->addresses()->latest()->get();
+        $followingStoresReady = Schema::hasTable('seller_followers');
+        $followingStores = null;
+
+        if ($request->query('tab') === 'following' && $followingStoresReady) {
+            $followingStores = SellerFollower::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->whereHas('sellerProfile', fn ($query) => $query
+                    ->where('status', 'ACTIVE')
+                    ->where('store_visibility', true)
+                    ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'ACTIVE')))
+                ->with('sellerProfile.primaryCategory')
+                ->latest()
+                ->paginate(12)
+                ->withQueryString();
+        }
 
         return view('buyer.account', [
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
             'addressCount' => $addresses->count(),
             'addressLimit' => 10,
+            'followingStoresReady' => $followingStoresReady,
+            'followingStores' => $followingStores,
             'pendingEmail' => $emailChanges->pendingEmail($buyer),
             'pendingPhone' => $mobileChanges->pendingPhone($buyer),
             'reviews' => Review::query()

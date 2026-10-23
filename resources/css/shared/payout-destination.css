@@ -1,0 +1,104 @@
+:root {
+    --payout-ink: #3B211B;
+    --payout-muted: #80695D;
+    --payout-faint: #9B867A;
+    --payout-border: #EADCCC;
+    --payout-border-strong: #DBCEC1;
+    --payout-surface: #FFFDF9;
+    --payout-soft: #FBF7F2;
+    --payout-brand: #561C17;
+    --payout-brand-soft: #F5ECEA;
+    --payout-success: #286244;
+    --payout-success-soft: #EAF4ED;
+}
+
+html.dark {
+    --payout-ink: #FFF8F2;
+    --payout-muted: #C8B7AD;
+    --payout-faint: #A99386;
+    --payout-border: #49342B;
+    --payout-border-strong: #60463A;
+    --payout-surface: #211B17;
+    --payout-soft: #1B1513;
+    --payout-brand: #EBA99D;
+    --payout-brand-soft: #361B17;
+    --payout-success: #A7D5B7;
+    --payout-success-soft: #25382D;
+}
+
+.payout-section { overflow: hidden; }
+.payout-section .payout-section-head { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 26px; border-bottom: 1px solid var(--payout-border); }
+.payout-section-head > div { min-width: 0; }
+.payout-overline { display: block; margin-bottom: 5px; color: var(--payout-brand); font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.payout-section .payout-section-head h2 { margin: 0; color: var(--payout-ink); font-size: 21px; line-height: 1.3; }
+.payout-section .payout-section-head p { max-width: 680px; margin: 6px 0 0; color: var(--payout-muted); font-size: 13px; line-height: 1.55; }
+.payout-section .payout-saved-badge { min-height: 34px; padding: 7px 12px; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; border: 1px solid #C9E2D1; border-radius: 999px; color: var(--payout-success); background: var(--payout-success-soft); font-size: 12px; font-weight: 700; }
+.payout-saved-badge svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+
+.payout-section-body { display: grid; gap: 20px; padding: 24px 26px 26px; }
+.payout-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 13px; border: 1px solid var(--payout-border); border-radius: 14px; background: linear-gradient(135deg, var(--payout-soft), var(--payout-surface)); }
+.payout-summary > div { min-width: 0; min-height: 88px; padding: 14px 16px; display: grid; align-content: center; gap: 6px; border: 1px solid var(--payout-border); border-radius: 10px; background: var(--payout-surface); }
+.payout-summary dt { color: var(--payout-muted); font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.payout-summary dd { margin: 0; overflow-wrap: anywhere; color: var(--payout-ink); font-size: 15px; font-weight: 700; line-height: 1.45; }
+.payout-summary > div:nth-child(3) dd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; letter-spacing: .025em; }
+.payout-editor { padding: 22px; border: 1px solid var(--payout-border); border-radius: 14px; background: var(--payout-surface); }
+.payout-editor__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.payout-editor__head h3 { margin: 2px 0 0; color: var(--payout-ink); font-size: 18px; line-height: 1.35; }
+.payout-editor__head p { margin: 0; color: var(--payout-muted); font-size: 12px; text-align: right; }
+.payout-editor__eyebrow { color: var(--payout-brand); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+.payout-form { display: grid; gap: 20px; }
+.payout-fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+.payout-section .payout-bank-field[hidden] { display: none !important; }
+.payout-section .payout-number-field { grid-column: 1 / -1; max-width: 560px; }
+.payout-section .payout-form .is-wide { grid-column: 1 / -1; }
+.payout-section .payout-form label { min-width: 0; display: grid; align-content: start; gap: 8px; color: var(--payout-muted); font-size: 12px; font-weight: 700; }
+.payout-section .payout-form label > span { color: var(--payout-muted); font-size: 12px; font-weight: 700; }
+.payout-section .payout-form input,
+.payout-section .payout-form select { width: 100%; min-width: 0; min-height: 48px; padding: 10px 13px; border: 1px solid var(--payout-border-strong); border-radius: 10px; outline: 0; color: var(--payout-ink); background: var(--payout-surface); font: inherit; font-size: 14px; transition: border-color .15s ease, box-shadow .15s ease; }
+.payout-section .payout-form input::placeholder { color: var(--payout-faint); }
+.payout-section .payout-form input:focus,
+.payout-section .payout-form select:focus { border-color: #A96F5E; box-shadow: 0 0 0 3px rgba(86, 28, 23, .1); }
+.payout-section .payout-form label small { color: var(--payout-faint); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.payout-section .payout-form .sl-form-grid { padding: 0; gap: 12px; }
+.payout-security-note { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; border: 1px solid var(--payout-border); border-radius: 10px; color: var(--payout-muted); background: var(--payout-soft); }
+.payout-security-note.is-wide,
+.payout-form-actions.is-wide { grid-column: 1 / -1; }
+.payout-section .payout-security-note { align-items: flex-start; padding: 15px 16px; border-color: var(--payout-border); border-radius: 12px; color: var(--payout-muted); background: var(--payout-soft); }
+.payout-section .payout-security-note .payout-security-note__icon { width: 34px; height: 34px; flex: 0 0 34px; margin: 0; border-radius: 9px; color: var(--payout-brand); background: var(--payout-brand-soft); }
+.payout-security-note__icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 9px; color: var(--payout-brand); background: var(--payout-brand-soft); }
+.payout-security-note__icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.payout-security-note strong { display: block; margin-bottom: 4px; color: var(--payout-ink); font-size: 13px; }
+.payout-security-note p { margin: 0; color: var(--payout-muted); font-size: 12px; line-height: 1.6; }
+.payout-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.payout-form-actions.is-wide { grid-column: 1 / -1; }
+.payout-section .payout-form-actions { padding: 0; }
+.payout-form-actions > small { color: var(--payout-faint); font-size: 11px; line-height: 1.5; }
+.payout-form-actions button { min-height: 46px; padding-inline: 20px; font-size: 13px; }
+.payout-empty-state { margin: 0; padding: 16px 18px; border: 1px dashed var(--payout-border-strong); border-radius: 11px; color: var(--payout-muted); background: var(--payout-soft); font-size: 13px; line-height: 1.55; }
+
+html.dark .payout-section .payout-saved-badge { border-color: #3C6049; }
+html.dark .payout-section .payout-form input,
+html.dark .payout-section .payout-form select { color-scheme: dark; }
+
+@media (max-width: 760px) {
+    .payout-section .payout-section-head { align-items: flex-start; padding: 20px; }
+    .payout-section-body { padding: 20px; }
+    .payout-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .payout-section .payout-fields-grid { grid-template-columns: 1fr; }
+    .payout-section .payout-number-field { max-width: none; }
+    .payout-summary > div { min-height: 76px; }
+}
+
+@media (max-width: 480px) {
+    .payout-section .payout-section-head { flex-direction: column; gap: 10px; }
+    .payout-section .payout-section-head h2 { font-size: 19px; }
+    .payout-section-body { padding: 16px; }
+    .payout-summary { grid-template-columns: 1fr; }
+    .payout-editor { padding: 16px; }
+    .payout-editor__head { align-items: flex-start; flex-direction: column; }
+    .payout-editor__head p { text-align: left; }
+    .payout-fields-grid { grid-template-columns: 1fr; }
+    .payout-section .payout-form .is-wide { grid-column: auto; }
+    .payout-form-actions { align-items: stretch; flex-direction: column; }
+    .payout-form-actions button { width: 100%; justify-content: center; }
+}

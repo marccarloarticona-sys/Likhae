@@ -101,12 +101,14 @@ class RiderPickupBatchController extends Controller
     public function scan(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse|RedirectResponse
     {
         $data = $request->validate([
-            'scanned_code' => ['required', 'string', 'max:150'],
+            'scanned_code' => ['required_without:tracking_code', 'nullable', 'string', 'max:150'],
+            'tracking_code' => ['required_without:scanned_code', 'nullable', 'string', 'max:150'],
             'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
         ]);
         $batch = $this->ownedBatch($request, $trip);
         try {
-            $result = $batches->scan($request->user(), $batch, $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
+            $trackingCode = $data['scanned_code'] ?? $data['tracking_code'];
+            $result = $batches->scan($request->user(), $batch, $trackingCode, $data['scan_method'] ?? 'MANUAL');
         } catch (RuntimeException $exception) {
             if ($request->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);

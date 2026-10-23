@@ -5,14 +5,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const label = form.querySelector('[data-payout-number-label]');
         const help = form.querySelector('[data-payout-number-help]');
         const method = form.querySelector('[name="payout_method"]');
+        const bankField = form.querySelector('[data-payout-bank-field]');
+        const bankName = form.querySelector('[name="payout_bank_name"]');
 
-        if (!type || !number || !label || !help) return;
+        if (!method && !bankField && !type) return;
 
         const update = () => {
+            if (!type || !number || !label || !help) return;
+
             const isMobile = type.value === 'MOBILE_NUMBER';
             label.textContent = isMobile ? 'Mobile number' : 'Account number';
             number.type = isMobile ? 'tel' : 'text';
-            number.inputMode = 'numeric';
+            number.inputMode = isMobile ? 'tel' : 'numeric';
             number.autocomplete = isMobile ? 'tel' : 'off';
             number.placeholder = isMobile ? '09XX XXX XXXX' : '6-20 digits';
             help.textContent = isMobile
@@ -21,18 +25,31 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         const updateFromMethod = () => {
-            if (!method) return;
+            const isBankTransfer = method?.value === 'Bank Transfer';
 
-            if (['GCash', 'Maya'].includes(method.value)) {
-                type.value = 'MOBILE_NUMBER';
-            } else if (method.value === 'Bank Transfer') {
-                type.value = 'ACCOUNT_NUMBER';
+            if (bankField) bankField.hidden = !isBankTransfer;
+            if (bankName) {
+                bankName.required = isBankTransfer;
+                bankName.disabled = !isBankTransfer;
+            }
+
+            if (!method) {
+                update();
+                return;
+            }
+
+            if (type) {
+                if (['GCash', 'Maya'].includes(method.value)) {
+                    type.value = 'MOBILE_NUMBER';
+                } else if (method.value === 'Bank Transfer') {
+                    type.value = 'ACCOUNT_NUMBER';
+                }
             }
 
             update();
         };
 
-        type.addEventListener('change', update);
+        type?.addEventListener('change', update);
         method?.addEventListener('change', updateFromMethod);
         updateFromMethod();
     });

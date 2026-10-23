@@ -413,7 +413,7 @@ final class LocalRiderTripService
                 true,
             ));
             $allCollectedReceived = $collectedItems->isNotEmpty()
-                && $collectedItems->every(fn (RiderLocalTripItem $row): bool => $row->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER');
+                && $collectedItems->every(fn (RiderLocalTripItem $row): bool => $row->riderAssignment?->shipment?->hasReachedSortingCenter());
 
             if (! $unresolvedItems && $allCollectedReceived) {
                 $trip->update(['status' => RiderLocalTrip::COMPLETED, 'completed_at' => now()]);

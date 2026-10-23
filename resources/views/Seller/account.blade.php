@@ -22,37 +22,67 @@
                     <label class="sl-field"><span>Registered business name</span><input value="{{ $storeProfile->business_name ?? '' }}" disabled aria-describedby="business-name-help"><small id="business-name-help">Verified business names cannot be changed here.</small></label><label class="sl-field"><span>Business type</span><input value="{{ $storeProfile->business_type ?? '' }}" disabled aria-describedby="business-type-help"><small id="business-type-help">Your verified Seller category is managed by LIKHAE.</small></label><label class="sl-field"><span>DTI/SEC registration number</span><input name="dti_sec_number" value="{{ old('dti_sec_number',$storeProfile->dti_sec_number ?? '') }}"></label><label class="sl-field"><span>TIN</span><input name="tin" value="{{ old('tin',$storeProfile->tin ?? '') }}"></label><label class="sl-field"><span>Operational pickup contact number</span><input name="contact_number" value="{{ old('contact_number',$businessAddress?->contact_number ?: $seller->contact_number) }}"></label><div class="contents"><x-shared.philippine-address-fields :address="$businessAddress" field-class="sl-field" wrapper-class="contents" /></div><x-shared.address-pin :address="$businessAddress" class="sl-span-2" />
                 </div><div class="sl-form-actions"><button type="submit" class="sl-btn sl-btn-primary">Save Business Information</button></div></form>
             @elseif($currentTab === 'payouts')
-                <section class="sl-card sl-form-section">
-                    <header class="sl-card-head"><div><h2>Payout Details</h2><p>Choose where Admin should send approved Seller payouts.</p></div>@if($payoutDestinationSaved)<span class="sl-status is-success">Destination saved</span>@endif</header>
+                <section class="sl-card sl-form-section payout-section">
+                    <header class="sl-card-head payout-section-head"><div><span class="payout-overline">Payout destination</span><h2>Payment details</h2><p>Choose where Admin should send approved Seller payouts.</p></div>@if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif</header>
+                    <div class="payout-section-body">
                     @if($payoutDestinationReady)
                         @if($payoutDestinationSaved)
                             @php
                                 $savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($payoutProfile);
                             @endphp
-                            <dl class="mb-4 grid gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4 text-sm sm:grid-cols-2">
+                            <dl class="payout-summary">
                                 <div><dt class="text-xs text-muted">Saved payment channel</dt><dd class="font-semibold">{{ $payoutProfile->payout_method }}@if($payoutProfile->payout_bank_name) · {{ $payoutProfile->payout_bank_name }}@endif</dd></div>
                                 <div><dt class="text-xs text-muted">Account holder</dt><dd class="font-semibold">{{ $payoutProfile->payout_account_name }}</dd></div>
                                 <div><dt class="text-xs text-muted">{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd class="font-semibold">{{ \App\Support\PayoutAccountDetails::formatNumber($payoutProfile->payout_account_number, $savedPayoutType) }}</dd></div>
                             </dl>
                         @endif
                         @php
+                            $payoutMethod = old('payout_method', $payoutProfile->payout_method);
                             $payoutAccountType = old('payout_account_type', \App\Support\PayoutAccountDetails::typeFor($payoutProfile));
                         @endphp
-                        <form method="POST" action="{{ route('seller.settlements.payout-destination.update') }}" data-payout-destination-form>
+                        <div class="payout-editor">
+                        <div class="payout-editor__head"><div><span class="payout-editor__eyebrow">Payout settings</span><h3>{{ $payoutDestinationSaved ? 'Update destination' : 'Add a destination' }}</h3></div><p>Changes apply to future payouts.</p></div>
+                        <form class="payout-form" method="POST" action="{{ route('seller.settlements.payout-destination.update') }}" data-payout-destination-form>
                             @csrf @method('PUT')
-                            <div class="sl-form-grid">
-                                <label class="sl-field"><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected(old('payout_method', $payoutProfile->payout_method) === $method)>{{ $method }}</option>@endforeach</select></label>
-                                <label class="sl-field"><span>Bank name (for bank transfer)</span><input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name', $payoutProfile->payout_bank_name) }}" autocomplete="off"></label>
-                                <label class="sl-field"><span>Account holder name</span><input name="payout_account_name" maxlength="150" value="{{ old('payout_account_name', $payoutProfile->payout_account_name) }}" required autocomplete="name"></label>
-                                <label class="sl-field"><span>Destination number type</span><select name="payout_account_type" data-payout-account-type required><option value="MOBILE_NUMBER" @selected($payoutAccountType === 'MOBILE_NUMBER')>Mobile number</option><option value="ACCOUNT_NUMBER" @selected($payoutAccountType === 'ACCOUNT_NUMBER')>Account number</option></select></label>
-                                <label class="sl-field"><span data-payout-number-label>{{ \App\Support\PayoutAccountDetails::typeLabel($payoutAccountType) }}</span><input type="text" inputmode="numeric" data-payout-account-number name="payout_account_number" maxlength="150" value="{{ old('payout_account_number', $payoutProfile->payout_account_number) }}" required autocomplete="off" aria-describedby="seller-payout-number-help"><small id="seller-payout-number-help" data-payout-number-help>{{ \App\Support\PayoutAccountDetails::formatHint($payoutAccountType) }}</small></label>
+                            <div class="sl-form-grid payout-fields-grid">
+                                <label class="sl-field">
+                                    <span>Payment channel</span>
+                                    <select name="payout_method" required>
+                                        <option value="">Select a channel</option>
+                                        @foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)
+                                            <option value="{{ $method }}" @selected($payoutMethod === $method)>{{ $method }}</option>
+                                        @endforeach
+                                    </select>
+                                </label>
+                                <label class="sl-field payout-bank-field" data-payout-bank-field @if($payoutMethod !== 'Bank Transfer') hidden @endif>
+                                    <span>Bank name</span>
+                                    <input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name', $payoutProfile->payout_bank_name) }}" autocomplete="organization">
+                                </label>
+                                <label class="sl-field">
+                                    <span>Account holder name</span>
+                                    <input name="payout_account_name" maxlength="150" value="{{ old('payout_account_name', $payoutProfile->payout_account_name) }}" required autocomplete="name">
+                                </label>
+                                <label class="sl-field">
+                                    <span>Destination number type</span>
+                                    <select name="payout_account_type" data-payout-account-type required>
+                                        <option value="MOBILE_NUMBER" @selected($payoutAccountType === 'MOBILE_NUMBER')>Mobile number</option>
+                                        <option value="ACCOUNT_NUMBER" @selected($payoutAccountType === 'ACCOUNT_NUMBER')>Account number</option>
+                                    </select>
+                                </label>
+                                <label class="sl-field payout-number-field">
+                                    <span data-payout-number-label>{{ \App\Support\PayoutAccountDetails::typeLabel($payoutAccountType) }}</span>
+                                    <input type="text" inputmode="numeric" data-payout-account-number name="payout_account_number" maxlength="150" value="{{ old('payout_account_number', $payoutProfile->payout_account_number) }}" required autocomplete="off" aria-describedby="seller-payout-number-help">
+                                    <small id="seller-payout-number-help" data-payout-number-help>{{ \App\Support\PayoutAccountDetails::formatHint($payoutAccountType) }}</small>
+                                </label>
                             </div>
-                            <div class="sl-help-card"><span>i</span><div><strong>Secure payout setup</strong><p>Account holder and number are encrypted at rest. Admin uses these details to send funds outside Likhae, then records a transfer reference and proof in your wallet. Card numbers and security codes are not collected.</p></div></div>
-                            <div class="sl-form-actions"><button class="sl-btn sl-btn-primary">Save payout details</button></div>
+                            <div class="sl-help-card payout-security-note"><span class="payout-security-note__icon"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M6.5 9V6a3.5 3.5 0 0 1 7 0v3"/></svg></span><div><strong>Protected payout details</strong><p>Your account holder name and payout number are encrypted. Admin sends approved payouts outside Likhae and records the transfer reference and proof in your wallet. Card numbers and security codes are not collected.</p></div></div>
+                            <div class="sl-form-actions payout-form-actions"><small>Check the number carefully before saving.</small><button type="submit" class="sl-btn sl-btn-primary">Save payout details</button></div>
                         </form>
+                        </div>
                     @else
-                        <p class="sl-empty-state">Payout details will be available after the additive payout destination migration is installed.</p>
+                        <p class="payout-empty-state">Payout details are temporarily unavailable while the payout setup is being updated.</p>
                     @endif
+                    </div>
                 </section>
             @elseif($currentTab === 'verification')
                 <section class="sl-card sl-verification-card"><header class="sl-card-head"><div><h2>Seller Verification</h2><p>Documents already submitted with the seller account.</p></div><span class="sl-status {{ ($seller->status??'active')==='active'?'is-success':'is-warning' }}">{{ str($seller->status ?? 'active')->headline() }}</span></header><div class="sl-document-list">

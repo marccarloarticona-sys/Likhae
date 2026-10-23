@@ -37,6 +37,7 @@
     $allowedTabs = [
         'profile',
         'addresses',
+        'following',
         'reviews',
         'password',
         'danger',
@@ -56,6 +57,10 @@
         'addresses' => [
             'label' => 'Addresses',
             'description' => 'Delivery locations',
+        ],
+        'following' => [
+            'label' => 'Following Stores',
+            'description' => 'Stores you follow',
         ],
         'reviews' => [
             'label' => 'Reviews',
@@ -84,6 +89,14 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/>
                     <circle cx="12" cy="10" r="2.5"/>
+                </svg>
+            ',
+
+            'following' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 10h18v10H3z"/>
+                    <path d="m2 10 2-6h16l2 6M8 20v-6h8v6"/>
+                    <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/>
                 </svg>
             ',
 
@@ -485,6 +498,66 @@
                             <label class="flex items-center gap-2 text-xs font-semibold text-stone-700 sm:col-span-2"><input type="checkbox" name="is_default" value="1" @checked(old('is_default', collect($addresses ?? [])->isEmpty()))> Use as my default address</label>
                             <div class="sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                         </form>
+                        @endif
+                    </div>
+                </section>
+            @endif
+
+            @if ($activeTab === 'following')
+                <section aria-labelledby="following-heading">
+                    <div class="border-b border-stone-100 px-5 py-4 sm:px-6">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h2 id="following-heading" class="text-base font-semibold text-stone-900">Following Stores</h2>
+                                <p class="mt-1 text-xs text-stone-500">Stores you follow, all in one place.</p>
+                            </div>
+                            @if($followingStoresReady ?? false)
+                                <span class="rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold text-stone-600">
+                                    {{ $followingStores?->total() ?? 0 }} {{ ($followingStores?->total() ?? 0) === 1 ? 'store' : 'stores' }}
+                                </span>
+                            @endif
+                        </div>
+                    </div>
+
+                    <div class="space-y-4 p-5 sm:p-6">
+                        @if(!($followingStoresReady ?? false))
+                            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-5 text-center">
+                                <h3 class="text-sm font-semibold text-amber-900">Following stores are temporarily unavailable</h3>
+                                <p class="mt-1 text-xs text-amber-800">Please try again later.</p>
+                            </div>
+                        @elseif(($followingStores?->count() ?? 0) > 0)
+                            <div class="grid gap-3 sm:grid-cols-2">
+                                @foreach($followingStores as $follow)
+                                    @php
+                                        $store = $follow->sellerProfile;
+                                    @endphp
+                                    <article class="flex min-w-0 items-center gap-4 rounded-2xl border border-stone-200 bg-white p-4 transition hover:border-red-200 hover:shadow-sm">
+                                        <div class="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-stone-100 bg-stone-50">
+                                            <x-shared.profile-image :path="$store->avatar_path" role="seller" :alt="$store->business_name" class="h-full w-full object-cover" />
+                                        </div>
+                                        <div class="min-w-0 flex-1">
+                                            <h3 class="truncate text-sm font-semibold text-stone-900">{{ $store->business_name ?: 'Seller Store' }}</h3>
+                                            <p class="mt-1 truncate text-xs text-stone-500">{{ $store->primaryCategory?->name ?: 'Marketplace store' }}</p>
+                                            @if($store->vacation_mode)
+                                                <span class="mt-2 inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800">On vacation</span>
+                                            @endif
+                                        </div>
+                                        <a href="{{ route('buyer.shop', ['seller' => $store->id]) }}" class="shrink-0 rounded-lg border border-stone-200 px-3 py-2 text-xs font-semibold text-red-900 transition hover:border-red-200 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100">
+                                            Visit store
+                                        </a>
+                                    </article>
+                                @endforeach
+                            </div>
+
+                            @if($followingStores->hasPages())
+                                <div class="pt-2">{{ $followingStores->links() }}</div>
+                            @endif
+                        @else
+                            <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center">
+                                <h3 class="text-sm font-semibold text-stone-800">You are not following any stores yet</h3>
+                                <p class="mt-1 text-xs text-stone-500">Follow stores you like to find them here.</p>
+                                <a href="{{ route('buyer.home') }}" class="mt-4 inline-flex rounded-xl bg-red-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Explore stores</a>
+                            </div>
                         @endif
                     </div>
                 </section>

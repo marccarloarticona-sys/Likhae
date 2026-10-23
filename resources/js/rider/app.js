@@ -5,5 +5,6 @@ import '../shared/messages';
 import '../shared/notification-sounds';
 import '../shared/rider-location';
 import '../shared/workspace-shell.js';
+import '../shared/payout-destination.js';
 
 document.addEventListener('DOMContentLoaded', initializeParcelScanners);

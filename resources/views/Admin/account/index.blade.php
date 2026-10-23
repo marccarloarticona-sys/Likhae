@@ -58,34 +58,38 @@
         </section>
     </div>
 
-    <section class="ad-card">
-        <div class="ad-card-head">
-            <div><span class="ad-overline">Payment destination</span><h2>Admin payout details</h2><p>This is for any future platform withdrawal. Seller and Logistics transfers use the destination saved in their own account settings.</p></div>
-            @if($payoutDestinationSaved)<span class="ad-status is-approved">Destination saved</span>@endif
+        <section class="ad-card payout-section">
+            <div class="ad-card-head payout-section-head">
+            <div><span class="payout-overline">Payment destination</span><h2>Admin payout details</h2><p>This is for any future platform withdrawal. Seller and Logistics transfers use the destination saved in their own account settings.</p></div>
+            @if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif
         </div>
-        <div class="ad-card-body">
+        <div class="ad-card-body payout-section-body">
             @if($payoutDestinationReady)
                 @if($payoutDestinationSaved)
                     @php($savedPayoutType = \App\Support\PayoutAccountDetails::typeFor($adminUser))
-                    <dl class="ad-admin-payout-summary">
+                    <dl class="payout-summary">
                         <div><dt>Saved payment channel</dt><dd>{{ $adminUser->payout_method }}@if($adminUser->payout_bank_name) · {{ $adminUser->payout_bank_name }}@endif</dd></div>
                         <div><dt>Account holder</dt><dd>{{ $adminUser->payout_account_name }}</dd></div>
                         <div><dt>{{ \App\Support\PayoutAccountDetails::typeLabel($savedPayoutType) }}</dt><dd>{{ \App\Support\PayoutAccountDetails::formatNumber($adminUser->payout_account_number, $savedPayoutType) }}</dd></div>
                     </dl>
                 @endif
                 @php($payoutAccountType = old('payout_account_type', \App\Support\PayoutAccountDetails::typeFor($adminUser)))
-                <form class="ad-admin-payout-form" method="POST" action="{{ route('admin.account.payout-destination.update') }}" data-payout-destination-form>
+                @php($payoutMethod = old('payout_method', $adminUser->payout_method))
+                <div class="payout-editor">
+                <div class="payout-editor__head"><div><span class="payout-editor__eyebrow">Payout settings</span><h3>{{ $payoutDestinationSaved ? 'Update destination' : 'Add a destination' }}</h3></div><p>Changes apply to future platform withdrawals.</p></div>
+                <form class="ad-admin-payout-form payout-form payout-fields-grid" method="POST" action="{{ route('admin.account.payout-destination.update') }}" data-payout-destination-form>
                     @csrf @method('PUT')
-                    <label class="ad-field"><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected(old('payout_method', $adminUser->payout_method) === $method)>{{ $method }}</option>@endforeach</select></label>
-                    <label class="ad-field"><span>Bank name (for bank transfer)</span><input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name', $adminUser->payout_bank_name) }}" autocomplete="off"></label>
-                    <label class="ad-field"><span>Account holder name</span><input name="payout_account_name" maxlength="150" value="{{ old('payout_account_name', $adminUser->payout_account_name) }}" required autocomplete="name"></label>
-                    <label class="ad-field"><span>Destination number type</span><select name="payout_account_type" data-payout-account-type required><option value="MOBILE_NUMBER" @selected($payoutAccountType === 'MOBILE_NUMBER')>Mobile number</option><option value="ACCOUNT_NUMBER" @selected($payoutAccountType === 'ACCOUNT_NUMBER')>Account number</option></select></label>
-                    <label class="ad-field"><span data-payout-number-label>{{ \App\Support\PayoutAccountDetails::typeLabel($payoutAccountType) }}</span><input type="text" inputmode="numeric" data-payout-account-number name="payout_account_number" maxlength="150" value="{{ old('payout_account_number', $adminUser->payout_account_number) }}" required autocomplete="off" aria-describedby="admin-payout-number-help"><small id="admin-payout-number-help" data-payout-number-help>{{ \App\Support\PayoutAccountDetails::formatHint($payoutAccountType) }}</small></label>
-                    <p class="ad-admin-payout-note" style="grid-column:1/-1;margin:0;color:var(--ad-muted);font-size:11px;line-height:1.5">Account holder and number are encrypted at rest. This destination is not used to send Seller or Logistics payouts. Card numbers and security codes are not collected.</p>
-                    <div><button class="ad-btn ad-btn-primary">Save payout details</button></div>
+                    <label class="ad-field payout-form-field"><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected($payoutMethod === $method)>{{ $method }}</option>@endforeach</select><small>Choose the service receiving this withdrawal.</small></label>
+                    <label class="ad-field payout-form-field payout-bank-field" data-payout-bank-field @if($payoutMethod !== 'Bank Transfer') hidden @endif><span>Bank name</span><input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name', $adminUser->payout_bank_name) }}" autocomplete="organization" placeholder="e.g. BPI"></label>
+                    <label class="ad-field payout-form-field is-wide"><span>Account holder name</span><input name="payout_account_name" maxlength="150" value="{{ old('payout_account_name', $adminUser->payout_account_name) }}" required autocomplete="name" placeholder="Name on the account"></label>
+                    <label class="ad-field payout-form-field"><span>Number type</span><select name="payout_account_type" data-payout-account-type required><option value="MOBILE_NUMBER" @selected($payoutAccountType === 'MOBILE_NUMBER')>Mobile number</option><option value="ACCOUNT_NUMBER" @selected($payoutAccountType === 'ACCOUNT_NUMBER')>Account number</option></select></label>
+                    <label class="ad-field payout-form-field"><span data-payout-number-label>{{ \App\Support\PayoutAccountDetails::typeLabel($payoutAccountType) }}</span><input type="text" inputmode="numeric" data-payout-account-number name="payout_account_number" maxlength="150" value="{{ old('payout_account_number', $adminUser->payout_account_number) }}" required autocomplete="off" aria-describedby="admin-payout-number-help"><small id="admin-payout-number-help" data-payout-number-help>{{ \App\Support\PayoutAccountDetails::formatHint($payoutAccountType) }}</small></label>
+                    <div class="payout-security-note is-wide"><span class="payout-security-note__icon"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M6.5 9V6a3.5 3.5 0 0 1 7 0v3"/></svg></span><div><strong>Private and protected</strong><p>Your account holder name and number are encrypted. This destination is for future platform withdrawals only; Seller and Logistics payouts use their own saved details.</p></div></div>
+                    <div class="payout-form-actions is-wide"><small>Card numbers and security codes are never collected.</small><button type="submit" class="ad-btn ad-btn-primary">Save payout details</button></div>
                 </form>
+                </div>
             @else
-                <p class="ad-empty">Admin payout details will be available after the additive payout destination migration is installed.</p>
+                <p class="payout-empty-state">Admin payout details are temporarily unavailable while the payout setup is being updated.</p>
             @endif
         </div>
     </section>

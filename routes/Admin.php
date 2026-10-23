@@ -110,6 +110,10 @@ Route::prefix('admin')
             ->middleware('throttle:20,1')->name('system-settings.logs');
         Route::get('/system-settings/audit-logs', [SystemSettingsMonitoringController::class, 'auditLogs'])
             ->middleware('throttle:20,1')->name('system-settings.audit-logs');
+        Route::get('/system-settings/audit-logs/preview-pdf', [SystemSettingsMonitoringController::class, 'previewAuditLogsPdf'])
+            ->middleware('throttle:20,1')->name('system-settings.audit-logs.preview-pdf');
+        Route::get('/system-settings/audit-logs/export-pdf', [SystemSettingsMonitoringController::class, 'exportAuditLogsPdf'])
+            ->middleware('throttle:20,1')->name('system-settings.audit-logs.export-pdf');
         Route::post('/system-settings/storage/refresh', [SystemSettingsMonitoringController::class, 'refreshStorage'])
             ->middleware('throttle:1,1')->name('system-settings.storage.refresh');
         Route::patch('/system-settings/product-moderation', [SystemSettingsMonitoringController::class, 'updateProductModeration'])

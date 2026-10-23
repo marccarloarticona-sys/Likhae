@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "../shared/feedback.css";
+@import "../shared/payout-destination.css";
+@import "../shared/wallet-pages.css";
 
 /* =========================================================
    LIKHAE SELLER CENTER — Tailwind CSS v4 design system

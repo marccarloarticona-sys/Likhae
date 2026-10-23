@@ -118,12 +118,14 @@ class RiderApiController extends Controller
     public function scanPickupBatch(Request $request, int $trip, SellerPickupBatchService $batches): JsonResponse
     {
         $data = $request->validate([
-            'tracking_code' => ['required', 'string', 'max:150'],
+            'scanned_code' => ['required_without:tracking_code', 'nullable', 'string', 'max:150'],
+            'tracking_code' => ['required_without:scanned_code', 'nullable', 'string', 'max:150'],
             'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
         ]);
         $batch = $this->ownedPickupBatch($request, $trip);
         try {
-            $result = $batches->scan($request->user(), $batch, $data['tracking_code'], $data['scan_method'] ?? 'MANUAL');
+            $trackingCode = $data['scanned_code'] ?? $data['tracking_code'];
+            $result = $batches->scan($request->user(), $batch, $trackingCode, $data['scan_method'] ?? 'MANUAL');
         } catch (RuntimeException $exception) {
             return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
         }

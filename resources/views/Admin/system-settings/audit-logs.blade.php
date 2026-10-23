@@ -6,7 +6,7 @@
 @php $showTime = fn ($value) => $value ? \Illuminate\Support\Carbon::parse($value)->timezone(config('app.timezone'))->format('M j, Y g:i:s A T') : 'Not available'; @endphp
 @section('content')
 <div class="ad-ops-page">
-    <section class="ad-page-head ad-ops-page-head"><div><span class="ad-overline">Existing business audit records</span><h1>Administrative Audit Logs</h1><p>History is read from the existing audit table. This page does not edit or delete audit records. Checked at {{ $showTime($checkedAt) }}.</p></div><a class="ad-btn ad-btn-secondary" href="{{ route('admin.system-settings') }}">Back to System Settings</a></section>
+    <section class="ad-page-head ad-ops-page-head"><div><span class="ad-overline">Existing business audit records</span><h1>Administrative Audit Logs</h1><p>History is read from the existing audit table. This page does not edit or delete audit records. Checked at {{ $showTime($checkedAt) }}.</p></div><div class="ad-ops-heading-actions">@if($available)<a class="ad-btn ad-btn-secondary" href="{{ route('admin.system-settings.audit-logs.preview-pdf', $filters) }}" target="_blank" rel="noopener">Preview PDF</a><a class="ad-btn ad-btn-primary" href="{{ route('admin.system-settings.audit-logs.export-pdf', $filters) }}">Export PDF</a>@endif<a class="ad-btn ad-btn-secondary" href="{{ route('admin.system-settings') }}">Back to System Settings</a></div></section>
     <form class="ad-card ad-card-body ad-ops-filters" method="GET" action="{{ route('admin.system-settings.audit-logs') }}">
         <label>Actor<select name="actor"><option value="">All Admin actors</option>@foreach($actors as $actor)<option value="{{ $actor->id }}" @selected((string)($filters['actor'] ?? '') === (string)$actor->id)>{{ $actor->name }}</option>@endforeach</select></label>
         <label>Action<select name="action"><option value="">All actions</option>@foreach($actions as $action)<option value="{{ $action }}" @selected(($filters['action'] ?? '') === $action)>{{ str($action)->replace(['.', '_'], ' ')->headline() }}</option>@endforeach</select></label>
@@ -26,6 +26,6 @@
         </tbody></table></div>
         <div class="ad-pagination ad-ops-pagination">{{ $entries->links() }}</div>
     @endif
-    <p class="ad-ops-footnote">Descriptions are limited to the recorded action and safe entity reference. Audit payloads, protected documents, IP addresses, and user-agent strings are withheld. The existing PDF export remains available from the Admin audit export route.</p>
+    <p class="ad-ops-footnote">PDF preview and export use the applied filters and include the 1,000 most recent matches at most. Descriptions are limited to the recorded action and safe entity reference. Audit payloads, protected documents, IP addresses, and user-agent strings are withheld.</p>
 </div>
 @endsection
