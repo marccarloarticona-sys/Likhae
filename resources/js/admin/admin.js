@@ -289,6 +289,7 @@ document.addEventListener('DOMContentLoaded', () => {
             link.setAttribute('aria-selected', 'false');
             link.dataset.searchQuery = item.query || item.label;
             link.dataset.searchHref = item.href;
+            link.dataset.searchType = item.type || 'page';
 
             const copy = document.createElement('span');
             copy.className = 'ad-search-option__copy';
@@ -326,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 count += group.items.length;
                 options.append(section);
             });
-            emptyMessage.hidden = count > 0 || !emptyText;
+            emptyMessage.hidden = !emptyText;
             emptyMessage.textContent = emptyText;
             clearHistory.hidden = title !== 'Recent searches' || count === 0;
             setOpen(count > 0 || Boolean(emptyText));
@@ -338,6 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 query: entry.query,
                 href: entry.href,
                 location: 'Recent search',
+                type: 'history',
             }));
             if (!recent.length) {
                 setOpen(false);
@@ -367,6 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         href: pageMatches[0].href,
                         location: pageMatches[0].group,
                         description: `Closest Admin page match for “${query}”`,
+                        type: 'page',
                     }],
                 });
             }
@@ -377,6 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     href: page.href,
                     location: page.group,
                     description: 'Open this Admin page',
+                    type: 'page',
                 })),
             });
             groups.push({
@@ -386,11 +390,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     href: section.href,
                     location: 'Current page section',
                     description: section.text.slice(0, 150),
+                    type: 'section',
                 })),
             });
 
             const hasMatch = pageMatches.length > 0 || sectionMatches.length > 0;
-            const userUrl = new URL(form.action, window.location.origin);
+            const userUrl = new URL(form.dataset.userSearchUrl, window.location.origin);
             userUrl.searchParams.set('q', query);
             groups.push({
                 label: 'User accounts',
@@ -398,11 +403,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     label: `Search users for “${query}”`,
                     href: `${userUrl.pathname}${userUrl.search}`,
                     location: 'Name, email, or account ID',
-                    description: hasMatch ? 'Open matching Admin user results' : 'No page match. Search users by name, email, or ID.',
+                    description: 'Open User Directory results',
+                    type: 'user',
                 }],
             });
 
-            renderGroups(groups, 'Suggestions');
+            renderGroups(groups, 'Suggestions', hasMatch ? '' : 'No matching Admin page or section. Choose User accounts below only if you want to search users.');
         };
 
         const setActiveOption = (index) => {
@@ -443,9 +449,19 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (event.key === 'ArrowUp' && !dropdown.hidden) {
                 event.preventDefault();
                 setActiveOption(activeOption < 0 ? 0 : activeOption - 1);
-            } else if (event.key === 'Enter' && activeOption >= 0 && !dropdown.hidden) {
+            } else if (event.key === 'Enter') {
                 event.preventDefault();
-                all('[role="option"]', options)[activeOption]?.click();
+                const query = input.value.trim();
+                if (!query) {
+                    showRecentSearches();
+                    return;
+                }
+                if (dropdown.hidden) renderSuggestions(query);
+                const suggestions = all('[role="option"]', options);
+                const destination = activeOption >= 0
+                    ? suggestions[activeOption]
+                    : suggestions.find((link) => link.dataset.searchType !== 'user');
+                destination?.click();
             } else if (event.key === 'Escape') {
                 setOpen(false);
             }
@@ -459,27 +475,19 @@ document.addEventListener('DOMContentLoaded', () => {
             setOpen(false);
         });
         form.addEventListener('submit', (event) => {
+            event.preventDefault();
             const query = input.value.trim();
             if (!query) {
-                event.preventDefault();
                 showRecentSearches();
                 return;
             }
 
-            if (!dropdown.hidden) {
-                const suggestions = all('[role="option"]', options);
-                const destination = activeOption >= 0 ? suggestions[activeOption] : suggestions[0];
-                if (destination) {
-                    event.preventDefault();
-                    destination.click();
-                    return;
-                }
-            }
-
-            const userUrl = new URL(form.action, window.location.origin);
-            userUrl.searchParams.set('q', query);
-            saveHistory(query, `${userUrl.pathname}${userUrl.search}`);
-            setOpen(false);
+            if (dropdown.hidden) renderSuggestions(query);
+            const suggestions = all('[role="option"]', options);
+            const destination = activeOption >= 0
+                ? suggestions[activeOption]
+                : suggestions.find((link) => link.dataset.searchType !== 'user');
+            destination?.click();
         });
         document.addEventListener('click', (event) => {
             if (!adminSearch.contains(event.target)) setOpen(false);

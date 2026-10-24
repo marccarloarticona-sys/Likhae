@@ -22,9 +22,9 @@
     </div>
 
     <div class="ad-search-wrap" data-admin-search>
-        <form class="ad-search" action="{{ route('admin.users') }}" method="GET" role="search" data-admin-search-form>
+        <form class="ad-search" action="{{ route('admin.dashboard') }}" method="GET" role="search" data-admin-search-form data-user-search-url="{{ route('admin.users') }}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input name="q" type="search" value="{{ request('q') }}" placeholder="Search Admin pages or users..." aria-label="Search Admin pages or users" aria-autocomplete="list" aria-expanded="false" aria-controls="adminSearchSuggestions" autocomplete="off" data-admin-search-input>
+            <input name="admin_search" type="search" value="{{ request('admin_search') }}" placeholder="Search all Admin pages..." aria-label="Search all Admin pages" aria-autocomplete="list" aria-expanded="false" aria-controls="adminSearchSuggestions" autocomplete="off" data-admin-search-input>
             <kbd>⌘ K</kbd>
         </form>
         <div class="ad-search-dropdown" id="adminSearchSuggestions" role="listbox" aria-label="Admin search suggestions" hidden data-admin-search-results>
