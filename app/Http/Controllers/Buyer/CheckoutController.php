@@ -295,6 +295,8 @@ class CheckoutController extends Controller
             'cart_item_ids.*' => ['required', 'integer'],
             'voucher_code' => ['nullable', 'string', 'max:80'],
             'platform_voucher_code' => ['nullable', 'string', 'max:80'],
+            'seller_voucher_codes' => ['nullable', 'array'],
+            'seller_voucher_codes.*' => ['nullable', 'string', 'max:80'],
             'voucher_codes' => ['nullable', 'array'],
             'voucher_codes.*' => ['nullable', 'string', 'max:80'],
             'protection_item_ids' => ['nullable', 'array'],
@@ -309,23 +311,12 @@ class CheckoutController extends Controller
             ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
             ->filter()
             ->all();
-
-        $platformSelection = filled($data['platform_voucher_code'] ?? null);
-        if ($platformSelection && filled($data['voucher_code'] ?? null)) {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
-            throw ValidationException::withMessages([
-                'voucher_code' => 'Choose one seller voucher or one LIKHAE voucher.',
-            ]);
-        }
-
-        $voucherCode = mb_strtoupper(trim((string) ($platformSelection
-            ? $data['platform_voucher_code']
-            : ($data['voucher_code'] ?? ''))));
-        if ($voucherCode === '' && count($legacyVoucherCodes) > 1) {
-            throw ValidationException::withMessages([
-                'voucher_code' => 'Enter one voucher code for checkout.',
-            ]);
-        }
+        $sellerVoucherCodes = collect((array) ($data['seller_voucher_codes'] ?? []))
+            ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
+            ->filter()
+            ->all();
+        $sellerVoucherCodes = array_replace($legacyVoucherCodes, $sellerVoucherCodes);
+        $platformVoucherCode = mb_strtoupper(trim((string) ($data['platform_voucher_code'] ?? '')));
 
         $selectedItems = $this->cartService->selectedItems($request->user(), $ownedIds);
         $request->session()->forget(['checkout_seller_voucher_codes', 'checkout_platform_voucher_code', 'checkout_shipping_voucher_code']);
@@ -342,34 +333,40 @@ class CheckoutController extends Controller
             ->values()
             ->all();
         $request->session()->put('checkout_protection_item_ids', $protectionIds);
-        if ($voucherCode !== '') {
+        $typedSellerVoucherCode = mb_strtoupper(trim((string) ($data['voucher_code'] ?? '')));
+        if ($typedSellerVoucherCode !== '') {
             $platformCodes = collect($this->checkoutService->availableVouchers($selectedItems, $request->user())->get('platform', []))
                 ->pluck('code')
                 ->map(fn ($code): string => mb_strtoupper((string) $code));
-            $isPlatformCode = $platformCodes->contains($voucherCode);
-            if ($platformSelection && ! $isPlatformCode) {
-                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
-                throw ValidationException::withMessages([
-                    'platform_voucher_code' => 'That LIKHAE voucher is no longer available. Choose another voucher.',
-                ]);
-            }
-            if (! $platformSelection && $isPlatformCode) {
-                $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            if ($platformCodes->contains($typedSellerVoucherCode)) {
                 throw ValidationException::withMessages([
                     'voucher_code' => 'Choose LIKHAE vouchers from the picker in Order Summary.',
                 ]);
             }
 
-            $request->session()->put('checkout_voucher_code', $voucherCode);
-            $request->session()->put('checkout_voucher_source', $platformSelection ? 'platform' : 'seller');
-            $request->session()->forget('checkout_voucher_codes');
-        } elseif ($legacyVoucherCodes !== []) {
-            $this->checkoutService->preview($selectedItems, $legacyVoucherCodes, $request->user());
-            $request->session()->put('checkout_voucher_codes', $legacyVoucherCodes);
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_source']);
-        } else {
-            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
+            $sellerVoucherMatches = $this->checkoutService->availableVouchers($selectedItems, $request->user())
+                ->except(['platform', 'shipping'])
+                ->flatMap(fn ($vouchers, $sellerId) => collect($vouchers)
+                    ->filter(fn (Voucher $voucher): bool => mb_strtoupper((string) $voucher->code) === $typedSellerVoucherCode)
+                    ->map(fn (Voucher $voucher): int => (int) $sellerId));
+            if ($sellerVoucherMatches->count() !== 1) {
+                throw ValidationException::withMessages([
+                    'voucher_code' => $sellerVoucherMatches->isEmpty()
+                        ? 'That Seller voucher is not available for the selected items.'
+                        : 'This code is available at more than one selected shop. Choose it from the correct Seller section.',
+                ]);
+            }
+            $sellerVoucherCodes[$sellerVoucherMatches->first()] = $typedSellerVoucherCode;
         }
+
+        ksort($sellerVoucherCodes);
+        $voucherSelection = [
+            'seller' => $sellerVoucherCodes,
+            'platform' => $platformVoucherCode,
+            'shipping' => '',
+        ];
+        $this->checkoutService->preview($selectedItems, $voucherSelection, $request->user());
+        $this->storeVoucherSelection($request, $voucherSelection);
 
         $request->session()->put('checkout_cart_item_ids', $ownedIds);
         $request->session()->forget('checkout_reward_points');

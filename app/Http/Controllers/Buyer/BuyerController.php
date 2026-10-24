@@ -989,6 +989,7 @@ class BuyerController extends Controller
             'cart_item_ids' => ['present', 'array', 'max:200'],
             'cart_item_ids.*' => ['required', 'integer', 'distinct'],
             'voucher_code' => ['nullable', 'string', 'max:80'],
+            'seller_profile_id' => ['nullable', 'integer'],
             'platform_voucher_code' => ['nullable', 'string', 'max:80'],
         ]);
 
@@ -1047,10 +1048,9 @@ class BuyerController extends Controller
             ], 422);
         }
 
-        $platformSelection = filled($data['platform_voucher_code'] ?? null);
-        $voucherCode = mb_strtoupper(trim((string) ($platformSelection
-            ? $data['platform_voucher_code']
-            : ($data['voucher_code'] ?? ''))));
+        $sellerVoucherCode = mb_strtoupper(trim((string) ($data['voucher_code'] ?? '')));
+        $requestedSellerId = (int) ($data['seller_profile_id'] ?? 0);
+        $platformVoucherCode = mb_strtoupper(trim((string) ($data['platform_voucher_code'] ?? '')));
         $checkoutService = app(CheckoutService::class);
         $buyer = $request->user();
         $defaultAddress = $buyer->addresses()->orderByDesc('is_default')->latest()->first();
@@ -1060,38 +1060,66 @@ class BuyerController extends Controller
             : $checkoutService->availableLogisticsProviders()->isNotEmpty();
 
         try {
-            if ($platformSelection && filled($data['voucher_code'] ?? null)) {
-                throw ValidationException::withMessages([
-                    'voucher_code' => 'Choose one seller voucher or one LIKHAE voucher.',
-                ]);
-            }
-
             $platformVoucherCodes = collect($checkoutService->availableVouchers($items, $buyer)->get('platform', []))
                 ->pluck('code')
                 ->map(fn ($code): string => mb_strtoupper((string) $code));
 
-            if ($voucherCode !== '' && $platformSelection && ! $platformVoucherCodes->contains($voucherCode)) {
+            if ($platformVoucherCode !== '' && ! $platformVoucherCodes->contains($platformVoucherCode)) {
                 throw ValidationException::withMessages([
                     'platform_voucher_code' => 'That LIKHAE voucher is no longer available. Choose another voucher.',
                 ]);
             }
 
-            if ($voucherCode !== '' && ! $platformSelection && $platformVoucherCodes->contains($voucherCode)) {
-                throw ValidationException::withMessages([
-                    'voucher_code' => 'Choose LIKHAE vouchers from the picker in Order Summary.',
-                ]);
+            $sellerSelection = [];
+            if ($sellerVoucherCode !== '') {
+                if ($platformVoucherCodes->contains($sellerVoucherCode)) {
+                    throw ValidationException::withMessages([
+                        'voucher_code' => 'Choose LIKHAE vouchers from the platform voucher picker.',
+                    ]);
+                }
+
+                $sellerVoucherMatches = $checkoutService->availableVouchers($items, $buyer)
+                    ->except(['platform', 'shipping'])
+                    ->flatMap(fn ($vouchers, $sellerId) => collect($vouchers)
+                        ->filter(fn (Voucher $voucher): bool => mb_strtoupper((string) $voucher->code) === $sellerVoucherCode)
+                        ->map(fn (Voucher $voucher): int => (int) $sellerId));
+
+                if ($requestedSellerId > 0 && ! $sellerVoucherMatches->contains($requestedSellerId)) {
+                    throw ValidationException::withMessages([
+                        'voucher_code' => 'That Seller voucher is not available for the selected items at this shop.',
+                    ]);
+                }
+
+                if ($requestedSellerId === 0 && $sellerVoucherMatches->count() !== 1) {
+                    throw ValidationException::withMessages([
+                        'voucher_code' => $sellerVoucherMatches->isEmpty()
+                            ? 'That Seller voucher is not available for the selected items.'
+                            : 'This code is available at more than one selected shop. Choose it from the correct Seller section.',
+                    ]);
+                }
+
+                $sellerSelection[$requestedSellerId > 0 ? $requestedSellerId : $sellerVoucherMatches->first()] = $sellerVoucherCode;
             }
 
             $preview = $checkoutService->preview(
                 $items,
-                $voucherCode,
+                [
+                    'seller' => $sellerSelection,
+                    'platform' => $platformVoucherCode,
+                    'shipping' => '',
+                ],
                 $buyer,
                 null,
                 $automaticRouting ? $defaultAddress : null,
             );
         } catch (ValidationException $exception) {
-            $voucherMessage = $voucherCode !== ''
-                ? $this->cartVoucherErrorMessage($exception, $items, $voucherCode)
+            $exceptionErrors = $exception->errors();
+            $failedVoucherCode = array_key_exists('platform_voucher_code', $exceptionErrors)
+                ? $platformVoucherCode
+                : $sellerVoucherCode;
+            $hasVoucher = $sellerVoucherCode !== '' || $platformVoucherCode !== '';
+            $voucherMessage = $hasVoucher
+                ? $this->cartVoucherErrorMessage($exception, $items, $failedVoucherCode)
                 : (collect($exception->errors())->flatten()->filter()->first()
                     ?: 'Cart totals could not be refreshed. Review your selected items and try again.');
             $fallbackPreview = null;
@@ -1122,7 +1150,7 @@ class BuyerController extends Controller
                 'voucher_applied' => false,
                 'voucher_message' => $voucherMessage,
                 'items' => $this->cartPreviewItemPrices($items),
-                'message' => $voucherCode === '' ? $voucherMessage : null,
+                'message' => $hasVoucher ? null : $voucherMessage,
             ]);
         }
 
@@ -1137,8 +1165,15 @@ class BuyerController extends Controller
             'shipping_total' => $shippingEstimateAvailable ? round($shipping, 2) : null,
             'shipping_estimate_available' => $shippingEstimateAvailable,
             'estimated_total' => round(max(0, $subtotal - $discount + ($shippingEstimateAvailable ? $shipping : 0)), 2),
-            'voucher_applied' => $voucherCode !== '',
-            'voucher_message' => $voucherCode !== '' ? 'Voucher applied to eligible selected items.' : null,
+            'voucher_applied' => $sellerVoucherCode !== '' || $platformVoucherCode !== '',
+            'seller_voucher_applied' => $sellerVoucherCode !== '',
+            'seller_voucher_code' => $sellerVoucherCode,
+            'seller_voucher_id' => $sellerSelection === [] ? null : (int) array_key_first($sellerSelection),
+            'platform_voucher_applied' => $platformVoucherCode !== '',
+            'platform_voucher_code' => $platformVoucherCode,
+            'voucher_message' => $sellerVoucherCode !== '' && $platformVoucherCode !== ''
+                ? 'Seller and LIKHAE vouchers are both applied to eligible items.'
+                : (($sellerVoucherCode !== '' || $platformVoucherCode !== '') ? 'Voucher applied to eligible selected items.' : null),
             'items' => $this->cartPreviewItemPrices($items),
             'message' => null,
         ]);
@@ -1225,6 +1260,9 @@ class BuyerController extends Controller
             return 'This voucher cannot be applied to the selected products.';
         }
         if (str_contains($normalized, 'we could not find') || str_contains($normalized, 'invalid or no longer available')) {
+            return 'This voucher code is invalid.';
+        }
+        if (str_contains($normalized, 'that seller voucher is not available for the selected items')) {
             return 'This voucher code is invalid.';
         }
 

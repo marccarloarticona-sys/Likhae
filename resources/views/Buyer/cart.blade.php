@@ -115,7 +115,7 @@
         fn ($item) => $item['stock'] < $item['quantity'] || $item['purchase_limit_exceeded']
     );
     $availableVouchers = collect($availableVouchers ?? []);
-    $sellerAvailableVouchers = $availableVouchers->except('platform');
+    $sellerAvailableVouchers = $availableVouchers->except(['platform', 'shipping']);
     $platformVouchers = collect($availableVouchers->get('platform', []));
 
     $subtotal = $defaultSelectedItems->sum(
@@ -524,7 +524,7 @@
                     </h2>
 
                     <p class="mt-1 text-xs text-stone-500">
-                        Shipping and eligible shop discounts are confirmed at checkout.
+                        Voucher estimates follow checkout rules. A seller voucher and a LIKHAE voucher can apply together.
                     </p>
                 </div>
 
@@ -532,7 +532,7 @@
                     <div class="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-4">
                         <div>
                             <h3 class="text-xs font-semibold text-stone-800">Voucher</h3>
-                            <p class="mt-1 text-[11px] text-stone-500">Enter a seller voucher code. Choose a LIKHAE voucher from the picker.</p>
+                            <p class="mt-1 text-[11px] text-stone-500">Apply an eligible seller voucher, then choose a LIKHAE voucher. Both discounts will be included in the estimate.</p>
                         </div>
                         <label for="cart-voucher-code" class="block text-[11px] font-semibold text-stone-700">Voucher code</label>
                         <div class="flex gap-2">
@@ -554,7 +554,7 @@
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="text-[10px] text-stone-500">{{ $sellerName }}:</span>
                                         @foreach($vouchers as $voucher)
-                                            <button type="button" data-use-voucher data-voucher-code="{{ $voucher->code }}" class="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-50" aria-label="Use {{ $voucher->code }} at {{ $sellerName }}">
+                                            <button type="button" data-use-voucher data-voucher-code="{{ $voucher->code }}" data-seller-id="{{ $sellerId }}" class="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-800 hover:bg-red-50" aria-label="Use {{ $voucher->code }} at {{ $sellerName }}">
                                                 {{ $voucher->code }} · {{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off &middot; Min PHP {{ number_format((float) $voucher->minimum_order_amount, 2) }}
                                             </button>
                                         @endforeach
@@ -564,6 +564,10 @@
                         @else
                             <p class="text-[10px] text-stone-400">No seller vouchers are available for these items. You can still enter a code from a shop.</p>
                         @endif
+                        <div data-seller-voucher-applied class="hidden items-center justify-between gap-3 border-t border-stone-200 pt-3 text-[11px]">
+                            <span class="font-semibold text-emerald-800">Seller voucher applied: <span data-seller-voucher-applied-code></span></span>
+                            <button type="button" data-remove-seller-voucher class="font-semibold text-red-800 underline">Remove</button>
+                        </div>
                         <button type="button" data-open-platform-vouchers aria-haspopup="dialog" aria-controls="cart-platform-voucher-dialog" @disabled($platformVouchers->isEmpty()) class="flex w-full items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50/60 p-3 text-left transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60">
                             <span class="flex items-center gap-3">
                                 <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-900 text-[10px] font-black tracking-wide text-white">LK</span>
@@ -734,6 +738,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const applyVoucherButton = page.querySelector('[data-apply-voucher]');
     const platformVoucherDialog = document.getElementById('cart-platform-voucher-dialog');
     const platformVoucherButton = page.querySelector('[data-open-platform-vouchers]');
+    const appliedSellerVoucher = page.querySelector('[data-seller-voucher-applied]');
+    const appliedSellerVoucherCode = page.querySelector('[data-seller-voucher-applied-code]');
     const appliedPlatformVoucher = page.querySelector('[data-platform-voucher-applied]');
     const appliedPlatformVoucherCode = page.querySelector('[data-platform-voucher-applied-code]');
     let previewSubtotal = null;
@@ -743,8 +749,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let previewError = false;
     let previewRequestId = 0;
     let previewAbortController = null;
-    let validatedVoucherCode = '';
-    let validatedVoucherSource = '';
+    let validatedSellerVoucherCode = '';
+    let validatedSellerVoucherId = '';
+    let validatedPlatformVoucherCode = '';
+    let selectedSellerVoucherId = '';
     const pendingQuantityItems = new Set();
     const quantityStates = new WeakMap();
 
@@ -1018,16 +1026,27 @@ document.addEventListener('DOMContentLoaded', () => {
         voucherFeedback.classList.toggle('text-stone-600', kind === 'neutral');
     };
     const renderAppliedVoucher = () => {
-        const isPlatformVoucher = Boolean(validatedVoucherCode) && validatedVoucherSource === 'platform';
-        appliedPlatformVoucher?.classList.toggle('hidden', !isPlatformVoucher);
-        appliedPlatformVoucher?.classList.toggle('flex', isPlatformVoucher);
-        if (appliedPlatformVoucherCode) appliedPlatformVoucherCode.textContent = isPlatformVoucher ? validatedVoucherCode : '';
+        const hasSellerVoucher = Boolean(validatedSellerVoucherCode);
+        const hasPlatformVoucher = Boolean(validatedPlatformVoucherCode);
+        appliedSellerVoucher?.classList.toggle('hidden', !hasSellerVoucher);
+        appliedSellerVoucher?.classList.toggle('flex', hasSellerVoucher);
+        appliedPlatformVoucher?.classList.toggle('hidden', !hasPlatformVoucher);
+        appliedPlatformVoucher?.classList.toggle('flex', hasPlatformVoucher);
+        if (appliedSellerVoucherCode) appliedSellerVoucherCode.textContent = validatedSellerVoucherCode;
+        if (appliedPlatformVoucherCode) appliedPlatformVoucherCode.textContent = validatedPlatformVoucherCode;
     };
-    const requestCartPreview = async (voucherCode = validatedVoucherCode, applyingVoucher = false, voucherSource = validatedVoucherSource || 'seller') => {
+    const requestCartPreview = async ({
+        sellerCode = validatedSellerVoucherCode,
+        sellerId = validatedSellerVoucherId,
+        platformCode = validatedPlatformVoucherCode,
+        applyingVoucher = false,
+    } = {}) => {
         const requestId = ++previewRequestId;
         previewAbortController?.abort();
         previewAbortController = new AbortController();
-        const code = String(voucherCode || '').trim().toUpperCase();
+        const normalizedSellerCode = String(sellerCode || '').trim().toUpperCase();
+        const normalizedPlatformCode = String(platformCode || '').trim().toUpperCase();
+        const hasVoucher = Boolean(normalizedSellerCode || normalizedPlatformCode);
         const selectedIds = getItems()
             .filter((item) => item.dataset.itemAvailable === '1' && item.querySelector('[data-cart-select]')?.checked)
             .map((item) => item.dataset.itemId)
@@ -1039,16 +1058,17 @@ document.addEventListener('DOMContentLoaded', () => {
         previewPending = true;
         previewError = false;
         if (applyVoucherButton) applyVoucherButton.disabled = true;
-        if (code) setVoucherFeedback('Updating voucher preview…');
+        if (applyingVoucher) setVoucherFeedback('Updating voucher preview…');
         updateSummary();
 
         if (selectedIds.length === 0) {
             previewPending = false;
             previewSubtotal = 0;
-            validatedVoucherCode = '';
-            validatedVoucherSource = '';
+            validatedSellerVoucherCode = '';
+            validatedSellerVoucherId = '';
+            validatedPlatformVoucherCode = '';
             previewError = false;
-            if (code) setVoucherFeedback('Select eligible cart items before applying a voucher.', 'error');
+            if (hasVoucher) setVoucherFeedback('Select eligible cart items before applying a voucher.', 'error');
             renderAppliedVoucher();
             updateSummary();
             if (applyVoucherButton) applyVoucherButton.disabled = false;
@@ -1056,7 +1076,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const body = new URLSearchParams({_token: csrfToken});
-        body.set(voucherSource === 'platform' && code ? 'platform_voucher_code' : 'voucher_code', code);
+        if (normalizedSellerCode) {
+            body.set('voucher_code', normalizedSellerCode);
+            if (sellerId) body.set('seller_profile_id', sellerId);
+        }
+        if (normalizedPlatformCode) body.set('platform_voucher_code', normalizedPlatformCode);
         selectedIds.forEach((id) => body.append('cart_item_ids[]', id));
 
         try {
@@ -1079,10 +1103,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewShipping = response.ok && payload.shipping_estimate_available && payload.shipping_total !== null
                     ? Math.max(0, Number(payload.shipping_total) || 0)
                     : null;
-                validatedVoucherCode = '';
-                validatedVoucherSource = '';
+                validatedSellerVoucherCode = '';
+                validatedSellerVoucherId = '';
+                validatedPlatformVoucherCode = '';
                 const message = payload.voucher_message || payload.message || 'Cart totals could not be refreshed. Try again.';
-                if (code && !applyingVoucher) {
+                if (hasVoucher && !applyingVoucher) {
                     setVoucherFeedback(`Voucher removed from preview because the selected items no longer qualify. ${message}`, 'error');
                 } else {
                     setVoucherFeedback(message, 'error');
@@ -1097,9 +1122,10 @@ document.addEventListener('DOMContentLoaded', () => {
             previewShipping = payload.shipping_estimate_available && payload.shipping_total !== null
                 ? Math.max(0, Number(payload.shipping_total) || 0)
                 : null;
-            validatedVoucherCode = code && payload.voucher_applied ? code : '';
-            validatedVoucherSource = validatedVoucherCode ? voucherSource : '';
-            if (code) {
+            validatedSellerVoucherCode = payload.seller_voucher_applied ? normalizedSellerCode : '';
+            validatedSellerVoucherId = payload.seller_voucher_applied ? String(payload.seller_voucher_id || sellerId || '') : '';
+            validatedPlatformVoucherCode = payload.platform_voucher_applied ? normalizedPlatformCode : '';
+            if (hasVoucher) {
                 setVoucherFeedback(payload.voucher_message || 'Voucher applied to eligible selected items.', 'success');
             } else if (!applyingVoucher) {
                 setVoucherFeedback('', 'neutral');
@@ -1110,8 +1136,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewDiscount = 0;
                 previewShipping = null;
                 previewError = true;
-                validatedVoucherCode = '';
-                validatedVoucherSource = '';
+                validatedSellerVoucherCode = '';
+                validatedSellerVoucherId = '';
+                validatedPlatformVoucherCode = '';
                 setVoucherFeedback('Cart totals could not be refreshed. Check your connection and try again.', 'error');
             }
         } finally {
@@ -1235,7 +1262,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLineTotal(item);
                 invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
+                persistQuantity(item).then(() => requestCartPreview());
             }
         }
 
@@ -1257,7 +1284,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLineTotal(item);
                 invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
+                persistQuantity(item).then(() => requestCartPreview());
             }
         }
 
@@ -1270,7 +1297,7 @@ document.addEventListener('DOMContentLoaded', () => {
             item?.remove();
             invalidateCartPreview();
             updateSummary();
-            requestCartPreview(validatedVoucherCode);
+            requestCartPreview();
         }
 
         if (removeSelectedButton) {
@@ -1287,7 +1314,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             invalidateCartPreview();
             updateSummary();
-            requestCartPreview(validatedVoucherCode);
+            requestCartPreview();
         }
     });
 
@@ -1301,7 +1328,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLineTotal(item);
                 invalidateCartPreview();
                 updateSummary();
-                persistQuantity(item).then(() => requestCartPreview(validatedVoucherCode));
+                persistQuantity(item).then(() => requestCartPreview());
             }
         }
 
@@ -1311,13 +1338,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!checkbox.disabled) checkbox.checked = event.target.checked;
             });
             updateSummary();
-            requestCartPreview(validatedVoucherCode);
+            requestCartPreview();
             return;
         }
 
         if (event.target.matches('[data-cart-select]')) {
             updateSummary();
-            requestCartPreview(validatedVoucherCode);
+            requestCartPreview();
         }
 
         if (event.target.matches('[data-select-all]')) {
@@ -1332,7 +1359,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             updateSummary();
-            requestCartPreview(validatedVoucherCode);
+            requestCartPreview();
         }
     });
 
@@ -1372,12 +1399,18 @@ document.addEventListener('DOMContentLoaded', () => {
             form.appendChild(input);
         });
 
-        const voucherCode = validatedVoucherCode;
-        if (voucherCode) {
+        if (validatedSellerVoucherCode && validatedSellerVoucherId) {
             const input = document.createElement('input');
             input.type = 'hidden';
-            input.name = validatedVoucherSource === 'platform' ? 'platform_voucher_code' : 'voucher_code';
-            input.value = voucherCode;
+            input.name = `seller_voucher_codes[${validatedSellerVoucherId}]`;
+            input.value = validatedSellerVoucherCode;
+            form.appendChild(input);
+        }
+        if (validatedPlatformVoucherCode) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'platform_voucher_code';
+            input.value = validatedPlatformVoucherCode;
             form.appendChild(input);
         }
 
@@ -1387,15 +1420,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     page.querySelectorAll('[data-use-voucher]').forEach((button) => {
         button.addEventListener('click', () => {
-            if (voucherInput) {
-                if (validatedVoucherCode) {
-                    validatedVoucherCode = '';
-                    validatedVoucherSource = '';
-                    requestCartPreview('');
-                }
-                voucherInput.value = button.dataset.voucherCode || '';
-                voucherInput.focus();
-            }
+            if (voucherInput) voucherInput.value = button.dataset.voucherCode || '';
+            selectedSellerVoucherId = button.dataset.sellerId || '';
+            voucherInput?.focus();
         });
     });
 
@@ -1406,7 +1433,11 @@ document.addEventListener('DOMContentLoaded', () => {
             voucherInput?.focus();
             return;
         }
-        requestCartPreview(code, true, 'seller');
+        requestCartPreview({
+            sellerCode: code,
+            sellerId: selectedSellerVoucherId,
+            applyingVoucher: true,
+        });
     });
 
     voucherInput?.addEventListener('keydown', (event) => {
@@ -1417,11 +1448,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     voucherInput?.addEventListener('input', () => {
-        if (validatedVoucherCode && voucherInput.value.trim().toUpperCase() !== validatedVoucherCode) {
-            validatedVoucherCode = '';
-            validatedVoucherSource = '';
+        selectedSellerVoucherId = '';
+        if (validatedSellerVoucherCode && voucherInput.value.trim().toUpperCase() !== validatedSellerVoucherCode) {
+            validatedSellerVoucherCode = '';
+            validatedSellerVoucherId = '';
             setVoucherFeedback('Apply the new code to preview its discount.');
-            requestCartPreview('');
+            requestCartPreview();
         }
     });
 
@@ -1430,10 +1462,19 @@ document.addEventListener('DOMContentLoaded', () => {
             voucherInput.value = '';
             voucherInput.focus();
         }
-        validatedVoucherCode = '';
-        validatedVoucherSource = '';
-        setVoucherFeedback('Voucher removed from preview.');
-        requestCartPreview('');
+        validatedSellerVoucherCode = '';
+        validatedSellerVoucherId = '';
+        selectedSellerVoucherId = '';
+        setVoucherFeedback('Seller voucher removed from preview.');
+        requestCartPreview();
+    });
+
+    page.querySelector('[data-remove-seller-voucher]')?.addEventListener('click', () => {
+        validatedSellerVoucherCode = '';
+        validatedSellerVoucherId = '';
+        if (voucherInput) voucherInput.value = '';
+        setVoucherFeedback('Seller voucher removed from preview.');
+        requestCartPreview();
     });
 
     platformVoucherButton?.addEventListener('click', () => platformVoucherDialog?.showModal());
@@ -1443,16 +1484,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     platformVoucherDialog?.querySelectorAll('[data-platform-voucher-code]').forEach((button) => {
         button.addEventListener('click', async () => {
-            if (voucherInput) voucherInput.value = '';
-            await requestCartPreview(button.dataset.platformVoucherCode || '', true, 'platform');
+            await requestCartPreview({
+                platformCode: button.dataset.platformVoucherCode || '',
+                applyingVoucher: true,
+            });
             platformVoucherDialog.close();
         });
     });
     page.querySelector('[data-remove-platform-voucher]')?.addEventListener('click', () => {
-        validatedVoucherCode = '';
-        validatedVoucherSource = '';
-        setVoucherFeedback('Voucher removed from preview.');
-        requestCartPreview('');
+        validatedPlatformVoucherCode = '';
+        setVoucherFeedback('LIKHAE voucher removed from preview.');
+        requestCartPreview();
     });
 
     getItems().forEach((item) => {
@@ -1461,7 +1503,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateSummary();
     renderAppliedVoucher();
-    requestCartPreview('');
+    requestCartPreview();
 });
 </script>
 @endsection
