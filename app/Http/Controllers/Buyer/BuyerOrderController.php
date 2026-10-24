@@ -89,11 +89,17 @@ class BuyerOrderController extends Controller
                 'sellerOrders.items.review',
                 'sellerOrders.shipments.orderItem',
                 'sellerOrders.shipments.events',
+                'sellerOrders.shipments.deliveryAttempts',
                 'sellerOrders.shipments.logisticsCenter',
                 'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
                 'payments',
                 'disputes',
             ]);
+
+        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+        if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
+            $orderQuery->with('sellerOrders.shipments.returnWorkflow');
+        }
 
         if ($returnRefundReady) {
             $orderQuery->with([
@@ -131,6 +137,7 @@ class BuyerOrderController extends Controller
             'orders' => $orders,
             'selectedOrder' => null,
             'returnRefundReady' => $returnRefundReady,
+            'returnEnhancementsReady' => $returnEnhancementsReady,
             'orderStatusCounts' => $orderStatusCounts,
             'orderActionStates' => $orderActionStates,
             'orderTabKeys' => $orderTabKeys,
@@ -193,6 +200,7 @@ class BuyerOrderController extends Controller
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $workflow->syncParentOrderProgress($order);
+        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
         $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
         $orderRelations = [
             'sellerOrders.sellerProfile.user', 'sellerOrders.voucher',
@@ -207,6 +215,9 @@ class BuyerOrderController extends Controller
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
             $orderRelations[] = 'returnRefundRequests';
+        }
+        if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
+            $orderRelations[] = 'sellerOrders.shipments.returnWorkflow';
         }
         $selectedOrder = $order->load($orderRelations);
         $selectedOrderActionState = $actions->state($selectedOrder, $this->returnRefundStorageReady());
@@ -250,6 +261,7 @@ class BuyerOrderController extends Controller
             'mapMarkers' => $mapMarkers,
             'deliveryPinRequired' => $deliveryPinRequired,
             'selectedOrderActionState' => $selectedOrderActionState,
+            'returnEnhancementsReady' => $returnEnhancementsReady,
             'orders' => $request->user()->orders()->with(['sellerOrders.shipments'])->latest()->paginate(10),
         ]);
     }
@@ -494,7 +506,14 @@ class BuyerOrderController extends Controller
             abort_if($variants->count() !== $quantityByVariant->count(), 409, 'A purchased variant is unavailable, so inventory cannot be restored safely.');
 
             foreach ($quantityByVariant as $variantId => $quantity) {
-                $variants->get($variantId)->increment('stock', $quantity);
+                $variant = $variants->get($variantId);
+                $variant->increment('stock', $quantity);
+                $flashUnits = (int) $items
+                    ->where('product_variant_id', (int) $variantId)
+                    ->sum('flash_sale_quantity');
+                if ($flashUnits > 0) {
+                    $variant->decrement('flash_sale_sold', min($flashUnits, (int) $variant->flash_sale_sold));
+                }
             }
 
             $cancelledAt = now();

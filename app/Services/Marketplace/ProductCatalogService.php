@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -111,13 +112,27 @@ class ProductCatalogService
 
         if ($request->boolean('deals') || $request->query('focus') === 'deals') {
             $query->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false));
-            $query->whereHas('variants', fn (Builder $variant) => $variant
-                ->where('is_active', true)
-                ->where('stock', '>', 0)
-                ->where('price', '>', 0)
-                ->where('discount_value', '>', 0)
-                ->where(fn (Builder $type) => $type->whereNull('discount_type')
-                    ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'")));
+            $query->whereHas('variants', function (Builder $variant): void {
+                $variant->where('is_active', true)
+                    ->where('stock', '>', 0)
+                    ->where('price', '>', 0)
+                    ->where(function (Builder $promotion): void {
+                        $promotion->where(function (Builder $discount): void {
+                            $discount->where('discount_value', '>', 0)
+                                ->where(fn (Builder $type) => $type->whereNull('discount_type')
+                                    ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'"));
+                        });
+
+                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
+                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+                            $promotion->orWhere(fn (Builder $flash) => $flash
+                                ->whereNotNull('flash_sale_price')
+                                ->where('flash_sale_price', '>', 0)
+                                ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold'));
+                        }
+                    });
+            });
         }
 
         $minimumRating = min(5, max(0, (float) $request->query('rating', 0)));
@@ -141,10 +156,25 @@ class ProductCatalogService
         $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
         $value = 'COALESCE(product_variants.discount_value, 0)';
         $price = 'product_variants.price';
+        $saleWindow = '(1 = 1)';
+        if (Schema::hasColumn('products', 'flash_sale_starts_at') && Schema::hasColumn('products', 'flash_sale_ends_at')) {
+            $now = now()->toDateTimeString();
+            $saleWindow = "((products.flash_sale_starts_at IS NULL OR products.flash_sale_starts_at <= '{$now}') AND (products.flash_sale_ends_at IS NULL OR products.flash_sale_ends_at > '{$now}'))";
+        }
+        $flashActive = '(1 = 0)';
+        $hasFlashPrice = Schema::hasColumn('product_variants', 'flash_sale_price');
+        if ($hasFlashPrice && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+            $flashActive = "(product_variants.flash_sale_price IS NOT NULL AND product_variants.flash_sale_price > 0 AND product_variants.flash_sale_allocation > product_variants.flash_sale_sold AND {$saleWindow})";
+        }
+        $regularDiscountActive = $hasFlashPrice
+            ? "(product_variants.flash_sale_price IS NOT NULL OR {$saleWindow})"
+            : $saleWindow;
 
         return "CAST(CASE
-            WHEN {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
-            WHEN ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
+            WHEN {$flashActive} THEN product_variants.flash_sale_price
+            WHEN {$regularDiscountActive} AND {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
+            WHEN {$regularDiscountActive} AND ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
             ELSE {$price}
         END AS DECIMAL(12, 2))";
     }
@@ -218,15 +248,18 @@ class ProductCatalogService
             ->first();
         $displayVariant = $dealsMode && $dealVariant
             ? $dealVariant
-            : $availableVariants->sortBy(fn (ProductVariant $variant): float => $variant->final_price)->first();
+            : ($availableVariants->sortBy(fn (ProductVariant $variant): float => $variant->final_price)->first()
+                ?? $activeVariants->sortBy(fn (ProductVariant $variant): float => $variant->final_price)->first());
         $seller = $product->sellerProfile;
         $isCatalogVisible = ! $product->trashed()
             && $product->status === 'ACTIVE'
             && $seller?->status === 'ACTIVE'
             && (bool) ($seller?->store_visibility ?? false)
             && $seller?->user?->status === 'ACTIVE'
+            && $activeVariants->isNotEmpty();
+        $isAvailable = $isCatalogVisible
+            && ! (bool) ($seller?->vacation_mode ?? false)
             && $availableVariants->isNotEmpty();
-        $isAvailable = $isCatalogVisible && ! (bool) ($seller?->vacation_mode ?? false);
         $currentPrice = $displayVariant?->final_price;
         $originalPrice = $displayVariant && $displayVariant->discount_amount > 0
             ? (float) $displayVariant->price
@@ -246,7 +279,7 @@ class ProductCatalogService
             'is_visible' => (bool) $isCatalogVisible,
             'available' => (bool) $isAvailable,
             'is_available' => (bool) $isAvailable,
-            'availability_restricted' => ! $isAvailable,
+            'availability_restricted' => ! $isCatalogVisible,
             'seller_on_vacation' => (bool) ($seller?->vacation_mode ?? false),
             'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
                 ? null

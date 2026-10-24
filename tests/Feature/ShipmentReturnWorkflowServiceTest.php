@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Http\Controllers\Rider\RiderShipmentController;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentReturnWorkflow;
+use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Rider\RiderAssignment;
 use App\Models\User;
 use App\Services\Fulfillment\ShipmentReturnWorkflowService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Fulfillment\ShipmentTransferService;
 use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Media\ImageOptimizationService;
 use Illuminate\Database\Schema\Blueprint;
@@ -232,7 +234,26 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
         $this->assertSame('RESCHEDULED', $attempt->status);
         $this->assertSame('ACCEPTED', $assignment->fresh()->status);
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
-        $this->assertSame(0, ShipmentReturnWorkflow::query()->where('shipment_id', $shipment->id)->count());
+        $workflow = ShipmentReturnWorkflow::query()->where('shipment_id', $shipment->id)->firstOrFail();
+        $this->assertSame(ShipmentReturnWorkflow::DISPOSITION_REDELIVERY, $workflow->return_disposition);
+        $this->assertTrue(app(ShipmentReturnWorkflowService::class)->hasOpenWorkflow($shipment->fresh()));
+
+        try {
+            app(ShipmentWorkflowService::class)->riderTransition($assignment->fresh(), 'start', $originalRider);
+            $this->fail('A scheduled retry must wait until Logistics confirms route-return custody.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('Return the undelivered parcel', $exception->getMessage());
+        }
+
+        $returns = app(ShipmentReturnWorkflowService::class);
+        $returns->handoffToCenterAsOriginalRider($workflow, $originalRider, 'MANUAL', $shipment->tracking_number);
+        $returns->receiveAtCenter($workflow->fresh(), User::query()->findOrFail(1), 'QR', $shipment->tracking_number);
+        $this->assertSame(ShipmentReturnWorkflow::CENTER_RECEIVED_FOR_REDELIVERY, $workflow->fresh()->status);
+        $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
+        $this->assertFalse($returns->hasOpenWorkflow($shipment->fresh()));
+        $this->assertSame(1, DB::table('rider_assignments')->where('shipment_id', $shipment->id)->count(), 'Returning the parcel must not create a separate pickup assignment.');
+        app(ShipmentWorkflowService::class)->riderTransition($assignment->fresh(), 'start', $originalRider);
+        $this->assertSame('OUT_FOR_DELIVERY', $shipment->fresh()->current_status, 'The parcel remains eligible for its rescheduled delivery after center receipt.');
 
         DB::table('shipments')->where('id', $shipment->id)->update(['current_status' => 'OUT_FOR_DELIVERY']);
         DB::table('rider_assignments')->where('id', 1)->update(['status' => 'IN_PROGRESS']);
@@ -261,11 +282,157 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
         $this->assertSame(1, DB::table('delivery_attempts')->where('shipment_id', $shipment->id)->count());
     }
 
+    public function test_batch_return_receiving_records_partial_results_per_parcel(): void
+    {
+        [, $originalRider, , , , $firstShipment] = $this->fixture();
+        $secondShipment = Shipment::query()->create([
+            'seller_order_id' => 1,
+            'tracking_number' => 'LK-RETURN-2',
+            'logistics_center_id' => 1,
+            'origin_logistics_center_id' => 1,
+            'current_status' => 'DELIVERY_FAILED',
+        ]);
+        DB::table('rider_assignments')->insert([
+            'id' => 2,
+            'shipment_id' => $secondShipment->id,
+            'rider_profile_id' => 1,
+            'assignment_type' => 'DELIVERY',
+            'status' => 'COMPLETED',
+        ]);
+        $secondWorkflow = app(ShipmentReturnWorkflowService::class)->initiateFromDeliveryFailure(
+            $secondShipment,
+            RiderAssignment::query()->findOrFail(2),
+            $originalRider,
+            'Recipient unavailable',
+            ShipmentReturnWorkflow::DISPOSITION_REDELIVERY,
+        );
+        $returns = app(ShipmentReturnWorkflowService::class);
+        $firstWorkflow = ShipmentReturnWorkflow::query()->where('shipment_id', $firstShipment->id)->firstOrFail();
+        $firstWorkflow->update(['return_disposition' => ShipmentReturnWorkflow::DISPOSITION_REDELIVERY]);
+        $returns->handoffToCenterAsOriginalRider($firstWorkflow, $originalRider, 'MANUAL', $firstShipment->tracking_number);
+        $returns->handoffToCenterAsOriginalRider($secondWorkflow, $originalRider, 'BARCODE', $secondShipment->tracking_number);
+
+        $results = $returns->receiveBatchAtCenter(User::query()->findOrFail(1), [
+            $firstShipment->tracking_number,
+            $secondShipment->tracking_number,
+            'LK-UNKNOWN',
+            strtolower($firstShipment->tracking_number),
+            $firstShipment->tracking_number,
+        ], 'QR');
+
+        $this->assertCount(5, $results);
+        $this->assertTrue($results[0]['success']);
+        $this->assertTrue($results[1]['success']);
+        $this->assertFalse($results[2]['success']);
+        $this->assertStringContainsString('No parcel', $results[2]['message']);
+        $this->assertFalse($results[3]['success']);
+        $this->assertStringContainsString('Duplicate', $results[3]['message']);
+        $this->assertFalse($results[4]['success']);
+        $this->assertSame(ShipmentReturnWorkflow::CENTER_RECEIVED_FOR_REDELIVERY, $firstWorkflow->fresh()->status);
+        $this->assertSame(ShipmentReturnWorkflow::CENTER_RECEIVED_FOR_REDELIVERY, $secondWorkflow->fresh()->status);
+        $this->assertSame(2, DB::table('parcel_scans')->where('scan_type', 'RETURN_TO_CENTER_RECEIVED')->count());
+    }
+
+    public function test_return_rider_handoff_requires_both_verified_rider_scans_and_can_be_stopped_safely(): void
+    {
+        [$centerUser, $originalRider, $returnRider, , $workflow, $shipment] = $this->fixture();
+        $returns = app(ShipmentReturnWorkflowService::class);
+        $workflow->update(['return_disposition' => ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN]);
+        $returns->handoffToCenterAsOriginalRider($workflow, $originalRider, 'MANUAL', $shipment->tracking_number);
+        $returns->receiveAtCenter($workflow->fresh(), $centerUser, 'MANUAL', $shipment->tracking_number);
+        $returns->assignReturnRider($workflow->fresh(), $centerUser, (int) $returnRider->riderProfile->id);
+        $returns->acceptAsReturnRider($workflow->fresh(), $returnRider);
+        $returns->pickupFromCenterAsReturnRider($workflow->fresh(), $returnRider, 'MANUAL', $shipment->tracking_number);
+        $returns->requestReturnRiderHandoff($workflow->fresh(), $centerUser, 1, 'Vehicle issue during seller route');
+
+        $pending = $workflow->fresh();
+        $this->assertSame(ShipmentReturnWorkflow::RETURN_RIDER_HANDOFF_PENDING, $pending->status);
+        $this->assertSame((int) $returnRider->riderProfile->id, (int) $pending->return_rider_profile_id, 'The existing rider remains custodian until both scans finish.');
+        $this->assertSame(1, (int) $pending->pending_return_rider_profile_id);
+        try {
+            $returns->confirmReturnRiderHandoffTo($pending, $originalRider, 'QR', $shipment->tracking_number);
+            $this->fail('The receiving rider cannot accept before the current rider scans release.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('current custodian must scan', $exception->getMessage());
+        }
+
+        $returns->confirmReturnRiderHandoffFrom($workflow->fresh(), $returnRider, 'BARCODE', $shipment->tracking_number);
+        $this->assertSame((int) $returnRider->riderProfile->id, (int) $workflow->fresh()->return_rider_profile_id);
+        $stopped = $returns->cancelReturnRiderHandoff($workflow->fresh(), $centerUser, 'Receiving rider unavailable');
+        $this->assertSame(ShipmentReturnWorkflow::RETURN_EXCEPTION, $stopped->status);
+        $this->assertSame((int) $returnRider->riderProfile->id, (int) $stopped->return_rider_profile_id);
+        $this->assertNull($stopped->pending_return_rider_profile_id);
+        $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
+
+        $resumed = $returns->resolveReturnException($stopped, $centerUser, 'Confirmed the parcel remains with the assigned rider.');
+        $this->assertSame(ShipmentReturnWorkflow::IN_TRANSIT_TO_SELLER, $resumed->status);
+        $this->assertSame((int) $returnRider->riderProfile->id, (int) $resumed->return_rider_profile_id);
+        try {
+            $returns->handoffToSellerAsReturnRider($resumed, $originalRider, 'MANUAL', $shipment->tracking_number);
+            $this->fail('The previous non-custodian must not act as the current return rider.');
+        } catch (HttpException $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
+
+        $returns->requestReturnRiderHandoff($resumed, $centerUser, 1, 'Vehicle issue during seller route');
+        $returns->confirmReturnRiderHandoffFrom($workflow->fresh(), $returnRider, 'MANUAL', $shipment->tracking_number);
+        $completed = $returns->confirmReturnRiderHandoffTo($workflow->fresh(), $originalRider, 'QR', $shipment->tracking_number);
+        $this->assertSame(ShipmentReturnWorkflow::IN_TRANSIT_TO_SELLER, $completed->status);
+        $this->assertSame(1, (int) $completed->return_rider_profile_id);
+        $this->assertNotNull($completed->handoff_completed_at);
+    }
+
+    public function test_cross_center_return_transfer_preserves_failed_delivery_status(): void
+    {
+        [$centerAUser, $originalRider, , , $workflow, $shipment] = $this->fixture();
+        DB::table('addresses')->insert([
+            ['id' => 1, 'province_code' => '01', 'municipality_code' => '0101'],
+            ['id' => 2, 'province_code' => '02', 'municipality_code' => '0202'],
+        ]);
+        DB::table('logistics_centers')->where('id', 1)->update(['address_id' => 1]);
+        DB::table('users')->insert([
+            ['id' => 5, 'first_name' => 'Center', 'last_name' => 'B', 'email' => 'center.b@test.invalid', 'account_type' => 'LOGISTICS', 'status' => 'ACTIVE'],
+            ['id' => 6, 'first_name' => 'Transfer', 'last_name' => 'Driver', 'email' => 'transfer.driver@test.invalid', 'account_type' => 'RIDER', 'status' => 'ACTIVE'],
+        ]);
+        DB::table('logistics_centers')->insert(['id' => 2, 'owner_user_id' => 5, 'business_name' => 'Seller Center', 'address_id' => 2]);
+        DB::table('rider_profiles')->insert(['id' => 3, 'user_id' => 6, 'logistics_center_id' => 1, 'status' => 'ACTIVE', 'vehicle_type' => 'van']);
+        DB::table('shipments')->where('id', $shipment->id)->update([
+            'origin_logistics_center_id' => 2,
+            'origin_province_code' => '02',
+            'origin_municipality_code' => '0202',
+            'destination_logistics_center_id' => 1,
+            'destination_province_code' => '01',
+            'destination_municipality_code' => '0101',
+        ]);
+
+        $returns = app(ShipmentReturnWorkflowService::class);
+        $returns->handoffToCenterAsOriginalRider($workflow, $originalRider, 'MANUAL', $shipment->tracking_number);
+        $returns->receiveAtCenter($workflow->fresh(), $centerAUser, 'QR', $shipment->tracking_number);
+        $this->assertSame(ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER, $workflow->fresh()->status);
+        $leg = ShipmentTransferLeg::query()->where('shipment_id', $shipment->id)->firstOrFail();
+        $this->assertSame(ShipmentTransferLeg::READY, $leg->status);
+
+        $transfers = app(ShipmentTransferService::class);
+        $transfers->release($leg, $centerAUser, $shipment->tracking_number, 'BARCODE');
+        $transfers->depart($leg->fresh(), User::query()->findOrFail(6));
+        $transfers->receive($leg->fresh(), User::query()->findOrFail(5), $shipment->tracking_number, 'QR');
+
+        $this->assertSame(ShipmentTransferLeg::RECEIVED, $leg->fresh()->status);
+        $this->assertSame(ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT, $workflow->fresh()->status);
+        $this->assertSame(2, (int) $shipment->fresh()->logistics_center_id);
+        $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
+        $this->assertSame(2, DB::table('parcel_scans')->where('transfer_leg_id', $leg->id)->count(), 'Origin release and destination receipt are the two physical custody scans.');
+        $this->assertStringContainsString('Seller-side center confirmed receipt', (string) DB::table('shipment_events')->where('shipment_id', $shipment->id)->orderByDesc('id')->value('notes'));
+    }
+
     public function test_return_routes_are_registered_and_return_templates_compile(): void
     {
         foreach ([
             'logistics.returns', 'logistics.returns.receive', 'logistics.returns.assign',
+            'logistics.returns.receive-batch', 'logistics.returns.prepare-transfer', 'logistics.returns.handoff',
+            'logistics.returns.handoff.cancel', 'logistics.returns.exceptions.resolve',
             'rider.returns', 'rider.returns.center-handoff', 'rider.returns.accept', 'rider.returns.pickup', 'rider.returns.seller-handoff',
+            'rider.returns.handoff.from', 'rider.returns.handoff.to',
             'seller.logistics.returns.confirm',
         ] as $name) {
             $route = app('router')->getRoutes()->getByName($name);
@@ -277,6 +444,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             'resources/views/logistics/returns/index.blade.php',
             'resources/views/rider/returns/index.blade.php',
             'resources/views/seller/logistics.blade.php',
+            'resources/views/buyer/orders.blade.php',
         ] as $relativePath) {
             $compiled = app('blade.compiler')->compileString(file_get_contents(base_path($relativePath)));
             $this->assertNotSame('', $compiled, $relativePath.' should compile.');
@@ -315,6 +483,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             'seller_order_id' => 1,
             'tracking_number' => 'LK-RETURN-1',
             'logistics_center_id' => 1,
+            'origin_logistics_center_id' => 1,
             'current_status' => 'DELIVERY_FAILED',
         ]);
         DB::table('rider_assignments')->insert([
@@ -356,6 +525,12 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->id();
             $table->unsignedBigInteger('owner_user_id');
             $table->string('business_name')->nullable();
+            $table->unsignedBigInteger('address_id')->nullable();
+        });
+        $schema->create('addresses', function (Blueprint $table): void {
+            $table->id();
+            $table->string('province_code')->nullable();
+            $table->string('municipality_code')->nullable();
         });
         $schema->create('seller_profiles', function (Blueprint $table): void {
             $table->id();
@@ -373,6 +548,12 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->string('tracking_number');
             $table->unsignedBigInteger('logistics_center_id')->nullable();
             $table->unsignedBigInteger('destination_logistics_center_id')->nullable();
+            $table->unsignedBigInteger('origin_logistics_center_id')->nullable();
+            $table->string('origin_province_code')->nullable();
+            $table->string('origin_municipality_code')->nullable();
+            $table->string('origin_barangay_code')->nullable();
+            $table->string('destination_province_code')->nullable();
+            $table->string('destination_municipality_code')->nullable();
             $table->string('current_status');
             $table->timestamps();
         });
@@ -390,6 +571,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->string('assignment_type');
             $table->string('status');
             $table->timestamp('completed_at')->nullable();
+            $table->timestamp('started_at')->nullable();
             $table->timestamps();
         });
         $schema->create('rider_assignment_locations', function (Blueprint $table): void {
@@ -432,6 +614,17 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->unsignedBigInteger('seller_received_by_user_id')->nullable();
             $table->timestamp('seller_received_at')->nullable();
             $table->text('seller_confirmation_notes')->nullable();
+            $table->string('return_disposition')->default('SELLER_RETURN');
+            $table->unsignedBigInteger('pending_return_rider_profile_id')->nullable();
+            $table->unsignedBigInteger('handoff_authorized_by_user_id')->nullable();
+            $table->timestamp('handoff_authorized_at')->nullable();
+            $table->text('handoff_reason')->nullable();
+            $table->timestamp('handoff_from_confirmed_at')->nullable();
+            $table->timestamp('handoff_to_confirmed_at')->nullable();
+            $table->timestamp('handoff_completed_at')->nullable();
+            $table->text('return_exception_reason')->nullable();
+            $table->unsignedBigInteger('return_exception_recorded_by_user_id')->nullable();
+            $table->timestamp('return_exception_recorded_at')->nullable();
             $table->timestamps();
         });
         $schema->create('parcel_scans', function (Blueprint $table): void {
@@ -440,6 +633,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->unsignedBigInteger('scanned_by_user_id')->nullable();
             $table->unsignedBigInteger('logistics_center_id')->nullable();
             $table->unsignedBigInteger('rider_assignment_id')->nullable();
+            $table->unsignedBigInteger('transfer_leg_id')->nullable();
             $table->string('scan_type');
             $table->string('scan_method');
             $table->string('scanned_code');
@@ -459,6 +653,25 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->timestamp('occurred_at');
             $table->timestamps();
         });
+        $schema->create('shipment_transfer_legs', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('shipment_id');
+            $table->unsignedInteger('sequence_no');
+            $table->unsignedBigInteger('origin_logistics_center_id');
+            $table->unsignedBigInteger('destination_logistics_center_id');
+            $table->string('origin_province_code');
+            $table->string('origin_municipality_code');
+            $table->string('destination_province_code');
+            $table->string('destination_municipality_code');
+            $table->string('status');
+            $table->unsignedBigInteger('released_by_user_id')->nullable();
+            $table->timestamp('released_at')->nullable();
+            $table->unsignedBigInteger('received_by_user_id')->nullable();
+            $table->timestamp('received_at')->nullable();
+            $table->timestamps();
+        });
+        $schema->create('transfer_manifests', fn (Blueprint $table) => $table->id());
+        $schema->create('transfer_manifest_items', fn (Blueprint $table) => $table->id());
         $schema->create('return_custody_events', fn (Blueprint $table) => $table->id());
     }
 }

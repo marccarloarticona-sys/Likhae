@@ -31,6 +31,8 @@ class Product extends Model
         'archived_at',
         'flash_sale_starts_at',
         'flash_sale_ends_at',
+        'submission_token',
+        'submission_fingerprint',
     ];
 
     protected function casts(): array
@@ -111,9 +113,7 @@ class Product extends Model
                     ->where('store_visibility', true)
                     ->whereHas('user', fn (Builder $user) => $user->where('status', 'ACTIVE'));
             })
-            ->whereHas('variants', fn (Builder $variant) => $variant
-                ->where('is_active', true)
-                ->where('stock', '>', 0));
+              ->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true));
     }
 
     public function scopeActive(Builder $query): Builder

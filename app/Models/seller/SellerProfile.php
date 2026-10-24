@@ -92,6 +92,11 @@ class SellerProfile extends Model
         return $this->hasMany(Product::class);
     }
 
+    public function promotions(): HasMany
+    {
+        return $this->hasMany(SellerPromotion::class);
+    }
+
     public function sellerOrders(): HasMany
     {
         return $this->hasMany(SellerOrder::class);

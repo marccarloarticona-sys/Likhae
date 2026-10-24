@@ -221,7 +221,12 @@ class FlashSaleReminderService
             return false;
         }
 
-        return $variant->resolved_discount_type !== 'none' && (float) $variant->discount_value > 0;
+        $hasDedicatedFlashAllocation = $variant->flash_sale_price !== null
+            && (float) $variant->flash_sale_price > 0
+            && $variant->flash_sale_remaining > 0;
+
+        return $hasDedicatedFlashAllocation
+            || ($variant->resolved_discount_type !== 'none' && (float) $variant->discount_value > 0);
     }
 
     private function productSaleIsEligible(Product $product): bool

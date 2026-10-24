@@ -15,6 +15,7 @@ use App\Models\Logistics\ShipmentEvent;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
@@ -69,10 +70,16 @@ class CheckoutService
             })
             ->groupBy(fn (CartItem $item) => (int) $item->productVariant->product->seller_profile_id)
             ->map(function (Collection $sellerItems, int $sellerId) use ($buyer): Collection {
+                $cartProductIds = $sellerItems
+                    ->map(fn (CartItem $item): int => (int) $item->productVariant->product_id)
+                    ->unique()
+                    ->all();
+
                 return Voucher::query()
                     ->where('seller_profile_id', $sellerId)
                     ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
                     ->when(Schema::hasColumn('vouchers', 'benefit_scope'), fn ($query) => $query->where('benefit_scope', 'PRODUCT'))
+                    ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->where('visibility', 'PUBLIC'))
                     ->where('is_active', true)
                     ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
                     ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
@@ -90,9 +97,11 @@ class CheckoutService
                             fn ($uses) => $uses->whereRaw('1 = 0'),
                         ),
                     ])
+                    ->with('eligibleProducts:id')
                     ->get()
                     ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null || $voucher->seller_orders_count < $voucher->usage_limit)
                         && ($voucher->per_user_limit === null || $voucher->buyer_uses_count < $voucher->per_user_limit)
+                        && ($voucher->applies_to !== 'PRODUCTS' || $voucher->eligibleProducts->contains(fn (Product $product): bool => in_array((int) $product->id, $cartProductIds, true)))
                     )
                     ->values();
             })
@@ -296,6 +305,8 @@ class CheckoutService
         }
         $shippingQuotes = [];
 
+        $this->assertFlashSaleAllocations($items);
+
         foreach ($items as $item) {
             /** @var CartItem $item */
             $item->loadMissing(['productVariant.product.sellerProfile.user', 'productVariant.product.sellerProfile.businessAddress', 'productVariant.optionValues.option']);
@@ -316,7 +327,14 @@ class CheckoutService
             }
 
             $sellerId = (int) $seller->id;
-            $lineTotal = $variant->final_price * (int) $item->quantity;
+            $unitPrice = (float) $variant->final_price;
+            $itemQuantity = (int) $item->quantity;
+            $item->setAttribute('checkout_unit_price', $unitPrice);
+            $item->setAttribute('checkout_discount_amount', (float) $variant->discount_amount);
+            $item->setAttribute('checkout_flash_sale_units', $variant->active_flash_sale_price !== null ? $itemQuantity : 0);
+            $item->setAttribute('checkout_promotion_discount_amount', 0.0);
+            $item->setAttribute('checkout_promotion_snapshot', []);
+            $lineTotal = round($unitPrice * $itemQuantity, 2);
             $subtotal += $lineTotal;
 
             $protection = $this->protection->quoteForCartItem($item);
@@ -383,6 +401,7 @@ class CheckoutService
                 'seller' => $seller,
                 'items' => collect(),
                 'item_subtotal' => 0.0,
+                'promotion_discount_total' => 0.0,
                 'voucher' => null,
                 'seller_voucher' => null,
                 'seller_voucher_discount' => 0.0,
@@ -417,6 +436,8 @@ class CheckoutService
             ]);
         }
 
+        $promotionDiscountTotal = $this->applySellerPromotions($groups, $lockVoucherUsage);
+
         $platformVoucher = null;
         $shippingVoucher = null;
         if ($singleVoucherCode !== '') {
@@ -439,13 +460,20 @@ class CheckoutService
                 if ($code === '') {
                     continue;
                 }
-                $voucher = $this->usableVoucher((int) $sellerId, $code, (float) $group['item_subtotal'], $buyer, $lockVoucherUsage);
+                $voucher = $this->usableVoucher(
+                    (int) $sellerId,
+                    $code,
+                    $group['items'],
+                    $buyer,
+                    $lockVoucherUsage,
+                    'seller_voucher_codes.'.$sellerId,
+                );
                 if (! $voucher) {
                     throw ValidationException::withMessages([
                         'seller_voucher_codes.'.$sellerId => 'This voucher is invalid or no longer available for this Seller.',
                     ]);
                 }
-                $discount = $this->discountAmount($voucher, (float) $group['item_subtotal']);
+                $discount = $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items']));
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
                 $group['voucher'] = $voucher;
@@ -454,7 +482,7 @@ class CheckoutService
             unset($group);
 
             $eligibleProductTotal = array_sum(array_map(
-                fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['seller_voucher_discount']),
+                fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['seller_voucher_discount']),
                 $groups,
             ));
             $platformCode = mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? '')));
@@ -468,7 +496,7 @@ class CheckoutService
             if ($shippingCode !== '') {
                 $eligibleShippingTotal = array_sum(array_map(fn (array $group): float => (float) $group['shipping_fee'], $groups));
                 $shippingSpendBase = array_sum(array_map(
-                    fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['voucher_discount']),
+                    fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['voucher_discount']),
                     $groups,
                 ));
                 $shippingVoucher = $this->usablePlatformVoucher($shippingCode, 'SHIPPING', $shippingSpendBase, $buyer, $lockVoucherUsage);
@@ -479,20 +507,27 @@ class CheckoutService
             foreach ($groups as $sellerId => &$group) {
                 $code = trim((string) ($legacyVoucherCodes[$sellerId] ?? ''));
                 $voucher = $code !== ''
-                    ? $this->usableVoucher((int) $sellerId, $code, (float) $group['item_subtotal'], $buyer, $lockVoucherUsage)
+                    ? $this->usableVoucher(
+                        (int) $sellerId,
+                        $code,
+                        $group['items'],
+                        $buyer,
+                        $lockVoucherUsage,
+                        'voucher_codes.'.$sellerId,
+                    )
                     : null;
                 if ($code !== '' && $voucher === null) {
                     throw ValidationException::withMessages([
                         'voucher_codes.'.$sellerId => 'This voucher is invalid or no longer available for this seller.',
                     ]);
                 }
-                $discount = $voucher ? $this->discountAmount($voucher, (float) $group['item_subtotal']) : 0.0;
+                $discount = $voucher ? $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items'])) : 0.0;
 
                 $group['voucher'] = $voucher;
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
                 $group['voucher_discount'] = $discount;
-                $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
+                $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
             }
             unset($group);
 
@@ -506,7 +541,7 @@ class CheckoutService
         }
 
         $eligibleSubtotalCents = array_sum(array_map(
-            fn (array $group): int => max(0, FinancialRules::cents($group['item_subtotal']) - FinancialRules::cents($group['voucher_discount'])),
+            fn (array $group): int => max(0, FinancialRules::cents($group['item_subtotal']) - FinancialRules::cents($group['promotion_discount_total']) - FinancialRules::cents($group['voucher_discount'])),
             $groups,
         ));
         if ($rewardPointsToRedeem > 0 && ! $buyer) {
@@ -529,7 +564,7 @@ class CheckoutService
             $rewardDiscount = (float) $group['reward_points_discount'];
             $shippingVoucherDiscount = min((float) $group['shipping_fee'], max(0.0, (float) $group['shipping_voucher_discount']));
             $group['shipping_voucher_discount'] = $shippingVoucherDiscount;
-            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - $discount - $rewardDiscount + (float) $group['shipping_fee'] - $shippingVoucherDiscount + (float) $group['protection_total']);
+            $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - $discount - $rewardDiscount + (float) $group['shipping_fee'] - $shippingVoucherDiscount + (float) $group['protection_total']);
             $discountTotal += $discount;
             $shippingTotal += (float) $group['shipping_fee'];
             $shippingVoucherDiscountTotal += $shippingVoucherDiscount;
@@ -541,12 +576,13 @@ class CheckoutService
             ? $this->rewardPoints->maximumRedeemablePoints($buyer, $eligibleSubtotalCents)
             : 0;
         $platformVoucherDiscountTotal = round(array_sum(array_map(fn (array $group): float => (float) $group['platform_voucher_discount'], $groups)), 2);
-        $totalDiscount = round($discountTotal + $shippingVoucherDiscountTotal + $rewardPointsDiscount, 2);
+        $totalDiscount = round($discountTotal + $promotionDiscountTotal + $shippingVoucherDiscountTotal + $rewardPointsDiscount, 2);
 
         return [
             'groups' => collect($groups),
             'subtotal' => round($subtotal, 2),
             'discount_total' => round($discountTotal, 2),
+            'promotion_discount_total' => round($promotionDiscountTotal, 2),
             'platform_voucher' => $platformVoucher,
             'platform_voucher_discount' => $platformVoucherDiscountTotal,
             'shipping_voucher' => $shippingVoucher,
@@ -558,7 +594,7 @@ class CheckoutService
             'maximum_redeemable_points' => $maximumRedeemablePoints,
             'shipping_total' => round($shippingTotal, 2),
             'protection_total' => round($protectionTotal, 2),
-            'grand_total' => max(0.0, round($subtotal - $discountTotal - $rewardPointsDiscount + $shippingTotal - $shippingVoucherDiscountTotal + $protectionTotal, 2)),
+            'grand_total' => max(0.0, round($subtotal - $promotionDiscountTotal - $discountTotal - $rewardPointsDiscount + $shippingTotal - $shippingVoucherDiscountTotal + $protectionTotal, 2)),
         ];
     }
 
@@ -908,6 +944,9 @@ class CheckoutService
                     'shipping_fee' => $group['shipping_fee'],
                     'grand_total' => $group['grand_total'],
                 ];
+                if (Schema::hasColumn('seller_orders', 'promotion_discount_total')) {
+                    $sellerOrderAttributes['promotion_discount_total'] = $group['promotion_discount_total'];
+                }
                 if (Schema::hasColumn('seller_orders', 'shipping_voucher_discount')) {
                     $sellerOrderAttributes['shipping_voucher_discount'] = $group['shipping_voucher_discount'];
                 }
@@ -929,8 +968,12 @@ class CheckoutService
                     $item->loadMissing(['productVariant.product', 'productVariant.optionValues.option']);
                     $variant = $lockedVariants->get($item->product_variant_id);
                     $product = $item->productVariant->product;
-                    $lineTotal = $variant->final_price * (int) $item->quantity;
-                    $discountAmount = $variant->discount_amount * (int) $item->quantity;
+                    $unitPrice = (float) $item->getAttribute('checkout_unit_price');
+                    $unitDiscount = (float) $item->getAttribute('checkout_discount_amount');
+                    $flashSaleUnits = (int) $item->getAttribute('checkout_flash_sale_units');
+                    $promotionDiscount = (float) $item->getAttribute('checkout_promotion_discount_amount');
+                    $lineTotal = max(0.0, round($unitPrice * (int) $item->quantity - $promotionDiscount, 2));
+                    $discountAmount = round($unitDiscount * (int) $item->quantity, 2);
 
                     $itemAttributes = [
                         'product_id' => $product->id,
@@ -938,13 +981,23 @@ class CheckoutService
                         'product_name' => $product->name,
                         'sku' => $item->productVariant->sku,
                         'variant_description' => $item->productVariant->description,
-                        'unit_price' => $variant->final_price,
+                        'unit_price' => $unitPrice,
                         'quantity' => $item->quantity,
                         'discount_amount' => $discountAmount,
                         'line_total' => $lineTotal,
                     ];
                     if ($snapshotReady) {
                         $itemAttributes['original_unit_price'] = number_format((float) $variant->price, 2, '.', '');
+                    }
+                    if (Schema::hasColumn('order_items', 'flash_sale_quantity')) {
+                        $itemAttributes['flash_sale_quantity'] = $flashSaleUnits;
+                    }
+                    if (Schema::hasColumn('order_items', 'promotion_discount_amount')) {
+                        $itemAttributes['promotion_discount_amount'] = $promotionDiscount;
+                    }
+                    if (Schema::hasColumn('order_items', 'promotion_snapshot')) {
+                        $snapshots = (array) $item->getAttribute('checkout_promotion_snapshot');
+                        $itemAttributes['promotion_snapshot'] = $snapshots !== [] ? $snapshots : null;
                     }
                     if (Schema::hasColumn('order_items', 'protection_selected')) {
                         $quote = (array) $item->getAttribute('protection_quote');
@@ -980,6 +1033,9 @@ class CheckoutService
                     }
 
                     $variant->decrement('stock', (int) $item->quantity);
+                    if ($flashSaleUnits > 0) {
+                        $variant->increment('flash_sale_sold', $flashSaleUnits);
+                    }
                 }
 
                 // Recalculate every parcel after all seller-order lines exist
@@ -1047,7 +1103,9 @@ class CheckoutService
         foreach ($groups as $sellerId => $group) {
             $weights[$sellerId] = max(
                 0,
-                FinancialRules::cents($group['item_subtotal']) - FinancialRules::cents($group['voucher_discount']),
+                FinancialRules::cents($group['item_subtotal'])
+                    - FinancialRules::cents($group['promotion_discount_total'])
+                    - FinancialRules::cents($group['voucher_discount']),
             );
             $groups[$sellerId]['reward_points_redeemed'] = 0;
             $groups[$sellerId]['reward_points_discount'] = 0.0;
@@ -1097,6 +1155,234 @@ class CheckoutService
             $groups[$sellerId]['reward_points_redeemed'] = $share;
             // At the 100:1 rate, one point represents one centavo.
             $groups[$sellerId]['reward_points_discount'] = round($share / 100, 2);
+        }
+    }
+
+    /** @param array<int, array<string, mixed>> $groups */
+    private function applySellerPromotions(array &$groups, bool $lockForUpdate = false): float
+    {
+        if ($groups === [] || ! Schema::hasTable('seller_promotions') || ! Schema::hasTable('seller_promotion_components')) {
+            return 0.0;
+        }
+
+        $query = SellerPromotion::query()
+            ->whereIn('seller_profile_id', array_map('intval', array_keys($groups)))
+            ->where('is_active', true)
+            ->where(fn ($window) => $window->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+            ->where(fn ($window) => $window->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+            ->with(['components.productVariant.product', 'buyVariant.product', 'rewardVariant.product'])
+            ->orderBy('id');
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+        $promotions = $query->get();
+        $reservedQuantities = [];
+        $totalDiscount = 0.0;
+
+        foreach ($promotions as $promotion) {
+            $sellerId = (int) $promotion->seller_profile_id;
+            if (! isset($groups[$sellerId])) {
+                continue;
+            }
+            $items = $groups[$sellerId]['items'];
+
+            if ($promotion->promotion_type === SellerPromotion::TYPE_BUNDLE) {
+                $components = $promotion->components
+                    ->filter(fn ($component) => $component->productVariant !== null)
+                    ->values();
+                if ($components->count() < 2) {
+                    continue;
+                }
+                $sets = $components->map(fn ($component): int => intdiv(
+                    $this->availableCartQuantity($items, (int) $component->product_variant_id, $reservedQuantities),
+                    max(1, (int) $component->quantity),
+                ))->min() ?? 0;
+                if ($sets < 1) {
+                    continue;
+                }
+
+                $availableRows = [];
+                foreach ($components as $component) {
+                    $required = (int) $component->quantity * $sets;
+                    $availableRows = array_merge($availableRows, $this->reserveVariantQuantity(
+                        $items,
+                        (int) $component->product_variant_id,
+                        $required,
+                        $reservedQuantities,
+                        reserve: false,
+                    ));
+                }
+                $componentValue = array_sum(array_map(fn (array $row): float => $row['unit_price'] * $row['quantity'], $availableRows));
+                $bundleValue = (float) $promotion->bundle_price * $sets;
+                $discount = round(min($componentValue, max(0.0, $componentValue - $bundleValue)), 2);
+                if ($discount <= 0) {
+                    continue;
+                }
+
+                $allocations = [];
+                foreach ($components as $component) {
+                    $allocations = array_merge($allocations, $this->reserveVariantQuantity(
+                        $items,
+                        (int) $component->product_variant_id,
+                        (int) $component->quantity * $sets,
+                        $reservedQuantities,
+                    ));
+                }
+                $this->applyPromotionDiscountToAllocations($allocations, $promotion, $discount, [
+                    'bundle_sets' => $sets,
+                    'bundle_price' => (float) $promotion->bundle_price,
+                    'components' => $components->map(fn ($component): array => [
+                        'product_variant_id' => (int) $component->product_variant_id,
+                        'product_name' => $component->productVariant->product?->name,
+                        'sku' => $component->productVariant->sku,
+                        'quantity_per_bundle' => (int) $component->quantity,
+                    ])->values()->all(),
+                ]);
+                $groups[$sellerId]['promotion_discount_total'] += $discount;
+                $totalDiscount += $discount;
+
+                continue;
+            }
+
+            if ($promotion->promotion_type !== SellerPromotion::TYPE_BUY_X_GET_Y
+                || ! $promotion->buy_variant_id || ! $promotion->reward_variant_id
+                || ! $promotion->buyVariant || ! $promotion->rewardVariant) {
+                continue;
+            }
+
+            $buyVariantId = (int) $promotion->buy_variant_id;
+            $rewardVariantId = (int) $promotion->reward_variant_id;
+            $buyQuantity = max(1, (int) $promotion->buy_quantity);
+            $rewardQuantity = max(1, (int) $promotion->reward_quantity);
+            $buyAvailable = $this->availableCartQuantity($items, $buyVariantId, $reservedQuantities);
+            $rewardAvailable = $this->availableCartQuantity($items, $rewardVariantId, $reservedQuantities);
+
+            if ($buyVariantId === $rewardVariantId) {
+                $sets = intdiv($buyAvailable, $buyQuantity + $rewardQuantity);
+            } else {
+                $sets = min(intdiv($buyAvailable, $buyQuantity), intdiv($rewardAvailable, $rewardQuantity));
+            }
+            if ($sets < 1) {
+                continue;
+            }
+
+            $buyAllocations = $this->reserveVariantQuantity(
+                $items,
+                $buyVariantId,
+                $buyQuantity * $sets,
+                $reservedQuantities,
+            );
+            $rewardAllocations = $this->reserveVariantQuantity(
+                $items,
+                $rewardVariantId,
+                $rewardQuantity * $sets,
+                $reservedQuantities,
+            );
+            if (array_sum(array_column($buyAllocations, 'quantity')) !== $buyQuantity * $sets
+                || array_sum(array_column($rewardAllocations, 'quantity')) !== $rewardQuantity * $sets) {
+                continue;
+            }
+
+            $discount = round(array_sum(array_map(fn (array $row): float => $row['unit_price'] * $row['quantity'], $rewardAllocations)), 2);
+            if ($discount <= 0) {
+                continue;
+            }
+
+            $this->applyPromotionDiscountToAllocations($rewardAllocations, $promotion, $discount, [
+                'buy_variant_id' => $buyVariantId,
+                'buy_product_name' => $promotion->buyVariant->product?->name,
+                'buy_sku' => $promotion->buyVariant->sku,
+                'buy_quantity' => $buyQuantity * $sets,
+                'reward_variant_id' => $rewardVariantId,
+                'reward_product_name' => $promotion->rewardVariant->product?->name,
+                'reward_sku' => $promotion->rewardVariant->sku,
+                'reward_quantity' => $rewardQuantity * $sets,
+            ]);
+            $groups[$sellerId]['promotion_discount_total'] += $discount;
+            $totalDiscount += $discount;
+        }
+
+        return round($totalDiscount, 2);
+    }
+
+    /** @param array<int, int> $reservedQuantities */
+    private function availableCartQuantity(Collection $items, int $variantId, array $reservedQuantities): int
+    {
+        return (int) $items
+            ->filter(fn (CartItem $item): bool => (int) $item->product_variant_id === $variantId)
+            ->sum(fn (CartItem $item): int => max(0, (int) $item->quantity - ($reservedQuantities[(int) $item->id] ?? 0)));
+    }
+
+    /**
+     * @param array<int, int> $reservedQuantities
+     * @return array<int, array{item: CartItem, quantity: int, unit_price: float}>
+     */
+    private function reserveVariantQuantity(
+        Collection $items,
+        int $variantId,
+        int $quantity,
+        array &$reservedQuantities,
+        bool $reserve = true,
+    ): array {
+        $remaining = $quantity;
+        $allocations = [];
+        foreach ($items->sortBy('id') as $item) {
+            if ((int) $item->product_variant_id !== $variantId || $remaining <= 0) {
+                continue;
+            }
+            $itemId = (int) $item->id;
+            $available = max(0, (int) $item->quantity - ($reservedQuantities[$itemId] ?? 0));
+            $take = min($remaining, $available);
+            if ($take <= 0) {
+                continue;
+            }
+            $unitPrice = (float) $item->getAttribute('checkout_unit_price');
+            $allocations[] = ['item' => $item, 'quantity' => $take, 'unit_price' => $unitPrice];
+            if ($reserve) {
+                $reservedQuantities[$itemId] = ($reservedQuantities[$itemId] ?? 0) + $take;
+            }
+            $remaining -= $take;
+        }
+
+        return $allocations;
+    }
+
+    /** @param array<int, array{item: CartItem, quantity: int, unit_price: float}> $allocations */
+    private function applyPromotionDiscountToAllocations(array $allocations, SellerPromotion $promotion, float $discount, array $snapshot): void
+    {
+        $baseCents = array_map(fn (array $row): int => FinancialRules::cents($row['unit_price'] * $row['quantity']), $allocations);
+        $totalBaseCents = array_sum($baseCents);
+        $discountCents = min($totalBaseCents, FinancialRules::cents($discount));
+        if ($totalBaseCents <= 0 || $discountCents <= 0) {
+            return;
+        }
+
+        $allocatedCents = 0;
+        $lastIndex = array_key_last($allocations);
+        foreach ($allocations as $index => $row) {
+            $shareCents = $index === $lastIndex
+                ? $discountCents - $allocatedCents
+                : intdiv($discountCents * $baseCents[$index], $totalBaseCents);
+            $shareCents = min($baseCents[$index], max(0, $shareCents));
+            $allocatedCents += $shareCents;
+            if ($shareCents <= 0) {
+                continue;
+            }
+
+            $item = $row['item'];
+            $item->setAttribute(
+                'checkout_promotion_discount_amount',
+                round((float) $item->getAttribute('checkout_promotion_discount_amount') + ($shareCents / 100), 2),
+            );
+            $snapshots = (array) $item->getAttribute('checkout_promotion_snapshot');
+            $snapshots[] = array_merge([
+                'promotion_id' => (int) $promotion->id,
+                'promotion_type' => $promotion->promotion_type,
+                'name' => $promotion->name,
+                'discount_amount' => number_format($shareCents / 100, 2, '.', ''),
+                'discounted_quantity' => (int) $row['quantity'],
+            ], $snapshot);
+            $item->setAttribute('checkout_promotion_snapshot', $snapshots);
         }
     }
 
@@ -1359,7 +1645,14 @@ class CheckoutService
         return $locations->first();
     }
 
-    private function usableVoucher(int $sellerId, string $code, float $subtotal, ?User $buyer = null, bool $lockVoucherUsage = false): ?Voucher
+    private function usableVoucher(
+        int $sellerId,
+        string $code,
+        Collection $items,
+        ?User $buyer = null,
+        bool $lockVoucherUsage = false,
+        string $errorKey = 'voucher_code',
+    ): ?Voucher
     {
         $voucher = Voucher::query()
             ->where('seller_profile_id', $sellerId)
@@ -1367,19 +1660,25 @@ class CheckoutService
             ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
             ->when(Schema::hasColumn('vouchers', 'benefit_scope'), fn ($query) => $query->where('benefit_scope', 'PRODUCT'))
             ->where('is_active', true)
-            ->where('minimum_order_amount', '<=', $subtotal)
             ->where(function ($query): void {
                 $query->whereNull('starts_at')->orWhere('starts_at', '<=', now());
             })
             ->where(function ($query): void {
                 $query->whereNull('ends_at')->orWhere('ends_at', '>=', now());
             })
-            ->whereHas('buyerClaims', fn ($query) => $query->where('buyer_user_id', $buyer?->id ?? 0))
+            ->when(
+                Schema::hasColumn('vouchers', 'visibility') && $buyer !== null,
+                fn ($query) => $query->where(fn ($access) => $access
+                    ->where('visibility', 'CODE_ONLY')
+                    ->orWhereHas('buyerClaims', fn ($claims) => $claims->where('buyer_user_id', $buyer->id))),
+                fn ($query) => $query->whereHas('buyerClaims', fn ($claims) => $claims->where('buyer_user_id', $buyer?->id ?? 0)),
+            )
             ->whereHas('sellerProfile', fn ($query) => $query
                 ->where('status', 'ACTIVE')
                 ->whereHas('user', fn ($user) => $user
                     ->where('account_type', User::TYPE_SELLER)
                     ->where('status', User::STATUS_ACTIVE)))
+            ->with('eligibleProducts:id')
             ->withCount([
                 'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
                 'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
@@ -1401,7 +1700,79 @@ class CheckoutService
             return null;
         }
 
+        $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $items);
+        if ($eligibleSubtotal <= 0) {
+            throw ValidationException::withMessages([
+                $errorKey => 'This voucher does not apply to the selected cart items.',
+            ]);
+        }
+        if ($eligibleSubtotal < (float) $voucher->minimum_order_amount) {
+            throw ValidationException::withMessages([
+                $errorKey => 'Add PHP '.number_format((float) $voucher->minimum_order_amount - $eligibleSubtotal, 2).' more in eligible products to use this voucher.',
+            ]);
+        }
+
         return $voucher;
+    }
+
+    private function voucherEligibleSubtotal(Voucher $voucher, Collection $items): float
+    {
+        if ($voucher->applies_to !== 'PRODUCTS') {
+            return round((float) $items->sum(fn (CartItem $item): float => $this->checkoutItemSubtotalAfterPromotions($item)), 2);
+        }
+
+        $productIds = $voucher->relationLoaded('eligibleProducts')
+            ? $voucher->eligibleProducts->modelKeys()
+            : $voucher->eligibleProducts()->pluck('products.id')->all();
+        $eligibleIds = array_fill_keys(array_map('intval', $productIds), true);
+
+        return round((float) $items->sum(function (CartItem $item) use ($eligibleIds): float {
+            $item->loadMissing('productVariant');
+            $variant = $item->productVariant;
+            if (! $variant || ! isset($eligibleIds[(int) $variant->product_id])) {
+                return 0.0;
+            }
+
+            return $this->checkoutItemSubtotalAfterPromotions($item);
+        }), 2);
+    }
+
+    private function checkoutItemSubtotalAfterPromotions(CartItem $item): float
+    {
+        $item->loadMissing('productVariant');
+        $unitPrice = $item->getAttribute('checkout_unit_price');
+        $unitPrice = $unitPrice === null ? (float) ($item->productVariant?->final_price ?? 0) : (float) $unitPrice;
+        $lineSubtotal = $unitPrice * (int) $item->quantity;
+        $promotionDiscount = (float) ($item->getAttribute('checkout_promotion_discount_amount') ?? 0);
+
+        return round(max(0.0, $lineSubtotal - $promotionDiscount), 2);
+    }
+
+    private function assertFlashSaleAllocations(Collection $items): void
+    {
+        $items->groupBy('product_variant_id')->each(function (Collection $variantItems): void {
+            /** @var CartItem|null $firstItem */
+            $firstItem = $variantItems->first();
+            if (! $firstItem) {
+                return;
+            }
+
+            $firstItem->loadMissing('productVariant.product');
+            $variant = $firstItem->productVariant;
+            $flashPrice = $variant?->active_flash_sale_price;
+            if (! $variant || $flashPrice === null) {
+                return;
+            }
+
+            $requested = (int) $variantItems->sum('quantity');
+            $remaining = (int) $variant->flash_sale_remaining;
+            if ($requested > $remaining) {
+                $productName = $variant->product?->name ?? 'This product';
+                throw ValidationException::withMessages([
+                    'cart' => "Only {$remaining} unit(s) remain at the flash-sale price for {$productName}. Reduce the quantity and refresh checkout. The product remains available at its regular price after the allocation is exhausted.",
+                ]);
+            }
+        });
     }
 
     private function usablePlatformVoucher(string $code, string $scope, float $eligibleSubtotal, ?User $buyer, bool $lockVoucherUsage): Voucher
@@ -1510,7 +1881,7 @@ class CheckoutService
                     'voucher_code' => 'Choose shipping vouchers from the Shipping Voucher picker.',
                 ]);
             }
-            $subtotal = array_sum(array_map(fn (array $group): float => (float) $group['item_subtotal'], $groups));
+            $subtotal = array_sum(array_map(fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total']), $groups));
             $usage = $lockVoucherUsage
                 ? VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id)
                 : null;
@@ -1550,9 +1921,10 @@ class CheckoutService
             ]);
         }
 
+        $requiresClaim = ! Schema::hasColumn('vouchers', 'visibility') || $voucher->visibility !== 'CODE_ONLY';
         if ($voucher->platform_code_key !== null
             || ! $buyer
-            || ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists()) {
+            || ($requiresClaim && ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists())) {
             throw ValidationException::withMessages([
                 'voucher_code' => 'Collect this Seller voucher in Rewards before using it.',
             ]);
@@ -1601,15 +1973,21 @@ class CheckoutService
             ]);
         }
 
-        if ((float) $group['item_subtotal'] < (float) $voucher->minimum_order_amount) {
-            $remaining = (float) $voucher->minimum_order_amount - (float) $group['item_subtotal'];
+        $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $group['items']);
+        if ($eligibleSubtotal <= 0) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'This voucher does not apply to the selected cart items.',
+            ]);
+        }
+        if ($eligibleSubtotal < (float) $voucher->minimum_order_amount) {
+            $remaining = (float) $voucher->minimum_order_amount - $eligibleSubtotal;
 
             throw ValidationException::withMessages([
                 'voucher_code' => 'Add PHP '.number_format($remaining, 2).' more from '.$voucher->sellerProfile?->business_name.' to use this voucher.',
             ]);
         }
 
-        $discount = $this->discountAmount($voucher, (float) $group['item_subtotal']);
+        $discount = $this->discountAmount($voucher, $eligibleSubtotal);
         $group['seller_voucher'] = $voucher;
         $group['seller_voucher_discount'] = $discount;
         $group['voucher'] = $voucher;
@@ -1625,7 +2003,7 @@ class CheckoutService
         $lastSellerId = array_key_last($groups);
 
         foreach ($groups as $sellerId => &$group) {
-            $eligibleGroupSubtotal = max(0.0, (float) $group['item_subtotal'] - (float) $group['seller_voucher_discount']);
+            $eligibleGroupSubtotal = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['seller_voucher_discount']);
             $share = (int) $sellerId === (int) $lastSellerId
                 ? round($discount - $allocated, 2)
                 : round($subtotal > 0 ? $discount * ($eligibleGroupSubtotal / $subtotal) : 0.0, 2);

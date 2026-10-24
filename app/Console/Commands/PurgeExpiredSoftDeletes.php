@@ -17,22 +17,39 @@ class PurgeExpiredSoftDeletes extends Command
     public function handle(): int
     {
         $cutoff = now()->subDays(30);
-        $products = Product::onlyTrashed()->where('deleted_at', '<=', $cutoff)->with('images')->get();
-        foreach ($products as $product) {
-            foreach ($product->images as $image) {
-                if (filled($image->file_path)) {
-                    Storage::disk('public')->delete($image->file_path);
+        $productIds = Product::onlyTrashed()->where('deleted_at', '<=', $cutoff)->pluck('id');
+        $purgedProducts = 0;
+        foreach ($productIds as $productId) {
+            $deletedPaths = DB::transaction(function () use ($productId, $cutoff): ?array {
+                $product = Product::onlyTrashed()->whereKey($productId)->where('deleted_at', '<=', $cutoff)
+                    ->lockForUpdate()->with('images')->first();
+                if (! $product
+                    || $product->orderItems()->exists()
+                    || $product->variants()->whereHas('cartItems')->exists()) {
+                    return null;
+                }
+
+                $paths = $product->images->pluck('file_path')->filter()->values()->all();
+                $product->forceDelete();
+
+                return $paths;
+            });
+
+            if ($deletedPaths === null) {
+                continue;
+            }
+            $purgedProducts++;
+            foreach ($deletedPaths as $path) {
+                try {
+                    Storage::disk('public')->delete($path);
+                } catch (\Throwable $exception) {
+                    report($exception);
                 }
             }
-            $variantIds = $product->variants()->pluck('id');
-            if ($variantIds->isNotEmpty()) {
-                DB::table('cart_items')->whereIn('product_variant_id', $variantIds)->delete();
-            }
-            $product->forceDelete();
         }
 
         $messages = Message::onlyTrashed()->where('deleted_at', '<=', $cutoff)->delete();
-        $this->info('Permanently removed '.$products->count().' expired products and '.$messages.' expired messages.');
+        $this->info('Permanently removed '.$purgedProducts.' expired products and '.$messages.' expired messages.');
 
         return self::SUCCESS;
     }

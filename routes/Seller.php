@@ -11,6 +11,7 @@ use App\Http\Controllers\Seller\SellerOrderController;
 use App\Http\Controllers\Seller\SellerPickupRequestController;
 use App\Http\Controllers\Seller\SellerReturnRefundController;
 use App\Http\Controllers\Seller\SellerProductController;
+use App\Http\Controllers\Seller\SellerPromotionController;
 use App\Http\Controllers\WorkspaceAiController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -46,6 +47,7 @@ Route::prefix('seller')
         Route::get('/products/trash', [SellerProductController::class, 'trash'])->name('products.trash');
         Route::post('/products/trash/{productId}/restore', [SellerProductController::class, 'restore'])->name('products.restore');
         Route::post('/products', [SellerProductController::class, 'store'])->name('products.store');
+        Route::post('/products/{product}/duplicate', [SellerProductController::class, 'duplicate'])->name('products.duplicate');
         Route::put('/products/{product}', [SellerProductController::class, 'update'])->name('products.update');
         Route::patch('/products/{product}/stock', [SellerProductController::class, 'stock'])->name('products.stock');
         Route::patch('/products/{product}/variants/{variant}/stock', [SellerProductController::class, 'variantStock'])->name('products.variants.stock');
@@ -116,6 +118,9 @@ Route::prefix('seller')
         Route::post('/marketing/campaigns', [SellerEngagementController::class, 'storeCampaign'])->name('marketing.campaigns.store');
         Route::patch('/marketing/campaigns/{voucher}', [SellerEngagementController::class, 'updateCampaign'])->name('marketing.campaigns.update');
         Route::patch('/marketing/campaigns/{voucher}/toggle', [SellerEngagementController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
+        Route::get('/promotions', [SellerPromotionController::class, 'index'])->name('promotions');
+        Route::post('/promotions', [SellerPromotionController::class, 'store'])->name('promotions.store');
+        Route::patch('/promotions/{promotion}/toggle', [SellerPromotionController::class, 'toggle'])->name('promotions.toggle');
 
         Route::get('/reports', [SellerOperationsController::class, 'reports'])->name('reports');
         Route::get('/reports/download', [SellerOperationsController::class, 'downloadReport'])->name('reports.download');

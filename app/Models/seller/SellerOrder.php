@@ -30,6 +30,7 @@ class SellerOrder extends Model
         'status',
         'item_subtotal',
         'voucher_discount',
+        'promotion_discount_total',
         'reward_points_redeemed',
         'reward_points_discount',
         'shipping_fee',
@@ -45,6 +46,7 @@ class SellerOrder extends Model
         return [
             'item_subtotal' => 'decimal:2',
             'voucher_discount' => 'decimal:2',
+            'promotion_discount_total' => 'decimal:2',
             'reward_points_redeemed' => 'integer',
             'reward_points_discount' => 'decimal:2',
             'shipping_fee' => 'decimal:2',

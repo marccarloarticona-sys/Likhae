@@ -107,11 +107,13 @@
                         $isCancellationEvent = $status === 'CANCELLED'
                             || str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
                             || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:');
-                        $label = str_starts_with((string) $event->notes, 'RETURN_CUSTODY: ')
-                            ? str($event->notes)->after('RETURN_CUSTODY: ')->toString()
-                            : (str_starts_with((string) $event->notes, 'RETURN_TO_SELLER_INITIATED: ')
-                                ? 'Return to seller initiated after failed delivery'
-                                : ($isCancellationEvent ? 'Shipment cancelled' : ($timelineLabels[$status] ?? null)));
+                        $label = str_starts_with((string) $event->notes, 'RETURN_TO_CENTER_PENDING: ')
+                            ? 'Parcel pending return to Logistics after the delivery route'
+                            : (str_starts_with((string) $event->notes, 'RETURN_CUSTODY: ')
+                                ? str($event->notes)->after('RETURN_CUSTODY: ')->toString()
+                                : (str_starts_with((string) $event->notes, 'RETURN_TO_SELLER_INITIATED: ')
+                                    ? 'Return to seller initiated after failed delivery'
+                                    : ($isCancellationEvent ? 'Shipment cancelled' : ($timelineLabels[$status] ?? null))));
                         if ($status === 'COMPLETED') {
                             $label = str_starts_with((string) $event->notes, 'Order automatically confirmed received after 3 days')
                                 ? 'Receipt automatically confirmed'
@@ -144,7 +146,7 @@
                         <div><span class="sl-eyebrow">Parcel {{ $loop->iteration }} of {{ $trackingShipments->count() }}</span><h3>{{ $shipment->orderItem?->product_name ?: 'Shipment' }}</h3><p>Tracking <strong>{{ $shipment->tracking_number }}</strong></p></div>
                         <span class="sl-status {{ $shipmentTone }}">{{ str($currentStatus)->replace('_', ' ')->title() }}</span>
                     </header>
-                    @if($returnWorkflowSchemaReady && $shipment->returnWorkflow)
+                    @if($returnWorkflowSchemaReady && $shipment->returnWorkflow && (!($returnEnhancementsReady ?? false) || $shipment->returnWorkflow->return_disposition !== 'REDELIVERY'))
                         <div class="my-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                             <strong>Return to seller: {{ str($shipment->returnWorkflow->status)->replace('_', ' ')->title() }}</strong>
                             <p class="mt-1">{{ $shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION' ? 'The rider recorded the handoff. Confirm below after you have the parcel.' : 'The parcel is moving through verified return custody.' }}</p>
@@ -262,7 +264,7 @@
                     <td>{{ $assignment?->riderProfile?->user?->name ?? 'Awaiting assignment' }}</td>
                     <td>
                         <span class="sl-status {{ $shipment->current_status === 'RETURNED' ? 'is-danger' : 'is-info' }}">{{ str($shipment->current_status)->headline() }}</span>
-                        @if($returnWorkflowSchemaReady && $shipment->returnWorkflow)
+                        @if($returnWorkflowSchemaReady && $shipment->returnWorkflow && (!($returnEnhancementsReady ?? false) || $shipment->returnWorkflow->return_disposition !== 'REDELIVERY'))
                             <small class="mt-1 block text-amber-800">Return: {{ str($shipment->returnWorkflow->status)->replace('_', ' ')->title() }}</small>
                             @if($shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION')
                                 <form method="POST" action="{{ route('seller.logistics.returns.confirm', $shipment->returnWorkflow) }}" class="mt-2 grid gap-1">

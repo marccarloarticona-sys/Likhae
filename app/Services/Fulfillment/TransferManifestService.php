@@ -447,7 +447,13 @@ final class TransferManifestService
             }
 
             if ($outcome !== TransferManifestItem::MISSING) {
-                $this->transfers->receive($locked->transferLeg, $actor, (string) $scannedCode, $scanMethod);
+                $this->transfers->receive(
+                    $locked->transferLeg,
+                    $actor,
+                    (string) $scannedCode,
+                    $scanMethod,
+                    $outcome === TransferManifestItem::RECEIVED,
+                );
             }
             if ($outcome === TransferManifestItem::RECEIVED) {
                 $locked->update([

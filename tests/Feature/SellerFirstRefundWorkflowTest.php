@@ -44,6 +44,122 @@ class SellerFirstRefundWorkflowTest extends TestCase
         $this->assertDatabaseHas('notifications', ['user_id' => $sellerUser->id, 'reference_id' => $sellerRequest->id]);
     }
 
+    public function test_seller_rejection_reason_requires_ten_to_three_hundred_trimmed_characters(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)
+            ->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+
+        foreach ([str_repeat('x', 9), " \t\n ", str_repeat('x', 301)] as $reason) {
+            $this->actingAs($sellerUser)
+                ->post(route('seller.orders.refunds.reject', $sellerRequest), ['rejection_reason' => $reason])
+                ->assertSessionHasErrors('rejection_reason');
+        }
+
+        $this->assertSame(SellerReturnRefundRequest::STATUS_SELLER_REVIEW, $sellerRequest->fresh()->status);
+    }
+
+    public function test_seller_can_reject_with_exactly_ten_trimmed_characters(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+
+        $this->actingAs($sellerUser)
+            ->post(route('seller.orders.refunds.reject', $sellerRequest), ['rejection_reason' => '  abcdefghij  '])
+            ->assertRedirect();
+
+        $this->assertSame('abcdefghij', $sellerRequest->fresh()->decision_reason);
+        $this->assertSame(SellerReturnRefundRequest::STATUS_REJECTED, $sellerRequest->fresh()->status);
+        $this->travelTo(now()->addDays(4));
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+        $this->assertSame(SellerReturnRefundRequest::STATUS_REJECTED, $sellerRequest->fresh()->status);
+        $this->travelBack();
+    }
+
+    public function test_seller_can_reject_with_exactly_three_hundred_characters(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+        $reason = str_repeat('x', 300);
+
+        $this->actingAs($sellerUser)
+            ->post(route('seller.orders.refunds.reject', $sellerRequest), ['rejection_reason' => $reason])
+            ->assertRedirect();
+
+        $this->assertSame(300, mb_strlen($sellerRequest->fresh()->decision_reason));
+    }
+
+    public function test_seller_response_deadline_shows_and_auto_approval_is_idempotent_at_three_days(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+        $deadline = $sellerRequest->created_at->copy()->addDays(3);
+
+        $this->actingAs($sellerUser)
+            ->get(route('seller.orders.refunds.show', $sellerRequest))
+            ->assertOk()
+            ->assertSee('Seller response due:')
+            ->assertSee($deadline->format('M d, Y g:i A'));
+
+        $sellerRequest->forceFill(['created_at' => now()->subDays(3)])->saveQuietly();
+        $originalOrderStatus = $order->fresh()->status;
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+
+        $sellerRequest->refresh();
+        $this->assertSame(SellerReturnRefundRequest::STATUS_APPROVED, $sellerRequest->status);
+        $this->assertEquals((float) $sellerRequest->requested_amount, (float) $sellerRequest->approved_amount);
+        $this->assertSame(1, $sellerRequest->events()->where('event_type', 'SELLER_AUTO_APPROVED_TIMEOUT')->count());
+        $this->assertSame(1, DB::table('notifications')->where('reference_type', SellerReturnRefundRequest::class)->where('reference_id', $sellerRequest->id)->where('title', 'Refund request automatically approved')->count());
+        $this->assertSame($originalOrderStatus, $order->fresh()->status);
+        $this->assertSame(0, $sellerRequest->payouts()->count());
+        $this->assertSame(0, DB::table('cash_refund_obligations')->where('seller_return_refund_request_id', $sellerRequest->id)->count());
+    }
+
+    public function test_deadline_command_waits_before_three_days_and_skips_manual_response_and_admin_dispute(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+        $sellerRequest->forceFill(['created_at' => now()->subDays(3)->addMinutes(5)])->saveQuietly();
+
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+        $this->assertSame(SellerReturnRefundRequest::STATUS_SELLER_REVIEW, $sellerRequest->fresh()->status);
+
+        $this->actingAs($sellerUser)->post(route('seller.orders.refunds.approve', $sellerRequest), ['confirm_approval' => 1])->assertRedirect();
+        $sellerRequest->forceFill(['created_at' => now()->subDays(4)])->saveQuietly();
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+        $this->assertSame(SellerReturnRefundRequest::STATUS_APPROVED, $sellerRequest->fresh()->status);
+        $this->assertSame(0, $sellerRequest->events()->where('event_type', 'SELLER_AUTO_APPROVED_TIMEOUT')->count());
+
+        $this->travelBack();
+    }
+
+    public function test_deadline_command_does_not_approve_an_escalated_admin_dispute(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item));
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+        $this->actingAs($sellerUser)
+            ->post(route('seller.orders.refunds.reject', $sellerRequest), ['rejection_reason' => 'The supplied return details are incomplete.'])
+            ->assertRedirect();
+        $this->actingAs($buyer)->post(route('buyer.returns.escalate', $sellerRequest), [
+            'reason' => 'I disagree with the Seller review',
+            'explanation' => 'Please have Admin review the evidence and decision.',
+            'confirm_escalation' => 1,
+        ])->assertRedirect();
+        $sellerRequest->forceFill(['created_at' => now()->subDays(4)])->saveQuietly();
+
+        $this->artisan('likhae:auto-approve-expired-seller-refunds')->assertExitCode(0);
+        $this->assertSame(SellerReturnRefundRequest::STATUS_ESCALATED, $sellerRequest->fresh()->status);
+        $this->assertNotNull($sellerRequest->fresh()->dispute_id);
+        $this->assertSame(0, $sellerRequest->events()->where('event_type', 'SELLER_AUTO_APPROVED_TIMEOUT')->count());
+    }
+
     public function test_return_form_disables_gcash_and_requires_cash_acknowledgement(): void
     {
         [$buyer, , $order, $item] = $this->createDeliveredOrder();

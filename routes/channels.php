@@ -46,7 +46,7 @@ Broadcast::channel('shipments.{shipment}', function ($user, Shipment $shipment) 
     }
 
     if ($user->isAccountType('RIDER')) {
-        return $shipment->riderAssignments
+        $isDeliveryRider = $shipment->riderAssignments
             ->contains(function ($assignment) use ($shipment, $user): bool {
                 if ((int) $assignment->riderProfile?->user_id !== (int) $user->id
                     || $assignment->riderProfile?->status !== 'ACTIVE'
@@ -65,6 +65,37 @@ Broadcast::channel('shipments.{shipment}', function ($user, Shipment $shipment) 
                     && in_array($shipment->current_status, ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'], true)
                     && in_array($assignment->status, ['ACCEPTED', 'IN_PROGRESS'], true);
             });
+        if ($isDeliveryRider) {
+            return true;
+        }
+
+        $rider = $user->riderProfile;
+        if (! $rider || $rider->status !== 'ACTIVE') {
+            return false;
+        }
+        $schema = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
+        if (! $schema->shipmentReturnsReady()) {
+            return false;
+        }
+
+        $returnWorkflow = \App\Models\Logistics\ShipmentReturnWorkflow::query()
+            ->where('shipment_id', $shipment->id)
+            ->whereIn('status', \App\Models\Logistics\ShipmentReturnWorkflow::OPEN_STATUSES)
+            ->first();
+        if (! $returnWorkflow) {
+            return false;
+        }
+
+        $originalRiderStillHoldsParcel = in_array($returnWorkflow->status, [
+            \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CENTER_HANDOFF,
+            \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CENTER_RECEIPT,
+        ], true) && (int) $returnWorkflow->originalDeliveryAssignment()->value('rider_profile_id') === (int) $rider->id;
+        if ($originalRiderStillHoldsParcel || (int) $returnWorkflow->return_rider_profile_id === (int) $rider->id) {
+            return true;
+        }
+
+        return $schema->shipmentReturnEnhancementsReady()
+            && (int) $returnWorkflow->pending_return_rider_profile_id === (int) $rider->id;
     }
 
     return false;

@@ -79,8 +79,13 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
 
         Route::get('/returns', [LogisticsReturnWorkflowController::class, 'index'])->name('returns');
+        Route::post('/returns/receive-batch', [LogisticsReturnWorkflowController::class, 'receiveBatch'])->name('returns.receive-batch');
         Route::post('/returns/{workflow}/receive', [LogisticsReturnWorkflowController::class, 'receive'])->whereNumber('workflow')->name('returns.receive');
         Route::post('/returns/{workflow}/assign', [LogisticsReturnWorkflowController::class, 'assign'])->whereNumber('workflow')->name('returns.assign');
+        Route::post('/returns/{workflow}/prepare-transfer', [LogisticsReturnWorkflowController::class, 'prepareTransfer'])->whereNumber('workflow')->name('returns.prepare-transfer');
+        Route::post('/returns/{workflow}/handoff', [LogisticsReturnWorkflowController::class, 'requestHandoff'])->whereNumber('workflow')->name('returns.handoff');
+        Route::post('/returns/{workflow}/handoff/cancel', [LogisticsReturnWorkflowController::class, 'cancelHandoff'])->whereNumber('workflow')->name('returns.handoff.cancel');
+        Route::post('/returns/{workflow}/exceptions/resolve', [LogisticsReturnWorkflowController::class, 'resolveException'])->whereNumber('workflow')->name('returns.exceptions.resolve');
 
         Route::get('/pickups', [DispatchController::class, 'pickups'])->name('pickups');
         Route::post('/pickups/requests/{pickupRequest}/assign', [DispatchController::class, 'assignSellerPickupRequest'])

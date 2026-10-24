@@ -3,6 +3,7 @@
 namespace App\Services\Marketplace;
 
 use App\Http\Requests\SaveSellerProductRequest;
+use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductImage;
 use App\Models\Seller\ProductOptionValue;
@@ -17,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -32,15 +34,35 @@ class SellerCatalogService
         $storedPaths = [];
         $deletedPaths = [];
         $previousModerationFingerprint = null;
+        $isNewProduct = $product === null;
+        $idempotencyKey = $isNewProduct ? $request->input('idempotency_key') : null;
+        $idempotencyReady = $isNewProduct && filled($idempotencyKey) && $this->productIdempotencyColumnsReady();
+        $submissionFingerprint = $idempotencyReady ? $this->submissionFingerprint($request) : null;
+
+        if ($idempotencyReady) {
+            $existing = Product::withTrashed()->where('seller_profile_id', $seller->id)
+                ->where('submission_token', $idempotencyKey)->first();
+            if ($existing) {
+                $this->assertIdempotencyFingerprintMatches($existing, (string) $submissionFingerprint);
+                abort_if($existing->trashed(), 409, 'This product submission was already used for a deleted product. Start a new product form to create another listing.');
+
+                return $existing->load(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'variants.productImage']);
+            }
+        }
 
         try {
-            $savedProduct = DB::transaction(function () use ($seller, $request, $product, &$storedPaths, &$deletedPaths, &$previousModerationFingerprint): Product {
-                $product ??= new Product(['seller_profile_id' => $seller->id]);
+            $savedProduct = DB::transaction(function () use ($seller, $request, $product, $isNewProduct, $idempotencyReady, $idempotencyKey, $submissionFingerprint, &$storedPaths, &$deletedPaths, &$previousModerationFingerprint): Product {
+                if ($product?->exists) {
+                    $product = Product::query()->whereKey($product->id)->lockForUpdate()->firstOrFail();
+                } else {
+                    $product = new Product(['seller_profile_id' => $seller->id]);
+                }
 
                 if ((int) $product->seller_profile_id !== (int) $seller->id) {
                     abort(403);
                 }
 
+                $wasActive = $product->exists && $product->status === 'ACTIVE';
                 if ($product->exists) {
                     $previousModerationFingerprint = $this->moderation->revisionFingerprint($product);
                 }
@@ -50,6 +72,10 @@ class SellerCatalogService
                     // Sellers may correct the listing while it is suspended, but
                     // only Admin can reinstate or republish it.
                     $status = 'SUSPENDED';
+                }
+                $syncVariantData = $status === 'ACTIVE' || $this->hasCompleteVariantInput($request);
+                if ($product->exists && $syncVariantData) {
+                    $this->assertOrderLinkedVariantsPreserved($product, $request);
                 }
 
                 $productAttributes = [
@@ -63,6 +89,10 @@ class SellerCatalogService
                     'published_at' => $status === 'ACTIVE' ? ($product->published_at ?: now()) : $product->published_at,
                     'archived_at' => $status === 'ARCHIVED' ? now() : null,
                 ];
+                if ($isNewProduct && $idempotencyReady) {
+                    $productAttributes['submission_token'] = $idempotencyKey;
+                    $productAttributes['submission_fingerprint'] = $submissionFingerprint;
+                }
                 if (Schema::hasColumn('products', 'flash_sale_starts_at')
                     && Schema::hasColumn('products', 'flash_sale_ends_at')) {
                     $productAttributes['flash_sale_starts_at'] = $request->input('flash_sale_starts_at') ?: null;
@@ -72,26 +102,52 @@ class SellerCatalogService
 
                 $product->save();
 
-                if ($request->input('product_type') === 'variations') {
+                if ($syncVariantData && $request->input('product_type') === 'variations') {
                     $this->assertVariationOptions((array) $request->input('options', []));
                 }
 
-                $optionValuesByKey = $this->syncOptions($product, (array) $request->input('options', []));
+                $optionValuesByKey = $syncVariantData
+                    ? $this->syncOptions($product, (array) $request->input('options', []))
+                    : [];
                 $this->removeImages($product, (array) $request->input('delete_image_ids', []), $deletedPaths);
+                $this->promotePrimaryImageIfNeeded($product);
                 $newImageReferences = $this->storeImages(
                     $seller,
                     $product,
                     $request,
                     $storedPaths,
                 );
-                $this->syncVariants($product, $request, $optionValuesByKey, $newImageReferences);
+                if ($syncVariantData) {
+                    $this->syncVariants($product, $request, $optionValuesByKey, $newImageReferences);
+                }
+
+                if ($status === 'ACTIVE') {
+                    $allowLegacyImageGap = $wasActive
+                        && ! $this->hasValidProductImage($product)
+                        && $request->file('image') === null
+                        && empty($request->file('images'))
+                        && empty($request->input('delete_image_ids', []));
+                    $this->assertStoredProductCanBePublished($product, $allowLegacyImageGap, $wasActive);
+                }
 
                 return $product->load(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'variants.productImage']);
             });
-        } catch (Throwable $exception) {
-            foreach ($storedPaths as $path) {
-                Storage::disk('public')->delete($path);
+        } catch (QueryException $exception) {
+            $this->deleteStoredPaths($storedPaths);
+            if ($idempotencyReady) {
+                $existing = Product::withTrashed()->where('seller_profile_id', $seller->id)
+                    ->where('submission_token', $idempotencyKey)->first();
+                if ($existing) {
+                    $this->assertIdempotencyFingerprintMatches($existing, (string) $submissionFingerprint);
+                    abort_if($existing->trashed(), 409, 'This product submission was already used for a deleted product. Start a new product form to create another listing.');
+
+                    return $existing->load(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'variants.productImage']);
+                }
             }
+
+            throw $exception;
+        } catch (Throwable $exception) {
+            $this->deleteStoredPaths($storedPaths);
 
             throw $exception;
         }
@@ -122,6 +178,9 @@ class SellerCatalogService
         abort_unless($product->status !== 'SUSPENDED', 403, 'Suspended listings require Admin review before they can be reinstated.');
 
         $newStatus = $product->status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED';
+        if ($newStatus === 'ACTIVE') {
+            $this->assertStoredProductCanBePublished($product);
+        }
         $product->update([
             'status' => $newStatus,
             'archived_at' => $newStatus === 'ARCHIVED' ? now() : null,
@@ -131,6 +190,22 @@ class SellerCatalogService
         $this->syncFlashSaleReminders($product->fresh());
 
         return $product;
+    }
+
+    public function moveToRecentlyDeleted(SellerProfile $seller, Product $product): void
+    {
+        abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
+
+        DB::transaction(function () use ($seller, $product): void {
+            $lockedProduct = Product::query()->whereKey($product->id)->lockForUpdate()->firstOrFail();
+            abort_unless((int) $lockedProduct->seller_profile_id === (int) $seller->id, 403);
+            if ($this->productHasUnfinishedOrders($lockedProduct)) {
+                throw ValidationException::withMessages([
+                    'product' => 'This product is linked to an order that is still in progress. Complete or cancel the order before moving it to Recently Deleted. You can archive it instead.',
+                ]);
+            }
+            $lockedProduct->delete();
+        });
     }
 
     public function updateSingleStock(SellerProfile $seller, Product $product, int $stock): void
@@ -149,6 +224,7 @@ class SellerCatalogService
                 ->lockForUpdate()
                 ->get();
             abort_unless($variants->count() === 1, 409, 'Edit variant stock from the product editor.');
+            $this->assertFlashSaleAllocationFitsStock($variants->first(), $stock);
             $variants->first()->update(['stock' => $stock]);
         }, attempts: 3);
 
@@ -175,6 +251,7 @@ class SellerCatalogService
                 ->where('product_id', $product->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+            $this->assertFlashSaleAllocationFitsStock($lockedVariant, $stock);
             $lockedVariant->update(['stock' => $stock]);
 
             return $lockedVariant;
@@ -185,10 +262,269 @@ class SellerCatalogService
         return $updatedVariant;
     }
 
+    private function assertFlashSaleAllocationFitsStock(ProductVariant $variant, int $stock): void
+    {
+        if ($variant->flash_sale_allocation === null) {
+            return;
+        }
+
+        $remainingAllocation = max(0, (int) $variant->flash_sale_allocation - (int) $variant->flash_sale_sold);
+        if ($remainingAllocation > $stock) {
+            throw ValidationException::withMessages([
+                'stock' => 'Stock cannot be reduced below the remaining flash-sale allocation. Update the allocation first.',
+            ]);
+        }
+    }
+
     private function syncFlashSaleReminders(Product $product): void
     {
         if (Schema::hasTable('flash_sale_reminders')) {
             app(FlashSaleReminderService::class)->syncProduct($product);
+        }
+    }
+
+    private function productIdempotencyColumnsReady(): bool
+    {
+        return Schema::hasTable('products')
+            && Schema::hasColumn('products', 'submission_token')
+            && Schema::hasColumn('products', 'submission_fingerprint');
+    }
+
+    private function submissionFingerprint(SaveSellerProductRequest $request): string
+    {
+        $payload = $request->all();
+        unset($payload['_token'], $payload['_method'], $payload['idempotency_key'], $payload['image'], $payload['images']);
+        $uploads = collect([$request->file('image')])
+            ->merge((array) $request->file('images', []))
+            ->filter(fn ($file): bool => $file instanceof UploadedFile && $file->isValid())
+            ->map(fn (UploadedFile $file): array => [
+                'name' => $file->getClientOriginalName(),
+                'size' => $file->getSize(),
+                'sha256' => hash_file('sha256', $file->getRealPath()),
+            ])
+            ->values()
+            ->all();
+
+        return hash('sha256', json_encode([
+            'fields' => $payload,
+            'uploads' => $uploads,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+    }
+
+    private function assertIdempotencyFingerprintMatches(Product $product, string $fingerprint): void
+    {
+        $storedFingerprint = (string) $product->getAttribute('submission_fingerprint');
+        abort_unless($storedFingerprint !== '' && hash_equals($storedFingerprint, $fingerprint), 409,
+            'This product form was already submitted with different information. Start a new product form to continue.');
+    }
+
+    /** @param array<int, string> $paths */
+    private function deleteStoredPaths(array $paths): void
+    {
+        foreach (array_unique($paths) as $path) {
+            try {
+                Storage::disk('public')->delete($path);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+    }
+
+    private function hasCompleteVariantInput(SaveSellerProductRequest $request): bool
+    {
+        if ($request->input('product_type') === 'single') {
+            return filled($request->input('price')) && filled($request->input('stock'));
+        }
+
+        $options = collect((array) $request->input('options', []))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row): bool => filled($row['name'] ?? null) || filled($row['values'] ?? null));
+        if ($options->isEmpty() || $options->contains(fn (array $row): bool => blank($row['name'] ?? null) || blank($row['values'] ?? null))) {
+            return false;
+        }
+
+        $variants = collect((array) $request->input('variants', []))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row): bool => collect(['id', 'sku', 'values', 'price', 'stock'])
+                ->contains(fn (string $field): bool => filled($row[$field] ?? null)));
+        if ($variants->isEmpty()) {
+            return filled($request->input('price')) && filled($request->input('stock'));
+        }
+
+        return $variants->every(fn (array $row): bool => filled($row['values'] ?? null)
+            && (filled($row['price'] ?? null) || filled($request->input('price')))
+            && (filled($row['stock'] ?? null) || filled($request->input('stock'))));
+    }
+
+    private function assertOrderLinkedVariantsPreserved(Product $product, SaveSellerProductRequest $request): void
+    {
+        $variantIds = $this->unfinishedOrderVariantIds($product);
+        if ($variantIds->isEmpty()) {
+            return;
+        }
+
+        $currentOptions = $product->options()->with('values')->orderBy('sort_order')->get()
+            ->map(fn ($option): array => [
+                mb_strtolower(trim($option->name)),
+                $option->values->sortBy('sort_order')->pluck('value')->map(fn ($value): string => mb_strtolower(trim($value)))->values()->all(),
+            ])->values()->all();
+        $submittedOptions = collect((array) $request->input('options', []))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row): bool => filled($row['name'] ?? null) || filled($row['values'] ?? null))
+            ->map(fn (array $option): array => [
+                mb_strtolower(trim((string) ($option['name'] ?? ''))),
+                collect(preg_split('/[,|]+/', (string) ($option['values'] ?? '')) ?: [])
+                    ->map(fn ($value): string => mb_strtolower(trim((string) $value)))
+                    ->filter()->values()->all(),
+            ])->values()->all();
+        if ($currentOptions !== $submittedOptions) {
+            throw ValidationException::withMessages([
+                'options' => 'Variation options used by an order in progress cannot be changed.',
+            ]);
+        }
+
+        $rows = collect((array) $request->input('variants', []))->filter(fn ($row): bool => is_array($row));
+        foreach ($product->variants()->with('optionValues.option')->whereIn('id', $variantIds)->lockForUpdate()->get() as $variant) {
+            $row = $request->input('product_type') === 'single'
+                ? ((int) $request->input('single_variant_id') === (int) $variant->id ? [
+                    'id' => $variant->id,
+                    'sku' => $request->input('sku'),
+                    'price' => $request->input('price'),
+                    'stock' => $request->input('stock'),
+                    'values' => '',
+                    'is_active' => $request->input('is_active', true),
+                ] : null)
+                : $rows->first(fn (array $candidate): bool => (int) ($candidate['id'] ?? 0) === (int) $variant->id);
+
+            if (! is_array($row)) {
+                throw ValidationException::withMessages([
+                    'variants' => 'A variation tied to an order in progress cannot be removed.',
+                ]);
+            }
+            $expectedValues = $variant->optionValues
+                ->sortBy(fn ($value): int => $value->option?->sort_order ?? 0)
+                ->pluck('value')->map(fn ($value): string => mb_strtolower(trim($value)))->values()->all();
+            $submittedValues = collect(preg_split('/[,|]+/', (string) ($row['values'] ?? '')) ?: [])
+                ->map(fn ($value): string => mb_strtolower(trim((string) $value)))->filter()->values()->all();
+            if ($expectedValues !== $submittedValues) {
+                throw ValidationException::withMessages([
+                    'variants' => 'A variation used by an order in progress cannot be reassigned.',
+                ]);
+            }
+            if (filled($row['sku'] ?? null) && trim((string) $row['sku']) !== $variant->sku) {
+                throw ValidationException::withMessages(['variants' => 'A variation used by an order in progress cannot change its SKU.']);
+            }
+            $price = $row['price'] ?? $request->input('price');
+            if (filled($price) && round((float) $price, 2) !== round((float) $variant->price, 2)) {
+                throw ValidationException::withMessages(['variants' => 'A variation used by an order in progress cannot change its price.']);
+            }
+            if (! filter_var($row['is_active'] ?? true, FILTER_VALIDATE_BOOLEAN)) {
+                throw ValidationException::withMessages(['variants' => 'A variation used by an order in progress cannot be deactivated.']);
+            }
+        }
+    }
+
+    private function unfinishedOrderVariantIds(Product $product): Collection
+    {
+        return $this->unfinishedOrderItems($product)
+            ->whereNotNull('order_items.product_variant_id')
+            ->distinct()
+            ->pluck('order_items.product_variant_id');
+    }
+
+    private function productHasUnfinishedOrders(Product $product): bool
+    {
+        return $this->unfinishedOrderItems($product)->exists();
+    }
+
+    private function unfinishedOrderItems(Product $product)
+    {
+        return DB::table('order_items')
+            ->join('seller_orders', 'seller_orders.id', '=', 'order_items.seller_order_id')
+            ->join('orders', 'orders.id', '=', 'seller_orders.order_id')
+            ->leftJoin('product_variants', 'product_variants.id', '=', 'order_items.product_variant_id')
+            ->where(function ($query) use ($product): void {
+                $query->where('order_items.product_id', $product->id)
+                    ->orWhere('product_variants.product_id', $product->id);
+            })
+            ->whereNotIn('seller_orders.status', ['COMPLETED', 'CANCELLED'])
+            ->whereNotIn('orders.status', ['COMPLETED', 'CANCELLED']);
+    }
+
+    private function hasValidProductImage(Product $product): bool
+    {
+        return $product->images()->get()->contains(fn (ProductImage $image): bool => filled($image->file_path)
+            && Storage::disk('public')->exists($image->file_path));
+    }
+
+    private function promotePrimaryImageIfNeeded(Product $product): void
+    {
+        $validImages = $product->images()->get()->filter(fn (ProductImage $image): bool => filled($image->file_path)
+            && Storage::disk('public')->exists($image->file_path));
+        $primary = $validImages->firstWhere('is_primary', true) ?? $validImages->first();
+        $product->images()->update(['is_primary' => false]);
+        if ($primary) {
+            $primary->update(['is_primary' => true]);
+        }
+    }
+
+    private function assertStoredProductCanBePublished(
+        Product $product,
+        bool $allowLegacyImageGap = false,
+        bool $allowUnavailableCategory = false,
+    ): void {
+        $errors = [];
+        if (blank(trim((string) $product->name))) {
+            $errors['name'] = 'Add a product name before publishing.';
+        }
+        if (blank(trim((string) $product->description))) {
+            $errors['description'] = 'Add a product description before publishing.';
+        }
+
+        $category = Category::query()->with('parent')->find($product->category_id);
+        $seller = $product->sellerProfile()->first();
+        $categoryAllowed = $category
+            && $category->is_active
+            && $category->archived_at === null
+            && (! $category->parent || ($category->parent->is_active && $category->parent->archived_at === null))
+            && ((int) $category->id === (int) $seller?->primary_category_id || (int) $category->parent_id === (int) $seller?->primary_category_id);
+        if (! $categoryAllowed && ! $allowUnavailableCategory) {
+            $errors['category_id'] = 'Choose an active category within your approved line of business before publishing.';
+        }
+
+        $hasPrimary = $product->images()->where('is_primary', true)->get()->contains(fn (ProductImage $image): bool => filled($image->file_path)
+            && Storage::disk('public')->exists($image->file_path));
+        if (! $hasPrimary && ! $allowLegacyImageGap) {
+            $errors['image'] = 'Upload a valid primary product image before publishing.';
+        }
+
+        $options = $product->options()->with('values')->orderBy('sort_order')->get();
+        $activeVariants = $product->variants()->where('is_active', true)->with('optionValues.option')->get();
+        if ($activeVariants->isEmpty()) {
+            $errors['variants'] = 'Add at least one available product variation before publishing.';
+        }
+        foreach ($activeVariants as $index => $variant) {
+            if ((float) $variant->price < 0 || $variant->stock === null || (int) $variant->stock < 0) {
+                $errors["variants.{$index}"] = 'Every available variation needs a valid price and stock quantity.';
+            }
+            if (! in_array($variant->payment_method, ['cod', 'online', 'cod_online'], true)) {
+                $errors["variants.{$index}.payment_method"] = 'Choose a valid payment method for each variation.';
+            }
+        }
+        if ($options->count() > 3 || ($options->isNotEmpty() && $options->contains(fn ($option): bool => blank($option->name) || $option->values->isEmpty()))) {
+            $errors['options'] = 'Every variation type needs a name and at least one option value (maximum three types).';
+        }
+        if ($options->isNotEmpty()) {
+            $expectedOptionIds = $options->pluck('id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+            foreach ($activeVariants as $index => $variant) {
+                $actualOptionIds = $variant->optionValues->pluck('product_option_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+                if ($actualOptionIds !== $expectedOptionIds) {
+                    $errors["variants.{$index}.values"] = 'Select one valid value for every variation type.';
+                }
+            }
+        }
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
         }
     }
 
@@ -276,8 +612,10 @@ class SellerCatalogService
     ): void
     {
         $options = $product->options()->with('values')->orderBy('sort_order')->get();
+        $protectedVariantIds = $this->unfinishedOrderVariantIds($product);
         $variantRows = collect((array) $request->input('variants', []))
-            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')) || filled(Arr::get($row, 'flash_sale_price')) || filled(Arr::get($row, 'flash_sale_allocation')))
             ->values();
 
         if ($variantRows->isEmpty() && $options->isNotEmpty()) {
@@ -300,6 +638,8 @@ class SellerCatalogService
                 'values' => '',
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
+                'flash_sale_price' => $request->input('flash_sale_price'),
+                'flash_sale_allocation' => $request->input('flash_sale_allocation'),
                 'is_active' => true,
             ]]);
         }
@@ -310,8 +650,17 @@ class SellerCatalogService
         $index = 0;
 
         foreach ($variantRows as $row) {
-            $sku = trim((string) Arr::get($row, 'sku')) ?: 'LK-'.$product->id.'-'.Str::upper(Str::random(6));
             $variantId = Arr::get($row, 'id');
+            $variant = null;
+            if (filled($variantId)) {
+                $variant = $product->variants()->whereKey((int) $variantId)->first();
+                if (! $variant) {
+                    throw ValidationException::withMessages([
+                        'variants' => 'One or more variant rows do not belong to this product.',
+                    ]);
+                }
+            }
+            $sku = trim((string) Arr::get($row, 'sku')) ?: ($variant?->sku ?: 'LK-'.$product->id.'-'.Str::upper(Str::random(6)));
 
             if (isset($seenSkus[mb_strtolower($sku)])) {
                 throw ValidationException::withMessages([
@@ -329,16 +678,6 @@ class SellerCatalogService
                 throw ValidationException::withMessages([
                     'variants' => "Variant SKU {$sku} is already used.",
                 ]);
-            }
-
-            $variant = null;
-            if (filled($variantId)) {
-                $variant = $product->variants()->whereKey((int) $variantId)->first();
-                if (! $variant) {
-                    throw ValidationException::withMessages([
-                        'variants' => 'One or more variant rows do not belong to this product.',
-                    ]);
-                }
             }
 
             $valueIds = $this->variantValueIds(
@@ -384,6 +723,8 @@ class SellerCatalogService
                 Arr::get($row, 'discount_type', $request->input('discount_type')),
                 $discountValue,
             );
+            $flashSalePrice = Arr::get($row, 'flash_sale_price');
+            $flashSaleAllocation = Arr::get($row, 'flash_sale_allocation');
             $paymentMethod = strtolower((string) (Arr::get($row, 'payment_method') ?: $request->input('payment_method', 'cod_online')));
             $productImage = $this->resolveVariantImage(
                 $product,
@@ -399,6 +740,8 @@ class SellerCatalogService
                 'price' => (float) $price,
                 'discount_type' => $discountType,
                 'discount_value' => $discountValue,
+                'flash_sale_price' => filled($flashSalePrice) ? (float) $flashSalePrice : null,
+                'flash_sale_allocation' => filled($flashSaleAllocation) ? (int) $flashSaleAllocation : null,
                 'payment_method' => $paymentMethod ?: 'cod_online',
                 'stock' => (int) $stock,
                 'weight_kg' => Arr::get($row, 'weight_kg', $request->input('weight_kg')),
@@ -412,6 +755,11 @@ class SellerCatalogService
             $index++;
         }
 
+        if ($protectedVariantIds->diff($keptIds)->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'variants' => 'A variation tied to an order in progress cannot be removed.',
+            ]);
+        }
         $product->variants()->whereNotIn('id', $keptIds)->update(['is_active' => false, 'is_default' => false]);
     }
 
@@ -473,6 +821,8 @@ class SellerCatalogService
                 'values' => implode(',', $values),
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
+                'flash_sale_price' => $request->input('flash_sale_price'),
+                'flash_sale_allocation' => $request->input('flash_sale_allocation'),
                 'payment_method' => $request->input('payment_method', 'cod_online'),
                 'is_active' => true,
             ];
@@ -610,6 +960,8 @@ class SellerCatalogService
             ]);
         }
 
+        $this->assertImagesNotUsedByUnfinishedOrderVariants($product, $imageIds->all());
+
         $product->variants()->whereIn('product_image_id', $imageIds)->update(['product_image_id' => null]);
 
         foreach ($images as $image) {
@@ -630,12 +982,50 @@ class SellerCatalogService
     {
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
         abort_unless((int) $image->product_id === (int) $product->id, 403);
+        $deletedPath = null;
 
-        if (filled($image->file_path)) {
-            Storage::disk('public')->delete($image->file_path);
+        DB::transaction(function () use ($seller, $product, $image, &$deletedPath): void {
+            $lockedProduct = Product::query()->whereKey($product->id)->lockForUpdate()->firstOrFail();
+            abort_unless((int) $lockedProduct->seller_profile_id === (int) $seller->id, 403);
+            $lockedImage = ProductImage::query()->whereKey($image->id)->where('product_id', $lockedProduct->id)->lockForUpdate()->firstOrFail();
+            $this->assertImagesNotUsedByUnfinishedOrderVariants($lockedProduct, [(int) $lockedImage->id]);
+
+            $remainingValidImage = $lockedProduct->images()->whereKeyNot($lockedImage->id)->get()
+                ->contains(fn (ProductImage $candidate): bool => filled($candidate->file_path)
+                    && Storage::disk('public')->exists($candidate->file_path));
+            if ($lockedProduct->status === 'ACTIVE' && ! $remainingValidImage) {
+                throw ValidationException::withMessages([
+                    'image' => 'An active product must retain a valid primary image. Archive the product before removing its final image.',
+                ]);
+            }
+
+            $lockedProduct->variants()->where('product_image_id', $lockedImage->id)->update(['product_image_id' => null]);
+            $deletedPath = $lockedImage->file_path;
+            $lockedImage->delete();
+            $this->promotePrimaryImageIfNeeded($lockedProduct);
+        });
+
+        if (filled($deletedPath)) {
+            try {
+                Storage::disk('public')->delete($deletedPath);
+            } catch (Throwable $exception) {
+                report($exception);
+            }
         }
+    }
 
-        $image->delete();
+    /** @param array<int, int> $imageIds */
+    private function assertImagesNotUsedByUnfinishedOrderVariants(Product $product, array $imageIds): void
+    {
+        $protectedVariants = $this->unfinishedOrderVariantIds($product);
+        if ($protectedVariants->isNotEmpty() && $product->variants()
+            ->whereIn('id', $protectedVariants)
+            ->whereIn('product_image_id', $imageIds)
+            ->exists()) {
+            throw ValidationException::withMessages([
+                'delete_image_ids' => 'An image assigned to a variation used by an order in progress cannot be removed.',
+            ]);
+        }
     }
 
     private function uniqueSlug(string $name, Product $product): string

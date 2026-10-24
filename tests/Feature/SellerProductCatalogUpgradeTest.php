@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Seller\Category;
 use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\ProductOptionValue;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Models\User;
@@ -41,6 +42,75 @@ class SellerProductCatalogUpgradeTest extends TestCase
         $this->assertSame(4, $product->variants()->count());
         $this->assertSame(2, $product->variants()->firstOrFail()->optionValues()->count());
         $this->assertSame('cod_online', $product->variants()->firstOrFail()->payment_method);
+    }
+
+    public function test_duplicate_product_copies_catalog_as_an_editable_draft_without_reusing_stock_or_images(): void
+    {
+        Storage::fake('public');
+        $this->seed(DatabaseSeeder::class);
+        $seller = User::query()->where('email', 'seller@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+
+        $this->actingAs($seller)->post(route('seller.products.store'), [
+            'product_type' => 'variations',
+            'name' => 'Safe Copy Source',
+            'category_id' => $category->id,
+            'description' => 'A durable handmade product for safe catalog duplication.',
+            'listing_status' => 'active',
+            'options' => [['name' => 'Color', 'values' => 'Red, Blue']],
+            'variants' => [
+                ['values' => 'Red', 'price' => 500, 'stock' => 7, 'discount_type' => 'percentage', 'discount_value' => 10, 'payment_method' => 'online', 'is_active' => 1, 'product_image_ref' => 'upload:primary'],
+                ['values' => 'Blue', 'price' => 400, 'stock' => 3, 'discount_type' => 'fixed', 'discount_value' => 25, 'payment_method' => 'cod', 'is_active' => 1, 'product_image_ref' => 'upload:additional:0'],
+            ],
+            'image' => UploadedFile::fake()->image('copy-source-red.jpg'),
+            'images' => [UploadedFile::fake()->image('copy-source-blue.jpg')],
+        ])->assertRedirect()->assertSessionHas('product_saved.status', 'ACTIVE');
+
+        $source = Product::query()->where('name', 'Safe Copy Source')->with(['images', 'options.values', 'variants.optionValues'])->sole();
+        $sourceVariantIds = $source->variants->modelKeys();
+        $sourceOptionValueIds = $source->options->flatMap(fn ($option) => $option->values)->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $sourceFiles = Storage::disk('public')->allFiles('sellers/'.$seller->sellerProfile->id.'/products/'.$source->id);
+        $this->assertCount(2, $sourceFiles);
+
+        $this->actingAs($seller)
+            ->post(route('seller.products.duplicate', $source))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $copy = Product::query()->whereKeyNot($source->id)->where('name', 'Safe Copy Source (Copy)')
+            ->with(['images', 'options.values', 'variants.optionValues'])
+            ->sole();
+        $this->actingAs($seller)
+            ->get(route('seller.products', ['mode' => 'edit', 'product' => $copy->id]))
+            ->assertOk()
+            ->assertSee('Safe Copy Source (Copy)');
+
+        $this->assertSame('DRAFT', $copy->status);
+        $this->assertNull($copy->published_at);
+        $this->assertNotSame($source->id, $copy->id);
+        $this->assertSame('Safe Copy Source', $source->fresh()->name);
+        $this->assertSame('ACTIVE', $source->fresh()->status);
+        $this->assertSame([7, 3], $source->fresh()->variants()->orderBy('id')->pluck('stock')->map(fn ($stock): int => (int) $stock)->all());
+        $this->assertCount(2, $copy->variants);
+        $this->assertSame([0, 0], $copy->variants->sortBy('price')->pluck('stock')->map(fn ($stock): int => (int) $stock)->values()->all());
+        $this->assertCount(2, array_unique($copy->variants->pluck('sku')->all()));
+        $this->assertNotEqualsCanonicalizing($source->variants->pluck('sku')->all(), $copy->variants->pluck('sku')->all());
+        $this->assertEqualsCanonicalizing(['fixed', 'percentage'], $copy->variants->pluck('discount_type')->all());
+        $this->assertEqualsCanonicalizing(['cod', 'online'], $copy->variants->pluck('payment_method')->all());
+        $this->assertCount(2, $copy->options->flatMap->values);
+        $copyOptionValueIds = $copy->options->flatMap(fn ($option) => $option->values)->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $this->assertNotEqualsCanonicalizing($sourceOptionValueIds, $copyOptionValueIds);
+        $this->assertNotEqualsCanonicalizing($sourceVariantIds, $copy->variants->modelKeys());
+        $this->assertSame(2, $copy->images->count());
+
+        $copyFiles = Storage::disk('public')->allFiles('sellers/'.$seller->sellerProfile->id.'/products/'.$copy->id);
+        $this->assertCount(2, $copyFiles);
+        $this->assertNotEqualsCanonicalizing($sourceFiles, $copyFiles);
+        foreach ([...$sourceFiles, ...$copyFiles] as $path) {
+            Storage::disk('public')->assertExists($path);
+        }
+
+        $this->assertDatabaseMissing('order_items', ['product_id' => $copy->id]);
     }
 
     public function test_variation_types_are_limited_to_three(): void
@@ -285,6 +355,7 @@ class SellerProductCatalogUpgradeTest extends TestCase
 
     public function test_seller_cannot_republish_an_admin_suspended_product(): void
     {
+        Storage::fake('public');
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
         $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
@@ -307,6 +378,8 @@ class SellerProductCatalogUpgradeTest extends TestCase
             'product_type' => 'single',
             'name' => 'Suspended Product Correction Updated',
             'category_id' => $category->id,
+            'description' => 'Corrected content still awaiting administrator review.',
+            'image' => UploadedFile::fake()->image('suspended-correction.jpg'),
             'price' => 100,
             'stock' => 2,
             'sku' => $variant->sku,

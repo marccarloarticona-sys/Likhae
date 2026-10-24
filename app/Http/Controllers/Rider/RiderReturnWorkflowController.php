@@ -18,17 +18,31 @@ class RiderReturnWorkflowController extends Controller
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
 
+        $relations = [
+            'shipment.sellerOrder.order.address',
+            'shipment.sellerOrder.sellerProfile.businessAddress',
+            'originalDeliveryAssignment', 'returnRider.user', 'logisticsCenter.address',
+        ];
+        if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady()) {
+            $relations[] = 'pendingReturnRider.user';
+        }
+
+        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
         $workflows = ShipmentReturnWorkflow::query()
             ->whereIn('status', ShipmentReturnWorkflow::OPEN_STATUSES)
-            ->where(function ($query) use ($rider): void {
-                $query->whereHas('originalDeliveryAssignment', fn ($assignment) => $assignment->where('rider_profile_id', $rider->id))
+            ->where(function ($query) use ($rider, $returnEnhancementsReady): void {
+                $query->where(function ($originalCustody) use ($rider): void {
+                    $originalCustody->whereIn('status', [
+                        ShipmentReturnWorkflow::AWAITING_CENTER_HANDOFF,
+                        ShipmentReturnWorkflow::AWAITING_CENTER_RECEIPT,
+                    ])->whereHas('originalDeliveryAssignment', fn ($assignment) => $assignment->where('rider_profile_id', $rider->id));
+                })
                     ->orWhere('return_rider_profile_id', $rider->id);
+                if ($returnEnhancementsReady) {
+                    $query->orWhere('pending_return_rider_profile_id', $rider->id);
+                }
             })
-            ->with([
-                'shipment.sellerOrder.order.address',
-                'shipment.sellerOrder.sellerProfile.businessAddress',
-                'originalDeliveryAssignment', 'returnRider.user', 'logisticsCenter.address',
-            ])
+            ->with($relations)
             ->latest('updated_at')
             ->paginate(20);
 
@@ -36,6 +50,7 @@ class RiderReturnWorkflowController extends Controller
             'active' => 'returns',
             'rider' => $rider,
             'workflows' => $workflows,
+            'returnEnhancementsReady' => $returnEnhancementsReady,
         ]);
     }
 
@@ -65,6 +80,16 @@ class RiderReturnWorkflowController extends Controller
         return $this->transition($request, $workflow, $returns, 'seller_handoff');
     }
 
+    public function handoffFrom(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    {
+        return $this->transition($request, $workflow, $returns, 'handoff_from');
+    }
+
+    public function handoffTo(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    {
+        return $this->transition($request, $workflow, $returns, 'handoff_to');
+    }
+
     private function transition(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns, string $step): RedirectResponse
     {
         $data = $request->validate([
@@ -78,6 +103,8 @@ class RiderReturnWorkflowController extends Controller
                 'center_handoff' => $returns->handoffToCenterAsOriginalRider($workflow, $request->user(), $data['scan_method'], $data['scanned_code'], $data['notes'] ?? null),
                 'pickup' => $returns->pickupFromCenterAsReturnRider($workflow, $request->user(), $data['scan_method'], $data['scanned_code'], $data['notes'] ?? null),
                 'seller_handoff' => $returns->handoffToSellerAsReturnRider($workflow, $request->user(), $data['scan_method'], $data['scanned_code'], $data['notes'] ?? null),
+                'handoff_from' => $returns->confirmReturnRiderHandoffFrom($workflow, $request->user(), $data['scan_method'], $data['scanned_code']),
+                'handoff_to' => $returns->confirmReturnRiderHandoffTo($workflow, $request->user(), $data['scan_method'], $data['scanned_code']),
                 default => throw new RuntimeException('Unsupported return custody action.'),
             };
         } catch (RuntimeException $exception) {

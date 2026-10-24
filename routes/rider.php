@@ -49,6 +49,8 @@ Route::prefix('rider')
             Route::post('/returns/{workflow}/accept', [RiderReturnWorkflowController::class, 'accept'])->whereNumber('workflow')->name('returns.accept');
             Route::post('/returns/{workflow}/pickup', [RiderReturnWorkflowController::class, 'pickup'])->whereNumber('workflow')->name('returns.pickup');
             Route::post('/returns/{workflow}/seller-handoff', [RiderReturnWorkflowController::class, 'sellerHandoff'])->whereNumber('workflow')->name('returns.seller-handoff');
+            Route::post('/returns/{workflow}/handoff/from', [RiderReturnWorkflowController::class, 'handoffFrom'])->whereNumber('workflow')->name('returns.handoff.from');
+            Route::post('/returns/{workflow}/handoff/to', [RiderReturnWorkflowController::class, 'handoffTo'])->whereNumber('workflow')->name('returns.handoff.to');
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');
             Route::post('/trips/{trip}/accept', [RiderTripController::class, 'accept'])->name('trips.accept');

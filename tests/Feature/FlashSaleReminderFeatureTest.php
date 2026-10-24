@@ -137,6 +137,29 @@ class FlashSaleReminderFeatureTest extends TestCase
             ->assertSee('Remind Me');
     }
 
+    public function test_upcoming_dedicated_flash_price_appears_in_flash_deals_and_supports_existing_reminders(): void
+    {
+        [$buyer, , , $product, $variant] = $this->flashSaleFixture();
+        $variant->update([
+            'discount_type' => 'none',
+            'discount_value' => 0,
+            'flash_sale_price' => 70,
+            'flash_sale_allocation' => 4,
+            'flash_sale_sold' => 0,
+        ]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.flash-deals'))
+            ->assertOk()
+            ->assertSee('Upcoming flash sales')
+            ->assertSee($product->name)
+            ->assertSee('Remind Me');
+
+        $reminder = app(FlashSaleReminderService::class)->register($buyer, $product);
+        $this->assertSame('PENDING', $reminder->status);
+        $this->assertSame(1, FlashSaleReminder::query()->count());
+    }
+
     /** @return array{User,User,SellerProfile,Product,ProductVariant} */
     private function flashSaleFixture(): array
     {

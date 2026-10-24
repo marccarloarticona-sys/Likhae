@@ -2,10 +2,12 @@
 
 namespace App\Services\Fulfillment;
 
+use App\Events\ShipmentTrackingUpdated;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -85,7 +87,10 @@ final class ShipmentTransferService
                 throw new RuntimeException('The shipment is not in the transfer origin hub custody.');
             }
 
-            return tap($leg)->update(['status' => ShipmentTransferLeg::READY]);
+            $leg->update(['status' => ShipmentTransferLeg::READY]);
+            $this->recordReturnProgressForLeg($leg, $actor, 'Return transfer to the seller-side center is ready to join an authorized manifest.');
+
+            return $leg->refresh();
         });
     }
 
@@ -111,6 +116,7 @@ final class ShipmentTransferService
             }
 
             $locked->update(['status' => ShipmentTransferLeg::IN_TRANSIT]);
+            $this->recordReturnProgressForLeg($locked, $actor, 'Return parcel is in transit between sorting centers.');
 
             return $locked->refresh();
         });
@@ -132,11 +138,11 @@ final class ShipmentTransferService
         });
     }
 
-    public function receive(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
+    public function receive(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL', bool $completeReturnReception = true): ShipmentTransferLeg
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($leg, $actor, $scannedCode, $scanMethod): ShipmentTransferLeg {
+        return DB::transaction(function () use ($leg, $actor, $scannedCode, $scanMethod, $completeReturnReception): ShipmentTransferLeg {
             $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
             $shipment = Shipment::query()->whereKey($locked->shipment_id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $locked->destination_logistics_center_id);
@@ -154,19 +160,47 @@ final class ShipmentTransferService
                 'received_by_user_id' => $actor->id,
                 'received_at' => now(),
             ]);
-            $shipment->update([
-                'logistics_center_id' => $locked->destination_logistics_center_id,
-                'current_status' => 'AT_SORTING_CENTER',
-            ]);
-            ShipmentEvent::query()->create([
-                'shipment_id' => $shipment->id,
-                'status' => $shipment->current_status,
-                'actor_user_id' => $actor->id,
-                'logistics_center_id' => $locked->destination_logistics_center_id,
-                'rider_assignment_id' => null,
-                'notes' => 'Transfer leg received after destination custody scan.',
-                'occurred_at' => now(),
-            ]);
+            $returnWorkflow = $this->pendingSellerReturnForLeg($locked);
+            $isReturnTransfer = $returnWorkflow
+                && $shipment->current_status === 'DELIVERY_FAILED'
+                && (int) $locked->destination_logistics_center_id === (int) $shipment->origin_logistics_center_id;
+
+            if ($isReturnTransfer) {
+                $shipment->update(['logistics_center_id' => $locked->destination_logistics_center_id]);
+                if ($completeReturnReception) {
+                    $returnWorkflow->update([
+                        'logistics_center_id' => $locked->destination_logistics_center_id,
+                        'status' => ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT,
+                        'return_exception_reason' => null,
+                        'return_exception_recorded_by_user_id' => null,
+                        'return_exception_recorded_at' => null,
+                    ]);
+                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center confirmed receipt of the return parcel; final return-rider assignment is pending.');
+                } else {
+                    $returnWorkflow->update([
+                        'logistics_center_id' => $locked->destination_logistics_center_id,
+                        'status' => ShipmentReturnWorkflow::RETURN_EXCEPTION,
+                        'return_exception_reason' => 'The parcel was scanned at the seller-side center with a condition exception. Logistics review is required before assignment.',
+                        'return_exception_recorded_by_user_id' => $actor->id,
+                        'return_exception_recorded_at' => now(),
+                    ]);
+                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center scanned the return parcel with a condition exception; Logistics review is required.');
+                }
+            } else {
+                $shipment->update([
+                    'logistics_center_id' => $locked->destination_logistics_center_id,
+                    'current_status' => 'AT_SORTING_CENTER',
+                ]);
+                ShipmentEvent::query()->create([
+                    'shipment_id' => $shipment->id,
+                    'status' => $shipment->current_status,
+                    'actor_user_id' => $actor->id,
+                    'logistics_center_id' => $locked->destination_logistics_center_id,
+                    'rider_assignment_id' => null,
+                    'notes' => 'Transfer leg received after destination custody scan.',
+                    'occurred_at' => now(),
+                ]);
+            }
 
             return $locked->refresh();
         });
@@ -189,6 +223,9 @@ final class ShipmentTransferService
             $locked->update(['status' => $to]);
             if ($beforeReturn) {
                 $beforeReturn($locked, $actor);
+            }
+            if ($scanType === 'TRANSFER_RELEASE') {
+                $this->recordReturnProgressForLeg($locked, $actor, 'Return parcel was released into an authorized inter-center transfer.');
             }
 
             return $locked->refresh();
@@ -271,6 +308,46 @@ final class ShipmentTransferService
             || ! \App\Support\RiderVehicleType::isInterLogistics($rider?->vehicle_type)) {
             throw new RuntimeException('Only the assigned active inter-logistics driver may depart this transfer.');
         }
+    }
+
+    private function pendingSellerReturnForLeg(ShipmentTransferLeg $leg): ?ShipmentReturnWorkflow
+    {
+        if (! $this->schema->shipmentReturnEnhancementsReady()) {
+            return null;
+        }
+
+        return ShipmentReturnWorkflow::query()
+            ->where('shipment_id', $leg->shipment_id)
+            ->where('status', ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+            ->where('return_disposition', ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN)
+            ->where('logistics_center_id', $leg->origin_logistics_center_id)
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function recordReturnProgressForLeg(ShipmentTransferLeg $leg, User $actor, string $notes): void
+    {
+        if (! $this->pendingSellerReturnForLeg($leg)) {
+            return;
+        }
+
+        $shipment = $leg->shipment()->firstOrFail();
+        $center = $leg->originLogisticsCenter()->first();
+        $this->recordReturnTransferEvent($shipment, $actor, $center, $notes);
+    }
+
+    private function recordReturnTransferEvent(Shipment $shipment, User $actor, ?LogisticsCenter $center, string $notes): void
+    {
+        ShipmentEvent::query()->create([
+            'shipment_id' => $shipment->id,
+            'status' => 'DELIVERY_FAILED',
+            'actor_user_id' => $actor->id,
+            'logistics_center_id' => $center?->id,
+            'rider_assignment_id' => null,
+            'notes' => 'RETURN_CUSTODY: '.$notes,
+            'occurred_at' => now(),
+        ]);
+        event(ShipmentTrackingUpdated::fromShipment($shipment->fresh()));
     }
 
     private function assertReady(): void

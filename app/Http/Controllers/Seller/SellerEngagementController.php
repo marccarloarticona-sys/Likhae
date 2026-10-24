@@ -285,10 +285,14 @@ class SellerEngagementController extends Controller
         abort_unless($seller, 403);
 
         $now = now();
-        $vouchers = $seller->vouchers()
-            ->withCount(['sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED')])
-            ->latest()
-            ->paginate(15);
+        $voucherProductTargetingReady = $this->voucherProductTargetingReady();
+        $voucherVisibilityReady = Schema::hasColumn('vouchers', 'visibility');
+        $vouchersQuery = $seller->vouchers()
+            ->withCount(['sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED')]);
+        if ($voucherProductTargetingReady) {
+            $vouchersQuery->with('eligibleProducts:id');
+        }
+        $vouchers = $vouchersQuery->latest()->paginate(15);
         $vouchers->getCollection()->each(function (Voucher $voucher) use ($now): void {
             $used = (int) $voucher->seller_orders_count;
             $status = ! $voucher->is_active ? 'Paused'
@@ -302,6 +306,12 @@ class SellerEngagementController extends Controller
                 : max(0, (int) $voucher->usage_limit - $used));
             $voucher->setAttribute('marketing_status', $status);
         });
+        if (! $voucherProductTargetingReady) {
+            $vouchers->getCollection()->each(function (Voucher $voucher): void {
+                $voucher->setAttribute('applies_to', 'STORE');
+                $voucher->setRelation('eligibleProducts', collect());
+            });
+        }
 
         $activeVoucherCount = $seller->vouchers()
             ->where('is_active', true)
@@ -340,6 +350,10 @@ class SellerEngagementController extends Controller
         return view('seller.marketing', [
             'seller' => $seller,
             'vouchers' => $vouchers,
+            'eligibleProducts' => $seller->products()
+                ->where('status', 'ACTIVE')
+                ->orderBy('name')
+                ->get(['id', 'name']),
             'voucherStats' => [
                 'total' => $vouchers->total(),
                 'active' => $activeVoucherCount,
@@ -348,6 +362,8 @@ class SellerEngagementController extends Controller
             ],
             'platformCampaigns' => $platformCampaigns,
             'platformCampaignsReady' => $platformCampaignsReady,
+            'voucherProductTargetingReady' => $voucherProductTargetingReady,
+            'voucherVisibilityReady' => $voucherVisibilityReady,
         ]);
     }
 
@@ -357,11 +373,18 @@ class SellerEngagementController extends Controller
         abort_unless($seller, 403);
 
         $data = $this->validatedMarketingVoucher($request, $seller);
+        $productIds = $data['product_ids'] ?? [];
+        unset($data['product_ids']);
 
-        Voucher::create($data + [
-            'seller_profile_id' => $seller->id,
-            'is_active' => true,
-        ]);
+        DB::transaction(function () use ($data, $productIds, $seller): void {
+            $voucher = Voucher::create($data + [
+                'seller_profile_id' => $seller->id,
+                'is_active' => true,
+            ]);
+            if ($this->voucherProductTargetingReady()) {
+                $voucher->eligibleProducts()->sync($productIds);
+            }
+        });
 
         return back()->with('status', 'Voucher saved.');
     }
@@ -369,7 +392,15 @@ class SellerEngagementController extends Controller
     public function updateCampaign(Request $request, Voucher $voucher): RedirectResponse
     {
         $seller = $this->sellerForOwnedVoucher($request, $voucher);
-        $voucher->update($this->validatedMarketingVoucher($request, $seller, $voucher));
+        $data = $this->validatedMarketingVoucher($request, $seller, $voucher);
+        $productIds = $data['product_ids'] ?? [];
+        unset($data['product_ids']);
+        DB::transaction(function () use ($voucher, $data, $productIds): void {
+            $voucher->update($data);
+            if ($this->voucherProductTargetingReady()) {
+                $voucher->eligibleProducts()->sync($productIds);
+            }
+        });
 
         return back()->with('status', 'Voucher updated. Existing redemptions and order totals are unchanged.');
     }
@@ -379,6 +410,8 @@ class SellerEngagementController extends Controller
         $request->merge([
             'name' => trim((string) $request->input('name', '')),
             'code' => trim((string) $request->input('code', '')),
+            'applies_to' => strtoupper(trim((string) $request->input('applies_to', 'STORE'))),
+            'visibility' => strtoupper(trim((string) $request->input('visibility', 'PUBLIC'))),
         ]);
 
         $data = $request->validate([
@@ -386,6 +419,10 @@ class SellerEngagementController extends Controller
             'name' => ['required', 'string', 'max:150'],
             'discount_type' => ['required', 'string', 'in:PERCENT,FIXED'],
             'discount_value' => ['required', 'numeric', 'gt:0', 'max:9999999999.99'],
+            'applies_to' => ['required', Rule::in(['STORE', 'PRODUCTS'])],
+            'visibility' => ['required', Rule::in(['PUBLIC', 'CODE_ONLY'])],
+            'product_ids' => ['nullable', 'array'],
+            'product_ids.*' => ['required', 'integer', 'distinct', Rule::exists('products', 'id')],
             'minimum_order_amount' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             'maximum_discount_amount' => ['nullable', 'numeric', 'gt:0', 'max:9999999999.99'],
             'usage_limit' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
@@ -393,6 +430,23 @@ class SellerEngagementController extends Controller
             'starts_at' => ['nullable', 'date'],
             'ends_at' => ['nullable', 'date'],
         ]);
+
+        if (! $this->voucherProductTargetingReady()) {
+            if ($data['applies_to'] === 'PRODUCTS') {
+                throw ValidationException::withMessages([
+                    'applies_to' => 'Selected product vouchers are temporarily unavailable until the voucher targeting schema is installed.',
+                ]);
+            }
+            unset($data['applies_to']);
+        }
+        if (! Schema::hasColumn('vouchers', 'visibility')) {
+            if ($data['visibility'] === 'CODE_ONLY') {
+                throw ValidationException::withMessages([
+                    'visibility' => 'Code-only vouchers are temporarily unavailable until the voucher visibility migration is installed.',
+                ]);
+            }
+            unset($data['visibility']);
+        }
 
         if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 100) {
             throw ValidationException::withMessages([
@@ -420,7 +474,72 @@ class SellerEngagementController extends Controller
             throw ValidationException::withMessages(['code' => 'This code is reserved for a LIKHAE platform campaign.']);
         }
 
+        $voucherProductTargetingReady = $this->voucherProductTargetingReady();
+        $productIds = collect($data['product_ids'] ?? [])->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
+        if ($voucherProductTargetingReady && $data['applies_to'] === 'PRODUCTS') {
+            if ($productIds === []) {
+                throw ValidationException::withMessages([
+                    'product_ids' => 'Select at least one product for this voucher.',
+                ]);
+            }
+            $ownedActiveIds = $seller->products()
+                ->where('status', 'ACTIVE')
+                ->whereIn('id', $productIds)
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->sort()
+                ->values()
+                ->all();
+            if ($ownedActiveIds !== $productIds) {
+                throw ValidationException::withMessages([
+                    'product_ids' => 'Choose only active products from your own store.',
+                ]);
+            }
+        } else {
+            $productIds = [];
+        }
+
+        if ($voucherProductTargetingReady) {
+            $data['product_ids'] = $productIds;
+        }
+
+        if ($voucher && $voucher->buyerClaims()->exists()) {
+            $currentProductIds = $voucherProductTargetingReady
+                ? $voucher->eligibleProducts()->pluck('products.id')->map(fn ($id): int => (int) $id)->sort()->values()->all()
+                : [];
+            $protectedValues = [
+                'code' => [mb_strtoupper((string) $voucher->code), $data['code']],
+                'discount_type' => [strtoupper((string) $voucher->discount_type), strtoupper((string) $data['discount_type'])],
+                'discount_value' => [round((float) $voucher->discount_value, 2), round((float) $data['discount_value'], 2)],
+                'minimum_order_amount' => [round((float) $voucher->minimum_order_amount, 2), round((float) ($data['minimum_order_amount'] ?? 0), 2)],
+                'maximum_discount_amount' => [$voucher->maximum_discount_amount === null ? null : round((float) $voucher->maximum_discount_amount, 2), isset($data['maximum_discount_amount']) ? round((float) $data['maximum_discount_amount'], 2) : null],
+                'usage_limit' => [$voucher->usage_limit === null ? null : (int) $voucher->usage_limit, isset($data['usage_limit']) ? (int) $data['usage_limit'] : null],
+                'per_user_limit' => [$voucher->per_user_limit === null ? null : (int) $voucher->per_user_limit, isset($data['per_user_limit']) ? (int) $data['per_user_limit'] : null],
+                'starts_at' => [$voucher->starts_at?->format('Y-m-d H:i'), ! empty($data['starts_at']) ? Carbon::parse($data['starts_at'])->format('Y-m-d H:i') : null],
+                'ends_at' => [$voucher->ends_at?->format('Y-m-d H:i'), ! empty($data['ends_at']) ? Carbon::parse($data['ends_at'])->format('Y-m-d H:i') : null],
+            ];
+            if ($voucherProductTargetingReady) {
+                $protectedValues['applies_to'] = [strtoupper((string) $voucher->applies_to), strtoupper((string) $data['applies_to'])];
+                $protectedValues['product_ids'] = [$currentProductIds, $productIds];
+            }
+            if (Schema::hasColumn('vouchers', 'visibility')) {
+                $protectedValues['visibility'] = [strtoupper((string) $voucher->visibility), strtoupper((string) $data['visibility'])];
+            }
+            $changedTerms = collect($protectedValues)
+                ->filter(fn (array $values): bool => $values[0] !== $values[1])
+                ->keys();
+            if ($changedTerms->isNotEmpty()) {
+                $errors = $changedTerms->mapWithKeys(fn (string $field): array => [$field => 'This voucher has already been claimed. Create a new voucher to change its terms; you can pause it instead.'])->all();
+                throw ValidationException::withMessages($errors);
+            }
+        }
+
         return $data;
+    }
+
+    private function voucherProductTargetingReady(): bool
+    {
+        return Schema::hasColumn('vouchers', 'applies_to') && Schema::hasTable('voucher_products');
     }
 
     public function toggleCampaign(Request $request, Voucher $voucher): RedirectResponse

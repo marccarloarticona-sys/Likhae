@@ -8,7 +8,7 @@
 <div class="sl-page">
     @if(session('status'))<div class="sl-compliance-feedback" role="status">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="sl-compliance-feedback is-warning" role="alert">{{ $errors->first() }}</div>@endif
-    <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Growth Tools</span><h2>Voucher Center</h2><p>Create, pause, and monitor store vouchers.</p></div><button type="button" class="sl-btn sl-btn-primary" data-modal-open="campaignModal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Create Voucher</button></div>
+    <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Growth Tools</span><h2>Voucher Center</h2><p>Create, pause, and monitor store vouchers.</p></div><div class="sl-toolbar-group"><a href="{{ route('seller.promotions') }}" class="sl-btn sl-btn-ghost">Product Promotions</a><button type="button" class="sl-btn sl-btn-primary" data-modal-open="campaignModal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Create Voucher</button></div></div>
 
     <section class="sl-mini-stats">
         <div><span>Vouchers</span><strong>{{ number_format($voucherStats['total']) }}</strong></div>
@@ -32,10 +32,20 @@
 
     <section class="sl-card">
         <div class="sl-table-toolbar"><div><h3>Store Vouchers</h3><p>Manage discounts available to your customers.</p></div><button type="button" class="sl-btn sl-btn-primary sl-btn-sm" data-modal-open="campaignModal">Create Voucher</button></div>
-        <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Name / Code</th><th>Benefit</th><th>Discount Cap</th><th>Minimum Spend</th><th>Usage Limits</th><th>Validity</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+        @unless($voucherProductTargetingReady)
+            <div class="sl-compliance-feedback is-warning" role="status">Vouchers for selected products are temporarily unavailable while the voucher targeting migration is pending. Existing store vouchers and other marketing tools remain available.</div>
+        @endunless
+        @unless($voucherVisibilityReady)
+            <div class="sl-compliance-feedback is-warning" role="status">Code-only vouchers are temporarily unavailable while the voucher visibility migration is pending.</div>
+        @endunless
+        <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Name / Code</th><th>Applies to</th><th>Access</th><th>Benefit</th><th>Discount Cap</th><th>Minimum Spend</th><th>Usage Limits</th><th>Validity</th><th>Status</th><th>Actions</th></tr></thead><tbody>
             @forelse($vouchers as $voucher)
                 <tr>
                     <td><strong>{{ $voucher->name }}</strong><small class="sl-code">{{ $voucher->code }}</small></td>
+                    <td>{{ $voucher->applies_to === 'PRODUCTS' ? 'Selected products' : 'Entire store' }}
+                        @if($voucher->applies_to === 'PRODUCTS')<small>{{ $voucher->eligibleProducts->count() }} product{{ $voucher->eligibleProducts->count() === 1 ? '' : 's' }}</small>@endif
+                    </td>
+                    <td>{{ ($voucher->visibility ?? 'PUBLIC') === 'CODE_ONLY' ? 'Code only' : 'Public' }}</td>
                     <td>{{ $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 2).'%' : 'PHP '.number_format((float) $voucher->discount_value, 2) }} off</td>
                     <td>{{ $voucher->maximum_discount_amount !== null ? 'PHP '.number_format((float) $voucher->maximum_discount_amount, 2) : 'No cap' }}</td>
                     <td>PHP {{ number_format((float) $voucher->minimum_order_amount, 2) }}</td>
@@ -52,12 +62,13 @@
                             data-voucher-id="{{ $voucher->id }}" data-voucher-name="{{ $voucher->name }}" data-voucher-code="{{ $voucher->code }}"
                             data-discount-type="{{ $voucher->discount_type }}" data-discount-value="{{ $voucher->discount_value }}"
                             data-minimum-order-amount="{{ $voucher->minimum_order_amount }}" data-maximum-discount-amount="{{ $voucher->maximum_discount_amount }}"
+                            data-applies-to="{{ $voucher->applies_to }}" data-product-ids="{{ $voucher->eligibleProducts->pluck('id')->implode(',') }}" data-visibility="{{ $voucher->visibility ?? 'PUBLIC' }}"
                             data-usage-limit="{{ $voucher->usage_limit }}" data-per-user-limit="{{ $voucher->per_user_limit }}"
                             data-starts-at="{{ $voucher->starts_at?->format('Y-m-d\\TH:i') ?? '' }}" data-ends-at="{{ $voucher->ends_at?->format('Y-m-d\\TH:i') ?? '' }}">Edit</button>
                         <form method="POST" action="{{ route('seller.marketing.campaigns.toggle', $voucher) }}" data-confirm-title="{{ $voucher->is_active ? 'Pause voucher?' : 'Activate voucher?' }}" data-confirm-message="{{ $voucher->is_active ? 'Customers will no longer be able to use this voucher.' : 'Customers will be able to use this voucher while it is valid.' }}" data-confirm-label="{{ $voucher->is_active ? 'Pause voucher' : 'Activate voucher' }}" @if($voucher->is_active) data-confirm-tone="danger" @endif>@csrf @method('PATCH')<button type="submit" class="sl-btn sl-btn-ghost sl-btn-sm">{{ $voucher->is_active ? 'Pause' : 'Activate' }}</button></form>
                     </td>
                 </tr>
-            @empty<tr><td colspan="8">No vouchers yet. Create one to get started.</td></tr>@endforelse
+            @empty<tr><td colspan="10">No vouchers yet. Create one to get started.</td></tr>@endforelse
         </tbody></table></div>
         {{ $vouchers->links() }}
     </section>
@@ -66,10 +77,13 @@
 <div class="sl-modal" data-modal="campaignModal" hidden>
     <div class="sl-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="campaignTitle">
         <header><div><span class="sl-eyebrow">Marketing Tool</span><h2 id="campaignTitle">Create Campaign</h2></div><button type="button" class="sl-icon-btn" data-modal-close aria-label="Close">×</button></header>
-        <form method="POST" action="{{ route('seller.marketing.campaigns.store') }}">@csrf
+        <form method="POST" action="{{ route('seller.marketing.campaigns.store') }}" data-voucher-target-form>@csrf
             <div class="sl-form-grid">
             <label class="sl-field sl-span-2"><span>Voucher name</span><input name="name" type="text" required></label>
             <label class="sl-field"><span>Code</span><input name="code" maxlength="80" required></label>
+                <label class="sl-field"><span>Applies to</span><select name="applies_to" data-voucher-target><option value="STORE">Entire store</option><option value="PRODUCTS" @disabled(!$voucherProductTargetingReady)>Selected products</option></select></label>
+                <label class="sl-field"><span>Access</span><select name="visibility"><option value="PUBLIC">Public voucher</option><option value="CODE_ONLY" @disabled(!$voucherVisibilityReady)>Code only</option></select></label>
+                <label class="sl-field sl-span-2" data-voucher-products-field hidden><span>Eligible products</span><select name="product_ids[]" data-voucher-products multiple size="5" @disabled(!$voucherProductTargetingReady)>@foreach($eligibleProducts as $product)<option value="{{ $product->id }}">{{ $product->name }}</option>@endforeach</select><small>Only selected products count toward this voucher and its minimum spend.</small></label>
             <label class="sl-field"><span>Discount type</span><select name="discount_type"><option value="PERCENT">Percent</option><option value="FIXED">Fixed amount</option></select></label>
                 <label class="sl-field"><span>Discount value</span><input name="discount_value" type="number" min="0.01" step="0.01" value="10" required></label>
             <label class="sl-field"><span>Minimum order amount</span><input name="minimum_order_amount" type="number" min="0" step="0.01" value="0"></label>
@@ -86,11 +100,14 @@
 <div class="sl-modal" data-modal="editVoucherModal" hidden>
     <div class="sl-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="editVoucherTitle">
         <header><div><span class="sl-eyebrow">Marketing Tool</span><h2 id="editVoucherTitle">Edit Voucher</h2></div><button type="button" class="sl-icon-btn" data-modal-close aria-label="Close">Ã—</button></header>
-        <form method="POST" action="#" data-voucher-edit-form>@csrf @method('PATCH')
+        <form method="POST" action="#" data-voucher-edit-form data-voucher-target-form>@csrf @method('PATCH')
             <input type="hidden" name="edit_voucher_id" value="">
             <div class="sl-form-grid">
                 <label class="sl-field sl-span-2"><span>Voucher name</span><input name="name" type="text" maxlength="150" required></label>
                 <label class="sl-field"><span>Code</span><input name="code" type="text" maxlength="80" required></label>
+                <label class="sl-field"><span>Applies to</span><select name="applies_to" data-voucher-target><option value="STORE">Entire store</option><option value="PRODUCTS" @disabled(!$voucherProductTargetingReady)>Selected products</option></select></label>
+                <label class="sl-field"><span>Access</span><select name="visibility"><option value="PUBLIC">Public voucher</option><option value="CODE_ONLY" @disabled(!$voucherVisibilityReady)>Code only</option></select></label>
+                <label class="sl-field sl-span-2" data-voucher-products-field hidden><span>Eligible products</span><select name="product_ids[]" data-voucher-products multiple size="5" @disabled(!$voucherProductTargetingReady)>@foreach($eligibleProducts as $product)<option value="{{ $product->id }}">{{ $product->name }}</option>@endforeach</select><small>Only selected products count toward this voucher and its minimum spend.</small></label>
                 <label class="sl-field"><span>Discount type</span><select name="discount_type" required><option value="PERCENT">Percent</option><option value="FIXED">Fixed amount</option></select></label>
                 <label class="sl-field"><span>Discount value</span><input name="discount_value" type="number" min="0.01" step="0.01" required></label>
                 <label class="sl-field"><span>Minimum order amount</span><input name="minimum_order_amount" type="number" min="0" step="0.01"></label>

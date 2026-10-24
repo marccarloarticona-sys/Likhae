@@ -35,6 +35,12 @@ Schedule::command('likhae:auto-confirm-delivered-orders')
     ->withoutOverlapping()
     ->onSuccess($recordSchedulerHeartbeat('likhae:auto-confirm-delivered-orders', 'success'))
     ->onFailure($recordSchedulerHeartbeat('likhae:auto-confirm-delivered-orders', 'failure'));
+Schedule::command('likhae:auto-approve-expired-seller-refunds')
+    ->hourly()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping()
+    ->onSuccess($recordSchedulerHeartbeat('likhae:auto-approve-expired-seller-refunds', 'success'))
+    ->onFailure($recordSchedulerHeartbeat('likhae:auto-approve-expired-seller-refunds', 'failure'));
 Schedule::command('likhae:expire-rider-assignment-offers')
     ->everyMinute()
     ->timezone('Asia/Manila')

@@ -14,6 +14,7 @@ use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Logistics\TransferManifestItem;
 use App\Models\Logistics\Waybill;
@@ -550,6 +551,10 @@ class ShipmentWorkflowService
                 }
             } else {
                 $this->requireShipmentStatus($shipment, ['SORTED', 'DELIVERY_FAILED'], 'assign a delivery rider');
+
+                if (app(ShipmentReturnWorkflowService::class)->hasOpenWorkflow($shipment)) {
+                    throw new RuntimeException('This undelivered parcel must return to Logistics before another delivery assignment can start.');
+                }
 
                 if ($this->isUnreceivedCrossHubShipment($shipment)) {
                     throw new RuntimeException('This shipment must be received by its destination hub before final-mile delivery assignment.');
@@ -1242,7 +1247,14 @@ class ShipmentWorkflowService
         }
 
         foreach ($quantityByVariant as $variantId => $quantity) {
-            $variants->get($variantId)->increment('stock', $quantity);
+            $variant = $variants->get($variantId);
+            $variant->increment('stock', $quantity);
+            $flashUnits = (int) $items
+                ->where('product_variant_id', (int) $variantId)
+                ->sum('flash_sale_quantity');
+            if ($flashUnits > 0) {
+                $variant->decrement('flash_sale_sold', min($flashUnits, (int) $variant->flash_sale_sold));
+            }
         }
 
         $cancelledAssignmentIds = collect();
@@ -1413,6 +1425,10 @@ class ShipmentWorkflowService
             $this->requireShipmentStatus($shipment, ['PICKUP_ASSIGNED'], 'start pickup');
         } else {
             $this->requireShipmentStatus($shipment, ['ASSIGNED_TO_RIDER', 'DELIVERY_FAILED'], 'start delivery');
+            if ($shipment->current_status === 'DELIVERY_FAILED'
+                && app(ShipmentReturnWorkflowService::class)->hasOpenWorkflow($shipment)) {
+                throw new RuntimeException('Return the undelivered parcel to Logistics before starting another delivery attempt.');
+            }
         }
         $this->localTrips->assertAssignmentMayStart($assignment);
         $assignment->update([
@@ -1584,14 +1600,28 @@ class ShipmentWorkflowService
             'completed_at' => $status === 'RESCHEDULED' && ! $returnToSellerInitiated ? null : now(),
         ]);
 
+        $returnSchema = app(LogisticsSchemaReadiness::class);
+        $routeReturnCreated = false;
+        if ($returnSchema->shipmentReturnsReady()
+            && ($returnToSellerInitiated || $returnSchema->shipmentReturnEnhancementsReady())) {
+            app(ShipmentReturnWorkflowService::class)->initiateFromDeliveryFailure(
+                $shipment,
+                $assignment,
+                $actor,
+                $reason,
+                $returnToSellerInitiated
+                    ? ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN
+                    : ShipmentReturnWorkflow::DISPOSITION_REDELIVERY,
+            );
+            $routeReturnCreated = true;
+        }
+
         $eventNote = $returnToSellerInitiated
             ? 'RETURN_TO_SELLER_INITIATED: '.$reason.' Reverse custody handover is still required before the parcel can be marked RETURNED.'
-            : $reason;
+            : ($routeReturnCreated
+                ? 'RETURN_TO_CENTER_PENDING: '.$reason.' The original delivery rider retains custody until Logistics confirms receipt.'
+                : $reason);
         $this->recordEvent($shipment, $shipmentStatus, $actor, $eventNote, $assignment);
-
-        if ($returnToSellerInitiated && app(LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
-            app(ShipmentReturnWorkflowService::class)->initiateFromDeliveryFailure($shipment, $assignment, $actor, $reason);
-        }
     }
 
     private function rejectAssignment(RiderAssignment $assignment, Shipment $shipment, User $actor, string $reason): void

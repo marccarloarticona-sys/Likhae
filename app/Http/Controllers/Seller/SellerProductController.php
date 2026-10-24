@@ -7,6 +7,8 @@ use App\Http\Requests\SaveSellerProductRequest;
 use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductImage;
+use App\Models\Seller\ProductOption;
+use App\Models\Seller\ProductOptionValue;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
 use App\Services\Marketplace\ProductCatalogService;
@@ -17,6 +19,11 @@ use App\Support\InventoryStockStatus;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Throwable;
 use Illuminate\View\View;
 
 class SellerProductController extends Controller
@@ -137,6 +144,7 @@ class SellerProductController extends Controller
 
         return view('seller.products', [
             'mode' => $mode,
+            'submissionToken' => $mode === 'add' ? (string) old('idempotency_key', Str::uuid()) : null,
             'seller' => $seller,
             'products' => $products,
             'sellerProducts' => $sellerProducts,
@@ -199,6 +207,154 @@ class SellerProductController extends Controller
         ]);
     }
 
+    public function duplicate(Request $request, Product $product): RedirectResponse
+    {
+        $seller = $this->seller($request);
+        abort_unless((int) $product->seller_profile_id === (int) $seller->id, 404);
+        $copiedImagePaths = [];
+
+        try {
+            $duplicate = DB::transaction(function () use ($seller, $product, &$copiedImagePaths): Product {
+                $source = $seller->products()
+                    ->with(['images', 'options.values', 'variants.optionValues', 'variants.productImage'])
+                    ->whereKey($product->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $copyName = mb_substr($source->name.' (Copy)', 0, 200);
+                $productAttributes = [
+                    'seller_profile_id' => $seller->id,
+                    'category_id' => $source->category_id,
+                    'name' => $copyName,
+                    'slug' => 'copy-'.$source->id.'-'.Str::lower(Str::random(12)),
+                    'description' => $source->description,
+                    'status' => 'DRAFT',
+                    'published_at' => null,
+                    'archived_at' => null,
+                ];
+                foreach (['purchase_limit_per_buyer', 'flash_sale_starts_at', 'flash_sale_ends_at', 'submission_token', 'submission_fingerprint'] as $optionalColumn) {
+                    if (Schema::hasColumn('products', $optionalColumn)) {
+                        $productAttributes[$optionalColumn] = in_array($optionalColumn, ['flash_sale_starts_at', 'flash_sale_ends_at'], true)
+                            ? null
+                            : ($optionalColumn === 'purchase_limit_per_buyer' ? $source->{$optionalColumn} : null);
+                    }
+                }
+                $copy = Product::query()->create($productAttributes);
+
+                $suffix = '-copy-'.$copy->id;
+                $copy->slug = mb_substr(Str::slug($copyName), 0, 220 - strlen($suffix)).$suffix;
+                $copy->save();
+
+                $optionValueIds = [];
+                foreach ($source->options as $sourceOption) {
+                    $option = ProductOption::query()->create([
+                        'product_id' => $copy->id,
+                        'name' => $sourceOption->name,
+                        'sort_order' => $sourceOption->sort_order,
+                    ]);
+                    foreach ($sourceOption->values as $sourceValue) {
+                        $value = ProductOptionValue::query()->create([
+                            'product_option_id' => $option->id,
+                            'value' => $sourceValue->value,
+                            'sort_order' => $sourceValue->sort_order,
+                        ]);
+                        $optionValueIds[(int) $sourceValue->id] = (int) $value->id;
+                    }
+                }
+
+                $imageIds = [];
+                foreach ($source->images as $sourceImage) {
+                    $newPath = null;
+                    if (filled($sourceImage->file_path) && Storage::disk('public')->exists($sourceImage->file_path)) {
+                        $extension = pathinfo($sourceImage->file_path, PATHINFO_EXTENSION);
+                        $filename = Str::lower(Str::random(40)).($extension !== '' ? '.'.$extension : '');
+                        $newPath = "sellers/{$seller->id}/products/{$copy->id}/{$filename}";
+                        if (! Storage::disk('public')->copy($sourceImage->file_path, $newPath)) {
+                            throw new \RuntimeException('A product image could not be copied safely.');
+                        }
+                        $copiedImagePaths[] = $newPath;
+                    }
+
+                    if ($newPath === null) {
+                        continue;
+                    }
+
+                    $attributes = [
+                        'product_id' => $copy->id,
+                        'file_path' => $newPath,
+                        'alt_text' => $copyName,
+                        'is_primary' => $sourceImage->is_primary,
+                        'sort_order' => $sourceImage->sort_order,
+                    ];
+                    if (DB::getSchemaBuilder()->hasColumn('product_images', 'product_option_value_id')) {
+                        $sourceValueId = (int) $sourceImage->product_option_value_id;
+                        $attributes['product_option_value_id'] = $optionValueIds[$sourceValueId] ?? null;
+                    }
+                    $image = ProductImage::query()->create($attributes);
+                    $imageIds[(int) $sourceImage->id] = (int) $image->id;
+                }
+
+                foreach ($source->variants as $index => $sourceVariant) {
+                    $variantAttributes = [
+                        'product_id' => $copy->id,
+                        'sku' => $this->duplicateSku($copy, (int) $index + 1),
+                        'price' => $sourceVariant->price,
+                        'stock' => 0,
+                        'is_default' => $sourceVariant->is_default,
+                        'is_active' => $sourceVariant->is_active,
+                    ];
+                    foreach (['discount_type', 'discount_value', 'payment_method', 'weight_kg'] as $copiedColumn) {
+                        if (Schema::hasColumn('product_variants', $copiedColumn)) {
+                            $variantAttributes[$copiedColumn] = $sourceVariant->{$copiedColumn};
+                        }
+                    }
+                    foreach (['flash_sale_price', 'flash_sale_allocation'] as $resetColumn) {
+                        if (Schema::hasColumn('product_variants', $resetColumn)) {
+                            $variantAttributes[$resetColumn] = null;
+                        }
+                    }
+                    if (Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+                        $variantAttributes['flash_sale_sold'] = 0;
+                    }
+                    if (Schema::hasColumn('product_variants', 'product_image_id')) {
+                        $variantAttributes['product_image_id'] = $imageIds[(int) $sourceVariant->product_image_id] ?? null;
+                    }
+                    $variant = ProductVariant::query()->create($variantAttributes);
+
+                    $newOptionValueIds = $sourceVariant->optionValues
+                        ->map(fn (ProductOptionValue $value): ?int => $optionValueIds[(int) $value->id] ?? null)
+                        ->filter()
+                        ->values()
+                        ->all();
+                    if ($newOptionValueIds !== []) {
+                        $variant->optionValues()->sync($newOptionValueIds);
+                    }
+                }
+
+                return $copy->load(['images.optionValue.option', 'options.values', 'variants.optionValues.option', 'variants.productImage']);
+            }, attempts: 3);
+        } catch (Throwable $exception) {
+            foreach (array_unique($copiedImagePaths) as $path) {
+                Storage::disk('public')->delete($path);
+            }
+
+            throw $exception;
+        }
+
+        return redirect()
+            ->route('seller.products', ['mode' => 'edit', 'product' => $duplicate->id])
+            ->with('status', 'Product duplicated as a draft. Review its details and add stock before publishing.');
+    }
+
+    private function duplicateSku(Product $product, int $variantIndex): string
+    {
+        do {
+            $sku = 'LK-'.$product->id.'-COPY-'.$variantIndex.'-'.Str::upper(Str::random(6));
+        } while (ProductVariant::query()->where('sku', $sku)->exists());
+
+        return $sku;
+    }
+
     public function stock(Request $request, Product $product): RedirectResponse
     {
         $data = $request->validate([
@@ -240,8 +396,7 @@ class SellerProductController extends Controller
     public function destroy(Request $request, Product $product): RedirectResponse
     {
         $seller = $this->seller($request);
-        abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
-        $product->delete();
+        $this->sellerCatalog->moveToRecentlyDeleted($seller, $product);
 
         return redirect()->route('seller.products')->with('status', 'Product moved to Recently Deleted. It will be permanently removed after 30 days.');
     }
@@ -501,6 +656,7 @@ class SellerProductController extends Controller
             'category' => $product->category?->name ?? 'Uncategorized',
             'category_id' => $product->category_id,
             'price' => (float) ($activeVariants->min(fn (ProductVariant $variant) => $variant->final_price) ?? 0),
+            'base_price' => (float) ($activeVariants->min(fn (ProductVariant $variant) => (float) $variant->price) ?? 0),
             'stock' => (int) $activeVariants->sum('stock'),
             'low_stock_count' => $activeVariants->filter(fn (ProductVariant $variant): bool => InventoryStockStatus::isLow((int) $variant->stock))->count(),
             'out_of_stock_count' => $activeVariants->filter(fn (ProductVariant $variant): bool => InventoryStockStatus::isOut((int) $variant->stock))->count(),
@@ -552,6 +708,8 @@ class SellerProductController extends Controller
                 'price' => $variant->price,
                 'discount_type' => $variant->resolved_discount_type,
                 'discount_value' => $variant->discount_value,
+                'flash_sale_price' => $variant->flash_sale_price,
+                'flash_sale_allocation' => $variant->flash_sale_allocation,
                 'payment_method' => $variant->payment_method ?: 'cod_online',
                 'stock' => $variant->stock,
                 'weight_kg' => $variant->weight_kg,

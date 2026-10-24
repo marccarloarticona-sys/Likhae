@@ -77,6 +77,23 @@ final class LogisticsSchemaReadiness
         return $this->hasTable('shipment_return_workflows');
     }
 
+    public function shipmentReturnEnhancementsReady(): bool
+    {
+        return $this->hasColumns('shipment_return_workflows', [
+            'return_disposition',
+            'pending_return_rider_profile_id',
+            'handoff_authorized_by_user_id',
+            'handoff_authorized_at',
+            'handoff_reason',
+            'handoff_from_confirmed_at',
+            'handoff_to_confirmed_at',
+            'handoff_completed_at',
+            'return_exception_reason',
+            'return_exception_recorded_by_user_id',
+            'return_exception_recorded_at',
+        ]);
+    }
+
     private function hasTable(string $table): bool
     {
         try {

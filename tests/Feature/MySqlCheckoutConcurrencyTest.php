@@ -147,6 +147,41 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertNotNull($center->fresh());
     }
 
+    public function test_mysql_concurrent_checkouts_never_sell_more_than_flash_allocation_at_flash_price(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller, $category] = $this->sellerRoutingFixture('flash-allocation-race');
+        $variant = $this->variant($seller, $category, 'flash-allocation-race', 5);
+        $product = $variant->product()->firstOrFail();
+        $product->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+        ]);
+        $variant->update([
+            'flash_sale_price' => 80,
+            'flash_sale_allocation' => 2,
+            'flash_sale_sold' => 0,
+        ]);
+        [$buyerA, $addressA, $itemA] = $this->buyerCart($variant, 'flash-allocation-a', 2);
+        [$buyerB, $addressB, $itemB] = $this->buyerCart($variant, 'flash-allocation-b', 2);
+
+        $results = $this->runWorkers([
+            ['buyer' => $buyerA, 'address' => $addressA, 'item' => $itemA, 'key' => (string) str()->uuid()],
+            ['buyer' => $buyerB, 'address' => $addressB, 'item' => $itemB, 'key' => (string) str()->uuid()],
+        ]);
+
+        $this->assertSame(2, collect($results)->where('status', 'success')->count(), json_encode($results));
+        $this->assertSame(2, (int) $variant->fresh()->flash_sale_sold);
+        $this->assertSame(1, (int) $variant->fresh()->stock);
+        $discountedUnits = (int) DB::table('order_items')
+            ->where('product_variant_id', $variant->id)
+            ->where('unit_price', 80)
+            ->sum('quantity');
+        $this->assertSame(2, $discountedUnits, 'Only the allocated units may be sold at the flash price.');
+        $this->assertSame(4, (int) DB::table('order_items')->where('product_variant_id', $variant->id)->sum('quantity'));
+    }
+
     public function test_mysql_product_lock_prevents_concurrent_checkouts_exceeding_the_buyer_limit(): void
     {
         $this->assertDisposableMySql();
@@ -179,7 +214,7 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $failure = collect($results)->firstWhere('status', 'business_failure');
         $this->assertArrayHasKey('cart', $failure['errors'] ?? []);
         $this->assertStringContainsString('limit of 1', strtolower((string) ($failure['errors']['cart'][0] ?? '')));
-        $this->assertSame(1, OrderItem::query()->where('product_id', $product->id)->sum('quantity'));
+        $this->assertSame(1, (int) OrderItem::query()->where('product_id', $product->id)->sum('quantity'));
         $this->assertSame(1, (int) $variant->fresh()->stock);
     }
 
@@ -203,6 +238,8 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $variantB = $this->variant($seller, $category, 'voucher-race-b', 2);
         [$buyerA, $addressA, $itemA] = $this->buyerCart($variantA, 'voucher-race-a');
         [$buyerB, $addressB, $itemB] = $this->buyerCart($variantB, 'voucher-race-b');
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyerA->id, 'voucher_id' => $voucher->id]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyerB->id, 'voucher_id' => $voucher->id]);
 
         $results = $this->runWorkers([
             ['buyer' => $buyerA, 'address' => $addressA, 'item' => $itemA, 'key' => (string) str()->uuid(), 'voucher' => $voucher->code],

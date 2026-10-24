@@ -206,6 +206,7 @@
           @forelse($sellerOrder->shipments as $shipment)
             @php
                 $shipmentStatus = $shipment->current_status;
+                $returnWorkflow = $shipment->relationLoaded('returnWorkflow') ? $shipment->getRelation('returnWorkflow') : null;
                 $isCancelledShipment = $isCancelledOrder || $sellerOrder->status === 'CANCELLED' || $shipmentStatus === 'CANCELLED';
                 $shipmentTransferLeg = $shipment->transferLegs->firstWhere('status', 'IN_TRANSIT');
                 $shipmentEvents = $shipment->events->sortBy('occurred_at')->values();
@@ -242,9 +243,35 @@
                             ? 'Automatically confirmed receipt'
                             : 'Buyer confirmed receipt';
                     }
+                    $eventNotes = (string) $event->notes;
+                    if (str_starts_with($eventNotes, 'RETURN_TO_CENTER_PENDING:')) {
+                        $eventLabel = 'Pending return to Logistics';
+                    } elseif (str_starts_with($eventNotes, 'RETURN_TO_SELLER_INITIATED:')) {
+                        $eventLabel = 'Return to seller initiated';
+                    } elseif (str_starts_with($eventNotes, 'RETURN_TO_SELLER_COMPLETED:')) {
+                        $eventLabel = 'Return completed after seller receipt';
+                    } elseif (str_starts_with($eventNotes, 'RETURN_CUSTODY:')) {
+                        $returnNotes = strtolower(substr($eventNotes, strlen('RETURN_CUSTODY:')));
+                        $eventLabel = match (true) {
+                            str_contains($returnNotes, 'handed to the sorting center') => 'Rider presented parcel to Logistics',
+                            str_contains($returnNotes, 'sorting center confirmed receipt') => 'Logistics received parcel',
+                            str_contains($returnNotes, 'redelivery workflow') => 'Parcel received for redelivery',
+                            str_contains($returnNotes, 'awaiting transfer') => 'Return transfer to seller-side center pending',
+                            str_contains($returnNotes, 'transfer') && str_contains($returnNotes, 'ready') => 'Return transfer prepared',
+                            str_contains($returnNotes, 'released into') => 'Return parcel released to transfer',
+                            str_contains($returnNotes, 'in transit between') => 'Return in transit between centers',
+                            str_contains($returnNotes, 'confirmed receipt of the return parcel') => 'Seller-side center received parcel',
+                            str_contains($returnNotes, 'return rider assigned') => 'Return rider assigned',
+                            str_contains($returnNotes, 'accepted the seller return') => 'Return rider accepted assignment',
+                            str_contains($returnNotes, 'collected the parcel') => 'Return rider collected parcel',
+                            str_contains($returnNotes, 'custody transferred') => 'Return rider handoff completed',
+                            str_contains($returnNotes, 'handed the parcel to the seller') => 'Parcel handed to seller; confirmation pending',
+                            default => 'Return custody updated',
+                        };
+                    }
                     if ($eventLabel) {
                         $previousTimelineRow = $timelineRows->last();
-                        if (!$previousTimelineRow || $previousTimelineRow['status'] !== $event->status || $previousTimelineRow['label'] !== $eventLabel) {
+                        if (!$previousTimelineRow || $previousTimelineRow['status'] !== $event->status || $previousTimelineRow['label'] !== $eventLabel || str_starts_with($eventNotes, 'RETURN_CUSTODY:')) {
                             $timelineRows->push(['status' => $event->status, 'label' => $eventLabel, 'event' => $event]);
                         }
                     }
@@ -255,7 +282,15 @@
                         $timelineRows->push(['status' => 'CANCELLED', 'label' => 'Order cancelled', 'event' => null]);
                     }
                 } elseif ($isTerminalOrder) {
-                    $timelineRows = $timelineRows->filter(fn ($row) => in_array($row['status'], ['PLACED', $shipmentStatus, 'CANCELLED'], true))->values();
+                    $timelineRows = $timelineRows->filter(fn ($row) => in_array($row['status'], ['PLACED', $shipmentStatus, 'CANCELLED'], true)
+                        || in_array($row['label'], [
+                            'Pending return to Logistics', 'Return to seller initiated', 'Return completed after seller receipt',
+                            'Rider presented parcel to Logistics', 'Logistics received parcel', 'Parcel received for redelivery',
+                            'Return transfer to seller-side center pending', 'Return transfer prepared', 'Return parcel released to transfer',
+                            'Return in transit between centers', 'Seller-side center received parcel', 'Return rider assigned',
+                            'Return rider accepted assignment', 'Return rider collected parcel', 'Return rider handoff completed',
+                            'Parcel handed to seller; confirmation pending', 'Return custody updated',
+                        ], true))->values();
                 }
                 $hasCancellationEvent = $timelineRows->contains(fn ($row): bool => $row['status'] === 'CANCELLED');
                 $currentTimelineRows = $hasCancellationEvent
@@ -280,6 +315,11 @@
                         'AT_SORTING_CENTER' => 'At Sorting Center',
                         default => str($shipmentStatus)->replace('_', ' ')->title()->toString(),
                     };
+                if ($shipmentStatus === 'DELIVERY_FAILED' && ($returnEnhancementsReady ?? false) && $returnWorkflow) {
+                    $shipmentStatusLabel = $returnWorkflow->return_disposition === 'REDELIVERY'
+                        ? 'Pending Redelivery'
+                        : 'Return to Seller in Progress';
+                }
                 $shipmentCardStatusLabel = $isCancelledShipment
                     ? 'Cancelled'
                     : ($shipmentStatus === 'RETURNED'
@@ -299,7 +339,11 @@
                         'SORTED' => ['A delivery rider will be assigned in your area.', 'Logistics'],
                         'ASSIGNED_TO_RIDER' => ['The delivery rider will accept and start the route.', 'Delivery rider'],
                         'OUT_FOR_DELIVERY' => ['Keep your phone available while the rider attempts delivery.', 'Delivery rider'],
-                        'DELIVERY_FAILED' => ['Check for a new attempt or contact the delivery team if needed.', 'Logistics / delivery rider'],
+                        'DELIVERY_FAILED' => (($returnEnhancementsReady ?? false) && $returnWorkflow)
+                            ? ($returnWorkflow->return_disposition === 'REDELIVERY'
+                                ? ['The rider will return the parcel to Logistics after the route; it remains eligible for redelivery.', 'Rider / Logistics']
+                                : ['The parcel is moving through verified return custody; seller receipt is required before it is marked returned.', 'Logistics / return rider / seller'])
+                            : ['Check for a new attempt or contact the delivery team if needed.', 'Logistics / delivery rider'],
                         'DELIVERED' => ($selectedOrderActionState['can_confirm_received'] ?? false)
                             ? ['Check the parcel, then confirm receipt for the order.', 'Buyer']
                             : ['Wait for the remaining parcels; confirm receipt when the order is ready.', 'Buyer'],
@@ -341,15 +385,16 @@
                             <a class="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto" href="{{ $proofUrl }}" target="_blank" rel="noopener noreferrer">View Full Photo</a>
                         </section>
                     @endif
-                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
+                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_bundle'))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
             </section>
           @empty
-            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span></div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
+            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_bundle'))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
           @endforelse
             @if($selectedOrder->sellerOrders->count() > 1)
                 <dl class="mx-3 mt-2 divide-y divide-stone-100 rounded-xl border border-stone-100 bg-stone-50/60 px-4 text-sm sm:mx-5">
                     <div class="flex flex-wrap justify-between gap-3 py-2.5"><dt class="text-stone-600">{{ $sellerOrder->sellerProfile?->business_name ?: 'Shop' }} merchandise subtotal</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $sellerOrder->item_subtotal, 2) }}</dd></div>
                     <div class="flex flex-wrap justify-between gap-3 py-2.5"><dt class="text-stone-600">Shipping fee</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $sellerOrder->shipping_fee, 2) }}</dd></div>
+                    @if((float) $sellerOrder->promotion_discount_total > 0)<div class="flex flex-wrap justify-between gap-3 py-2.5"><dt class="text-stone-600">Seller promotion</dt><dd class="font-semibold text-emerald-700">−&#8369;{{ number_format((float) $sellerOrder->promotion_discount_total, 2) }}</dd></div>@endif
                     <div class="flex flex-wrap justify-between gap-3 py-2.5"><dt class="text-stone-600">Voucher discount</dt><dd class="font-semibold text-stone-900">&#8722;&#8369;{{ number_format((float) $sellerOrder->voucher_discount, 2) }}</dd></div>
                     <div class="flex flex-wrap justify-between gap-3 py-2.5"><dt class="text-stone-600">Additional Care</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $sellerOrder->protection_total, 2) }}</dd></div>
                     <div class="flex flex-wrap justify-between gap-3 border-t border-stone-200 py-3"><dt class="font-bold text-stone-900">Shop order total</dt><dd class="font-bold text-stone-900">&#8369;{{ number_format((float) $sellerOrder->grand_total, 2) }}</dd></div>
@@ -371,6 +416,7 @@
             <dl class="mt-1 divide-y divide-stone-100 text-sm">
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Merchandise subtotal</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->subtotal, 2) }}</dd></div>
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Shipping fee</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->shipping_total, 2) }}</dd></div>
+                @if((float) $selectedOrder->sellerOrders->sum('promotion_discount_total') > 0)<div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Seller promotions</dt><dd class="font-semibold text-emerald-700">−&#8369;{{ number_format((float) $selectedOrder->sellerOrders->sum('promotion_discount_total'), 2) }}</dd></div>@endif
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="min-w-0 text-stone-600">Voucher discount @if($appliedVoucherGroups->isNotEmpty())<span class="mt-1 block text-xs text-stone-500">@foreach($appliedVoucherGroups as $voucherOrders)@php $appliedVoucher = $voucherOrders->first()->voucher; @endphp<span class="mr-2 inline-block">{{ $appliedVoucher->seller_profile_id ? ($voucherOrders->first()->sellerProfile?->business_name ?? 'Shop').' voucher' : 'LIKHAE Platform voucher' }}: {{ $appliedVoucher->code }}</span>@endforeach</span>@endif</dt><dd class="shrink-0 font-semibold text-stone-900">&#8722;&#8369;{{ number_format((float) $selectedOrder->sellerOrders->sum('voucher_discount'), 2) }}</dd></div>
                 @if((int) $selectedOrder->reward_points_redeemed > 0)
                     <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Reward points ({{ number_format((int) $selectedOrder->reward_points_redeemed) }})</dt><dd class="font-semibold text-red-800">&#8722;&#8369;{{ number_format((float) $selectedOrder->reward_points_discount, 2) }}</dd></div>

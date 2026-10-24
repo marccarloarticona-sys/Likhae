@@ -202,6 +202,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 discount_value: button.dataset.discountValue,
                 minimum_order_amount: button.dataset.minimumOrderAmount,
                 maximum_discount_amount: button.dataset.maximumDiscountAmount,
+                applies_to: button.dataset.appliesTo,
+                visibility: button.dataset.visibility || 'PUBLIC',
                 usage_limit: button.dataset.usageLimit,
                 per_user_limit: button.dataset.perUserLimit,
                 starts_at: button.dataset.startsAt,
@@ -211,9 +213,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 const field = select(`[name="${name}"]`, form);
                 if (field) field.value = value ?? '';
             });
+            const selectedProductIds = new Set((button.dataset.productIds || '').split(',').filter(Boolean));
+            selectAll('[data-voucher-products] option', form).forEach((option) => {
+                option.selected = selectedProductIds.has(option.value);
+            });
+            syncVoucherTargetForm(form);
         }
         openModal(modal);
     }));
+
+    function syncVoucherTargetForm(form) {
+        const target = select('[data-voucher-target]', form);
+        const productField = select('[data-voucher-products]', form);
+        const wrapper = productField?.closest('[data-voucher-products-field]');
+        const selectingProducts = target?.value === 'PRODUCTS';
+        if (wrapper) wrapper.hidden = !selectingProducts;
+        if (productField) productField.required = Boolean(selectingProducts);
+    }
+
+    selectAll('[data-voucher-target-form]').forEach((form) => {
+        select('[data-voucher-target]', form)?.addEventListener('change', () => syncVoucherTargetForm(form));
+        syncVoucherTargetForm(form);
+    });
     selectAll('[data-modal-close]').forEach((button) => button.addEventListener('click', () => closeModal(button.closest('[data-modal]'))));
     selectAll('[data-modal]').forEach((modal) => modal.addEventListener('click', (event) => {
         if (event.target === modal) closeModal(modal);
@@ -264,6 +285,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         newLibrary.innerHTML = '';
         const existingCount = selectAll('[data-library-image]:not(.is-removing)').length;
+        const imageLimitError = existingCount + primaryFiles.length + additionalFiles.length > 10
+            ? 'A product may have at most 10 images, including the primary image.'
+            : '';
+        const productForm = select('.sl-editor-layout');
+        [select('[data-image-input]'), select('[data-images-input]')].filter(Boolean)
+            .forEach((input) => input.setCustomValidity(imageLimitError));
+        if (productForm && imageLimitError && productForm.dataset.imageLimitInvalid !== 'true') showToast(imageLimitError);
+        if (productForm) productForm.dataset.imageLimitInvalid = String(Boolean(imageLimitError));
         const renderNewImage = (file, ref, number, primary = false, index = 0) => {
             const item = document.createElement('span');
             item.className = 'sl-saved-image sl-product-image-library__item';
@@ -490,8 +519,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const checks = {
                 name: name !== 'Your product name',
+                description: Boolean(select('[name="description"]', productForm)?.value.trim()),
                 category: Boolean(select('[name="category_id"]', productForm)?.value),
-                image: Boolean(select('[name="image"]', productForm)?.files?.length || select('[data-image-preview] img')),
+                image: Boolean(select('[name="image"]', productForm)?.files?.length || selectAll('[data-library-image]:not(.is-removing)', productForm).length),
                 pricing: prices.length > 0 && prices.every((value) => value >= 0),
                 inventory: variations ? variantStocks.length > 0 && variantStocks.every((value) => value >= 0) : singleStock >= 0,
                 variations: !variations || (variantPrices.length > 0 && selectAll('[name^="variants"][name$="[values]"]:not(:disabled)', productForm).every((field) => field.value.trim())),
@@ -702,7 +732,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const previousDiscountType = normalizeDiscountType(previousValue('discount_type', 'none'), previousValue('discount_value') ? 'percentage' : 'none');
             const row = document.createElement('div');
             row.className = 'sl-variation-row';
-            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" ${previousDiscountType === 'none' ? 'selected' : ''}>None</option><option value="percentage" ${previousDiscountType === 'percentage' ? 'selected' : ''}>Percentage</option><option value="fixed" ${previousDiscountType === 'fixed' ? 'selected' : ''}>Fixed</option></select><input name="variants[${index}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="${escapeHtml(previousValue('discount_value', '0'))}" placeholder="0" aria-label="Discount value"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
+            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][flash_sale_price]" type="number" min="0.01" max="999999.99" step="0.01" value="${escapeHtml(previousValue('flash_sale_price'))}" placeholder="Flash price" aria-label="Variant flash-sale price"><input name="variants[${index}][flash_sale_allocation]" type="number" min="1" max="999999" step="1" value="${escapeHtml(previousValue('flash_sale_allocation'))}" placeholder="Units" aria-label="Variant flash-sale allocation"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" ${previousDiscountType === 'none' ? 'selected' : ''}>None</option><option value="percentage" ${previousDiscountType === 'percentage' ? 'selected' : ''}>Percentage</option><option value="fixed" ${previousDiscountType === 'fixed' ? 'selected' : ''}>Fixed</option></select><input name="variants[${index}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="${escapeHtml(previousValue('discount_value', '0'))}" placeholder="0" aria-label="Discount value"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
             list.appendChild(row);
         });
         syncAllVariantImageButtons();
@@ -790,6 +820,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 clearVariantImageAssignments(`image:${imageId}`);
                 showToast('Assignments using this image were cleared. Choose another image if needed.');
             }
+            syncProductImageLibrary();
             select('.sl-editor-layout')?.dispatchEvent(new Event('input', { bubbles: true }));
         }
         const removeNewImage = event.target.closest('[data-remove-new-product-image]');

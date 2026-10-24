@@ -111,15 +111,30 @@ class BuyerController extends Controller
             ->where(function (Builder $query): void {
                 $query->whereNull('flash_sale_ends_at')->orWhereColumn('flash_sale_ends_at', '>', 'flash_sale_starts_at');
             })
-            ->whereHas('variants', fn (Builder $variants) => $variants
-                ->where('is_active', true)
-                ->where('stock', '>', 0)
-                ->where('price', '>', 0)
-                ->where('discount_value', '>', 0)
-                ->where(function (Builder $discountType): void {
-                    $discountType->whereNull('discount_type')
-                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
-                }));
+            ->whereHas('variants', function (Builder $variants): void {
+                $variants->where('is_active', true)
+                    ->where('stock', '>', 0)
+                    ->where('price', '>', 0)
+                    ->where(function (Builder $promotion): void {
+                        $promotion->where(function (Builder $discount): void {
+                            $discount->where('discount_value', '>', 0)
+                                ->where(function (Builder $discountType): void {
+                                    $discountType->whereNull('discount_type')
+                                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
+                                });
+                        });
+
+                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
+                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+                            $promotion->orWhere(function (Builder $flash): void {
+                                $flash->whereNotNull('flash_sale_price')
+                                    ->where('flash_sale_price', '>', 0)
+                                    ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold');
+                            });
+                        }
+                    });
+            });
         $upcomingProducts = $this->catalog->applySort(
             $this->catalog->applyFilters($upcomingQuery, $request),
             $request->query('sort', 'latest')
@@ -140,15 +155,30 @@ class BuyerController extends Controller
     private function discountedProductsQuery(): Builder
     {
         $query = $this->catalog->visibleQuery()
-            ->whereHas('variants', fn (Builder $variants) => $variants
-                ->where('is_active', true)
-                ->where('stock', '>', 0)
-                ->where('price', '>', 0)
-                ->where('discount_value', '>', 0)
-                ->where(function (Builder $discountType): void {
-                    $discountType->whereNull('discount_type')
-                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
-                }));
+            ->whereHas('variants', function (Builder $variants): void {
+                $variants->where('is_active', true)
+                    ->where('stock', '>', 0)
+                    ->where('price', '>', 0)
+                    ->where(function (Builder $promotion): void {
+                        $promotion->where(function (Builder $discount): void {
+                            $discount->where('discount_value', '>', 0)
+                                ->where(function (Builder $discountType): void {
+                                    $discountType->whereNull('discount_type')
+                                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
+                                });
+                        });
+
+                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
+                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+                            $promotion->orWhere(function (Builder $flash): void {
+                                $flash->whereNotNull('flash_sale_price')
+                                    ->where('flash_sale_price', '>', 0)
+                                    ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold');
+                            });
+                        }
+                    });
+            });
 
         if (Schema::hasColumn('products', 'flash_sale_starts_at')) {
             $query->where(function (Builder $scheduled): void {
@@ -180,7 +210,13 @@ class BuyerController extends Controller
                     default => 0.0,
                 };
 
-                return ['variant' => $variant, 'discount_amount' => $amount, 'final_price' => max(0.0, $rawPrice - $amount)];
+                $regularPrice = max(0.0, $rawPrice - $amount);
+                $flashPrice = $variant->flash_sale_price !== null && $variant->flash_sale_remaining > 0
+                    ? (float) $variant->flash_sale_price
+                    : null;
+                $finalPrice = $flashPrice !== null ? $flashPrice : $regularPrice;
+
+                return ['variant' => $variant, 'discount_amount' => round(max(0, $rawPrice - $finalPrice), 2), 'final_price' => $finalPrice];
             })
             ->filter(fn (array $row): bool => $row['discount_amount'] > 0)
             ->sortBy('final_price')
@@ -410,10 +446,25 @@ class BuyerController extends Controller
         $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
         $value = 'COALESCE(product_variants.discount_value, 0)';
         $price = 'product_variants.price';
+        $saleWindow = '(1 = 1)';
+        if (Schema::hasColumn('products', 'flash_sale_starts_at') && Schema::hasColumn('products', 'flash_sale_ends_at')) {
+            $now = now()->toDateTimeString();
+            $saleWindow = "((products.flash_sale_starts_at IS NULL OR products.flash_sale_starts_at <= '{$now}') AND (products.flash_sale_ends_at IS NULL OR products.flash_sale_ends_at > '{$now}'))";
+        }
+        $flashActive = '(1 = 0)';
+        $hasFlashPrice = Schema::hasColumn('product_variants', 'flash_sale_price');
+        if ($hasFlashPrice && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+            $flashActive = "(product_variants.flash_sale_price IS NOT NULL AND product_variants.flash_sale_price > 0 AND product_variants.flash_sale_allocation > product_variants.flash_sale_sold AND {$saleWindow})";
+        }
+        $regularDiscountActive = $hasFlashPrice
+            ? "(product_variants.flash_sale_price IS NOT NULL OR {$saleWindow})"
+            : $saleWindow;
 
         return "CAST(CASE
-            WHEN {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
-            WHEN ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
+            WHEN {$flashActive} THEN product_variants.flash_sale_price
+            WHEN {$regularDiscountActive} AND {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
+            WHEN {$regularDiscountActive} AND ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
             ELSE {$price}
         END AS DECIMAL(12, 2))";
     }

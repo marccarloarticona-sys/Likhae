@@ -43,7 +43,11 @@ class SellerReturnRefundController extends Controller
             $sellerRequest->setRelation('cashRefundObligation', null);
         }
 
-        return view('seller.return-refund-show', compact('sellerRequest'));
+        $responseDeadline = $sellerRequest->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW
+            ? $sellerRequest->created_at?->copy()->addDays(ReturnRefundWorkflowService::SELLER_RESPONSE_DAYS)->timezone(config('app.timezone'))
+            : null;
+
+        return view('seller.return-refund-show', compact('sellerRequest', 'responseDeadline'));
     }
 
     public function approve(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse
@@ -55,6 +59,8 @@ class SellerReturnRefundController extends Controller
         DB::transaction(function () use ($request, $sellerRequest, $workflow): void {
             $locked = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with('request')->firstOrFail();
             abort_unless($locked->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW, 409, 'This request is no longer awaiting Seller review.');
+            $responseDeadline = $locked->created_at?->copy()->addDays(ReturnRefundWorkflowService::SELLER_RESPONSE_DAYS);
+            abort_unless($responseDeadline && now()->lt($responseDeadline), 409, 'The Seller response deadline has passed. The request is awaiting automatic handling.');
             $from = $locked->status;
             $locked->update([
                 'status' => SellerReturnRefundRequest::STATUS_APPROVED,
@@ -75,11 +81,17 @@ class SellerReturnRefundController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
-        $data = $request->validate(['rejection_reason' => ['required', 'string', 'min:5', 'max:2000']]);
+        $reason = $request->input('rejection_reason');
+        if (is_string($reason)) {
+            $request->merge(['rejection_reason' => trim($reason)]);
+        }
+        $data = $request->validate(['rejection_reason' => ['required', 'string', 'min:10', 'max:300']]);
 
         DB::transaction(function () use ($request, $sellerRequest, $data, $workflow): void {
             $locked = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with('request')->firstOrFail();
             abort_unless($locked->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW, 409, 'This request is no longer awaiting Seller review.');
+            $responseDeadline = $locked->created_at?->copy()->addDays(ReturnRefundWorkflowService::SELLER_RESPONSE_DAYS);
+            abort_unless($responseDeadline && now()->lt($responseDeadline), 409, 'The Seller response deadline has passed. The request is awaiting automatic handling.');
             $from = $locked->status;
             $locked->update([
                 'status' => SellerReturnRefundRequest::STATUS_REJECTED,

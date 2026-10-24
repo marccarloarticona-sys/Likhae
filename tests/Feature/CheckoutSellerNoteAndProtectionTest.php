@@ -16,10 +16,12 @@ use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
+use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -236,6 +238,215 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
     }
 
+    public function test_selected_product_seller_voucher_uses_only_eligible_subtotal_when_stacked(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $otherProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['subcategory']->id,
+            'name' => 'Other Seller A product',
+            'slug' => 'other-seller-a-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $otherVariant = ProductVariant::query()->create([
+            'product_id' => $otherProduct->id,
+            'sku' => 'SKU-A-OTHER',
+            'price' => 300,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $otherItem = CartItem::query()->create([
+            'cart_id' => $fixture['itemA']->cart_id,
+            'product_variant_id' => $otherVariant->id,
+            'quantity' => 1,
+        ]);
+        $sellerVoucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'SELECTEDPRODUCT50',
+            'name' => 'Selected product fifty off',
+            'discount_type' => 'FIXED',
+            'discount_value' => 50,
+            'minimum_order_amount' => 101,
+            'applies_to' => 'PRODUCTS',
+            'is_active' => true,
+        ]);
+        $sellerVoucher->eligibleProducts()->sync([$fixture['productA']->id]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $sellerVoucher->id]);
+        $platformVoucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'TARGETSTACK10',
+            'benefit_scope' => 'PRODUCT',
+            'code' => 'TARGETSTACK10',
+            'name' => 'Target stack product voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        $shippingVoucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'TARGETSHIP30',
+            'benefit_scope' => 'SHIPPING',
+            'code' => 'TARGETSHIP30',
+            'name' => 'Target stack shipping voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => 30,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        $items = collect([$fixture['itemA'], $otherItem, $fixture['itemB']]);
+        $checkout = app(CheckoutService::class);
+        $selection = [
+            'seller' => [$fixture['sellerA']->id => $sellerVoucher->code],
+            'platform' => $platformVoucher->code,
+            'shipping' => $shippingVoucher->code,
+        ];
+
+        $this->assertCount(0, $checkout->availableVouchers(collect([$otherItem]), $fixture['buyer'])->get($fixture['sellerA']->id, collect()));
+        $this->assertSame([$sellerVoucher->id], $checkout->availableVouchers(collect([$fixture['itemA'], $otherItem]), $fixture['buyer'])->get($fixture['sellerA']->id, collect())->modelKeys());
+
+        try {
+            $checkout->preview($items, $selection, $fixture['buyer']);
+            $this->fail('The unrelated product subtotal must not satisfy a selected-product minimum spend.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('more in eligible products', $exception->errors()['seller_voucher_codes.'.$fixture['sellerA']->id][0]);
+        }
+
+        $sellerVoucher->update(['minimum_order_amount' => 100]);
+        $preview = $checkout->preview($items, $selection, $fixture['buyer']);
+        $this->assertEquals(400.00, $preview['groups'][$fixture['sellerA']->id]['item_subtotal']);
+        $this->assertEquals(50.00, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
+        $this->assertEquals(35.00, $preview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
+        $this->assertEquals(20.00, $preview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
+        $this->assertEquals(135.00, $preview['total_discount']);
+        $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
+    }
+
+    public function test_flash_sale_price_precedes_regular_seller_discount_and_is_snapshotted_at_checkout(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $fixture['productA']->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+        ]);
+        $variant->update([
+            'price' => 100,
+            'discount_type' => 'percentage',
+            'discount_value' => 10,
+            'flash_sale_price' => 80,
+            'flash_sale_allocation' => 2,
+            'flash_sale_sold' => 0,
+        ]);
+
+        $platformVoucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'FLASHSTACK10',
+            'benefit_scope' => 'PRODUCT',
+            'code' => 'FLASHSTACK10',
+            'name' => 'Flash stacked platform ten percent',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        $selection = ['platform' => $platformVoucher->code];
+
+        $checkout = app(CheckoutService::class);
+        $preview = $checkout->preview(collect([$fixture['itemA']]), $selection, $fixture['buyer']);
+        $this->assertEquals(80.00, $preview['subtotal']);
+        $this->assertEquals(8.00, $preview['platform_voucher_discount']);
+
+        $order = $checkout->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$fixture['itemA']->id], 'COD', $selection, null, [], [],
+            '00000000-0000-4000-8000-000000000071',
+        );
+        $orderItem = $order->sellerOrders()->with('items')->where('seller_profile_id', $fixture['sellerA']->id)->sole()->items->sole();
+
+        $this->assertEquals(80.00, $orderItem->unit_price);
+        $this->assertEquals(20.00, $orderItem->discount_amount);
+        $this->assertEquals(8.00, $order->platform_voucher_discount);
+        $this->assertSame(4, (int) $variant->fresh()->stock);
+        $this->assertSame(1, (int) $variant->fresh()->flash_sale_sold);
+        $this->assertSame(1, (int) $orderItem->flash_sale_quantity);
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+
+        $this->assertSame(5, (int) $variant->fresh()->stock);
+        $this->assertSame(0, (int) $variant->fresh()->flash_sale_sold);
+        $this->assertEquals(80.00, $orderItem->fresh()->unit_price, 'Cancellation must preserve the purchased price snapshot.');
+    }
+
+    public function test_flash_sale_quota_rejects_overage_then_regular_price_applies_after_exhaustion(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $fixture['productA']->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+        ]);
+        $variant->update([
+            'price' => 100,
+            'discount_type' => 'percentage',
+            'discount_value' => 10,
+            'flash_sale_price' => 80,
+            'flash_sale_allocation' => 1,
+            'flash_sale_sold' => 0,
+        ]);
+        $fixture['itemA']->update(['quantity' => 2]);
+
+        try {
+            app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [], $fixture['buyer']);
+            $this->fail('A checkout cannot exceed the remaining flash-sale allocation.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('cart', $exception->errors());
+        }
+
+        $variant->update(['flash_sale_sold' => 1]);
+        $freshItem = CartItem::query()->findOrFail($fixture['itemA']->id);
+        $preview = app(CheckoutService::class)->preview(collect([$freshItem]), [], $fixture['buyer']);
+        $this->assertEquals(180.00, $preview['subtotal']);
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$fixture['itemA']->id], 'COD', [], null, [], [],
+            '00000000-0000-4000-8000-000000000072',
+        );
+        $orderItem = $order->sellerOrders()->with('items')->where('seller_profile_id', $fixture['sellerA']->id)->sole()->items->sole();
+        $this->assertEquals(90.00, $orderItem->unit_price);
+        $this->assertSame(1, (int) $variant->fresh()->flash_sale_sold);
+        $this->assertSame(3, (int) $variant->fresh()->stock);
+    }
+
+    public function test_scheduled_flash_price_activates_and_expiry_restores_regular_discount(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $startsAt = now()->addHour();
+        $endsAt = $startsAt->copy()->addHour();
+        $fixture['productA']->update(['flash_sale_starts_at' => $startsAt, 'flash_sale_ends_at' => $endsAt]);
+        $variant->update([
+            'price' => 100,
+            'discount_type' => 'percentage',
+            'discount_value' => 10,
+            'flash_sale_price' => 70,
+            'flash_sale_allocation' => 3,
+            'flash_sale_sold' => 0,
+        ]);
+
+        $this->assertSame(90.0, (float) $variant->fresh()->load('product')->final_price);
+        $this->travelTo($startsAt);
+        $this->assertSame(70.0, (float) $variant->fresh()->load('product')->final_price);
+        $this->travelTo($endsAt);
+        $this->assertSame(90.0, (float) $variant->fresh()->load('product')->final_price);
+        $this->travelBack();
+    }
+
     public function test_voucher_scope_and_minimum_spend_are_validated_server_side(): void
     {
         $fixture = $this->checkoutFixture();
@@ -315,6 +526,276 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(100.00, $preview['shipping_voucher_discount']);
         $this->assertEquals(0.00, $preview['grand_total']);
         $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
+    }
+
+    public function test_code_only_seller_voucher_is_hidden_from_rewards_and_applies_by_exact_code(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'PRIVATEA10',
+            'name' => 'Private customer voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'visibility' => 'CODE_ONLY',
+            'is_active' => true,
+        ]);
+
+        $claimable = app(BuyerVoucherClaimService::class)->claimableSellerVouchers($fixture['buyer']);
+        $this->assertFalse($claimable->contains('id', $voucher->id));
+
+        $preview = app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [
+            'seller' => [$fixture['sellerA']->id => 'PRIVATEA10'],
+        ], $fixture['buyer']);
+
+        $this->assertSame(10.0, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
+    }
+
+    public function test_private_voucher_still_rejects_wrong_expired_and_ineligible_codes(): void
+    {
+        $fixture = $this->checkoutFixture();
+        Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'PRIVATEEXPIRED',
+            'name' => 'Expired private voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'visibility' => 'CODE_ONLY',
+            'ends_at' => now()->subMinute(),
+            'is_active' => true,
+        ]);
+        Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'PRIVATEELIGIBLE',
+            'name' => 'Ineligible private voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => 10,
+            'minimum_order_amount' => 200,
+            'visibility' => 'CODE_ONLY',
+            'is_active' => true,
+        ]);
+
+        foreach (['DOESNOTEXIST', 'PRIVATEEXPIRED', 'PRIVATEELIGIBLE'] as $code) {
+            try {
+                app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [
+                    'seller' => [$fixture['sellerA']->id => $code],
+                ], $fixture['buyer']);
+                $this->fail('An invalid, expired, or ineligible private voucher must not apply.');
+            } catch (\Illuminate\Validation\ValidationException $exception) {
+                $this->assertArrayHasKey('seller_voucher_codes.'.$fixture['sellerA']->id, $exception->errors());
+            }
+        }
+    }
+
+    public function test_seller_can_create_bundle_from_owned_variants_and_foreign_variants_are_rejected(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $componentProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['productA']->category_id,
+            'name' => 'Bundle Component Product',
+            'slug' => 'bundle-component-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $componentVariant = ProductVariant::query()->create([
+            'product_id' => $componentProduct->id,
+            'sku' => 'SKU-BUNDLE-COMPONENT',
+            'price' => 50,
+            'stock' => 10,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->get(route('seller.promotions'))
+            ->assertOk()
+            ->assertSee('Create a Bundle Deal');
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->post(route('seller.promotions.store'), [
+                'promotion_type' => SellerPromotion::TYPE_BUNDLE,
+                'name' => 'Summer Bundle',
+                'bundle_price' => 120,
+                'components' => [
+                    ['product_variant_id' => $fixture['itemA']->product_variant_id, 'quantity' => 1],
+                    ['product_variant_id' => $componentVariant->id, 'quantity' => 1],
+                ],
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $promotion = SellerPromotion::query()->where('name', 'Summer Bundle')->with('components')->sole();
+        $this->assertSame(SellerPromotion::TYPE_BUNDLE, $promotion->promotion_type);
+        $this->assertEquals(120.00, (float) $promotion->bundle_price);
+        $this->assertEqualsCanonicalizing(
+            [(int) $fixture['itemA']->product_variant_id, (int) $componentVariant->id],
+            $promotion->components->pluck('product_variant_id')->map(fn ($id): int => (int) $id)->all(),
+        );
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->post(route('seller.promotions.store'), [
+                'promotion_type' => SellerPromotion::TYPE_BUNDLE,
+                'name' => 'Invalid Foreign Bundle',
+                'bundle_price' => 100,
+                'components' => [
+                    ['product_variant_id' => $fixture['itemA']->product_variant_id, 'quantity' => 1],
+                    ['product_variant_id' => $fixture['itemB']->product_variant_id, 'quantity' => 1],
+                ],
+            ])
+            ->assertSessionHasErrors('components');
+        $this->assertDatabaseMissing('seller_promotions', ['name' => 'Invalid Foreign Bundle']);
+    }
+
+    public function test_bundle_discount_is_snapshotted_charged_and_cancelled_without_duplicate_stock_restore(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $firstVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $secondProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['productA']->category_id,
+            'name' => 'Bundle Second Item',
+            'slug' => 'bundle-second-item',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $secondVariant = ProductVariant::query()->create([
+            'product_id' => $secondProduct->id,
+            'sku' => 'SKU-BUNDLE-SECOND',
+            'price' => 50,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $secondItem = CartItem::query()->create([
+            'cart_id' => $fixture['itemA']->cart_id,
+            'product_variant_id' => $secondVariant->id,
+            'quantity' => 1,
+        ]);
+        $promotion = SellerPromotion::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'name' => 'Two item bundle',
+            'promotion_type' => SellerPromotion::TYPE_BUNDLE,
+            'bundle_price' => 120,
+            'is_active' => true,
+        ]);
+        $promotion->components()->createMany([
+            ['product_variant_id' => $firstVariant->id, 'quantity' => 1],
+            ['product_variant_id' => $secondVariant->id, 'quantity' => 1],
+        ]);
+
+        $items = collect([$fixture['itemA']->fresh(), $secondItem->fresh()]);
+        $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => $items->pluck('id')->all()])
+            ->get(route('buyer.checkout'))
+            ->assertOk()
+            ->assertSee('Two item bundle')
+            ->assertSee('data-seller-promotion-discount="30.00"', false)
+            ->assertSee('170.00');
+
+        $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
+        $this->assertEquals(30.00, $preview['promotion_discount_total']);
+        $this->assertEquals(170.00, $preview['grand_total']);
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
+            '00000000-0000-4000-8000-000000000081',
+        );
+        $sellerOrder = $order->sellerOrders()->with('items')->sole();
+        $orderedItems = $sellerOrder->items->keyBy('product_variant_id');
+        $this->assertEquals(30.00, (float) $sellerOrder->promotion_discount_total);
+        $this->assertEquals(120.00, (float) $sellerOrder->items->sum('line_total'));
+        $this->assertNotEmpty($orderedItems[$secondVariant->id]->promotion_snapshot);
+        $this->assertEquals(170.00, (float) $order->grand_total);
+        $this->assertEquals(30.00, (float) $order->discount_total);
+        $this->assertSame(4, (int) $firstVariant->fresh()->stock);
+        $this->assertSame(4, (int) $secondVariant->fresh()->stock);
+
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee('Two item bundle')
+            ->assertSee('Bundle includes:')
+            ->assertSee('Bundle Second Item');
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+        $this->assertSame(5, (int) $firstVariant->fresh()->stock);
+        $this->assertSame(5, (int) $secondVariant->fresh()->stock);
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+        $this->assertSame(5, (int) $firstVariant->fresh()->stock);
+        $this->assertSame(5, (int) $secondVariant->fresh()->stock);
+    }
+
+    public function test_buy_x_get_y_requires_reward_in_cart_and_restores_regular_reward_line(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $buyVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $rewardProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['productA']->category_id,
+            'name' => 'Campaign Reward Product',
+            'slug' => 'campaign-reward-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $rewardVariant = ProductVariant::query()->create([
+            'product_id' => $rewardProduct->id,
+            'sku' => 'SKU-CAMPAIGN-REWARD',
+            'price' => 30,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $rewardItem = CartItem::query()->create([
+            'cart_id' => $fixture['itemA']->cart_id,
+            'product_variant_id' => $rewardVariant->id,
+            'quantity' => 1,
+        ]);
+        $fixture['itemA']->update(['quantity' => 2]);
+        SellerPromotion::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'name' => 'Buy two get one reward',
+            'promotion_type' => SellerPromotion::TYPE_BUY_X_GET_Y,
+            'buy_variant_id' => $buyVariant->id,
+            'buy_quantity' => 2,
+            'reward_variant_id' => $rewardVariant->id,
+            'reward_quantity' => 1,
+            'is_active' => true,
+        ]);
+
+        $items = collect([$fixture['itemA']->fresh(), $rewardItem->fresh()]);
+        $withoutReward = app(CheckoutService::class)->preview(collect([$fixture['itemA']->fresh()]), [], $fixture['buyer']);
+        $this->assertSame(0.0, $withoutReward['promotion_discount_total']);
+
+        $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
+        $this->assertEquals(30.00, $preview['promotion_discount_total']);
+        $this->assertEquals(250.00, $preview['grand_total']);
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
+            '00000000-0000-4000-8000-000000000082',
+        );
+        $sellerOrder = $order->sellerOrders()->with('items')->sole();
+        $rewardOrderItem = $sellerOrder->items->firstWhere('product_variant_id', $rewardVariant->id);
+        $this->assertNotNull($rewardOrderItem);
+        $this->assertSame(0.0, (float) $rewardOrderItem->line_total);
+        $this->assertEquals(30.00, (float) $rewardOrderItem->promotion_discount_amount);
+        $this->assertSame('Campaign Reward Product', $rewardOrderItem->promotion_snapshot[0]['reward_product_name']);
+        $this->assertSame(3, (int) $buyVariant->fresh()->stock);
+        $this->assertSame(4, (int) $rewardVariant->fresh()->stock);
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+        $this->assertSame(5, (int) $buyVariant->fresh()->stock);
+        $this->assertSame(5, (int) $rewardVariant->fresh()->stock);
     }
 
     public function test_reward_points_require_100_minimum_and_each_100_points_discount_one_peso(): void

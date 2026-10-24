@@ -54,6 +54,29 @@ class BuyerProductCatalogFiltersTest extends TestCase
             'min_price' => '',
             'max_price' => '',
         ]))->assertOk()->assertSee($product->name);
+
+        $product->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+        ]);
+        $variant->update([
+            'price' => 350,
+            'discount_type' => 'fixed',
+            'discount_value' => 50,
+            'flash_sale_price' => 250,
+            'flash_sale_allocation' => 2,
+            'flash_sale_sold' => 0,
+        ]);
+
+        $this->get(route('buyer.products', [
+            'category' => $product->category->slug,
+            'min_price' => '250.00',
+            'max_price' => '250.00',
+        ]))->assertOk()->assertSee($product->name);
+        $this->get(route('buyer.products', [
+            'category' => $product->category->slug,
+            'min_price' => '250.01',
+        ]))->assertOk()->assertDontSee($product->name);
     }
 
     public function test_search_trims_and_matches_case_insensitively_and_escapes_like_wildcards(): void
@@ -218,7 +241,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
                 'payment_method' => 'COD',
             ])
             ->assertUnprocessable()
-            ->assertJsonValidationErrors('cart_item_ids');
+            ->assertJsonValidationErrors('cart');
     }
 
     public function test_out_of_stock_products_stay_visible_with_clear_availability_text(): void

@@ -143,6 +143,7 @@
                 @foreach($groups as $sellerId => $group)
                     @php
                         $sellerSubtotal = (float) data_get($group, 'item_subtotal', 0);
+                        $sellerPromotionDiscount = (float) data_get($group, 'promotion_discount_total', 0);
                         $sellerDiscount = (float) data_get($group, 'voucher_discount', 0);
                         $sellerSellerVoucherDiscount = (float) data_get($group, 'seller_voucher_discount', 0);
                         $sellerPlatformVoucherDiscount = (float) data_get($group, 'platform_voucher_discount', 0);
@@ -153,7 +154,7 @@
                         $sellerProtection = (float) data_get($group, 'protection_total', 0);
                         $sellerTotal = (float) data_get($group, 'grand_total', 0);
                     @endphp
-                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}" data-seller-shipping-discount="{{ number_format($sellerShippingVoucherDiscount, 2, '.', '') }}">
+                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-promotion-discount="{{ number_format($sellerPromotionDiscount, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}" data-seller-shipping-discount="{{ number_format($sellerShippingVoucherDiscount, 2, '.', '') }}">
                         <header class="border-b border-stone-100 bg-stone-50 px-5 py-4">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <h2 class="text-base font-bold uppercase tracking-wide text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
@@ -167,7 +168,8 @@
                                     $product = $variant->product;
                                     $protectionQuote = (array) ($item->protection_quote ?? []);
                                     $unitPrice = (float) $variant->final_price;
-                                    $lineTotal = $unitPrice * (int) $item->quantity;
+                                    $promotionDiscount = (float) ($item->getAttribute('checkout_promotion_discount_amount') ?? 0);
+                                    $lineTotal = max(0, $unitPrice * (int) $item->quantity - $promotionDiscount);
                                 @endphp
                                 <article class="rounded-xl border border-stone-200 p-3 sm:p-4">
                                     <div class="flex gap-3">
@@ -176,6 +178,9 @@
                                             <strong class="block text-sm font-semibold text-stone-900">{{ $product->name }}</strong>
                                             <span class="mt-1 block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }}</span>
                                             <span class="mt-2 block text-xs text-stone-600">&#8369;{{ number_format($unitPrice, 2) }} × {{ $item->quantity }}</span>
+                                            @foreach((array) ($item->getAttribute('checkout_promotion_snapshot') ?? []) as $promotionSnapshot)
+                                                <span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }}: −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>
+                                            @endforeach
                                         </div>
                                         <div class="shrink-0 text-right">
                                             <span class="block text-[10px] uppercase tracking-wide text-stone-400">Line total</span>
@@ -204,6 +209,9 @@
                         </div>
                         <div class="space-y-2 border-t border-stone-100 px-5 py-4 text-xs">
                             <div class="flex justify-between gap-3 text-stone-500"><span>{{ data_get($group, 'seller.business_name', 'Shop') }} subtotal</span><strong class="text-stone-700">&#8369;{{ number_format($sellerSubtotal, 2) }}</strong></div>
+                            @if($sellerPromotionDiscount > 0)
+                                <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Seller promotion</span><strong>−&#8369;{{ number_format($sellerPromotionDiscount, 2) }}</strong></div>
+                            @endif
                             @if(data_get($group, 'seller_voucher'))
                                 <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Seller Voucher {{ data_get($group, 'seller_voucher.code') }}</span><strong>-&#8369;{{ number_format($sellerSellerVoucherDiscount, 2) }}</strong></div>
                             @endif
@@ -474,6 +482,7 @@
             const rewardCount = document.querySelector('[data-reward-points-summary-count]');
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
+            const promotionDiscount = Number(@json((float) data_get($preview, 'promotion_discount_total', 0)));
             const shippingVoucherDiscount = Number(@json((float) data_get($preview, 'shipping_voucher_discount', 0)));
             const fixedVoucherDiscount = discount + shippingVoucherDiscount;
             const maximumRewardPoints = Number(@json($maxRedeemablePoints));
@@ -489,7 +498,7 @@
                 const cards = [...document.querySelectorAll('[data-seller-card]')];
                 const rows = cards.map((card) => ({
                     card,
-                    eligibleCents: Math.max(0, Math.round((Number(card.dataset.sellerSubtotal || 0) - Number(card.dataset.sellerDiscount || 0)) * 100)),
+                    eligibleCents: Math.max(0, Math.round((Number(card.dataset.sellerSubtotal || 0) - Number(card.dataset.sellerPromotionDiscount || 0) - Number(card.dataset.sellerDiscount || 0)) * 100)),
                 }));
                 const totalWeight = rows.reduce((sum, row) => sum + row.eligibleCents, 0);
                 let allocated = 0;
@@ -528,6 +537,7 @@
                 rewardAllocations.forEach(({ card, points: sellerRewardPoints }) => {
                     const sellerId = card.dataset.sellerId;
                     const sellerSubtotal = Number(card.dataset.sellerSubtotal || 0);
+                    const sellerPromotionDiscount = Number(card.dataset.sellerPromotionDiscount || 0);
                     const sellerDiscount = Number(card.dataset.sellerDiscount || 0);
                     const sellerRewardDiscount = sellerRewardPoints / 100;
                     const sellerShipping = input
@@ -537,7 +547,7 @@
                         .filter((checkbox) => checkbox.dataset.sellerId === sellerId)
                         .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
                     const sellerShippingDiscount = Number(card.dataset.sellerShippingDiscount || 0);
-                    const sellerTotal = Math.max(0, sellerSubtotal - sellerDiscount - sellerRewardDiscount + sellerShipping - sellerShippingDiscount + sellerProtection);
+                    const sellerTotal = Math.max(0, sellerSubtotal - sellerPromotionDiscount - sellerDiscount - sellerRewardDiscount + sellerShipping - sellerShippingDiscount + sellerProtection);
 
                     shippingTotal += sellerShipping;
                     protectionTotal += sellerProtection;
@@ -558,8 +568,8 @@
                 if (shipping) shipping.textContent = money(shippingTotal);
                 if (protection) protection.textContent = money(protectionTotal);
                 const totalDiscount = document.getElementById('checkout-total-discount');
-                if (totalDiscount) totalDiscount.textContent = `-${money(fixedVoucherDiscount + (rewardPoints / 100))}`;
-                if (total) total.textContent = money(Math.max(0, subtotal - discount - (rewardPoints / 100) + shippingTotal - shippingVoucherDiscount + protectionTotal));
+                if (totalDiscount) totalDiscount.textContent = `-${money(fixedVoucherDiscount + promotionDiscount + (rewardPoints / 100))}`;
+                if (total) total.textContent = money(Math.max(0, subtotal - promotionDiscount - discount - (rewardPoints / 100) + shippingTotal - shippingVoucherDiscount + protectionTotal));
             };
 
             rewardToggle?.addEventListener('change', () => {

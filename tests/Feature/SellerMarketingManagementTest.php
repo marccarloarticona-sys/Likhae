@@ -3,12 +3,15 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\Order;
+use App\Models\Buyer\BuyerVoucherClaim;
+use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class SellerMarketingManagementTest extends TestCase
@@ -61,6 +64,26 @@ class SellerMarketingManagementTest extends TestCase
             ->assertSee('0 uses left')
             ->assertSee('2 per buyer')
             ->assertDontSee('FOREIGNVOUCHER');
+    }
+
+    public function test_marketing_page_remains_available_before_product_targeting_migration(): void
+    {
+        $this->makeVoucher($this->seller->sellerProfile, ['code' => 'SCHEMAFALLBACK']);
+        $schema = \Mockery::mock(Schema::getFacadeRoot())->makePartial();
+        $schema->shouldReceive('hasColumn')->with('vouchers', 'applies_to')->andReturn(false);
+        Schema::swap($schema);
+
+        try {
+            $this->actingAs($this->seller)
+                ->get(route('seller.marketing'))
+                ->assertOk()
+                ->assertSee('Vouchers for selected products are temporarily unavailable')
+                ->assertSee('SCHEMAFALLBACK')
+                ->assertSee('Entire store')
+                ->assertDontSee('voucher_products');
+        } finally {
+            Schema::clearResolvedInstance('db.schema');
+        }
     }
 
     public function test_seller_can_edit_own_voucher_but_cannot_edit_or_pause_another_sellers_or_platform_voucher(): void
@@ -133,6 +156,132 @@ class SellerMarketingManagementTest extends TestCase
             ->assertSessionHasErrors('ends_at');
 
         $this->assertDatabaseMissing('vouchers', ['code' => 'EQUALDATES']);
+    }
+
+    public function test_fixed_voucher_discount_must_be_positive(): void
+    {
+        $this->actingAs($this->seller);
+        foreach ([0, -1] as $discountValue) {
+            $this->from(route('seller.marketing'))
+                ->post(route('seller.marketing.campaigns.store'), [
+                    'code' => 'INVALIDFIXED'.$discountValue,
+                    'name' => 'Invalid fixed discount',
+                    'discount_type' => 'FIXED',
+                    'discount_value' => $discountValue,
+                    'minimum_order_amount' => 0,
+                    'applies_to' => 'STORE',
+                ])
+                ->assertRedirect(route('seller.marketing'))
+                ->assertSessionHasErrors('discount_value');
+        }
+
+        $this->assertDatabaseCount('vouchers', 0);
+    }
+
+    public function test_seller_can_target_owned_active_products_but_not_another_sellers_product(): void
+    {
+        $ownedProduct = Product::query()->where('seller_profile_id', $this->seller->sellerProfile->id)->where('status', 'ACTIVE')->firstOrFail();
+        $foreignSeller = $this->createForeignSellerProfile();
+        $foreignProduct = Product::query()->create([
+            'seller_profile_id' => $foreignSeller->id,
+            'category_id' => $this->seller->sellerProfile->primary_category_id,
+            'name' => 'Foreign eligible product',
+            'slug' => 'foreign-eligible-product',
+            'status' => 'ACTIVE',
+        ]);
+
+        $this->actingAs($this->seller)
+            ->get(route('seller.marketing'))
+            ->assertOk()
+            ->assertSee('name="applies_to"', escape: false)
+            ->assertSee('name="product_ids[]"', escape: false)
+            ->assertSee($ownedProduct->name)
+            ->assertDontSee($foreignProduct->name);
+
+        $this->from(route('seller.marketing'))
+            ->post(route('seller.marketing.campaigns.store'), [
+                'code' => 'TARGETOWNED',
+                'name' => 'Owned product voucher',
+                'discount_type' => 'FIXED',
+                'discount_value' => 25,
+                'minimum_order_amount' => 100,
+                'applies_to' => 'PRODUCTS',
+                'product_ids' => [$ownedProduct->id],
+            ])
+            ->assertRedirect(route('seller.marketing'))
+            ->assertSessionHas('status', 'Voucher saved.');
+
+        $voucher = Voucher::query()->where('code', 'TARGETOWNED')->sole();
+        $this->assertSame('PRODUCTS', $voucher->applies_to);
+        $this->assertSame([$ownedProduct->id], $voucher->eligibleProducts()->pluck('products.id')->all());
+
+        $this->from(route('seller.marketing'))
+            ->post(route('seller.marketing.campaigns.store'), [
+                'code' => 'TARGETFOREIGN',
+                'name' => 'Foreign product voucher',
+                'discount_type' => 'FIXED',
+                'discount_value' => 25,
+                'applies_to' => 'PRODUCTS',
+                'product_ids' => [$foreignProduct->id],
+            ])
+            ->assertRedirect(route('seller.marketing'))
+            ->assertSessionHasErrors('product_ids');
+
+        $this->assertDatabaseMissing('vouchers', ['code' => 'TARGETFOREIGN']);
+    }
+
+    public function test_claimed_voucher_terms_cannot_be_changed_but_name_and_pause_remain_available(): void
+    {
+        $this->actingAs($this->seller);
+        $voucher = $this->makeVoucher($this->seller->sellerProfile, [
+            'code' => 'CLAIMEDTERMS',
+            'discount_type' => 'FIXED',
+            'discount_value' => 25,
+            'minimum_order_amount' => 100,
+        ]);
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
+
+        $basePayload = [
+            'code' => 'CLAIMEDTERMS',
+            'name' => 'Renamed claimed voucher',
+            'discount_type' => 'FIXED',
+            'discount_value' => 25,
+            'minimum_order_amount' => 100,
+            'maximum_discount_amount' => null,
+            'usage_limit' => null,
+            'per_user_limit' => null,
+            'starts_at' => null,
+            'ends_at' => null,
+            'applies_to' => 'STORE',
+            'product_ids' => [],
+        ];
+
+        $this->from(route('seller.marketing'))
+            ->patch(route('seller.marketing.campaigns.update', $voucher), array_replace($basePayload, ['discount_value' => 30]))
+            ->assertRedirect(route('seller.marketing'))
+            ->assertSessionHasErrors('discount_value');
+        $this->assertSame('25.00', $voucher->fresh()->discount_value);
+
+        $ownedProduct = Product::query()->where('seller_profile_id', $this->seller->sellerProfile->id)->where('status', 'ACTIVE')->firstOrFail();
+        $this->from(route('seller.marketing'))
+            ->patch(route('seller.marketing.campaigns.update', $voucher), array_replace($basePayload, [
+                'applies_to' => 'PRODUCTS',
+                'product_ids' => [$ownedProduct->id],
+            ]))
+            ->assertRedirect(route('seller.marketing'))
+            ->assertSessionHasErrors(['applies_to', 'product_ids']);
+
+        $this->actingAs($this->seller)
+            ->patch(route('seller.marketing.campaigns.update', $voucher), $basePayload)
+            ->assertRedirect()
+            ->assertSessionHas('status', 'Voucher updated. Existing redemptions and order totals are unchanged.');
+        $this->assertSame('Renamed claimed voucher', $voucher->fresh()->name);
+
+        $this->patch(route('seller.marketing.campaigns.toggle', $voucher))
+            ->assertRedirect();
+        $this->assertFalse($voucher->fresh()->is_active);
+        $this->assertDatabaseHas('buyer_voucher_claims', ['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
     }
 
     private function createForeignSellerProfile(): SellerProfile

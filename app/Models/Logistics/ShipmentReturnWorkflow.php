@@ -16,8 +16,15 @@ class ShipmentReturnWorkflow extends Model
     public const ASSIGNED_TO_RETURN_RIDER = 'ASSIGNED_TO_RETURN_RIDER';
     public const RETURN_RIDER_ACCEPTED = 'RETURN_RIDER_ACCEPTED';
     public const IN_TRANSIT_TO_SELLER = 'IN_TRANSIT_TO_SELLER';
+    public const AWAITING_CROSS_CENTER_TRANSFER = 'AWAITING_CROSS_CENTER_TRANSFER';
+    public const RETURN_RIDER_HANDOFF_PENDING = 'RETURN_RIDER_HANDOFF_PENDING';
+    public const RETURN_EXCEPTION = 'RETURN_EXCEPTION';
     public const AWAITING_SELLER_CONFIRMATION = 'AWAITING_SELLER_CONFIRMATION';
     public const SELLER_RECEIVED = 'SELLER_RECEIVED';
+    public const CENTER_RECEIVED_FOR_REDELIVERY = 'CENTER_RECEIVED_FOR_REDELIVERY';
+
+    public const DISPOSITION_SELLER_RETURN = 'SELLER_RETURN';
+    public const DISPOSITION_REDELIVERY = 'REDELIVERY';
 
     public const OPEN_STATUSES = [
         self::AWAITING_CENTER_HANDOFF,
@@ -26,6 +33,9 @@ class ShipmentReturnWorkflow extends Model
         self::ASSIGNED_TO_RETURN_RIDER,
         self::RETURN_RIDER_ACCEPTED,
         self::IN_TRANSIT_TO_SELLER,
+        self::AWAITING_CROSS_CENTER_TRANSFER,
+        self::RETURN_RIDER_HANDOFF_PENDING,
+        self::RETURN_EXCEPTION,
         self::AWAITING_SELLER_CONFIRMATION,
     ];
 
@@ -36,6 +46,10 @@ class ShipmentReturnWorkflow extends Model
         'return_rider_assigned_by_user_id', 'return_rider_assigned_at', 'return_rider_accepted_at',
         'return_rider_picked_up_by_user_id', 'return_rider_picked_up_at', 'seller_handoff_by_user_id',
         'seller_handoff_at', 'seller_received_by_user_id', 'seller_received_at', 'seller_confirmation_notes',
+        'return_disposition', 'pending_return_rider_profile_id', 'handoff_authorized_by_user_id',
+        'handoff_authorized_at', 'handoff_reason', 'handoff_from_confirmed_at', 'handoff_to_confirmed_at',
+        'handoff_completed_at', 'return_exception_reason', 'return_exception_recorded_by_user_id',
+        'return_exception_recorded_at',
     ];
 
     protected function casts(): array
@@ -49,6 +63,11 @@ class ShipmentReturnWorkflow extends Model
             'return_rider_picked_up_at' => 'datetime',
             'seller_handoff_at' => 'datetime',
             'seller_received_at' => 'datetime',
+            'handoff_authorized_at' => 'datetime',
+            'handoff_from_confirmed_at' => 'datetime',
+            'handoff_to_confirmed_at' => 'datetime',
+            'handoff_completed_at' => 'datetime',
+            'return_exception_recorded_at' => 'datetime',
         ];
     }
 
@@ -72,6 +91,11 @@ class ShipmentReturnWorkflow extends Model
         return $this->belongsTo(RiderProfile::class, 'return_rider_profile_id');
     }
 
+    public function pendingReturnRider(): BelongsTo
+    {
+        return $this->belongsTo(RiderProfile::class, 'pending_return_rider_profile_id');
+    }
+
     public function initiatedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'initiated_by_user_id');
@@ -90,6 +114,16 @@ class ShipmentReturnWorkflow extends Model
     public function returnRiderAssignedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'return_rider_assigned_by_user_id');
+    }
+
+    public function handoffAuthorizedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'handoff_authorized_by_user_id');
+    }
+
+    public function returnExceptionRecordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'return_exception_recorded_by_user_id');
     }
 
     public function returnRiderPickedUpBy(): BelongsTo

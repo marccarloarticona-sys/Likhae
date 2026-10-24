@@ -26,6 +26,7 @@ class BuyerVoucherClaimService
         }
 
         $vouchers = $this->sellerVoucherQuery()
+            ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->where('visibility', 'PUBLIC'))
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
@@ -124,6 +125,10 @@ class BuyerVoucherClaimService
     {
         if (! $this->isSellerVoucher($voucher)) {
             return 'This is a platform campaign, not a Seller voucher.';
+        }
+
+        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'CODE_ONLY') {
+            return 'This voucher is available by code only.';
         }
 
         $seller = $voucher->sellerProfile;

@@ -5,6 +5,7 @@ namespace App\Models\Seller;
 use App\Models\Buyer\BuyerVoucherClaim;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Voucher extends Model
@@ -13,6 +14,8 @@ class Voucher extends Model
         'seller_profile_id',
         'platform_code_key',
         'benefit_scope',
+        'applies_to',
+        'visibility',
         'code',
         'name',
         'image_path',
@@ -38,6 +41,7 @@ class Voucher extends Model
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
             'is_active' => 'boolean',
+            'visibility' => 'string',
         ];
     }
 
@@ -63,5 +67,10 @@ class Voucher extends Model
     public function buyerClaims(): HasMany
     {
         return $this->hasMany(BuyerVoucherClaim::class);
+    }
+
+    public function eligibleProducts(): BelongsToMany
+    {
+        return $this->belongsToMany(Product::class, 'voucher_products')->withTimestamps();
     }
 }

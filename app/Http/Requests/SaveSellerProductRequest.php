@@ -5,6 +5,8 @@ namespace App\Http\Requests;
 use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class SaveSellerProductRequest extends FormRequest
@@ -18,10 +20,12 @@ class SaveSellerProductRequest extends FormRequest
     {
         $discountValue = $this->input('discount_value', $this->input('discount', $this->input('discount_percentage')));
         $discountType = strtolower((string) ($this->input('discount_type') ?? 'none'));
+        $idempotencyKey = $this->header('Idempotency-Key', $this->input('idempotency_key'));
 
         $this->merge([
             'product_type' => strtolower((string) $this->input('product_type', 'single')),
             'status' => strtoupper((string) $this->input('status', $this->input('listing_status', 'DRAFT'))),
+            'idempotency_key' => is_string($idempotencyKey) ? strtolower(trim($idempotencyKey)) : null,
             // Keep unknown values intact so the Rule::in validation below
             // rejects tampered input instead of silently treating it as none.
             'discount_type' => $discountType,
@@ -40,14 +44,17 @@ class SaveSellerProductRequest extends FormRequest
             'product_type' => ['required', Rule::in(['single', 'variations'])],
             'name' => ['required', 'string', 'max:200'],
             'category_id' => ['required', 'integer', $categoryRule],
-            'description' => ['nullable', 'string', 'max:10000'],
+            'description' => [Rule::requiredIf(fn (): bool => $this->isPublishing()), 'nullable', 'string', 'max:10000'],
             'purchase_limit_per_buyer' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'ARCHIVED'])],
+            'idempotency_key' => ['nullable', 'uuid'],
             'flash_sale_starts_at' => ['nullable', 'date'],
             'flash_sale_ends_at' => ['nullable', 'date'],
+            'flash_sale_price' => ['nullable', 'numeric', 'min:0.01', 'max:999999.99'],
+            'flash_sale_allocation' => ['nullable', 'integer', 'min:1', 'max:999999'],
 
-            'price' => ['required_if:product_type,single', 'nullable', 'numeric', 'min:0', 'max:999999.99'],
-            'stock' => ['required_if:product_type,single', 'nullable', 'integer', 'min:0', 'max:999999'],
+            'price' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'numeric', 'min:0', 'max:999999.99'],
+            'stock' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'integer', 'min:0', 'max:999999'],
             'weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
             'sku' => ['nullable', 'string', 'max:100'],
             'single_variant_id' => ['nullable', 'integer'],
@@ -57,12 +64,12 @@ class SaveSellerProductRequest extends FormRequest
             'is_active' => ['nullable', 'boolean'],
 
             'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
-            'images' => ['nullable', 'array', 'max:9'],
+            'images' => ['nullable', 'array'],
             'images.*' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'delete_image_ids' => ['nullable', 'array', 'max:10'],
             'delete_image_ids.*' => ['integer', Rule::exists('product_images', 'id')],
 
-            'options' => ['required_if:product_type,variations', 'nullable', 'array', 'max:3'],
+            'options' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'variations'), 'nullable', 'array', 'max:3'],
             'options.*.name' => ['required_with:options.*.values', 'nullable', 'string', 'max:100'],
             'options.*.values' => ['required_with:options.*.name', 'nullable', 'string', 'max:1000'],
 
@@ -75,6 +82,8 @@ class SaveSellerProductRequest extends FormRequest
             'variants.*.values' => ['nullable', 'string', 'max:500'],
             'variants.*.discount_type' => ['nullable', Rule::in(['none', 'percentage', 'fixed'])],
             'variants.*.discount_value' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],
+            'variants.*.flash_sale_price' => ['nullable', 'numeric', 'min:0.01', 'max:999999.99'],
+            'variants.*.flash_sale_allocation' => ['nullable', 'integer', 'min:1', 'max:999999'],
             'variants.*.payment_method' => ['nullable', Rule::in(['cod', 'online', 'cod_online'])],
             'variants.*.is_active' => ['nullable', 'boolean'],
             'variants.*.product_image_ref' => ['nullable', 'string', 'max:100'],
@@ -110,12 +119,20 @@ class SaveSellerProductRequest extends FormRequest
                 $validator->errors()->add('category_id', 'Choose a category within your approved line of business.');
             }
 
-            $this->validateDiscount($validator, (array) $this->input('variants', []), 'variants', $this->input('price'));
+            $this->validateImageCount($validator);
+            if ($this->isPublishing()) {
+                $this->validatePublicationRequirements($validator);
+            }
+
+            $variantRows = collect((array) $this->input('variants', []))->filter(fn ($row): bool => is_array($row))->all();
+            $this->validateDiscount($validator, $variantRows, 'variants', $this->input('price'));
             $this->validateDiscount($validator, [[
                 'discount_type' => $this->input('discount_type'),
                 'discount_value' => $this->input('discount_value'),
                 'price' => $this->input('price'),
             ]], '', $this->input('price'));
+
+            $this->validateFlashSaleConfiguration($validator);
 
             $startsAt = $this->input('flash_sale_starts_at');
             $endsAt = $this->input('flash_sale_ends_at');
@@ -128,19 +145,102 @@ class SaveSellerProductRequest extends FormRequest
                     : [[
                         'discount_value' => $this->input('discount_value'),
                         'discount_type' => $this->input('discount_type'),
+                        'flash_sale_price' => $this->input('flash_sale_price'),
                     ]];
-                $hasDiscount = collect($rows)->contains(fn ($row): bool => (float) ($row['discount_value'] ?? 0) > 0
-                    && strtolower((string) ($row['discount_type'] ?? 'none')) !== 'none');
-                if (! $hasDiscount) {
-                    $validator->errors()->add('flash_sale_starts_at', 'Set a product discount before scheduling a flash sale.');
+                $hasPromotion = collect($rows)->filter(fn ($row): bool => is_array($row))->contains(fn ($row): bool => (
+                    (float) ($row['discount_value'] ?? 0) > 0
+                    && strtolower((string) ($row['discount_type'] ?? 'none')) !== 'none'
+                ) || filled($row['flash_sale_price'] ?? null));
+                if (! $hasPromotion) {
+                    $validator->errors()->add('flash_sale_starts_at', 'Set a Seller discount or flash-sale price before scheduling a sale.');
                 }
             }
         });
     }
 
+    private function validateFlashSaleConfiguration($validator): void
+    {
+        $isSingle = $this->input('product_type') === 'single';
+        $rows = $isSingle
+            ? [[
+                'id' => $this->input('single_variant_id'),
+                'price' => $this->input('price'),
+                'stock' => $this->input('stock'),
+                'discount_type' => $this->input('discount_type'),
+                'discount_value' => $this->input('discount_value'),
+                'flash_sale_price' => $this->input('flash_sale_price'),
+                'flash_sale_allocation' => $this->input('flash_sale_allocation'),
+            ]]
+            : collect((array) $this->input('variants', []))->filter(fn ($row): bool => is_array($row))->values()->all();
+        if (! $isSingle && $rows === [] && (filled($this->input('flash_sale_price')) || filled($this->input('flash_sale_allocation')))) {
+            $rows = [[
+                'price' => $this->input('price'),
+                'stock' => $this->input('stock'),
+                'discount_type' => $this->input('discount_type'),
+                'discount_value' => $this->input('discount_value'),
+                'flash_sale_price' => $this->input('flash_sale_price'),
+                'flash_sale_allocation' => $this->input('flash_sale_allocation'),
+            ]];
+        }
+
+        $product = $this->editingProduct();
+        foreach ($rows as $index => $row) {
+            $flashPrice = $row['flash_sale_price'] ?? null;
+            $allocation = $row['flash_sale_allocation'] ?? null;
+            if (blank($flashPrice) && blank($allocation)) {
+                continue;
+            }
+
+            $prefix = $isSingle ? '' : "variants.{$index}.";
+            $priceField = $prefix.'flash_sale_price';
+            $allocationField = $prefix.'flash_sale_allocation';
+            if (blank($flashPrice)) {
+                $validator->errors()->add($priceField, 'Enter a flash-sale price when setting an allocation.');
+            }
+            if (blank($allocation)) {
+                $validator->errors()->add($allocationField, 'Set how many units can use the flash-sale price.');
+            }
+
+            $basePrice = $row['price'] ?? $this->input('price');
+            $discountType = strtolower((string) ($row['discount_type'] ?? $this->input('discount_type', 'none')));
+            $discountValue = (float) ($row['discount_value'] ?? $this->input('discount_value', 0));
+            if (filled($flashPrice) && is_numeric($basePrice)) {
+                $basePrice = (float) $basePrice;
+                $regularDiscount = match ($discountType) {
+                    'fixed' => min($basePrice, max(0, $discountValue)),
+                    'percentage' => min($basePrice, $basePrice * min(100, max(0, $discountValue)) / 100),
+                    default => 0,
+                };
+                $regularPrice = round(max(0, $basePrice - $regularDiscount), 2);
+                if ((float) $flashPrice >= $regularPrice) {
+                    $validator->errors()->add($priceField, 'Flash-sale price must be lower than the current regular Seller price.');
+                }
+            }
+
+            $stock = $row['stock'] ?? $this->input('stock');
+            if (filled($allocation) && is_numeric($stock)) {
+                $sold = 0;
+                $variantId = $row['id'] ?? null;
+                if ($product && filled($variantId)) {
+                    $sold = (int) $product->variants()->whereKey((int) $variantId)->value('flash_sale_sold');
+                }
+                $allocationCount = (int) $allocation;
+                if ($allocationCount < $sold) {
+                    $validator->errors()->add($allocationField, 'Flash-sale allocation cannot be lower than units already sold at the flash price.');
+                } elseif ($allocationCount - $sold > (int) $stock) {
+                    $validator->errors()->add($allocationField, 'Flash-sale allocation cannot exceed the variant stock available for this sale.');
+                }
+            }
+        }
+    }
+
     private function validateDiscount($validator, array $rows, string $attribute, mixed $fallbackPrice = null): void
     {
         foreach ($rows as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
             $value = (float) ($row['discount_value'] ?? $row['discount'] ?? 0);
             $type = strtolower((string) ($row['discount_type'] ?? ($value > 0 ? 'percentage' : 'none')));
             $price = $row['price'] ?? $fallbackPrice;
@@ -191,5 +291,100 @@ class SaveSellerProductRequest extends FormRequest
         return (int) $product->seller_profile_id === (int) $this->user()?->sellerProfile?->id
             ? $product
             : null;
+    }
+
+    private function isPublishing(): bool
+    {
+        return strtoupper((string) $this->input('status', 'DRAFT')) === 'ACTIVE';
+    }
+
+    private function validateImageCount($validator): void
+    {
+        $product = $this->editingProduct();
+        $deleteIds = collect((array) $this->input('delete_image_ids', []))->map(fn ($id): int => (int) $id)->all();
+        $existingCount = $product
+            ? $product->images()->when($deleteIds !== [], fn ($query) => $query->whereNotIn('id', $deleteIds))->count()
+            : 0;
+
+        if ($existingCount + $this->uploadedImages()->count() > 10) {
+            $validator->errors()->add('images', 'A product may have at most 10 images, including the primary image.');
+        }
+    }
+
+    private function validatePublicationRequirements($validator): void
+    {
+        $product = $this->editingProduct();
+        $deleteIds = collect((array) $this->input('delete_image_ids', []))->map(fn ($id): int => (int) $id)->all();
+        $existingImages = $product
+            ? $product->images()->when($deleteIds !== [], fn ($query) => $query->whereNotIn('id', $deleteIds))->get()
+            : collect();
+        $hasValidStoredImage = $existingImages->contains(fn ($image): bool => filled($image->file_path)
+            && Storage::disk('public')->exists($image->file_path));
+        $hasValidUpload = $this->uploadedImages()->isNotEmpty();
+        $mayKeepLegacyImageGap = $product?->status === 'ACTIVE'
+            && ! $hasValidStoredImage && ! $hasValidUpload && $deleteIds === [];
+
+        if (! $hasValidStoredImage && ! $hasValidUpload && ! $mayKeepLegacyImageGap) {
+            $validator->errors()->add('image', 'Upload a valid primary product image before publishing.');
+        }
+
+        if ($this->input('product_type') !== 'variations') {
+            return;
+        }
+
+        $options = collect((array) $this->input('options', []))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row): bool => filled($row['name'] ?? null) || filled($row['values'] ?? null))
+            ->values();
+        if ($options->isEmpty()) {
+            $validator->errors()->add('options', 'Add at least one variation type and option value before publishing.');
+        }
+        foreach ($options as $index => $option) {
+            if (blank($option['name'] ?? null)) {
+                $validator->errors()->add("options.{$index}.name", 'Enter a name for this variation type.');
+            }
+            if (blank($option['values'] ?? null)) {
+                $validator->errors()->add("options.{$index}.values", 'Enter at least one value for this variation type.');
+            }
+        }
+
+        $variants = collect((array) $this->input('variants', []))
+            ->filter(fn ($row): bool => is_array($row))
+            ->filter(fn ($row): bool => collect(['id', 'sku', 'values', 'price', 'stock'])
+                ->contains(fn (string $field): bool => filled($row[$field] ?? null)))
+            ->values();
+        if ($variants->isEmpty()) {
+            if (blank($this->input('price'))) {
+                $validator->errors()->add('price', 'Enter a price for the variation combinations.');
+            }
+            if (blank($this->input('stock'))) {
+                $validator->errors()->add('stock', 'Enter a stock quantity for the variation combinations.');
+            }
+
+            return;
+        }
+        foreach ($variants as $index => $variant) {
+            if (blank($variant['values'] ?? null)) {
+                $validator->errors()->add("variants.{$index}.values", 'Select a value for every variation type.');
+            }
+            if (blank($variant['price'] ?? null) && blank($this->input('price'))) {
+                $validator->errors()->add("variants.{$index}.price", 'Enter a price for this variation.');
+            }
+            if (blank($variant['stock'] ?? null) && blank($this->input('stock'))) {
+                $validator->errors()->add("variants.{$index}.stock", 'Enter a stock quantity for this variation.');
+            }
+        }
+    }
+
+    /** @return \Illuminate\Support\Collection<int, UploadedFile> */
+    private function uploadedImages(): \Illuminate\Support\Collection
+    {
+        $extra = $this->file('images', []);
+        $extra = is_array($extra) ? $extra : [$extra];
+
+        return collect([$this->file('image')])
+            ->merge($extra)
+            ->filter(fn ($file): bool => $file instanceof UploadedFile && $file->isValid())
+            ->values();
     }
 }

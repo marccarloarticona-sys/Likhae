@@ -206,6 +206,7 @@ class SellerOperationsController extends Controller
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
         $returnWorkflowSchemaReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady();
+        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
 
         if ($request->query('view') === 'tracking') {
             $orderNumber = $request->validate([
@@ -238,6 +239,7 @@ class SellerOperationsController extends Controller
                 'trackingOrder' => $trackingOrder,
                 'mapMarkers' => $mapMarkers,
                 'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
+                'returnEnhancementsReady' => $returnEnhancementsReady,
             ]);
         }
 
@@ -297,6 +299,7 @@ class SellerOperationsController extends Controller
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,
             'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
+            'returnEnhancementsReady' => $returnEnhancementsReady,
         ]);
     }
 
