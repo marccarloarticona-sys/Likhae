@@ -86,6 +86,25 @@ class SellerMarketingManagementTest extends TestCase
         }
     }
 
+    public function test_product_promotions_page_explains_when_its_schema_migration_is_pending(): void
+    {
+        $schema = \Mockery::mock(Schema::getFacadeRoot())->makePartial();
+        $schema->shouldReceive('hasTable')->with('seller_promotions')->andReturn(false);
+        Schema::swap($schema);
+
+        try {
+            $this->actingAs($this->seller)
+                ->get(route('seller.promotions'))
+                ->assertOk()
+                ->assertSee('Product Promotions')
+                ->assertSee('Product promotions are temporarily unavailable while the product promotions database migration is pending.')
+                ->assertDontSee('Create a Bundle Deal')
+                ->assertDontSee('Save Buy X Get Y Offer');
+        } finally {
+            Schema::clearResolvedInstance('db.schema');
+        }
+    }
+
     public function test_seller_can_edit_own_voucher_but_cannot_edit_or_pause_another_sellers_or_platform_voucher(): void
     {
         $sellerProfile = $this->seller->sellerProfile;

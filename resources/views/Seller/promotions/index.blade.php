@@ -14,6 +14,9 @@
         <a href="{{ route('seller.marketing') }}" class="sl-btn sl-btn-ghost">Voucher Center</a>
     </div>
 
+    @unless($promotionStorageReady)
+        <div class="sl-compliance-feedback is-warning" role="status">Product promotions are temporarily unavailable while the product promotions database migration is pending.</div>
+    @else
     <section class="sl-card">
         <div class="sl-table-toolbar"><div><h3>Your Promotions</h3><p>Discounts are recalculated against current stock and prices at checkout.</p></div></div>
         <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Promotion</th><th>Offer</th><th>Products</th><th>Schedule</th><th>Status</th><th>Action</th></tr></thead><tbody>
@@ -91,6 +94,7 @@
             </form>
         </section>
     </div>
+    @endunless
 </div>
 
 <template data-bundle-component-template>

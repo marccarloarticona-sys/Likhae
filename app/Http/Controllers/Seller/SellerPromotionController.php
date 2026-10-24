@@ -10,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -19,29 +20,44 @@ class SellerPromotionController extends Controller
     public function index(Request $request): View
     {
         $seller = $this->seller($request);
-        $variants = $seller->products()
-            ->where('status', 'ACTIVE')
-            ->whereHas('variants', fn ($query) => $query->where('is_active', true))
-            ->with(['variants' => fn ($query) => $query->where('is_active', true)->with('product')])
-            ->orderBy('name')
-            ->get()
-            ->flatMap(fn ($product) => $product->variants)
-            ->sortBy(fn (ProductVariant $variant) => $variant->product->name.' '.$variant->description)
-            ->values();
+        $promotionStorageReady = $this->promotionStorageReady();
+        $variants = collect();
+        $promotions = collect();
+
+        if ($promotionStorageReady) {
+            $variants = $seller->products()
+                ->where('status', 'ACTIVE')
+                ->whereHas('variants', fn ($query) => $query->where('is_active', true))
+                ->with(['variants' => fn ($query) => $query->where('is_active', true)->with('product')])
+                ->orderBy('name')
+                ->get()
+                ->flatMap(fn ($product) => $product->variants)
+                ->sortBy(fn (ProductVariant $variant) => $variant->product->name.' '.$variant->description)
+                ->values();
+
+            $promotions = $seller->promotions()
+                ->with(['components.productVariant.product', 'buyVariant.product', 'rewardVariant.product'])
+                ->latest('id')
+                ->paginate(15);
+        }
 
         return view('seller.promotions.index', [
             'seller' => $seller,
             'variants' => $variants,
-            'promotions' => $seller->promotions()
-                ->with(['components.productVariant.product', 'buyVariant.product', 'rewardVariant.product'])
-                ->latest('id')
-                ->paginate(15),
+            'promotions' => $promotions,
+            'promotionStorageReady' => $promotionStorageReady,
         ]);
     }
 
     public function store(Request $request): RedirectResponse
     {
         $seller = $this->seller($request);
+        if (! $this->promotionStorageReady()) {
+            return back()->withErrors([
+                'promotion' => 'Product promotions are temporarily unavailable while their database migration is pending.',
+            ]);
+        }
+
         $request->merge([
             'promotion_type' => strtoupper(trim((string) $request->input('promotion_type', ''))),
             'name' => trim((string) $request->input('name', '')),
@@ -115,9 +131,12 @@ class SellerPromotionController extends Controller
         return back()->with('status', 'Promotion saved. Discounts apply at checkout when the required products and quantities are in the cart.');
     }
 
-    public function toggle(Request $request, SellerPromotion $promotion): RedirectResponse
+    public function toggle(Request $request, int $promotion): RedirectResponse
     {
         $seller = $this->seller($request);
+        abort_unless($this->promotionStorageReady(), 503);
+
+        $promotion = SellerPromotion::query()->findOrFail($promotion);
         abort_unless((int) $promotion->seller_profile_id === (int) $seller->id, 404);
 
         DB::transaction(function () use ($promotion): void {
@@ -134,6 +153,12 @@ class SellerPromotionController extends Controller
         abort_unless($seller, 403);
 
         return $seller;
+    }
+
+    private function promotionStorageReady(): bool
+    {
+        return Schema::hasTable('seller_promotions')
+            && Schema::hasTable('seller_promotion_components');
     }
 
     /** @param array<int> $variantIds
