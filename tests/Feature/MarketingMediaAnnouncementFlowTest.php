@@ -50,6 +50,7 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
         $this->post(route('admin.marketing.campaigns.store'), [
             'name' => 'Media only campaign',
             'code' => 'MEDIAONLY2026',
+            'benefit_scope' => 'PRODUCT',
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
             'minimum_order_amount' => 250,
@@ -719,6 +720,7 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
         return array_merge([
             'name' => 'Test campaign',
             'code' => $code,
+            'benefit_scope' => 'PRODUCT',
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
             'minimum_order_amount' => 250,

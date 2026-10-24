@@ -256,7 +256,18 @@ class TransferController extends Controller
     public function depart(Request $request, int $manifest): RedirectResponse
     {
         $manifest = $this->loadManifest($manifest);
-        return $this->runAction($request, $manifest, fn () => $this->manifests->depart($request->user(), $manifest), 'Manifest marked in transit.');
+        $data = $request->validate([
+            'scanned_codes' => ['required', 'array', 'min:1', 'max:100'],
+            'scanned_codes.*' => ['required', 'string', 'max:150'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+        ]);
+
+        return $this->runAction($request, $manifest, fn () => $this->manifests->depart(
+            $request->user(),
+            $manifest,
+            $data['scanned_codes'],
+            strtoupper((string) ($data['scan_method'] ?? 'MANUAL')),
+        ), 'Manifest marked in transit.');
     }
 
     public function arrive(Request $request, int $manifest): RedirectResponse

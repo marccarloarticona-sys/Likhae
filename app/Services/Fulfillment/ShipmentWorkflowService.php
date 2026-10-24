@@ -38,9 +38,6 @@ use RuntimeException;
 
 class ShipmentWorkflowService
 {
-    public const MAX_ACTIVE_LOCAL_JOBS = 3;
-    public const MAX_ACTIVE_PICKUP_ASSIGNMENTS = self::MAX_ACTIVE_LOCAL_JOBS;
-
     public function __construct(
         private readonly LocalRiderEligibilityService $localRiderEligibility,
         private readonly LogisticsSchemaReadiness $schema,
@@ -582,9 +579,11 @@ class ShipmentWorkflowService
             $activeLocalJobs = $rider->assignments()
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
                 ->count();
-            if ($activeLocalJobs >= self::MAX_ACTIVE_LOCAL_JOBS) {
-                throw new RuntimeException('This rider already has the maximum of three active local jobs.');
-            }
+            \App\Support\LocalTripCapacityRules::assertCanAssign(
+                (int) $activeLocalJobs,
+                1,
+                $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
+            );
 
             $assignment = RiderAssignment::create([
                 'shipment_id' => $shipment->id,

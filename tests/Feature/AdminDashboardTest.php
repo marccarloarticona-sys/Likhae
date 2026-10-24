@@ -35,9 +35,9 @@ class AdminDashboardTest extends TestCase
 
         $this->actingAs($admin)->get(route('admin.dashboard'))
             ->assertOk()
-            ->assertSee('data-admin-header-host', false)
+            ->assertSee('data-admin-search', false)
             ->assertSee('data-admin-header', false)
-            ->assertSee('Search Admin Center')
+            ->assertSee('Search all Admin pages...')
             ->assertSee(route('admin.account'), false)
             ->assertSee(route('admin.messages'), false)
             ->assertViewHas('accountStats', [

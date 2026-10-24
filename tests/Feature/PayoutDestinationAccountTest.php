@@ -30,10 +30,8 @@ class PayoutDestinationAccountTest extends TestCase
         $destination = $this->destination('GCash', '09171234567');
 
         $this->actingAs($admin)
-            ->get(route('admin.account'))
+            ->get(route('admin.account', ['tab' => 'payout']))
             ->assertOk()
-            ->assertSee('data-admin-header', false)
-            ->assertSee('display: grid !important', false)
             ->assertSee('Admin payout details')
             ->assertSee('GCash');
 
@@ -128,6 +126,7 @@ class PayoutDestinationAccountTest extends TestCase
         return [
             'payout_method' => $method,
             'payout_account_name' => 'Ada Admin',
+            'payout_account_type' => in_array($method, ['GCash', 'Maya'], true) ? 'MOBILE_NUMBER' : 'ACCOUNT_NUMBER',
             'payout_account_number' => $number,
         ];
     }

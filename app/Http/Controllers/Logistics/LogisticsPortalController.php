@@ -40,11 +40,13 @@ use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
+use App\Support\LocalTripCapacityRules;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -91,6 +93,16 @@ class LogisticsPortalController extends Controller
                         ->where('assignment_type', 'PICKUP')
                         ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))->count(),
                 'last_mile' => (clone $base)->whereIn('current_status', ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'])->count(),
+                'active_riders' => RiderProfile::query()
+                    ->where('logistics_center_id', $center->id)
+                    ->whereIn('status', ['ACTIVE', 'WARNED'])
+                    ->whereHas('user', fn ($user) => $user->where('account_type', User::TYPE_RIDER)->where('status', User::STATUS_ACTIVE))
+                    ->count(),
+                'suspended_riders' => RiderProfile::query()
+                    ->where('logistics_center_id', $center->id)
+                    ->where(fn ($riders) => $riders->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])
+                        ->orWhereHas('user', fn ($user) => $user->where('status', User::STATUS_SUSPENDED)))
+                    ->count(),
                 'manifests' => 0,
             ];
             if (app(LogisticsSchemaReadiness::class)->transferReady()) {
@@ -119,6 +131,9 @@ class LogisticsPortalController extends Controller
 
         $finance = [
             'rider_cod_obligations' => 0.0,
+            'cod_collected' => 0.0,
+            'cod_awaiting_remittance' => 0.0,
+            'cod_reconciled' => 0.0,
             'remittance_submitted' => 0.0,
             'verified_cash' => 0.0,
             'discrepancies' => 0,
@@ -131,6 +146,16 @@ class LogisticsPortalController extends Controller
             $finance['verified_cash'] = (float) (clone $remittances)->whereIn('status', ['VERIFIED', 'RECONCILED', 'DISCREPANCY'])->sum('verified_amount');
             $finance['discrepancies'] = (int) (clone $remittances)->where('status', 'DISCREPANCY')->count();
             $finance['rider_cod_obligations'] = (float) CodCollection::query()->where('logistics_center_id', $center->id)->whereIn('status', ['COLLECTED', 'REMITTED', 'DISCREPANCY'])->sum('expected_amount');
+            $collections = CodCollection::query()->where('logistics_center_id', $center->id);
+            $finance['cod_collected'] = (float) (clone $collections)
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_DISCREPANCY, CodCollection::DISCREPANCY])
+                ->sum('collected_amount');
+            $finance['cod_awaiting_remittance'] = (float) (clone $collections)
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::DISCREPANCY])
+                ->sum('collected_amount');
+            $finance['cod_reconciled'] = (float) (clone $remittances)
+                ->where('status', RiderRemittance::RECONCILED)
+                ->sum('verified_amount');
         }
         if (app(FinanceSchemaReadiness::class)->step7Ready()) {
             $pools = LogisticsEarningPool::query()->where('logistics_center_id', $center->id);
@@ -236,6 +261,13 @@ class LogisticsPortalController extends Controller
             ->latest()
             ->orderByDesc('id')
             ->paginate(15);
+
+        $riders->getCollection()->each(function (RiderProfile $rider): void {
+            $rider->setAttribute('remaining_parcel_capacity', LocalTripCapacityRules::remainingCapacity(
+                $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
+                (int) $rider->active_assignments_count,
+            ));
+        });
 
         $stats = [
             ['label' => 'Total Riders', 'value' => (clone $riderQuery)->count()],
@@ -439,15 +471,20 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter;
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
-        $rider->loadMissing('user');
-        $oldStatus = $rider->status;
+        $riderId = (int) $rider->id;
         $userStatus = match ($status) {
             'SUSPENDED' => 'SUSPENDED',
             'BANNED' => 'DEACTIVATED',
             default => 'ACTIVE',
         };
 
-        DB::transaction(function () use ($request, $rider, $status, $userStatus, $reason, $oldStatus): void {
+        DB::transaction(function () use ($request, $riderId, $status, $userStatus, $reason): void {
+            $rider = RiderProfile::query()
+                ->with('user')
+                ->whereKey($riderId)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $oldStatus = $rider->status;
             $rider->update([
                 'status' => $status,
                 'is_online' => in_array($status, ['ACTIVE', 'WARNED'], true) ? $rider->is_online : false,
@@ -456,6 +493,7 @@ class LogisticsPortalController extends Controller
 
             if (in_array($status, ['SUSPENDED', 'BANNED'], true)) {
                 $this->releaseUncollectedPickupAssignments($rider);
+                $this->releaseUncollectedDeliveryAssignments($rider);
             }
 
             AuditLog::create([
@@ -531,6 +569,48 @@ class LogisticsPortalController extends Controller
 
             if (! in_array($trip->status, ['COMPLETED', 'CANCELLED', 'EXCEPTION'], true)) {
                 $trip->update(['status' => 'CANCELLED', 'cancelled_at' => now()]);
+            }
+        }
+    }
+
+    private function releaseUncollectedDeliveryAssignments(RiderProfile $rider): void
+    {
+        $assignments = $rider->assignments()
+            ->delivery()
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
+            ->whereHas('shipment', fn ($query) => $query->where('current_status', 'ASSIGNED_TO_RIDER'))
+            ->with('shipment')
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($assignments as $assignment) {
+            $shipment = $assignment->shipment;
+            $assignment->update([
+                'status' => 'CANCELLED',
+                'cancelled_at' => now(),
+                'rejection_reason' => 'Released to the sorted dispatch queue because the rider was suspended before taking custody.',
+            ]);
+
+            if ($shipment?->current_status !== 'ASSIGNED_TO_RIDER') {
+                continue;
+            }
+
+            $shipment->update(['current_status' => 'SORTED']);
+            \App\Models\Logistics\ShipmentEvent::create([
+                'shipment_id' => $shipment->id,
+                'status' => 'SORTED',
+                'actor_user_id' => auth()->id(),
+                'logistics_center_id' => $rider->logistics_center_id,
+                'notes' => 'Delivery assignment released to the sorted dispatch queue because the Rider was suspended before taking parcel custody.',
+                'occurred_at' => now(),
+            ]);
+
+            if (Schema::hasTable('cod_collections') && Schema::hasColumn('cod_collections', 'rider_profile_id')) {
+                CodCollection::query()
+                    ->where('shipment_id', $shipment->id)
+                    ->where('rider_profile_id', $rider->id)
+                    ->where('status', CodCollection::PENDING)
+                    ->update(['rider_profile_id' => null]);
             }
         }
     }

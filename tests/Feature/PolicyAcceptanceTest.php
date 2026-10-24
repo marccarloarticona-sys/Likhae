@@ -24,11 +24,11 @@ class PolicyAcceptanceTest extends TestCase
             ->assertSee('data-registration-policy-modal', false)
             ->assertSee('role="dialog"', false)
             ->assertSee('Version 1.0')
-            ->assertSee('Test Terms &amp; Conditions')
+            ->assertSee('Test Terms & Conditions')
             ->assertSee('Test Privacy Policy')
             ->assertSee('data-registration-terms-ack', false)
             ->assertSee('data-registration-privacy-ack', false)
-            ->assertSee('Agree &amp; Continue', false)
+            ->assertSee('I agree')
             ->assertDontSee('data-registration-terms-ack checked', false)
             ->assertDontSee('data-registration-privacy-ack checked', false);
     }
@@ -43,7 +43,7 @@ class PolicyAcceptanceTest extends TestCase
         $this->actingAs($buyer)
             ->withSession(['policy_version_snapshot' => $fingerprint])
             ->get(route('buyer.settings'))
-            ->assertRedirect(route('buyer.home'));
+            ->assertRedirect(route('login'));
 
         $this->post(route('policies.accept'), [
             'policy_acceptances' => [
@@ -147,8 +147,8 @@ class PolicyAcceptanceTest extends TestCase
         ]);
 
         $service = app(PolicyAcceptanceService::class);
-        $this->assertSame([$policy->id], $service->pendingPolicies($riderA)->modelKeys());
-        $this->assertSame([], $service->pendingPolicies($riderB)->modelKeys());
+        $this->assertSame([$policy->id], $service->pendingPolicies($riderA)->pluck('id')->all());
+        $this->assertSame([], $service->pendingPolicies($riderB)->pluck('id')->all());
     }
 
     private function termsPolicy(string $version = '1.0', string $body = 'Test Terms & Conditions.'): PlatformPolicy

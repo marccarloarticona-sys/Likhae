@@ -53,6 +53,11 @@ class ConversationAttachmentController extends Controller
             ? response()->file($file['path'], $headers)
             : response()->download($file['path'], $file['name'], $headers);
 
+        // BinaryFileResponse may default to public caching unless its private
+        // flag is set explicitly, even when a Cache-Control header was passed.
+        $response->setPrivate();
+        $response->headers->addCacheControlDirective('no-store');
+
         return $response;
     }
 }

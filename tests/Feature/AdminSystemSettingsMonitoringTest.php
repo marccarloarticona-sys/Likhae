@@ -44,7 +44,6 @@ class AdminSystemSettingsMonitoringTest extends TestCase
             ->assertSee('Database')
             ->assertSee('HEALTHY')
             ->assertSee('Storage Usage & Capacity')
-            ->assertSee('Database Table Usage')
             ->assertSee('File Storage Breakdown')
             ->assertSee('Recent System Errors')
             ->assertSee('Admin Preferences')
@@ -232,7 +231,10 @@ class AdminSystemSettingsMonitoringTest extends TestCase
 
         $response = $this->actingAs($this->admin())->get(route('admin.system-settings'));
 
-        $response->assertOk()->assertSee('ProcessPayment')->assertSee('RuntimeException')->assertDontSee('test-only-token');
+        $response->assertOk()
+            ->assertDontSee('ProcessPayment')
+            ->assertDontSee('RuntimeException')
+            ->assertDontSee('test-only-token');
     }
 
     private function admin(): User

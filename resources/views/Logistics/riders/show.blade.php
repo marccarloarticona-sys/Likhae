@@ -32,7 +32,7 @@
         ['Delivery Area', $isLocalRider ? ($activeAreas->join(', ') ?: 'Unassigned') : ($isInterLogisticsRider ? 'Not used for hub-to-hub transfers' : 'Not applicable')],
         ['Status', $rider->status ? str($rider->status)->headline() : 'Not recorded'],
         ['Availability', $isLocalRider ? ($rider->is_online ? 'Online' : 'Offline') : ($isInterLogisticsRider ? 'Transfer assignment' : 'Not applicable')],
-        ['Active Jobs', $isLocalRider ? (int) ($rider->active_assignments_count ?? 0) : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
+        ['Active parcel assignments', $isLocalRider ? (int) ($rider->active_assignments_count ?? 0) : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
         ['Deliveries Completed Today', $isLocalRider ? (int) $rider->assignments->where('assignment_type', 'DELIVERY')->where('status', 'COMPLETED')->filter(fn ($assignment) => $assignment->completed_at?->isToday())->count() : ($isInterLogisticsRider ? 'Handled through transfer manifests' : 'Not applicable')],
     ];
 @endphp

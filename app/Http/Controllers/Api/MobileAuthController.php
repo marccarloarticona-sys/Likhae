@@ -10,6 +10,7 @@ use App\Models\Admin\PlatformSetting;
 use App\Models\User;
 use App\Services\RegistrationWorkflowService;
 use App\Services\PolicyAcceptanceService;
+use App\Services\RiderAvailabilityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -409,8 +410,9 @@ class MobileAuthController extends Controller
         ]);
     }
 
-    public function logout(Request $request): JsonResponse
+    public function logout(Request $request, RiderAvailabilityService $availability): JsonResponse
     {
+        $availability->markOfflineOnLogout($request->user());
         $tokenAttributes = [
             'api_token_hash' => null,
             'api_token_expires_at' => null,

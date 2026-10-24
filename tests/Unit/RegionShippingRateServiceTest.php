@@ -58,7 +58,6 @@ class RegionShippingRateServiceTest extends TestCase
 
     public function test_named_cross_region_pair_adds_configured_tiers_without_numeric_inference(): void
     {
-        PlatformSetting::put('additional_region_tier_fee', '6.00', 'decimal');
         PlatformSetting::put('shipping_region_tiers', "National Capital Region | Central Luzon | 2", 'string');
 
         $quote = app(RegionShippingRateService::class)->quote(
@@ -67,9 +66,25 @@ class RegionShippingRateServiceTest extends TestCase
             '50.00',
         );
 
-        $this->assertSame('62.00', $quote['shipping_fee']);
+        $this->assertSame('60.00', $quote['shipping_fee']);
         $this->assertSame(2, $quote['snapshot']['additional_region_tiers']);
+        $this->assertSame('5.00', $quote['snapshot']['additional_region_tier_fee']);
         $this->assertSame('Central Luzon', $quote['snapshot']['destination_region']);
+    }
+
+    public function test_approved_regional_step_examples_match_the_fixed_five_peso_surcharge(): void
+    {
+        foreach ([1 => '55.00', 3 => '65.00', 4 => '70.00'] as $steps => $expected) {
+            PlatformSetting::put('shipping_region_tiers', "National Capital Region | Central Luzon | {$steps}", 'string');
+
+            $quote = app(RegionShippingRateService::class)->quote(
+                $this->address('National Capital Region'),
+                $this->address('Central Luzon'),
+                '50.00',
+            );
+
+            $this->assertSame($expected, $quote['shipping_fee']);
+        }
     }
 
     public function test_cross_region_route_without_a_configured_pair_fails_closed(): void

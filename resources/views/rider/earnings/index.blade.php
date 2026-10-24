@@ -9,7 +9,7 @@
     <section class="lk-wallet-header">
         <div class="lk-wallet-header__copy">
         <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Income Management</span>
-        <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink">My Wallet &amp; Earnings</h1>
+        <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink">My Earnings</h1>
         <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">{{ $earningsNotice }}</p>
         </div>
     </section>

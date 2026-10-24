@@ -260,7 +260,7 @@ class BuyerPurchaseActionsTest extends TestCase
             'cart_item_ids' => [$item->id],
             'voucher_codes' => [$product->seller_profile_id => 'save10'],
         ])->assertRedirect(route('buyer.checkout'))
-            ->assertSessionHas('checkout_voucher_codes', [
+            ->assertSessionHas('checkout_seller_voucher_codes', [
                 $product->seller_profile_id => 'SAVE10',
             ]);
     }

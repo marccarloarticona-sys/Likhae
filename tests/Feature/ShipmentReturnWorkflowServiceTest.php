@@ -414,14 +414,14 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
 
         $transfers = app(ShipmentTransferService::class);
         $transfers->release($leg, $centerAUser, $shipment->tracking_number, 'BARCODE');
-        $transfers->depart($leg->fresh(), User::query()->findOrFail(6));
+        $transfers->depart($leg->fresh(), User::query()->findOrFail(6), $shipment->tracking_number, 'BARCODE');
         $transfers->receive($leg->fresh(), User::query()->findOrFail(5), $shipment->tracking_number, 'QR');
 
         $this->assertSame(ShipmentTransferLeg::RECEIVED, $leg->fresh()->status);
         $this->assertSame(ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT, $workflow->fresh()->status);
         $this->assertSame(2, (int) $shipment->fresh()->logistics_center_id);
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
-        $this->assertSame(2, DB::table('parcel_scans')->where('transfer_leg_id', $leg->id)->count(), 'Origin release and destination receipt are the two physical custody scans.');
+        $this->assertSame(3, DB::table('parcel_scans')->where('transfer_leg_id', $leg->id)->count(), 'Origin release, transfer departure, and destination receipt are separately recorded custody scans.');
         $this->assertStringContainsString('Seller-side center confirmed receipt', (string) DB::table('shipment_events')->where('shipment_id', $shipment->id)->orderByDesc('id')->value('notes'));
     }
 

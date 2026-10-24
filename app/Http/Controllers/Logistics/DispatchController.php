@@ -27,6 +27,7 @@ use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
 use App\Services\RefundProofStorageService;
 use App\Support\RiderVehicleType;
+use App\Support\LocalTripCapacityRules;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -39,7 +40,7 @@ class DispatchController extends Controller
 {
     public const MANUAL_OVERRIDE_STATUSES = [
         'READY_FOR_PICKUP', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED',
-        'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED',
+        'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED',
     ];
 
     public function index(Request $request): View
@@ -131,8 +132,7 @@ class DispatchController extends Controller
                     'shipments' => $sellerRequests->map(fn ($pickup) => $pickup->shipment)->filter()->values(),
                     'eligible_riders' => $firstShipment
                         ? $riders->filter(fn (RiderProfile $rider) =>
-                            (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
-                            && (int) $rider->approved_parcel_capacity > 0
+                            LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
                             && $workflow->riderCoversSellerPickupArea($firstShipment, $rider))->values()
                         : collect(),
                 ];
@@ -164,8 +164,7 @@ class DispatchController extends Controller
             $count = $shipments->count();
             $pickupRequest->setAttribute('eligible_riders', $riders->filter(fn (RiderProfile $rider): bool =>
                 $count > 0
-                && (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
-                && (int) $rider->approved_parcel_capacity > 0
+                && LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
                 && $shipments->every(fn (Shipment $shipment): bool => $workflow->riderCoversSellerPickupArea($shipment, $rider)))->values());
             $pickupRequest->setAttribute('progress_payload', app(SellerPickupRequestService::class)
                 ->progress($pickupRequest, (int) $pickupRequest->seller_profile_id));
@@ -194,8 +193,7 @@ class DispatchController extends Controller
             $eligible = $canReassign
                 ? $riders->filter(fn (RiderProfile $candidate): bool =>
                     (int) $candidate->id !== (int) $batch->rider_profile_id
-                    && (int) $candidate->active_assignments_count + $items->count() <= ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
-                    && $items->count() <= (int) $candidate->approved_parcel_capacity
+                    && LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) >= $items->count()
                     && $items->every(fn ($item): bool => $workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $candidate)))->values()
                 : collect();
             $batch->setAttribute('reassignable_riders', $eligible);
@@ -417,7 +415,7 @@ class DispatchController extends Controller
         $eligibleRidersByShipment = $shipments->getCollection()
             ->mapWithKeys(fn (Shipment $shipment): array => [
                 $shipment->id => $riders
-                    ->filter(fn (RiderProfile $rider): bool => (int) $rider->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
+                    ->filter(fn (RiderProfile $rider): bool => LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
                         && $workflow->riderCoversShipmentDestinationArea($shipment, $rider))
                     ->values(),
             ])
@@ -455,7 +453,10 @@ class DispatchController extends Controller
                             ->orWhereHas('order', fn ($order) => $order
                                 ->where('order_number', $tracking)
                                 ->orWhere('id', ctype_digit($tracking) ? (int) $tracking : 0)))
-                        ->orWhereHas('sellerOrder.order.buyer', fn ($buyer) => $buyer->where('name', 'like', '%'.$tracking.'%'));
+                        ->orWhereHas('sellerOrder.order.buyer', fn ($buyer) => $buyer
+                            ->where('first_name', 'like', '%'.$tracking.'%')
+                            ->orWhere('last_name', 'like', '%'.$tracking.'%')
+                            ->orWhereRaw("CONCAT_WS(' ', first_name, last_name) LIKE ?", ['%'.$tracking.'%']));
                 })
                 ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'events.actor', 'scans', 'deliveryAttempts', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
                 ->orderByRaw('CASE WHEN shipments.tracking_number = ? THEN 0 ELSE 1 END', [$tracking])
@@ -486,9 +487,9 @@ class DispatchController extends Controller
             $locked = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
             $oldStatus = $locked->current_status;
             $newStatus = strtoupper($data['status']);
+            abort_if($newStatus === 'DELIVERED', 409, 'A manual status override cannot confirm delivery. Complete the assigned Rider delivery workflow with its scan, proof, and COD checks.');
             abort_if(in_array($oldStatus, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'A closed or exception shipment cannot be manually overridden.');
             abort_if(app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class)->hasOpenWorkflow($locked), 409, 'An active return-to-seller workflow controls this parcel status until seller receipt is confirmed.');
-            abort_if($newStatus === 'DELIVERED' && ! in_array($oldStatus, ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'], true), 409, 'Manual delivery confirmation is only allowed for a parcel already out for delivery or awaiting a retry.');
             abort_if($oldStatus === $newStatus, 422, 'The shipment already has that status.');
 
             $locked->update(['current_status' => $newStatus]);
@@ -721,7 +722,7 @@ class DispatchController extends Controller
         $skippedCount = count($result['skipped_ids']);
         $message = 'Seller pickup batch #P-'.$result['trip']->id.' assigned with '.$assignedCount.' parcel(s).';
         if ($skippedCount > 0) {
-            $message .= ' '.$skippedCount.' parcel(s) were skipped because the rider reached the three-active-job limit.';
+            $message .= ' '.$skippedCount.' parcel(s) remain unassigned because they exceed the rider\'s remaining approved capacity.';
         }
 
         return back()->with('status', $message);
@@ -764,7 +765,7 @@ class DispatchController extends Controller
 
         $message = 'Seller pickup request #'.$assigned->id.' assigned to trip #'.$assigned->rider_local_trip_id.'.';
         if ((int) $assigned->skipped_count > 0) {
-            $message .= ' '.$assigned->skipped_count.' parcel(s) were left in a new request because of the rider\'s remaining three-job or approved-capacity limit.';
+            $message .= ' '.$assigned->skipped_count.' parcel(s) were left in a new request because they exceed the rider\'s remaining approved capacity.';
         }
 
         return back()->with('status', $message);
@@ -819,8 +820,7 @@ class DispatchController extends Controller
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->get()
             ->filter(fn (RiderProfile $candidate): bool =>
-                (int) $candidate->active_assignments_count < ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS
-                && (int) $candidate->approved_parcel_capacity > 0
+                LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) > 0
                 && $workflow->riderCoversSellerPickupArea($shipment, $candidate))
             ->map(function (RiderProfile $candidate) use ($sellerAddress): RiderProfile {
                 $candidate->setAttribute('seller_distance_km', $this->distanceKm(

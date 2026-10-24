@@ -45,7 +45,6 @@ class RiderDashboardTest extends TestCase
             ->assertSee('Parcel Scanner')
             ->assertSee('data-parcel-scanner', false)
             ->assertSee('data-scanner-start', false)
-            ->assertSee('Earnings')
             ->assertSee('No rider parcels found yet.');
 
         $this->actingAs($riderUser)

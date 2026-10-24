@@ -7,6 +7,16 @@ use Throwable;
 
 final class LogisticsSchemaReadiness
 {
+    public function riderAvailabilityReady(): bool
+    {
+        return $this->hasColumns('rider_profiles', [
+            'is_online',
+            'availability_latitude',
+            'availability_longitude',
+            'availability_location_updated_at',
+        ]);
+    }
+
     public function automaticRoutingReady(): bool
     {
         return $this->hasColumns('shipments', [

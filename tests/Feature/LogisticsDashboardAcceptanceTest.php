@@ -16,6 +16,9 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Seller\Category;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Finance\CodCollection;
+use App\Models\Finance\RiderRemittance;
+use App\Models\Finance\RiderRemittanceItem;
 use App\Models\User;
 use App\Services\Finance\CodCollectionService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
@@ -145,16 +148,34 @@ class LogisticsDashboardAcceptanceTest extends TestCase
 
     public function test_log_dash_004_company_scope_transfer_hubs_and_detail_access(): void
     {
-        [$originUser, $origin] = $this->center('Scope origin');
-        [$destinationUser, $destination] = $this->center('Scope destination');
+        [$originUser, $origin] = $this->center('JNT');
+        [$destinationUser, $destination] = $this->center('Pagsanjan');
         [$otherUser, $other] = $this->center('Unrelated');
+        for ($index = 0; $index < 10; $index++) {
+            $this->shipment($origin, 'READY_FOR_PICKUP');
+        }
+        for ($index = 0; $index < 5; $index++) {
+            $this->shipment($destination, 'READY_FOR_PICKUP');
+        }
         $transferred = $this->shipment($origin, 'SORTED');
         $unrelated = $this->shipment($other, 'PICKED_UP');
         $this->manifestFor($transferred, $origin, $destination, $originUser);
 
-        $this->assertSame(1, $this->actingAs($originUser)->get(route('logistics.dashboard'))->assertOk()->viewData('counts')['in_transit']);
-        $this->assertSame(1, $this->actingAs($destinationUser)->get(route('logistics.dashboard'))->assertOk()->viewData('counts')['in_transit']);
-        $this->assertSame(1, $this->actingAs($otherUser)->get(route('logistics.dashboard'))->assertOk()->viewData('counts')['in_transit']);
+        $originDashboard = $this->actingAs($originUser)->get(route('logistics.dashboard'))->assertOk();
+        $destinationDashboard = $this->actingAs($destinationUser)->get(route('logistics.dashboard'))->assertOk();
+        $otherDashboard = $this->actingAs($otherUser)->get(route('logistics.dashboard'))->assertOk();
+        $this->assertSame(['pending' => 10, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $originDashboard->viewData('counts'));
+        $this->assertSame(['pending' => 5, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $destinationDashboard->viewData('counts'));
+        $this->assertSame(['pending' => 0, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $otherDashboard->viewData('counts'));
+        $this->assertSame(1, $originDashboard->viewData('operational')['outgoing']);
+        $this->assertSame(1, $destinationDashboard->viewData('operational')['incoming']);
+        $this->assertSame(0, $destinationDashboard->viewData('operational')['pickup'], 'An incoming hub transfer is not an active seller pickup.');
+        foreach ([[$originUser, $originDashboard], [$destinationUser, $destinationDashboard], [$otherUser, $otherDashboard]] as [$user, $dashboard]) {
+            foreach ($dashboard->viewData('counts') as $category => $count) {
+                $list = $this->actingAs($user)->get(route('logistics.parcels', ['status' => $category]))->assertOk();
+                $this->assertSame($count, $list->viewData('shipments')->total(), $category.' dashboard count matches its authorized parcel list.');
+            }
+        }
         $this->actingAs($originUser)->get(route('logistics.parcels.show', $unrelated))->assertForbidden();
         $this->actingAs($otherUser)->get(route('logistics.parcels.show', $transferred))->assertForbidden();
         $this->actingAs($originUser)->get(route('logistics.parcels', ['status' => 'in_transit', 'company_id' => $other->id]))->assertForbidden();
@@ -164,6 +185,60 @@ class LogisticsDashboardAcceptanceTest extends TestCase
         $this->actingAs($originUser)->get(route('logistics.parcels.show', $transferred))->assertOk();
         $this->actingAs($destinationUser)->get(route('logistics.parcels.show', $transferred))->assertOk();
         $this->assertSame(1, $this->actingAs($originUser)->get(route('logistics.parcels', ['status' => 'in_transit']))->assertOk()->viewData('shipments')->total());
+    }
+
+    public function test_dashboard_shows_center_scoped_rider_and_cod_reconciliation_totals(): void
+    {
+        [$user, $center] = $this->center('Finance dashboard');
+        [, $otherCenter] = $this->center('Other finance dashboard');
+        $activeUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
+        $activeRider = RiderProfile::create([
+            'user_id' => $activeUser->id, 'logistics_center_id' => $center->id,
+            'vehicle_type' => 'motorcycle', 'plate_number' => 'FIN-DASH-ACTIVE-'.uniqid(),
+            'drivers_license_number' => 'FIN-DASH-ACTIVE-LICENSE-'.uniqid(), 'status' => 'ACTIVE',
+        ]);
+        $suspendedUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
+        RiderProfile::create([
+            'user_id' => $suspendedUser->id, 'logistics_center_id' => $center->id,
+            'vehicle_type' => 'motorcycle', 'plate_number' => 'FIN-DASH-SUSPENDED-'.uniqid(),
+            'drivers_license_number' => 'FIN-DASH-SUSPENDED-LICENSE-'.uniqid(), 'status' => 'SUSPENDED',
+        ]);
+        $foreignUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
+        RiderProfile::create([
+            'user_id' => $foreignUser->id, 'logistics_center_id' => $otherCenter->id,
+            'vehicle_type' => 'motorcycle', 'plate_number' => 'FIN-DASH-FOREIGN-'.uniqid(),
+            'drivers_license_number' => 'FIN-DASH-FOREIGN-LICENSE-'.uniqid(), 'status' => 'ACTIVE',
+        ]);
+
+        $awaitingShipment = $this->shipment($center, 'DELIVERED');
+        CodCollection::create([
+            'shipment_id' => $awaitingShipment->id, 'seller_order_id' => $awaitingShipment->seller_order_id,
+            'order_id' => $awaitingShipment->sellerOrder->order_id, 'rider_profile_id' => $activeRider->id,
+            'logistics_center_id' => $center->id, 'expected_amount' => '42.00', 'collected_amount' => '40.00',
+            'status' => CodCollection::COLLECTED, 'collection_reference' => 'DASH-COD-COLLECTED-'.uniqid(), 'collected_at' => now(),
+        ]);
+        $reconciledShipment = $this->shipment($center, 'DELIVERED');
+        $reconciledCollection = CodCollection::create([
+            'shipment_id' => $reconciledShipment->id, 'seller_order_id' => $reconciledShipment->seller_order_id,
+            'order_id' => $reconciledShipment->sellerOrder->order_id, 'rider_profile_id' => $activeRider->id,
+            'logistics_center_id' => $center->id, 'expected_amount' => '30.00', 'collected_amount' => '30.00',
+            'status' => CodCollection::REMITTED, 'collection_reference' => 'DASH-COD-REMITTED-'.uniqid(), 'collected_at' => now(),
+        ]);
+        $remittance = RiderRemittance::create([
+            'rider_profile_id' => $activeRider->id, 'logistics_center_id' => $center->id,
+            'remittance_reference' => 'DASH-REM-'.uniqid(), 'expected_amount' => '30.00',
+            'submitted_amount' => '30.00', 'verified_amount' => '30.00', 'status' => RiderRemittance::RECONCILED,
+            'submitted_at' => now(), 'verified_at' => now(),
+        ]);
+        RiderRemittanceItem::create(['rider_remittance_id' => $remittance->id, 'cod_collection_id' => $reconciledCollection->id]);
+
+        $dashboard = $this->actingAs($user)->get(route('logistics.dashboard'))->assertOk();
+
+        $this->assertSame(1, $dashboard->viewData('operational')['active_riders']);
+        $this->assertSame(1, $dashboard->viewData('operational')['suspended_riders']);
+        $this->assertSame(70.0, $dashboard->viewData('financeSummary')['cod_collected']);
+        $this->assertSame(40.0, $dashboard->viewData('financeSummary')['cod_awaiting_remittance']);
+        $this->assertSame(30.0, $dashboard->viewData('financeSummary')['cod_reconciled']);
     }
 
     private function center(string $name): array

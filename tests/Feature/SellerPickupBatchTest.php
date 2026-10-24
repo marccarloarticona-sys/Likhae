@@ -80,7 +80,7 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame($this->seller->id, $trip->seller_profile_id);
     }
 
-    public function test_02_ten_parcels_are_partially_assigned_to_the_three_job_limit(): void
+    public function test_02_ten_parcels_can_use_the_riders_full_approved_capacity(): void
     {
         $shipments = $this->readyShipments($this->seller, 10);
         $result = app(SellerPickupBatchService::class)->createPartial(
@@ -90,9 +90,94 @@ class SellerPickupBatchTest extends TestCase
             array_map(fn (Shipment $shipment): int => (int) $shipment->id, $shipments),
         );
 
-        $this->assertSame(3, $result['trip']->items()->count());
-        $this->assertCount(3, $result['assigned_ids']);
-        $this->assertCount(7, $result['skipped_ids']);
+        $this->assertSame(10, $result['trip']->items()->count());
+        $this->assertCount(10, $result['assigned_ids']);
+        $this->assertCount(0, $result['skipped_ids']);
+    }
+
+    public function test_remaining_capacity_rejects_oversized_direct_assignment_and_keeps_partial_overflow_unassigned(): void
+    {
+        $alreadyAssigned = $this->readyShipments($this->seller, 5);
+        $this->createBatch($alreadyAssigned);
+
+        $requested = $this->readyShipments($this->seller, 6);
+        try {
+            $this->createBatch($requested);
+            $this->fail('A six-parcel assignment must not exceed the five remaining parcel slots.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('capacity for 5 more parcel(s)', $exception->getMessage());
+        }
+
+        $result = app(SellerPickupBatchService::class)->createPartial(
+            $this->centerUser,
+            $this->center,
+            (int) $this->rider->id,
+            array_map(fn (Shipment $shipment): int => (int) $shipment->id, $requested),
+        );
+
+        $this->assertCount(5, $result['assigned_ids']);
+        $this->assertCount(1, $result['skipped_ids']);
+        $this->assertSame(10, $this->rider->assignments()->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])->count());
+        $this->assertDatabaseMissing('rider_assignments', [
+            'shipment_id' => $result['skipped_ids'][0],
+            'rider_profile_id' => $this->rider->id,
+            'status' => 'ASSIGNED',
+        ]);
+    }
+
+    public function test_pickup_batch_can_be_reassigned_before_any_parcel_is_collected(): void
+    {
+        $shipments = $this->readyShipments($this->seller, 2);
+        $oldTrip = $this->createBatch($shipments);
+        $newRider = $this->newRider();
+
+        $replacement = app(SellerPickupBatchService::class)->reassign(
+            $this->centerUser,
+            $this->center,
+            $oldTrip,
+            (int) $newRider->id,
+        );
+
+        $this->assertSame('CANCELLED', $oldTrip->fresh()->status);
+        $this->assertSame($newRider->id, $replacement->rider_profile_id);
+        $this->assertSame(2, $replacement->items()->count());
+        foreach ($shipments as $shipment) {
+            $this->assertSame('PICKUP_ASSIGNED', $shipment->fresh()->current_status);
+            $this->assertDatabaseHas('rider_assignments', [
+                'shipment_id' => $shipment->id,
+                'rider_profile_id' => $newRider->id,
+                'status' => 'ASSIGNED',
+            ]);
+            $this->assertDatabaseHas('shipment_events', [
+                'shipment_id' => $shipment->id,
+                'status' => 'PICKUP_ASSIGNED',
+                'notes' => 'Pickup rider reassigned from '.$this->rider->user->name.' to '.$newRider->user->name.'.',
+            ]);
+        }
+    }
+
+    public function test_pickup_batch_cannot_be_reassigned_after_a_successful_collection_scan(): void
+    {
+        $shipment = $this->readyShipment($this->seller);
+        [$trip, $riderUser] = $this->startBatch([$shipment]);
+        app(SellerPickupBatchService::class)->scan($riderUser, $trip, $shipment->tracking_number, 'BARCODE');
+
+        $replacementRider = $this->newRider();
+        try {
+            app(SellerPickupBatchService::class)->reassign(
+                $this->centerUser,
+                $this->center,
+                $trip->fresh(),
+                (int) $replacementRider->id,
+            );
+            $this->fail('A parcel already scanned into Rider custody cannot be reassigned without a custody handoff.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('before any parcel is scanned as collected', $exception->getMessage());
+        }
+
+        $this->assertSame('PICKED_UP', $shipment->fresh()->current_status);
+        $this->assertSame(1, $shipment->scans()->where('scan_type', 'PICKUP_COLLECTED')->where('result', 'SUCCESS')->count());
+        $this->assertSame(1, RiderLocalTrip::query()->count());
     }
 
     public function test_03_server_rejects_eleven_parcels(): void
@@ -540,10 +625,11 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame(5, $pickup->memberships()->count());
     }
 
-    public function test_bulk_pickup_assignment_caps_active_jobs_and_returns_skipped_parcels_to_queue(): void
+    public function test_bulk_pickup_assignment_respects_approved_capacity_and_returns_overflow_to_queue(): void
     {
         $shipments = $this->requestReadyShipments($this->seller, 5);
         $pickup = $this->createDurableRequest($this->seller, $shipments);
+        $this->rider->update(['approved_parcel_capacity' => 3]);
 
         $response = $this->actingAs($this->centerUser)->post(route('logistics.pickups.requests.assign', $pickup), [
             'rider_profile_id' => $this->rider->id,

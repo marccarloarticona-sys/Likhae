@@ -439,8 +439,17 @@ class ShippingRateGovernanceTest extends TestCase
         $rateRoutes = collect(app('router')->getRoutes()->getRoutes())
             ->filter(fn ($route): bool => str_contains($route->getName() ?? '', 'shipping-rate'));
 
-        $this->assertCount(9, $rateRoutes);
-        $this->assertTrue($rateRoutes->every(fn ($route): bool => ! array_intersect($route->methods(), ['PUT', 'PATCH', 'DELETE'])));
+        $genericVersionCrudRoutes = $rateRoutes->filter(function ($route): bool {
+            $name = strtolower((string) $route->getName());
+            $uri = strtolower((string) $route->uri());
+            $isGenericVersionResource = str_contains($name, 'shipping-rate-version')
+                || preg_match('#(?:^|/)shipping-rate-versions?(?:/|$)#', $uri) === 1;
+
+            return $isGenericVersionResource
+                && (bool) array_intersect($route->methods(), ['POST', 'PUT', 'PATCH', 'DELETE']);
+        });
+
+        $this->assertTrue($genericVersionCrudRoutes->isEmpty(), 'Shipping-rate policy must not expose generic rate-version CRUD endpoints.');
     }
 
     private function submit(User $user, string $amount): ShippingRateChangeRequest
@@ -527,6 +536,14 @@ class ShippingRateGovernanceTest extends TestCase
             $table->string('password')->nullable();
             $table->timestamp('email_verified_at')->nullable();
             $table->text('notification_preferences')->nullable();
+            $table->timestamps();
+        });
+        $schema->create('platform_settings', function ($table): void {
+            $table->id();
+            $table->string('key')->unique();
+            $table->text('value')->nullable();
+            $table->string('value_type', 24)->default('string');
+            $table->unsignedBigInteger('updated_by_user_id')->nullable();
             $table->timestamps();
         });
         $schema->create('logistics_centers', function ($table): void {

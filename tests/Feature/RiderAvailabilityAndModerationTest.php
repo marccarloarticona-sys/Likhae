@@ -31,6 +31,18 @@ class RiderAvailabilityAndModerationTest extends TestCase
         $this->assertDatabaseHas('rider_profiles', ['id' => $rider->id, 'is_online' => false]);
     }
 
+    public function test_availability_is_visible_on_mobile_and_reflects_server_state(): void
+    {
+        [, $riderUser] = $this->riderFixture();
+
+        $response = $this->actingAs($riderUser)->get(route('rider.dashboard'))->assertOk();
+
+        $response->assertSee('RIDER STATUS')
+            ->assertSee('OFFLINE')
+            ->assertSee('Not accepting new jobs');
+        $this->assertSame(2, substr_count($response->getContent(), 'name="is_online" value='));
+    }
+
     public function test_suspension_requires_ten_reason_characters_and_reactivation_keeps_rider_offline(): void
     {
         [$owner, , $rider] = $this->riderFixture();
@@ -62,8 +74,9 @@ class RiderAvailabilityAndModerationTest extends TestCase
             ->get(route('logistics.riders'))
             ->assertOk()
             ->assertSee('Offline')
-            ->assertSee('active jobs')
-            ->assertSee('deliveries completed today');
+            ->assertSee('0 active parcel assignments')
+            ->assertSee('10 parcel capacity remaining')
+            ->assertSee('0 deliveries completed today');
     }
 
     /** @return array{User, User, RiderProfile} */
@@ -90,6 +103,7 @@ class RiderAvailabilityAndModerationTest extends TestCase
             'user_id' => $riderUser->id,
             'logistics_center_id' => $center->id,
             'vehicle_type' => 'motorcycle',
+            'approved_parcel_capacity' => 10,
             'plate_number' => 'AVAIL-'.$suffix,
             'drivers_license_number' => 'LICENSE-'.$suffix,
             'status' => 'ACTIVE',

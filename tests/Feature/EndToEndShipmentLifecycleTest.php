@@ -254,7 +254,7 @@ class EndToEndShipmentLifecycleTest extends TestCase
             'result' => 'SUCCESS',
         ]);
         $eventStatuses = $shipment->events()->pluck('status')->all();
-        $this->assertSame(['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], array_values(array_unique($eventStatuses)));
+        $this->assertSame(['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKUP_ASSIGNED', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], array_values(array_unique($eventStatuses)));
         $this->assertEquals(10.0, (float) CommissionTransaction::where('seller_order_id', $sellerOrder->id)->value('commission_amount'));
     }
 

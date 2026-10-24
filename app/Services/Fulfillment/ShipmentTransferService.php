@@ -101,11 +101,11 @@ final class ShipmentTransferService
         }, $scanMethod);
     }
 
-    public function depart(ShipmentTransferLeg $leg, User $actor): ShipmentTransferLeg
+    public function depart(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($leg, $actor): ShipmentTransferLeg {
+        return DB::transaction(function () use ($leg, $actor, $scannedCode, $scanMethod): ShipmentTransferLeg {
             $locked = ShipmentTransferLeg::query()->whereKey($leg->id)->lockForUpdate()->firstOrFail();
             $this->assertOriginTransporter($actor, (int) $locked->origin_logistics_center_id);
             if ($locked->status === ShipmentTransferLeg::IN_TRANSIT) {
@@ -115,6 +115,7 @@ final class ShipmentTransferService
                 throw new RuntimeException('Only a released transfer leg can depart.');
             }
 
+            $this->recordScan($locked, $actor, $scannedCode, 'TRANSFER_DEPARTURE', $scanMethod);
             $locked->update(['status' => ShipmentTransferLeg::IN_TRANSIT]);
             $this->recordReturnProgressForLeg($locked, $actor, 'Return parcel is in transit between sorting centers.');
 

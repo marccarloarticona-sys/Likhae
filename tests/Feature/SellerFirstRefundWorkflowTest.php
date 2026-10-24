@@ -9,6 +9,7 @@ use App\Models\Buyer\ReturnRefundEvidence;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
+use App\Models\Returns\CashRefundObligation;
 use App\Models\Seller\Category;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
@@ -358,6 +359,39 @@ class SellerFirstRefundWorkflowTest extends TestCase
             ->assertOk()
             ->assertSee('Cash');
         $this->assertSame(SellerReturnRefundRequest::STATUS_APPROVED, $sellerRequest->fresh()->status);
+    }
+
+    public function test_cash_refund_cannot_be_paid_until_an_authorized_payer_policy_is_configured(): void
+    {
+        config(['likhae.cash_refund_authorized_account_types' => []]);
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item))->assertOk();
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+
+        $this->actingAs($sellerUser)->post(route('seller.orders.refunds.approve', $sellerRequest), ['confirm_approval' => 1])->assertRedirect();
+        $sellerRequest->refresh();
+
+        $custody = app(\App\Services\Returns\ReturnCustodyService::class);
+        $custody->recordCustodyEvent($sellerRequest, $sellerUser, 'LOGISTICS_RECEIVED');
+        $custody->recordCustodyEvent($sellerRequest, $sellerUser, 'SELLER_RECEIVED');
+        $returnItem = $sellerRequest->items()->sole();
+        $custody->recordInspection($sellerRequest, $returnItem, $sellerUser, ['inventory_disposition' => 'QUARANTINED']);
+        $this->actingAs($sellerUser)->post(route('seller.orders.refunds.cash-ready', $sellerRequest), ['confirm_cash_ready' => 1])->assertRedirect();
+
+        $obligation = CashRefundObligation::query()->sole();
+        $this->assertSame(CashRefundObligation::CASH_READY, $obligation->state);
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+
+        $this->actingAs($admin)->from(route('admin.finance'))->post(route('admin.cash-refunds.paid', $obligation), [
+            'payment_reference' => 'COD-CASH-REF-TEST',
+            'confirm_cash_paid' => 1,
+        ])->assertRedirect(route('admin.finance'))->assertSessionHasErrors('cash_refund');
+
+        $obligation->refresh();
+        $this->assertSame(CashRefundObligation::CASH_READY, $obligation->state);
+        $this->assertNull($obligation->paid_by_user_id);
+        $this->assertNull($obligation->paid_at);
+        $this->assertNull($obligation->payment_reference);
     }
 
     public function test_another_seller_cannot_open_the_refund_request(): void

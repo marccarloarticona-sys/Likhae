@@ -74,7 +74,8 @@
                     <span class="mt-1 block text-[8px] text-muted">RID-{{ str_pad((string) $rider->id, 4, '0', STR_PAD_LEFT) }} · {{ $activeArea ?: 'Unassigned' }}</span>
                     @if($rider->vehicleRole() === 'LOCAL_BARANGAY')
                         <span class="mt-1 block text-[8px] text-muted">Approved local-trip capacity: {{ $rider->approved_parcel_capacity ?? 'Not set' }} parcels</span>
-                        <span class="mt-1 block text-[8px] text-muted">{{ $rider->active_assignments_count }} active jobs · {{ $rider->completed_deliveries_today_count }} deliveries completed today</span>
+                        <span class="mt-1 block text-[8px] text-muted">{{ $rider->active_assignments_count }} active parcel assignments · {{ $rider->remaining_parcel_capacity }} parcel capacity remaining</span>
+                        <span class="mt-1 block text-[8px] text-muted">{{ $rider->completed_deliveries_today_count }} deliveries completed today</span>
                         <span class="mt-1 block text-[8px] {{ $rider->is_online ? 'text-emerald-700' : 'text-muted' }}">{{ $rider->is_online ? 'Online and available' : 'Offline' }}</span>
                     @elseif($rider->vehicleRole() === 'INTER_LOGISTICS')
                         <span class="mt-1 block text-[8px] text-muted">Approved capacity: {{ $rider->approved_parcel_capacity ?? '—' }} parcels · {{ $rider->approved_weight_capacity_kg ?? '—' }} kg · {{ $rider->approved_volume_capacity_liters ?? '—' }} L</span>

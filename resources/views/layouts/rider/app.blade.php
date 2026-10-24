@@ -525,14 +525,63 @@
                 top: 0;
                 z-index: 45;
                 display: flex;
+                flex-wrap: wrap;
                 min-height: 62px;
                 align-items: center;
                 justify-content: space-between;
                 gap: 8px;
-                padding: 0 12px;
+                padding: 8px 12px;
                 border-bottom: 1px solid var(--ra-line);
                 background: rgba(251, 247, 242, .92);
                 backdrop-filter: blur(18px);
+            }
+
+            .rider-mobile-status-row {
+                display: flex;
+                flex: 1 0 100%;
+                min-width: 0;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 8px 2px 2px;
+                border-top: 1px solid var(--ra-line);
+            }
+
+            .rider-mobile-status-copy {
+                display: grid;
+                min-width: 0;
+                gap: 2px;
+                color: var(--ra-text);
+                font-size: 10px;
+            }
+
+            .rider-mobile-status-copy strong {
+                color: var(--ra-success);
+                font-size: 11px;
+                letter-spacing: .06em;
+            }
+
+            .rider-mobile-status-copy small {
+                color: var(--ra-muted);
+                font-size: 8px;
+                font-weight: 800;
+                letter-spacing: .12em;
+            }
+
+            .rider-mobile-status-copy span {
+                color: var(--ra-muted);
+                font-size: 10px;
+            }
+
+            .rider-mobile-status-row form {
+                flex: 0 0 auto;
+                margin-left: auto;
+            }
+
+            .rider-mobile-status-toggle {
+                min-height: 44px;
+                padding: 0 14px;
+                font-size: 11px;
             }
 
             .rider-mobile-brand {
@@ -726,31 +775,33 @@
     @endif
     <script>
         (() => {
-            const form = document.querySelector('[data-rider-availability-form]');
-            if (!form) return;
-            const online = form.querySelector('input[name="is_online"]');
-            const latitude = form.querySelector('[data-availability-latitude]');
-            const longitude = form.querySelector('[data-availability-longitude]');
-            const message = form.querySelector('[data-availability-message]');
-            let locationReady = false;
-            form.addEventListener('submit', (event) => {
-                if (online.value !== '1' || locationReady) return;
-                event.preventDefault();
-                if (!navigator.geolocation) {
-                    message.textContent = 'Location access is required to go online for nearby dispatch.';
-                    return;
-                }
-                message.textContent = 'Getting your location…';
-                navigator.geolocation.getCurrentPosition((position) => {
-                    latitude.value = position.coords.latitude;
-                    longitude.value = position.coords.longitude;
-                    locationReady = true;
-                    form.requestSubmit();
-                }, () => {
-                    message.textContent = 'Location was not shared. You can still go online, but nearby auto-assignment needs location access.';
-                    locationReady = true;
-                    form.requestSubmit();
-                }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
+            document.querySelectorAll('[data-rider-availability-form]').forEach((form) => {
+                const online = form.querySelector('input[name="is_online"]');
+                const latitude = form.querySelector('[data-availability-latitude]');
+                const longitude = form.querySelector('[data-availability-longitude]');
+                const message = form.querySelector('[data-availability-message]');
+                let locationReady = false;
+                form.addEventListener('submit', (event) => {
+                    if (online.value !== '1' || locationReady) return;
+                    event.preventDefault();
+                    if (!navigator.geolocation) {
+                        message.textContent = 'Location is unavailable. You can still go online; nearby automatic dispatch may be limited.';
+                        locationReady = true;
+                        form.requestSubmit();
+                        return;
+                    }
+                    message.textContent = 'Getting your location…';
+                    navigator.geolocation.getCurrentPosition((position) => {
+                        latitude.value = position.coords.latitude;
+                        longitude.value = position.coords.longitude;
+                        locationReady = true;
+                        form.requestSubmit();
+                    }, () => {
+                        message.textContent = 'Location was not shared. You can still go online, but nearby automatic dispatch may be limited.';
+                        locationReady = true;
+                        form.requestSubmit();
+                    }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
+                });
             });
         })();
     </script>

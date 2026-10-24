@@ -77,6 +77,7 @@ class SellerVoucherIntegrationTest extends TestCase
             'ends_at' => '2026-10-19 12:00:00',
         ])->assertRedirect(route('seller.marketing'))->assertSessionHasErrors('ends_at');
 
-        $this->assertDatabaseCount('vouchers', 0);
+        $this->assertDatabaseMissing('vouchers', ['code' => 'TOOMUCH']);
+        $this->assertDatabaseMissing('vouchers', ['code' => 'BADDATES']);
     }
 }

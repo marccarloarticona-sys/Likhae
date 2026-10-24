@@ -455,12 +455,13 @@ class SellerDashboardFinancialsTest extends TestCase
         $this->assertSame(245.0, $response->viewData('dashboardStats')['completed_order_value_all_time']);
         $this->assertSame(160.0, $response->viewData('financialSummary')['gross']);
         $response
-            ->assertSee('All-time completed order value; shipping and Additional Care included')
+            ->assertSee('Includes shipping and Additional Care; this is not your payout.')
+            ->assertSee('Recognized merchandise sales from delivered orders. Shipping and Additional Care are excluded.')
             ->assertDontSee('Completed Order Total')
-            ->assertSee('Gross Sales')
+            ->assertSee('Gross sales')
             ->assertSee('Commission')
-            ->assertSee('Net Sales')
-            ->assertSee('Gross sales (last 7 days)');
+            ->assertSee('Net sales')
+            ->assertSee('Non-cancelled orders');
     }
 
     public function test_dashboard_chart_orders_daily_gross_and_zero_fills_the_other_six_days(): void

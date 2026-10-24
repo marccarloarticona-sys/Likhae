@@ -9,7 +9,7 @@ use Illuminate\Validation\ValidationException;
 
 final class RegionShippingRateService
 {
-    public const DEFAULT_ADDITIONAL_TIER_FEE = '6.00';
+    public const DEFAULT_ADDITIONAL_TIER_FEE = '5.00';
 
     /**
      * @return array{shipping_fee:string,snapshot:array<string,mixed>}

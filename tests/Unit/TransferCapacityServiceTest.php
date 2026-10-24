@@ -31,7 +31,7 @@ class TransferCapacityServiceTest extends TestCase
         ]);
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('weight or volume is missing');
+        $this->expectExceptionMessage('parcel weight is missing');
 
         (new TransferCapacityService)->assertCapacity($driver, [
             ['weight_kg' => null, 'volume_liters' => 1],

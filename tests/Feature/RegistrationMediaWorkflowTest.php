@@ -6,11 +6,13 @@ use App\Models\Auth\RegistrationApplication;
 use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Admin\PlatformPolicy;
+use App\Models\Rider\RiderProfile;
 use App\Models\Seller\Category;
 use App\Models\User;
 use App\Http\Middleware\RequireMandatoryPolicyAcceptance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -133,7 +135,7 @@ class RegistrationMediaWorkflowTest extends TestCase
         Storage::disk('public')->assertExists($profile->banner_path);
     }
 
-    public function test_rider_registration_documents_are_reviewable_only_by_assigned_logistics_center(): void
+    public function test_rider_001_assigned_logistics_approval_activates_rider_access_and_admin_cannot_approve(): void
     {
         $centerOwner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
         $center = LogisticsCenter::query()->create([
@@ -189,8 +191,48 @@ class RegistrationMediaWorkflowTest extends TestCase
             $this->post(route('logistics.riders.application.documents.verify', [$application, $document]))
                 ->assertRedirect();
         }
-        $this->post(route('logistics.riders.approve', $application))->assertRedirect();
+
+        $admin = User::factory()->create([
+            'account_type' => User::TYPE_ADMIN,
+            'status' => User::STATUS_ACTIVE,
+        ]);
+        $statusBeforeAdminDecision = $application->fresh()->status;
+        $this->actingAs($admin)
+            ->post(route('admin.registrations.approve', $application))
+            ->assertNotFound();
+        $this->assertSame($statusBeforeAdminDecision, $application->fresh()->status);
+
+        $this->actingAs($centerOwner)
+            ->from(route('logistics.riders.application.show', $application))
+            ->post(route('logistics.riders.approve', $application))
+            ->assertRedirect(route('logistics.riders.application.show', $application));
         $this->assertSame(RegistrationApplication::STATUS_APPROVED, $application->fresh()->status);
+
+        $rider = RiderProfile::query()->where('user_id', $application->user_id)->sole();
+        $this->assertSame((int) $center->id, (int) $rider->logistics_center_id);
+        $this->assertSame('ACTIVE', $rider->status);
+        $this->assertSame((int) $centerOwner->id, (int) $rider->approved_by_user_id);
+        $this->assertNotNull($rider->approved_at);
+        $this->assertSame(User::STATUS_ACTIVE, $application->user->fresh()->status);
+        $this->actingAs($application->user->fresh())
+            ->get(route('rider.dashboard'))
+            ->assertOk();
+
+        $approvalAuditCount = DB::table('audit_logs')
+            ->where('event', 'registration.approved')
+            ->where('auditable_type', RegistrationApplication::class)
+            ->where('auditable_id', $application->id)
+            ->count();
+        $this->actingAs($centerOwner)
+            ->post(route('logistics.riders.approve', $application))
+            ->assertRedirect(route('logistics.riders.application.show', $application))
+            ->assertSessionHasErrors('application');
+        $this->assertSame(1, RiderProfile::query()->where('user_id', $application->user_id)->count());
+        $this->assertSame($approvalAuditCount, DB::table('audit_logs')
+            ->where('event', 'registration.approved')
+            ->where('auditable_type', RegistrationApplication::class)
+            ->where('auditable_id', $application->id)
+            ->count());
 
         $otherOwner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
         LogisticsCenter::query()->create([

@@ -32,7 +32,7 @@ class PurchaseLimitPerBuyerTest extends TestCase
         $column = $columns->firstWhere('name', 'purchase_limit_per_buyer');
 
         $this->assertNotNull($column);
-        $this->assertSame('integer', strtolower((string) $column['type']));
+        $this->assertMatchesRegularExpression('/^int(?:eger)? unsigned$/', strtolower((string) $column['type']));
         $this->assertTrue($column['nullable']);
         $this->assertNull($column['default']);
         $this->assertFalse(collect(Schema::getIndexes('products'))->contains(

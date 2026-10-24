@@ -2,6 +2,16 @@
 @php
     $notificationCount = (int) $notificationCount;
     $workspaceRider = auth()->user()?->riderProfile;
+    $isLocalRider = $workspaceRider && \App\Support\RiderVehicleType::isLocalBarangay($workspaceRider->vehicle_type);
+    $availabilitySchemaReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->riderAvailabilityReady();
+    $canToggleAvailability = $isLocalRider
+        && $availabilitySchemaReady
+        && in_array($workspaceRider->status, ['ACTIVE', 'WARNED'], true)
+        && auth()->user()?->status === \App\Models\User::STATUS_ACTIVE;
+    $availabilityOnline = $canToggleAvailability && (bool) $workspaceRider->is_online;
+    $availabilityUnavailableMessage = ! $availabilitySchemaReady
+        ? 'Availability controls are unavailable until Rider status setup is complete.'
+        : 'Contact Logistics to restore Rider access.';
 @endphp
 
 <div class="rider-mobile-bar">
@@ -17,6 +27,25 @@
         @if($notificationCount > 0)<span class="rider-notification-badge">{{ $notificationCount }}</span>@endif
     </button>
     <x-shared.workspace.account-menu label="Rider Account" profile-route="rider.profile" compact />
+    @if($isLocalRider)
+        <div class="rider-mobile-status-row">
+            <div class="rider-mobile-status-copy" role="status" aria-live="polite">
+                <small>RIDER STATUS</small>
+                <strong>{{ $canToggleAvailability ? ($availabilityOnline ? 'ONLINE' : 'OFFLINE') : 'UNAVAILABLE' }}</strong>
+                <span>{{ $canToggleAvailability ? ($availabilityOnline ? 'Available for new jobs' : 'Not accepting new jobs') : $availabilityUnavailableMessage }}</span>
+            </div>
+            @if($canToggleAvailability)
+                <form method="POST" action="{{ route('rider.availability.update') }}" data-rider-availability-form>
+                    @csrf @method('PATCH')
+                    <input type="hidden" name="is_online" value="{{ $availabilityOnline ? 0 : 1 }}">
+                    <input type="hidden" name="latitude" data-availability-latitude>
+                    <input type="hidden" name="longitude" data-availability-longitude>
+                    <button type="submit" class="rider-topbar-status rider-mobile-status-toggle">{{ $availabilityOnline ? 'Go Offline' : 'Go Online' }}</button>
+                    <span class="sr-only" data-availability-message aria-live="polite"></span>
+                </form>
+            @endif
+        </div>
+    @endif
 </div>
 
 <header class="rider-topbar">
@@ -29,15 +58,18 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>
             @if($notificationCount > 0)<span class="rider-notification-badge">{{ $notificationCount }}</span>@endif
         </button>
-        @if($workspaceRider && \App\Support\RiderVehicleType::isLocalBarangay($workspaceRider->vehicle_type))
-            <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:6px" data-rider-availability-form>
+        @if($isLocalRider && $canToggleAvailability)
+            <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:8px" data-rider-availability-form>
                 @csrf @method('PATCH')
-                <input type="hidden" name="is_online" value="{{ $workspaceRider->is_online ? 0 : 1 }}">
+                <input type="hidden" name="is_online" value="{{ $availabilityOnline ? 0 : 1 }}">
                 <input type="hidden" name="latitude" data-availability-latitude>
                 <input type="hidden" name="longitude" data-availability-longitude>
-                <button type="submit" class="rider-topbar-status" style="cursor:pointer;border-color:{{ $workspaceRider->is_online ? '#CFE8DA' : '#E4DCCB' }};background:{{ $workspaceRider->is_online ? 'var(--ra-success-soft)' : '#F5F1E8' }};color:{{ $workspaceRider->is_online ? 'var(--ra-success)' : '#76684F' }}">{{ $workspaceRider->is_online ? 'Go Offline' : 'Go Online' }}</button>
+                <span class="rider-topbar-copy" role="status"><strong>RIDER STATUS · {{ $availabilityOnline ? 'ONLINE' : 'OFFLINE' }}</strong><span>{{ $availabilityOnline ? 'Available for new jobs' : 'Not accepting new jobs' }}</span></span>
+                <button type="submit" class="rider-topbar-status" style="cursor:pointer;border-color:{{ $availabilityOnline ? '#CFE8DA' : '#E4DCCB' }};background:{{ $availabilityOnline ? 'var(--ra-success-soft)' : '#F5F1E8' }};color:{{ $availabilityOnline ? 'var(--ra-success)' : '#76684F' }}">{{ $availabilityOnline ? 'Go Offline' : 'Go Online' }}</button>
                 <span class="sr-only" data-availability-message aria-live="polite"></span>
             </form>
+        @elseif($isLocalRider)
+            <span class="rider-topbar-status" role="status">{{ $availabilitySchemaReady ? 'Unavailable · Contact Logistics' : 'Availability setup unavailable' }}</span>
         @endif
         <x-shared.workspace.account-menu label="Rider Account" profile-route="rider.profile" />
     </div>

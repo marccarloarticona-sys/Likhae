@@ -201,6 +201,63 @@ class RiderMobileApiTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_delivery_api_does_not_accept_a_caller_supplied_proof_path(): void
+    {
+        $rider = $this->createRider();
+        [$assignment] = $this->createDeliveryAssignment($rider->riderProfile);
+
+        $this->withToken($this->issueToken($rider))
+            ->patchJson(route('api.v1.rider.assignments.transition', $assignment), [
+                'action' => 'delivery_success',
+                'scanned_code' => $assignment->shipment->tracking_number,
+                'collected_amount' => '0.00',
+                'proof_path' => 'delivery-proofs/fake-proof.jpg',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('proof_file');
+
+        $this->assertSame('OUT_FOR_DELIVERY', $assignment->shipment->fresh()->current_status);
+        $this->assertDatabaseMissing('delivery_attempts', [
+            'shipment_id' => $assignment->shipment_id,
+            'status' => 'DELIVERED',
+        ]);
+    }
+
+    public function test_mobile_logout_marks_rider_offline_and_preserves_current_delivery_work(): void
+    {
+        $rider = $this->createRider();
+        $profile = $rider->riderProfile;
+        [$assignment] = $this->createDeliveryAssignment($profile);
+        $profile->update([
+            'is_online' => true,
+            'availability_latitude' => '14.2000000',
+            'availability_longitude' => '121.5000000',
+            'availability_location_updated_at' => now(),
+        ]);
+
+        $this->withToken($this->issueToken($rider))
+            ->postJson(route('api.v1.auth.logout'))
+            ->assertOk()
+            ->assertJsonPath('success', true);
+
+        $this->assertDatabaseHas('rider_profiles', [
+            'id' => $profile->id,
+            'is_online' => false,
+            'availability_latitude' => null,
+            'availability_longitude' => null,
+            'availability_location_updated_at' => null,
+        ]);
+        $this->assertDatabaseHas('rider_assignments', [
+            'id' => $assignment->id,
+            'rider_profile_id' => $profile->id,
+            'status' => 'IN_PROGRESS',
+        ]);
+        $this->assertDatabaseHas('shipments', [
+            'id' => $assignment->shipment_id,
+            'current_status' => 'OUT_FOR_DELIVERY',
+        ]);
+    }
+
     private function createRider(): User
     {
         $owner = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);

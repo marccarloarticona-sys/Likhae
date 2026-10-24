@@ -952,7 +952,11 @@ class BuyerController extends Controller
         $purchaseLimitExceededProducts = $this->purchaseLimitExceededProducts($cartItems, $buyer);
 
         $cartItems->each(function (CartItem $item) use ($purchaseLimitExceededProducts): void {
-            $item->setAttribute('cart_availability', $this->cartItemAvailability($item));
+            $availability = $this->cartItemAvailability($item);
+            if ($availability['code'] === 'INSUFFICIENT_STOCK') {
+                $availability['message'] = 'Only '.max(0, (int) ($item->productVariant?->stock ?? 0)).' available.';
+            }
+            $item->setAttribute('cart_availability', $availability);
             $productId = (int) ($item->productVariant?->product?->id ?? 0);
             $item->setAttribute('purchase_limit_exceeded', isset($purchaseLimitExceededProducts[$productId]));
         });
@@ -1119,7 +1123,7 @@ class BuyerController extends Controller
                 : $sellerVoucherCode;
             $hasVoucher = $sellerVoucherCode !== '' || $platformVoucherCode !== '';
             $voucherMessage = $hasVoucher
-                ? $this->cartVoucherErrorMessage($exception, $items, $failedVoucherCode)
+                ? $this->cartVoucherErrorMessage($exception, $items, $failedVoucherCode, $buyer)
                 : (collect($exception->errors())->flatten()->filter()->first()
                     ?: 'Cart totals could not be refreshed. Review your selected items and try again.');
             $fallbackPreview = null;
@@ -1227,7 +1231,7 @@ class BuyerController extends Controller
         ])->values()->all();
     }
 
-    private function cartVoucherErrorMessage(ValidationException $exception, $items, string $code): string
+    private function cartVoucherErrorMessage(ValidationException $exception, $items, string $code, User $buyer): string
     {
         $original = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
         $normalized = mb_strtolower($original);
@@ -1263,6 +1267,30 @@ class BuyerController extends Controller
             return 'This voucher code is invalid.';
         }
         if (str_contains($normalized, 'that seller voucher is not available for the selected items')) {
+            $sellerIds = $items
+                ->map(fn (CartItem $item): int => (int) ($item->productVariant?->product?->seller_profile_id ?? 0))
+                ->filter(fn (int $sellerId): bool => $sellerId > 0)
+                ->unique()
+                ->values();
+            $matchingVouchers = Voucher::query()
+                ->whereRaw('UPPER(code) = ?', [mb_strtoupper(trim($code))])
+                ->whereIn('seller_profile_id', $sellerIds)
+                ->whereHas('buyerClaims', fn ($query) => $query->where('buyer_user_id', $buyer->id))
+                ->with('sellerProfile.user')
+                ->get();
+
+            if ($matchingVouchers->count() === 1) {
+                $voucher = $matchingVouchers->first();
+                $claimService = app(BuyerVoucherClaimService::class);
+                $globalUses = (int) VoucherRedemptionCounter::countsFor($matchingVouchers)->get($voucher->id, 0);
+                $buyerUses = (int) VoucherRedemptionCounter::countsFor($matchingVouchers, (int) $buyer->id)->get($voucher->id, 0);
+                $unavailableReason = $claimService->unavailableReason($voucher, $buyer, $globalUses, $buyerUses);
+
+                if ($unavailableReason !== null) {
+                    return $unavailableReason;
+                }
+            }
+
             return 'This voucher code is invalid.';
         }
 

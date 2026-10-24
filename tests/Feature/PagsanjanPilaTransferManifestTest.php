@@ -145,12 +145,12 @@ class PagsanjanPilaTransferManifestTest extends TestCase
         $manifest = $this->manifestWithLegs($fixture, [$missing]);
         $this->assertRuntimeFailure(
             fn () => app(TransferManifestService::class)->assignDriver($fixture['originUser'], $manifest, $fixture['driver']),
-            'weight or volume is missing',
+            'a parcel weight is missing',
         );
         $manifest->update(['assigned_driver_rider_profile_id' => $fixture['driver']->id]);
         $this->assertRuntimeFailure(
             fn () => app(TransferManifestService::class)->seal($fixture['originUser'], $manifest->fresh()),
-            'weight or volume is missing',
+            'a parcel weight is missing',
         );
         $this->assertSame('DRAFT', $manifest->fresh()->status);
     }
@@ -172,7 +172,7 @@ class PagsanjanPilaTransferManifestTest extends TestCase
         $this->actingAs($fixture['originUser'])
             ->get(route('logistics.transfers.show', $manifest))
             ->assertOk()
-            ->assertSee('Save measured values');
+            ->assertSee('Save measurements');
         $this->patch(route('logistics.transfers.items.measurements', [$manifest, $item]), [
             'parcel_weight_kg' => '1.250',
             'parcel_volume_liters' => '3.500',
@@ -295,7 +295,23 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             $this->assertSame(ShipmentTransferLeg::RELEASED, $item->transferLeg->fresh()->status);
         }
 
-        $manifest = $service->driverStart($fixture['driverUser'], $manifest, $codes);
+        $this->actingAs($fixture['driverUser'])
+            ->get(route('rider.transfers.show', $manifest))
+            ->assertOk()
+            ->assertSee('Scan each parcel as it is loaded for departure');
+        $this->post(route('rider.transfers.start', $manifest), ['scanned_codes' => []])
+            ->assertSessionHasErrors('scanned_codes');
+        $wrongDepartureCodes = $codes;
+        $wrongDepartureCodes[$items[0]->id] = 'WRONG-TRACKING-CODE';
+        $this->assertRuntimeFailure(
+            fn () => $service->driverStart($fixture['driverUser'], $manifest, $wrongDepartureCodes),
+            'does not match the shipment assigned to this transfer leg',
+        );
+        $this->post(route('rider.transfers.start', $manifest), [
+            'scanned_codes' => $codes,
+            'scan_method' => 'BARCODE',
+        ])->assertRedirect();
+        $manifest = $manifest->fresh();
         $this->assertSame('IN_TRANSIT', $manifest->status);
         foreach ($items as $item) {
             $this->assertSame(ShipmentTransferLeg::IN_TRANSIT, $item->transferLeg->fresh()->status);
@@ -422,7 +438,7 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'approved_by_user_id' => $originUser->id,
             'approved_at' => now(),
         ]);
-        $destinationRiderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
+        $destinationRiderUser = User::factory()->create(['account_type' => User::TYPE_RIDER, 'status' => User::STATUS_ACTIVE]);
         $destinationRider = RiderProfile::create([
             'user_id' => $destinationRiderUser->id,
             'logistics_center_id' => $destination->id,
@@ -431,6 +447,7 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'plate_number' => 'PILA-RIDER-'.uniqid(),
             'drivers_license_number' => 'PILA-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
         ]);
         $area = ServiceArea::create([
             'logistics_center_id' => $destination->id,

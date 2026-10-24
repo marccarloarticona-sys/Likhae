@@ -428,9 +428,9 @@
                                                     {{ $item['availability_message'] }}
                                                 @else
                                                     {{ $item['stock'] < $item['quantity'] ? 'Only '.$item['stock'].' available.' : $item['stock'].' pieces available' }}
-                                                    @if ($item['purchase_limit_exceeded'])
-                                                        Cart quantity exceeds this product's purchase limit.
-                                                    @endif
+                                                @endif
+                                                @if ($item['purchase_limit_exceeded'])
+                                                    Cart quantity exceeds this product's purchase limit.
                                                 @endif
                                             </p>
                                         </div>

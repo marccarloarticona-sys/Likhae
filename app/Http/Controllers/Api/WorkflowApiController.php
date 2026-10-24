@@ -72,7 +72,8 @@ class WorkflowApiController extends Controller
             'collected_amount' => ['required_if:action,delivery_success', 'nullable', 'numeric', 'decimal:0,2', 'min:0'],
             'collection_reference' => ['nullable', 'string', 'max:100'],
             'notes' => ['nullable', 'string', 'max:1000'],
-            'proof_path' => ['nullable', 'string', 'max:500'],
+            // Delivery proof must be uploaded through this request. Never trust
+            // a caller-supplied storage path as evidence of a genuine delivery.
             'proof_file' => ['required_if:action,delivery_success', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
         ]);
         $proofPath = null;

@@ -21,6 +21,8 @@
         'rider_assignment' => ['Awaiting rider assignment', 'Sorted without an active delivery assignment'],
         'pickup' => ['Active pickups', 'Pickup rider assignment in progress'],
         'last_mile' => ['Active last-mile', 'Assigned or out for delivery'],
+        'active_riders' => ['Active Riders', 'Approved Riders with active accounts'],
+        'suspended_riders' => ['Suspended Riders', 'Suspended or inactive Rider profiles'],
         'manifests' => ['Active inter-hub manifests', 'Separate manifest records'],
     ];
 @endphp
@@ -159,7 +161,7 @@
     <section class="rounded-xl border border-line bg-surface p-5 shadow-sm" aria-labelledby="finance-heading">
         <div class="flex flex-wrap items-center justify-between gap-3"><div><h2 id="finance-heading" class="text-base font-semibold text-ink">COD and earnings reconciliation</h2><p class="mt-1 text-xs text-muted">All-time finance totals; separate from the shipment creation-date filter.</p></div><a href="{{ route('logistics.remittances') }}" class="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-ink">Review remittances</a></div>
         <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            @foreach([['Rider COD obligations', 'rider_cod_obligations'], ['Submitted cash', 'remittance_submitted'], ['Verified cash', 'verified_cash'], ['Discrepancies', 'discrepancies'], ['Logistics pool', 'logistics_pool'], ['Pending settlement', 'pending_settlement']] as [$label, $key])
+            @foreach([['COD collected', 'cod_collected'], ['COD awaiting Rider remittance', 'cod_awaiting_remittance'], ['COD reconciled', 'cod_reconciled'], ['Expected Rider COD', 'rider_cod_obligations'], ['Submitted cash', 'remittance_submitted'], ['Verified cash', 'verified_cash'], ['Discrepancies', 'discrepancies'], ['Logistics pool', 'logistics_pool'], ['Pending settlement', 'pending_settlement']] as [$label, $key])
                 <div class="rounded-lg bg-page-secondary p-3"><span class="block text-[11px] text-muted">{{ $label }}</span><strong class="mt-1 block text-sm text-ink">{{ $key === 'discrepancies' ? number_format((int) $financeSummary[$key]) : 'PHP '.number_format((float) $financeSummary[$key], 2) }}</strong></div>
             @endforeach
         </div>

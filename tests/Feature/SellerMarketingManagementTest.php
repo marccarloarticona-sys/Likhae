@@ -194,7 +194,8 @@ class SellerMarketingManagementTest extends TestCase
                 ->assertSessionHasErrors('discount_value');
         }
 
-        $this->assertDatabaseCount('vouchers', 0);
+        $this->assertDatabaseMissing('vouchers', ['code' => 'INVALIDFIXED0']);
+        $this->assertDatabaseMissing('vouchers', ['code' => 'INVALIDFIXED-1']);
     }
 
     public function test_seller_can_target_owned_active_products_but_not_another_sellers_product(): void

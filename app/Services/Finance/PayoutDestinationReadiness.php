@@ -7,7 +7,10 @@ use Illuminate\Support\Facades\Schema;
 
 final class PayoutDestinationReadiness
 {
-    private const COLUMNS = ['payout_method', 'payout_account_type', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
+    // Older Rider profiles still store one encrypted destination in the
+    // legacy columns and do not have payout_account_type. The account type is
+    // inferable from the payment channel for that fallback path.
+    private const COLUMNS = ['payout_method', 'payout_bank_name', 'payout_account_name', 'payout_account_number'];
 
     public function readyFor(string $table): bool
     {
@@ -26,7 +29,9 @@ final class PayoutDestinationReadiness
 
     public function supportsMultipleFor(string $table): bool
     {
-        return $this->readyFor($table) && Schema::hasColumn($table, 'payout_destinations');
+        return $this->readyFor($table)
+            && Schema::hasColumn($table, 'payout_destinations')
+            && Schema::hasColumn($table, 'payout_account_type');
     }
 
     public function hasDestination(Model $profile): bool

@@ -34,4 +34,19 @@ class LocalTripCapacityRulesTest extends TestCase
         LocalTripCapacityRules::assertAvailable(8, 10);
         $this->assertSame(10, LocalTripCapacityRules::approvedCapacity(10));
     }
+
+    public function test_remaining_capacity_counts_existing_active_parcels(): void
+    {
+        $this->assertSame(5, LocalTripCapacityRules::remainingCapacity(10, 5));
+        $this->assertSame(0, LocalTripCapacityRules::remainingCapacity(10, 10));
+        $this->assertSame(0, LocalTripCapacityRules::remainingCapacity(null, 0));
+    }
+
+    public function test_assignment_must_fit_remaining_approved_parcel_capacity(): void
+    {
+        LocalTripCapacityRules::assertCanAssign(5, 5, 10);
+
+        $this->expectException(RuntimeException::class);
+        LocalTripCapacityRules::assertCanAssign(5, 6, 10);
+    }
 }

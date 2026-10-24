@@ -73,8 +73,11 @@ class CartService
                 $quantity,
             );
             if (! $availability['available']) {
+                $attribute = $availability['code'] === 'INSUFFICIENT_STOCK'
+                    ? 'quantity'
+                    : 'product_variant_id';
                 throw ValidationException::withMessages([
-                    'product_variant_id' => $availability['message'],
+                    $attribute => $availability['message'],
                 ]);
             }
 

@@ -95,8 +95,17 @@
                 @csrf
                 <div>
                     <h2 class="font-semibold text-ink">Start transfer</h2>
-                    <p class="mt-1 text-sm text-muted">All parcels have been released by the origin hub. Start the trip when you are ready to depart.</p>
+                    <p class="mt-1 text-sm text-muted">Scan each parcel as it is loaded for departure. Transport starts after every manifest parcel has a matching scan.</p>
                 </div>
+                <div class="grid gap-2">
+                    @foreach($manifest->items as $item)
+                        <label class="grid gap-1 text-sm font-semibold text-ink">
+                            {{ $item->transferLeg?->shipment?->tracking_number }}
+                            <input name="scanned_codes[{{ $item->id }}]" required maxlength="150" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Scan or enter this parcel's tracking number" class="min-h-11 w-full rounded-lg border border-line px-3 py-2 text-sm font-normal">
+                        </label>
+                    @endforeach
+                </div>
+                <input type="hidden" name="scan_method" value="MANUAL">
                 <button class="justify-self-start rounded-lg bg-primary px-4 py-2 font-semibold text-white">Start Transfer</button>
             </form>
         @endif

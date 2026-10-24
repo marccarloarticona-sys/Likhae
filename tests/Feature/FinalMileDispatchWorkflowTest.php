@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\Admin\Dispute;
+use App\Models\Admin\DisputeEvidence;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderAddress;
@@ -9,6 +11,7 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Rider\RiderProfile;
@@ -20,6 +23,8 @@ use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -112,6 +117,12 @@ class FinalMileDispatchWorkflowTest extends TestCase
         $workflow = app(ShipmentWorkflowService::class);
 
         foreach ([1, 2, 3] as $attemptNumber) {
+            if ($attemptNumber > 1) {
+                $returnWorkflow = ShipmentReturnWorkflow::query()->where('shipment_id', $shipment->id)->firstOrFail();
+                $returns = app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class);
+                $returns->handoffToCenterAsOriginalRider($returnWorkflow, $fixture['riderUser'], 'MANUAL', $shipment->tracking_number);
+                $returns->receiveAtCenter($returnWorkflow->fresh(), $fixture['centerUser'], 'MANUAL', $shipment->tracking_number);
+            }
             if ($assignment->status === 'ACCEPTED') {
                 $workflow->riderTransition($assignment, 'start', $fixture['riderUser']);
             }
@@ -148,6 +159,77 @@ class FinalMileDispatchWorkflowTest extends TestCase
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
         $this->assertSame('FAILED', $shipment->deliveryAttempts()->sole()->status);
         $this->assertTrue($shipment->events()->where('notes', 'like', 'RETURN_TO_SELLER_INITIATED:%')->exists());
+    }
+
+    public function test_logistics_manual_status_override_cannot_mark_a_parcel_delivered(): void
+    {
+        $fixture = $this->fixture();
+        $shipment = $this->shipment($fixture, self::SAN_MIGUEL, 'Manual Override Road');
+        $shipment->update(['current_status' => 'OUT_FOR_DELIVERY']);
+
+        $this->actingAs($fixture['centerUser'])
+            ->post(route('logistics.parcels.status-override', $shipment), [
+                'status' => 'DELIVERED',
+                'reason' => 'Buyer confirmed the package arrived.',
+            ])
+            ->assertSessionHasErrors('status');
+
+        $this->assertSame('OUT_FOR_DELIVERY', $shipment->fresh()->current_status);
+        $this->assertDatabaseMissing('shipment_events', [
+            'shipment_id' => $shipment->id,
+            'status' => 'DELIVERED',
+        ]);
+    }
+
+    public function test_logistics_lost_exception_opens_a_claim_and_notifies_buyer_seller_and_admin(): void
+    {
+        $fixture = $this->fixture();
+        $shipment = $this->shipment($fixture, self::SAN_MIGUEL, 'Lost Parcel Road');
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+
+        $this->actingAs($fixture['centerUser'])
+            ->post(route('logistics.parcels.exceptions.store', $shipment), [
+                'exception_type' => 'LOST',
+                'reason' => 'Parcel remained missing after the authorized hub search.',
+            ])
+            ->assertRedirect();
+
+        $dispute = Dispute::query()->where('shipment_id', $shipment->id)->sole();
+        $this->assertSame('SHIPMENT_LOST', $dispute->type);
+        $this->assertSame('OPEN', $dispute->status);
+        $this->assertSame('LOST', $shipment->fresh()->current_status);
+        $this->assertDatabaseHas('shipment_events', ['shipment_id' => $shipment->id, 'status' => 'LOST']);
+        $this->assertSame(1, $fixture['buyer']->notifications()->where('type', 'SHIPMENT_EXCEPTION')->count());
+        $this->assertSame(1, $fixture['sellerUser']->notifications()->where('type', 'SHIPMENT_EXCEPTION')->count());
+        $this->assertSame(1, $admin->notifications()->where('type', 'SHIPMENT_EXCEPTION')->count());
+    }
+
+    public function test_logistics_damaged_exception_requires_and_protects_photo_evidence(): void
+    {
+        Storage::fake('local');
+        $fixture = $this->fixture();
+        $shipment = $this->shipment($fixture, self::SAN_MIGUEL, 'Damaged Parcel Road');
+        $route = route('logistics.parcels.exceptions.store', $shipment);
+        $this->actingAs($fixture['centerUser'])
+            ->post($route, [
+                'exception_type' => 'DAMAGED',
+                'reason' => 'Outer box is crushed and contents may be affected.',
+            ])
+            ->assertSessionHasErrors('photo');
+
+        $this->post($route, [
+            'exception_type' => 'DAMAGED',
+            'reason' => 'Outer box is crushed and contents may be affected.',
+            'photo' => UploadedFile::fake()->image('damage.jpg', 1200, 900),
+        ])->assertRedirect();
+
+        $dispute = Dispute::query()->where('shipment_id', $shipment->id)->sole();
+        $evidence = DisputeEvidence::query()->where('dispute_id', $dispute->id)->sole();
+        $this->assertSame('SHIPMENT_DAMAGED', $dispute->type);
+        $this->assertSame('DAMAGED', $shipment->fresh()->current_status);
+        $this->assertSame('local', $evidence->disk);
+        $this->assertTrue($evidence->encrypted);
+        Storage::disk('local')->assertExists($evidence->file_path);
     }
 
     private function startDelivery(array $fixture, Shipment $shipment): \App\Models\Rider\RiderAssignment

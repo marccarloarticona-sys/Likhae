@@ -67,11 +67,11 @@
                     <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf
-                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online eligible rider for up to {{ $requestParcels->count() }} parcels
+                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online rider · excess parcels stay in a new request
                                 <select name="rider_profile_id" required class="min-h-11 border border-line bg-white px-3 text-sm text-ink" @disabled($pickupRequest->eligible_riders->isEmpty())>
                                     <option value="">{{ $pickupRequest->eligible_riders->isEmpty() ? 'No eligible Rider with sufficient capacity' : 'Select a local Rider' }}</option>
                                     @foreach($pickupRequest->eligible_riders as $rider)
-                                        <option value="{{ $rider->id }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · approved capacity {{ min(10, (int) $rider->approved_parcel_capacity) }}</option>
+                                        <option value="{{ $rider->id }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · up to {{ min($requestParcels->count(), \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} of {{ $requestParcels->count() }} parcel(s)</option>
                                     @endforeach
                                 </select>
                             </label>
@@ -129,7 +129,7 @@
                                 <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
                                     <option value="">{{ $eligibleRiders->isEmpty() ? 'No eligible rider assigned to this pickup barangay' : 'Select motorcycle or tricycle rider' }}</option>
                                     @foreach($eligibleRiders as $rider)
-                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS - (int) $rider->active_assignments_count) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · up to {{ min(10, (int) $rider->approved_parcel_capacity, \App\Services\Fulfillment\ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS - (int) $rider->active_assignments_count) }} job(s)</option>
+                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · {{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} parcel(s) available</option>
                                     @endforeach
                                 </select>
                             </label>
@@ -176,7 +176,7 @@
                                 <select name="rider_profile_id" required class="min-h-10 border border-line bg-white px-3 text-sm text-ink">
                                     <option value="">Select another rider</option>
                                     @foreach($batch->reassignable_riders as $candidate)
-                                        <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · {{ $candidate->active_assignments_count }} active job(s)</option>
+                                        <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · {{ $candidate->active_assignments_count }} active parcel assignment(s) · {{ \App\Support\LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) }} capacity remaining</option>
                                     @endforeach
                                 </select>
                             </label>

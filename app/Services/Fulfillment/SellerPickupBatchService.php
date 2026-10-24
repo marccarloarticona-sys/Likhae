@@ -24,8 +24,6 @@ use RuntimeException;
 
 final class SellerPickupBatchService
 {
-    public const MAX_ACTIVE_JOBS = ShipmentWorkflowService::MAX_ACTIVE_LOCAL_JOBS;
-
     private const ACTIVE_ASSIGNMENT_STATUSES = ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'];
 
     private const RESOLVED_ASSIGNMENT_STATUSES = ['COMPLETED', 'REJECTED', 'CANCELLED'];
@@ -83,9 +81,12 @@ final class SellerPickupBatchService
             $capacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity === null
                 ? null
                 : (int) $rider->approved_parcel_capacity);
-            if ($count > $capacity) {
-                throw new RuntimeException("This rider's approved capacity is {$capacity} parcels.");
-            }
+            $activeAssignments = $rider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
+            LocalTripCapacityRules::assertCanAssign(
+                (int) $activeAssignments,
+                $count,
+                $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
+            );
 
             $shipments = Shipment::query()
                 ->whereIn('id', $ids)
@@ -227,6 +228,9 @@ final class SellerPickupBatchService
         if ($ids === [] || count($ids) !== count(array_unique($ids))) {
             throw new RuntimeException('Select one or more unique ready parcels for the pickup assignment.');
         }
+        if (count($ids) > LocalTripCapacityRules::MAX_PARCELS_PER_TRIP) {
+            throw new RuntimeException('A seller pickup assignment can contain no more than 10 parcels.');
+        }
 
         return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $sellerPickupRequestId): array {
             $rider = RiderProfile::query()->whereKey($riderProfileId)->lockForUpdate()->firstOrFail();
@@ -235,13 +239,13 @@ final class SellerPickupBatchService
             }
 
             $activeJobs = $rider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
-            $remainingJobs = max(0, self::MAX_ACTIVE_JOBS - $activeJobs);
-            $approvedCapacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity === null
-                ? null
-                : (int) $rider->approved_parcel_capacity);
-            $assignCount = min(count($ids), $remainingJobs, $approvedCapacity, LocalTripCapacityRules::MAX_PARCELS_PER_TRIP);
+            $remainingCapacity = LocalTripCapacityRules::remainingCapacity(
+                $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
+                (int) $activeJobs,
+            );
+            $assignCount = min(count($ids), $remainingCapacity, LocalTripCapacityRules::MAX_PARCELS_PER_TRIP);
             if ($assignCount < 1) {
-                throw new RuntimeException('This rider has reached the three-active-job limit or has no approved parcel capacity remaining.');
+                throw new RuntimeException('This rider has no approved parcel capacity remaining.');
             }
 
             $assignedIds = array_slice($ids, 0, $assignCount);
@@ -297,14 +301,11 @@ final class SellerPickupBatchService
                 throw new RuntimeException('Choose an active, online local rider assigned to this logistics center.');
             }
             $activeJobs = $newRider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
-            if ($activeJobs + $items->count() > self::MAX_ACTIVE_JOBS) {
-                throw new RuntimeException('The selected rider does not have enough room under the three-active-job limit for this batch.');
-            }
-            if ($items->count() > LocalTripCapacityRules::approvedCapacity($newRider->approved_parcel_capacity === null
-                ? null
-                : (int) $newRider->approved_parcel_capacity)) {
-                throw new RuntimeException('The selected rider does not have enough approved parcel capacity for this batch.');
-            }
+            LocalTripCapacityRules::assertCanAssign(
+                (int) $activeJobs,
+                $items->count(),
+                $newRider->approved_parcel_capacity === null ? null : (int) $newRider->approved_parcel_capacity,
+            );
 
             $seller = $trip->seller;
             $firstShipment = $items->first()->riderAssignment->shipment;
@@ -316,6 +317,11 @@ final class SellerPickupBatchService
                 throw new RuntimeException('The seller pickup service area is unavailable.');
             }
 
+            $trip->update([
+                'status' => RiderLocalTrip::CANCELLED,
+                'cancelled_at' => now(),
+                'exception_notes' => 'Pickup batch reassigned before collection.',
+            ]);
             $replacementTrip = $this->trips->createTrip($actor, $newRider, $area, RiderLocalTrip::TYPE_PICKUP, $seller);
             foreach ($items as $item) {
                 $oldAssignment = $item->riderAssignment;
@@ -329,11 +335,6 @@ final class SellerPickupBatchService
                 $this->notifications->riderAssignmentCreated($newAssignment);
             }
 
-            $trip->update([
-                'status' => RiderLocalTrip::CANCELLED,
-                'cancelled_at' => now(),
-                'exception_notes' => 'Pickup batch reassigned before collection.',
-            ]);
             SellerPickupRequest::query()
                 ->where('rider_local_trip_id', $trip->id)
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])

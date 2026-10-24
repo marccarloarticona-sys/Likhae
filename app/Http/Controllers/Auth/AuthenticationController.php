@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\RiderAvailabilityService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -123,7 +124,7 @@ class AuthenticationController extends Controller
         return $this->recentAccountsRedirect($request, $accounts, $data['portal'], 'Recent accounts cleared.');
     }
 
-    public function switchAccount(Request $request): RedirectResponse
+    public function switchAccount(Request $request, RiderAvailabilityService $availability): RedirectResponse
     {
         $data = $request->validate([
             'account_id' => ['nullable', 'integer'],
@@ -133,6 +134,7 @@ class AuthenticationController extends Controller
             ->filter(fn ($account): bool => is_array($account))
             ->first(fn (array $account): bool => (int) ($account['id'] ?? 0) === (int) ($data['account_id'] ?? 0));
 
+        $availability->markOfflineOnLogout($request->user());
         Auth::logout();
         $request->session()->regenerate();
         $request->session()->regenerateToken();
@@ -149,13 +151,14 @@ class AuthenticationController extends Controller
             ->with('status', 'Enter your password to switch accounts.');
     }
 
-    public function destroy(Request $request): RedirectResponse
+    public function destroy(Request $request, RiderAvailabilityService $availability): RedirectResponse
     {
         $user = $request->user();
         $portal = $user instanceof User
             && $user->isAccountType(User::TYPE_LOGISTICS, User::TYPE_RIDER);
         $savedAccounts = $this->allSavedAccounts($request)->all();
 
+        $availability->markOfflineOnLogout($user);
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();

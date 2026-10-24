@@ -6,6 +6,7 @@ use App\Services\Monitoring\SystemHealthMonitor;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Tests\TestCase;
@@ -79,13 +80,17 @@ class SystemHealthMonitorTest extends TestCase
             'cache.stores.file.path' => $this->schedulerCachePath,
         ]);
 
-        $signatures = [
-            'likhae:publish-announcements',
-            'likhae:purge-expired-soft-deletes',
-            'likhae:auto-confirm-delivered-orders',
-            'likhae:expire-rider-assignment-offers',
-        ];
+        $signatures = collect(Schedule::events())
+            ->map(function ($event): ?string {
+                return preg_match('/\\b(likhae:[A-Za-z0-9:-]+)\\b/', (string) ($event->command ?? ''), $matches) === 1
+                    ? $matches[1]
+                    : null;
+            })
+            ->filter()
+            ->values()
+            ->all();
         $prefix = (string) config('system_monitoring.scheduler_cache_prefix');
+        $this->assertNotEmpty($signatures);
         foreach ($signatures as $signature) {
             Cache::store()->put($this->heartbeatKey($prefix, $signature, 'success'), now()->toIso8601String(), now()->addDays(30));
         }
@@ -93,7 +98,7 @@ class SystemHealthMonitorTest extends TestCase
         $health = app(SystemHealthMonitor::class)->snapshot();
         $this->assertSame('HEALTHY', $health['scheduler']['status']);
         $this->assertSame('HEALTHY', $health['cache']['status']);
-        $this->assertCount(4, $health['scheduler']['tasks']);
+        $this->assertCount(count($signatures), $health['scheduler']['tasks']);
 
         $failureKey = $this->heartbeatKey($prefix, $signatures[0], 'failure');
         Cache::store()->put($failureKey, now()->addSecond()->toIso8601String(), now()->addDays(30));
@@ -102,10 +107,10 @@ class SystemHealthMonitorTest extends TestCase
         $this->assertSame('DEGRADED', $failedTask['status']);
 
         Cache::store()->forget($failureKey);
-        $staleKey = $this->heartbeatKey($prefix, $signatures[3], 'success');
-        Cache::store()->put($staleKey, now()->subMinutes(6)->toIso8601String(), now()->addDays(30));
+        $staleKey = $this->heartbeatKey($prefix, $signatures[0], 'success');
+        Cache::store()->put($staleKey, now()->subDays(2)->toIso8601String(), now()->addDays(30));
         $staleHealth = app(SystemHealthMonitor::class)->snapshot();
-        $staleTask = collect($staleHealth['scheduler']['tasks'])->firstWhere('command', $signatures[3]);
+        $staleTask = collect($staleHealth['scheduler']['tasks'])->firstWhere('command', $signatures[0]);
         $this->assertSame('STALE', $staleTask['status']);
         $this->assertSame('STALE', $staleHealth['scheduler']['status']);
     }

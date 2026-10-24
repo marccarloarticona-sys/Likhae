@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
+use App\Models\Auth\RegistrationApplication;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Buyer\Address;
@@ -36,8 +37,9 @@ use Illuminate\View\View;
 
 class RiderController extends Controller
 {
-    public function updateAvailability(Request $request): RedirectResponse
+    public function updateAvailability(Request $request, LogisticsSchemaReadiness $schema): RedirectResponse
     {
+        abort_unless($schema->riderAvailabilityReady(), 503, 'Rider availability controls are temporarily unavailable until the Rider availability schema is installed.');
         $data = $request->validate([
             'is_online' => ['required', 'boolean'],
             'latitude' => ['nullable', 'numeric', 'between:-90,90', 'required_with:longitude'],
@@ -61,8 +63,9 @@ class RiderController extends Controller
         return back()->with('status', $rider->is_online ? 'You are now online and available for assignments.' : 'You are now offline.');
     }
 
-    public function updateAvailabilityLocation(Request $request): JsonResponse|RedirectResponse
+    public function updateAvailabilityLocation(Request $request, LogisticsSchemaReadiness $schema): JsonResponse|RedirectResponse
     {
+        abort_unless($schema->riderAvailabilityReady(), 503, 'Rider availability location is unavailable until the Rider availability schema is installed.');
         $data = $request->validate([
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
@@ -429,25 +432,34 @@ class RiderController extends Controller
     public function profile(Request $request): View
     {
         $rider = $this->rider($request)->load(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations']);
-        $residentialAddress = $rider->user->addresses()->orderByDesc('is_default')->latest()->first();
+        $residentialAddress = $rider->user
+            ?->addresses()
+            ?->orderByDesc('is_default')
+            ?->latest()
+            ?->first();
+        $riderApplication = RegistrationApplication::query()
+            ->where('user_id', $rider->user_id)
+            ->whereHas('riderData')
+            ->with(['documents:id,registration_application_id,document_type,verification_status,verified_at'])
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
+            ->first();
+        $riderDocuments = $riderApplication?->documents ?? collect();
 
-        return view('rider.profile.index', compact('rider', 'residentialAddress'));
+        return view('rider.profile.index', compact('rider', 'residentialAddress', 'riderDocuments'));
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse
     {
         $user = $this->rider($request)->user;
         $data = $request->validate([
-            'first_name' => ['required', 'string', 'max:100'],
-            'last_name' => ['required', 'string', 'max:100'],
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'contact_number' => ['required', 'string', 'max:30', Rule::unique('users', 'contact_number')->ignore($user->id)],
             'profile_photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         $hasNewPhoto = $request->hasFile('profile_photo');
         unset($data['profile_photo']);
-        $user->update($data);
+        $user->update(['contact_number' => $data['contact_number']]);
 
         if ($hasNewPhoto) {
             $profilePhotos->replace($user, $request->file('profile_photo'));
