@@ -23,7 +23,7 @@
                     data-payout-account-number="{{ $destination['payout_account_number'] }}"
                     data-is-default="{{ $destination['is_default'] ? '1' : '0' }}">Edit</button>
                 @if(!$destination['is_default'] && $destinationComplete)
-                    <form method="POST" action="{{ route($payoutDestinationRoute) }}">
+                    <form method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}">
                         @csrf @method('PUT')
                         <input type="hidden" name="destination_action" value="set_default">
                         <input type="hidden" name="destination_id" value="{{ $destination['id'] }}">
@@ -32,7 +32,7 @@
                 @elseif(!$destinationComplete)
                     <span class="payout-destination-card__note">Incomplete details; add a complete destination to use it for future payouts.</span>
                 @endif
-                <form method="POST" action="{{ route($payoutDestinationRoute) }}" data-confirm-title="Remove payout destination?" data-confirm-message="Remove this saved payout destination? If it is the default, another saved destination will become the default." data-confirm-label="Remove destination" data-confirm-tone="danger">
+                <form method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-confirm-title="Remove payout destination?" data-confirm-message="Remove this saved payout destination? If it is the default, another saved destination will become the default." data-confirm-label="Remove destination" data-confirm-tone="danger">
                     @csrf @method('PUT')
                     <input type="hidden" name="destination_action" value="remove">
                     <input type="hidden" name="destination_id" value="{{ $destination['id'] }}">
@@ -56,7 +56,7 @@
         <div><span class="payout-editor__eyebrow">Payout settings</span><h3 data-payout-editor-title>{{ $payoutEditorTitle }}</h3></div>
         <p>{{ $payoutChangeDescription }}</p>
     </div>
-    <form class="payout-form payout-fields-grid" method="POST" action="{{ route($payoutDestinationRoute) }}" data-payout-destination-form data-payout-has-default="{{ $hasPayoutDefault ? '1' : '0' }}" data-payout-add-title="{{ count($payoutDestinations) ? 'Add another destination' : 'Add a destination' }}" data-payout-editing="{{ $editingDestinationId !== '' ? '1' : '0' }}" data-payout-edit-default="{{ $editingDestinationIsDefault ? '1' : '0' }}">
+    <form class="payout-form payout-fields-grid" method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-payout-destination-form data-payout-has-default="{{ $hasPayoutDefault ? '1' : '0' }}" data-payout-add-title="{{ count($payoutDestinations) ? 'Add another destination' : 'Add a destination' }}" data-payout-editing="{{ $editingDestinationId !== '' ? '1' : '0' }}" data-payout-edit-default="{{ $editingDestinationIsDefault ? '1' : '0' }}">
         @csrf @method('PUT')
         <input type="hidden" name="destination_action" value="{{ $editingDestinationId !== '' ? 'update' : 'add' }}">
         <input type="hidden" name="destination_id" value="{{ $editingDestinationId }}">

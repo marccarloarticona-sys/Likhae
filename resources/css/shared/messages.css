@@ -1,3 +1,54 @@
+.lk-conversation-search {
+    display: flex;
+    min-height: 40px;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 12px;
+    padding: 0 10px;
+    border: 1px solid var(--msg-border, var(--lk-border, #EADCCC));
+    border-radius: 10px;
+    background: var(--msg-card, var(--lk-card, #FFFDF9));
+    color: var(--msg-muted, var(--lk-muted, #987865));
+}
+
+.lk-conversation-search:focus-within {
+    border-color: #C19771;
+    box-shadow: 0 0 0 3px rgba(86, 28, 23, .08);
+}
+
+.lk-conversation-search svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+}
+
+.lk-conversation-search input {
+    width: 100%;
+    min-width: 0;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--msg-text, var(--lk-text, #3B211B));
+    font: inherit;
+    font-size: 11px;
+}
+
+.lk-conversation-search input::placeholder { color: var(--msg-muted-2, var(--lk-muted-2, #A99386)); }
+.lk-messages-search-empty { padding: 22px 14px; color: var(--msg-muted, var(--lk-muted, #987865)); font-size: 11px; text-align: center; }
+.lk-conversation-item[hidden],
+.lk-messages-search-empty[hidden] { display: none !important; }
+
+html.dark .lk-conversation-search { border-color: #3B2E27; background: #211B17; color: #C8B7AD; }
+html.dark .lk-conversation-search input { color: #F5EFE8; }
+html.dark .lk-conversation-search input::placeholder,
+html.dark .lk-messages-search-empty { color: #C8B7AD; }
+
 .lk-message-image-frame {
     position: relative;
     display: block;

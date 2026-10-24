@@ -340,13 +340,6 @@
                     'active' => ['admin.system-settings'],
                 ],
                 [
-                    'key' => 'audit-logs',
-                    'label' => 'Audit Logs',
-                    'route' => 'admin.system-settings.audit-logs',
-                    'icon' => 'history',
-                    'active' => ['admin.system-settings.audit-logs'],
-                ],
-                [
                     'key' => 'account',
                     'label' => 'My Account',
                     'route' => 'admin.account',

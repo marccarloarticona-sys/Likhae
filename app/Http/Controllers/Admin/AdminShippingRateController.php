@@ -3,13 +3,16 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Admin\PlatformSetting;
 use App\Models\Finance\ShippingRateChangeRequest;
 use App\Models\User;
+use App\Services\Finance\RegionShippingRateService;
 use App\Services\Finance\ShippingRateGovernanceService;
 use App\Services\Finance\ShippingRatePolicyService;
 use App\Support\FinancialRules;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use RuntimeException;
 
@@ -24,7 +27,11 @@ class AdminShippingRateController extends Controller
         if (! in_array($status, ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'SUPERSEDED', 'ALL'], true)) {
             $status = 'PENDING';
         }
-        $requests = $ready
+        $tab = (string) $request->query('tab', 'requests');
+        if (! in_array($tab, ['requests', 'transfer-commission', 'regional-tiers'], true)) {
+            $tab = 'requests';
+        }
+        $requests = $ready && $tab === 'requests'
             ? ShippingRateChangeRequest::query()
                 ->with('requester.logisticsCenter', 'reviewer')
                 ->when($status !== 'ALL', fn ($query) => $query->where('status', $status))
@@ -40,7 +47,49 @@ class AdminShippingRateController extends Controller
             'requests' => $requests,
             'status' => $status,
             'currentVersion' => $ready ? $rates->currentVersion() : null,
+            'tab' => $tab,
+            'shippingSettings' => [
+                'transfer_commission_type' => PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'),
+                'transfer_commission_value' => PlatformSetting::valueOf('transfer_commission_value', 0),
+                'additional_region_tier_fee' => PlatformSetting::valueOf('additional_region_tier_fee', RegionShippingRateService::DEFAULT_ADDITIONAL_TIER_FEE),
+                'shipping_region_tiers' => PlatformSetting::valueOf('shipping_region_tiers', ''),
+            ],
         ]);
+    }
+
+    public function updateTransferCommission(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'transfer_commission_type' => ['required', Rule::in(['PERCENT', 'FIXED'])],
+            'transfer_commission_value' => ['required', 'numeric', 'min:0', 'max:10000'],
+        ]);
+
+        if ($data['transfer_commission_type'] === 'PERCENT' && (float) $data['transfer_commission_value'] > 100) {
+            return back()
+                ->withErrors(['transfer_commission_value' => 'The transfer commission percentage cannot exceed 100%.'])
+                ->withInput();
+        }
+
+        PlatformSetting::put('transfer_commission_type', $data['transfer_commission_type'], 'string', $request->user()->id);
+        PlatformSetting::put('transfer_commission_value', $data['transfer_commission_value'], 'decimal', $request->user()->id);
+
+        return redirect()->route('admin.shipping-rate-requests', ['tab' => 'transfer-commission'])
+            ->with('status', 'Transfer commission settings updated.');
+    }
+
+    public function updateRegionalShippingTiers(Request $request, RegionShippingRateService $regionShipping): RedirectResponse
+    {
+        $data = $request->validate([
+            'additional_region_tier_fee' => ['required', 'decimal:0,2', 'min:0', 'max:1000000'],
+            'shipping_region_tiers' => ['nullable', 'string', 'max:10000'],
+        ]);
+
+        $normalizedRegionTiers = $regionShipping->normalizeTierMap((string) ($data['shipping_region_tiers'] ?? ''));
+        PlatformSetting::put('additional_region_tier_fee', $data['additional_region_tier_fee'], 'decimal', $request->user()->id);
+        PlatformSetting::put('shipping_region_tiers', $normalizedRegionTiers, 'string', $request->user()->id);
+
+        return redirect()->route('admin.shipping-rate-requests', ['tab' => 'regional-tiers'])
+            ->with('status', 'Regional shipping tier settings updated.');
     }
 
     public function show(Request $request, ShippingRateChangeRequest $shippingRateRequest, ShippingRatePolicyService $rates): View

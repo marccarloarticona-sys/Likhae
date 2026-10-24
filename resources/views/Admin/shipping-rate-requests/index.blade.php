@@ -1,10 +1,11 @@
 @extends('layouts.admin.app')
 
 @section('title', 'Shipping Rate Requests')
-@section('subtitle', 'Review shipping fee and commission split proposals.')
+@section('subtitle', 'Review Logistics rate requests and manage shipping fee rules.')
 @section('active', 'shipping-rate-requests')
 
 @section('content')
+@php($transferType = old('transfer_commission_type', $shippingSettings['transfer_commission_type']))
 <div class="ad-page ad-shipping-rate-page">
     @if(session('status'))
         <div role="status" class="ad-rate-flash ad-rate-flash--success">
@@ -20,6 +21,19 @@
         </div>
     @endif
 
+    <nav class="ad-rate-page-tabs" aria-label="Shipping rate administration sections">
+        @foreach([
+            'requests' => 'Requests & allocation',
+            'transfer-commission' => 'Transfer commission',
+            'regional-tiers' => 'Regional shipping tiers',
+        ] as $tabKey => $tabLabel)
+            <a class="ad-rate-page-tab {{ $tab === $tabKey ? 'is-active' : '' }}"
+               href="{{ route('admin.shipping-rate-requests', ['tab' => $tabKey, 'status' => $tabKey === 'requests' ? $status : null]) }}"
+               @if($tab === $tabKey) aria-current="page" @endif>{{ $tabLabel }}</a>
+        @endforeach
+    </nav>
+
+    @if($tab === 'requests')
     <section class="ad-card ad-rate-policy-card" aria-labelledby="shipping-rate-policy-title">
         <header class="ad-rate-policy-card__header">
             <div>
@@ -118,7 +132,7 @@
         @if($schemaReady)
             <nav class="ad-rate-filter-tabs" aria-label="Filter shipping rate requests by status">
                 @foreach(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'SUPERSEDED', 'ALL'] as $filter)
-                    <a class="ad-rate-filter-tab {{ $status === $filter ? 'is-active' : '' }}" href="{{ route('admin.shipping-rate-requests', ['status' => $filter]) }}" @if($status === $filter) aria-current="page" @endif>
+                    <a class="ad-rate-filter-tab {{ $status === $filter ? 'is-active' : '' }}" href="{{ route('admin.shipping-rate-requests', ['tab' => 'requests', 'status' => $filter]) }}" @if($status === $filter) aria-current="page" @endif>
                         {{ str($filter)->headline() }}
                     </a>
                 @endforeach
@@ -210,5 +224,110 @@
             </div>
         @endif
     </section>
+    @elseif($tab === 'transfer-commission')
+        <section class="ad-card ad-platform-card ad-rate-settings-card" aria-labelledby="transfer-commission-title">
+            <header class="ad-card-head">
+                <div>
+                    <span class="ad-overline">Logistics</span>
+                    <h2 id="transfer-commission-title">Transfer commission</h2>
+                    <p>Choose how much Logistics pays from each sealed manifest.</p>
+                </div>
+            </header>
+            <form method="POST" action="{{ route('admin.shipping-rate-requests.transfer-commission.update') }}" class="ad-platform-card__body ad-rate-settings-form">
+                @csrf
+                @method('PATCH')
+                <label class="ad-field">
+                    <span>Fee type</span>
+                    <select id="transfer-commission-type" name="transfer_commission_type">
+                        <option value="PERCENT" @selected($transferType === 'PERCENT')>Percentage of shipping fees</option>
+                        <option value="FIXED" @selected($transferType === 'FIXED')>Fixed amount per parcel</option>
+                    </select>
+                </label>
+                <label class="ad-field">
+                    <span data-transfer-value-label>Commission rate</span>
+                    <span class="ad-platform-money-input">
+                        <input id="transfer-commission-value" type="number" name="transfer_commission_value" min="0" max="{{ $transferType === 'PERCENT' ? '100' : '10000' }}" step="0.01" value="{{ old('transfer_commission_value', $shippingSettings['transfer_commission_value']) }}" required>
+                        <span data-transfer-value-unit>{{ $transferType === 'PERCENT' ? '%' : 'PHP' }}</span>
+                    </span>
+                    <small data-transfer-value-help>
+                        @if($transferType === 'PERCENT')
+                            This percentage is based on the shipping fees of parcels in the manifest.
+                        @else
+                            This amount is charged once for each parcel in the manifest.
+                        @endif
+                    </small>
+                    @error('transfer_commission_value')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
+                </label>
+                <p class="ad-platform-note">The selected rule is saved with each manifest when it is sealed. Later setting changes do not alter sealed manifests.</p>
+                <div class="ad-platform-settings__actions">
+                    <p>Changes apply to new manifests only.</p>
+                    <button class="ad-btn ad-btn-primary" type="submit">Save transfer commission</button>
+                </div>
+            </form>
+        </section>
+    @else
+        <section class="ad-card ad-platform-card ad-rate-settings-card" aria-labelledby="regional-tiers-title">
+            <header class="ad-card-head">
+                <div>
+                    <span class="ad-overline">Shipping</span>
+                    <h2 id="regional-tiers-title">Regional shipping tiers</h2>
+                    <p>Add a fee when a parcel travels between different regions.</p>
+                </div>
+            </header>
+            <form method="POST" action="{{ route('admin.shipping-rate-requests.regional-tiers.update') }}" class="ad-platform-card__body ad-rate-settings-form">
+                @csrf
+                @method('PATCH')
+                <label class="ad-field">
+                    <span>Additional fee per tier</span>
+                    <span class="ad-platform-money-input ad-platform-money-input--prefix">
+                        <span aria-hidden="true">PHP</span>
+                        <input type="number" name="additional_region_tier_fee" min="0" max="1000000" step="0.01" value="{{ old('additional_region_tier_fee', $shippingSettings['additional_region_tier_fee']) }}" required>
+                    </span>
+                    <small>This amount is multiplied by the route’s tier and added to the base shipping fee.</small>
+                    @error('additional_region_tier_fee')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
+                </label>
+
+                <label class="ad-field ad-platform-region-map">
+                    <span>Region pair map</span>
+                    <textarea name="shipping_region_tiers" rows="5" maxlength="10000" spellcheck="false" placeholder="National Capital Region | Central Luzon | 1&#10;Central Luzon | CALABARZON | 2">{{ old('shipping_region_tiers', $shippingSettings['shipping_region_tiers']) }}</textarea>
+                    <small>One route per line: <code>Origin Region | Destination Region | Tier</code>. Use official region names and a tier from 1 to 20.</small>
+                    @error('shipping_region_tiers')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
+                </label>
+
+                <div class="ad-platform-note ad-platform-note--soft">
+                    <strong>How tiers work</strong>
+                    <p>Same-region routes use the base fee. Cross-region pairs work in either direction. For example, PHP 6 per tier means a tier 2 route adds PHP 12. The system does not infer distance from region codes.</p>
+                </div>
+                <div class="ad-platform-settings__actions">
+                    <p>Changes apply to new checkouts. Existing snapshots remain as saved.</p>
+                    <button class="ad-btn ad-btn-primary" type="submit">Save shipping tiers</button>
+                </div>
+            </form>
+        </section>
+    @endif
 </div>
 @endsection
+
+@push('scripts')
+<script>
+    const transferType = document.getElementById('transfer-commission-type');
+    const transferValue = document.getElementById('transfer-commission-value');
+    const transferUnit = document.querySelector('[data-transfer-value-unit]');
+    const transferValueLabel = document.querySelector('[data-transfer-value-label]');
+    const transferValueHelp = document.querySelector('[data-transfer-value-help]');
+
+    function updateTransferCommissionFields() {
+        if (!transferType || !transferValue || !transferUnit || !transferValueLabel || !transferValueHelp) return;
+        const percentage = transferType.value === 'PERCENT';
+        transferValue.max = percentage ? '100' : '10000';
+        transferUnit.textContent = percentage ? '%' : 'PHP';
+        transferValueLabel.textContent = percentage ? 'Commission rate' : 'Amount per parcel';
+        transferValueHelp.textContent = percentage
+            ? 'This percentage is based on the shipping fees of parcels in the manifest.'
+            : 'This amount is charged once for each parcel in the manifest.';
+    }
+
+    transferType?.addEventListener('change', updateTransferCommissionFields);
+    updateTransferCommissionFields();
+</script>
+@endpush

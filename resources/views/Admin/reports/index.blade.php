@@ -18,6 +18,13 @@
         </a>
     </header>
 
+    <nav class="ad-report-tabs" aria-label="Sales report sections">
+        <a href="#reports-overview">Overview</a>
+        <a href="#reports-rankings">Rankings</a>
+        <a href="#reports-transactions">Transactions <span>{{ number_format($orderItemRecords->total()) }}</span></a>
+    </nav>
+
+    <section id="reports-overview" class="ad-report-tab-panel" aria-label="Report overview and filters">
     <section class="ad-report-summary" aria-label="Filtered sales summary">
         <article class="ad-report-stat is-sales">
             <span class="ad-report-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2v20m5-15.5C17 4.6 14.9 3.5 12 3.5S7 4.9 7 7s1.7 3.1 5 4 5 2 5 4.2-2.2 3.3-5 3.3-5-1.2-5-3.3"/></svg></span>
@@ -40,9 +47,9 @@
     <section class="ad-card ad-report-filter-card">
         <header class="ad-card-head">
             <div><span class="ad-overline">Narrow your results</span><h2>Report filters</h2><p>Combine shop, category, product, order status, and date.</p></div>
-            <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.reports') }}">Clear filters</a>
+            <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.reports') }}#reports-overview">Clear filters</a>
         </header>
-        <form method="GET" action="{{ route('admin.reports') }}">
+        <form method="GET" action="{{ route('admin.reports') }}#reports-overview">
             <div class="ad-card-body">
                 <div class="ad-report-filter-grid">
                     <label class="ad-field"><span>Shop</span>
@@ -95,8 +102,9 @@
             </div>
         </form>
     </section>
+    </section>
 
-    <section class="ad-report-rankings-section">
+    <section id="reports-rankings" class="ad-report-rankings-section ad-report-tab-panel" aria-label="Shop, category, and product rankings">
         <header class="ad-report-section-head">
             <div><span class="ad-overline">Rankings</span><h2>Top performers</h2><p>Top 10 within this report, ranked by {{ match($filters['sort'] ?? 'sales') { 'units' => 'units sold', 'commission' => 'commission', 'orders' => 'orders', default => 'item sales' } }}.</p></div>
         </header>
@@ -128,7 +136,7 @@
         <p class="ad-report-footnote">Commission is recorded when a seller order is completed. Product and category commission is allocated by item share; void commissions are excluded. Category labels reflect the product's current category.</p>
     </section>
 
-    <section class="ad-card ad-report-detail-card">
+    <section id="reports-transactions" class="ad-card ad-report-detail-card ad-report-tab-panel" aria-label="Matching product sales transactions">
         <header class="ad-card-head"><div><span class="ad-overline">Transactions</span><h2>Matching product sales</h2><p>One row per order item. Sales exclude shipping and distribute seller voucher discounts proportionally.</p></div><span class="ad-report-row-count">{{ number_format($orderItemRecords->total()) }} rows</span></header>
         <div class="ad-table-wrap"><table class="ad-table ad-report-table ad-report-detail-table"><thead><tr><th>Seller order</th><th>Buyer</th><th>Shop</th><th>Product</th><th>Category</th><th>Qty</th><th>Item sales</th><th>Commission</th><th>Status</th><th>Date</th></tr></thead><tbody>
             @forelse($orderItemRecords as $item)

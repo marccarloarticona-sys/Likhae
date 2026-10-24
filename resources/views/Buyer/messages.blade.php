@@ -12,7 +12,7 @@
         $activeName = $dbActiveSeller->store_name ?: $dbActiveSeller->business_name ?: $dbActiveSeller->name;
         $selectedSlug = \Illuminate\Support\Str::slug($activeName).'-'.$dbActiveSeller->id;
     }
-    $activeSeller = $sellers->firstWhere('slug', $selectedSlug) ?: $sellers->first();
+    $activeSeller = filled($selectedSlug) ? $sellers->firstWhere('slug', $selectedSlug) : null;
     if (!$activeSeller && $dbActiveSeller) {
         $activeName = $dbActiveSeller->store_name ?: $dbActiveSeller->business_name ?: $dbActiveSeller->name;
         $activeSeller = [
@@ -892,11 +892,17 @@
                 </h2>
             </div>
 
+            <label class="lk-conversation-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.5 4.5"></path></svg>
+                <input type="search" placeholder="Search by name…" aria-label="Search conversations by name" data-conversation-search>
+            </label>
             <div class="lk-conversation-list">
+                <div class="lk-messages-search-empty" data-conversation-search-empty hidden>No conversations match that name.</div>
                 @forelse($sellers as $item)
                     <a
                         href="{{ route('buyer.messages', ['seller' => $item['slug']]) }}"
                         class="lk-conversation-item {{ $selectedSlug === $item['slug'] ? 'is-active' : '' }}"
+                        data-conversation-name="{{ $item['name'] }}"
                         data-conversation-presence-id="{{ $item['conversation_id'] }}"
                         data-presence-url="{{ route('messages.receipt', ['conversation' => $item['conversation_id']]) }}"
                     >
@@ -1109,11 +1115,11 @@
                     </svg>
 
                     <h3>
-                        No conversation selected
+                        New conversation
                     </h3>
 
                     <p>
-                        Select a conversation from the left to start chatting.
+                        Select a conversation from the list, or visit a shop to start a new conversation.
                     </p>
                 </div>
             @endif

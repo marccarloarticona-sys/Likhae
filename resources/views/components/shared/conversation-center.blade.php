@@ -1,7 +1,7 @@
 @php
     $messageConversations = collect($conversations ?? []);
     $selectedConversationId = (int) request('conversation', 0);
-    $activeConversation = $messageConversations->firstWhere('id', $selectedConversationId) ?: $messageConversations->first();
+    $activeConversation = $selectedConversationId > 0 ? $messageConversations->firstWhere('id', $selectedConversationId) : null;
     $activeOther = $activeConversation?->participants?->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
     $activeOtherName = $activeOther?->name ?: 'Conversation';
     $conversationService = app(\App\Services\Communication\ConversationService::class);
@@ -144,7 +144,12 @@
     <section class="lk-messages-shell">
         <aside class="lk-messages-sidebar">
             <div class="lk-messages-sidebar-head"><h2>Conversations ({{ $messageConversations->count() }})</h2></div>
+            <label class="lk-conversation-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.5 4.5"></path></svg>
+                <input type="search" placeholder="Search by name…" aria-label="Search conversations by name" data-conversation-search>
+            </label>
             <div class="lk-conversation-list">
+                <div class="lk-messages-search-empty" data-conversation-search-empty hidden>No conversations match that name.</div>
                 @forelse($messageConversations as $conversation)
                     @php
                         $other = $conversation->participants->first(fn ($participant) => (int) $participant->id !== (int) auth()->id());
@@ -153,7 +158,7 @@
                         $isActive = (int) $conversation->id === (int) ($activeConversation?->id);
                         $messagePreview = $conversationService->messagePreviewFor($conversation->latestMessage);
                     @endphp
-                    <a href="{{ url()->current().'?conversation='.$conversation->id }}" class="lk-conversation-item {{ $isActive ? 'is-active' : '' }}" data-conversation-presence-id="{{ $conversation->id }}" data-presence-url="{{ route('messages.receipt', ['conversation' => $conversation->id]) }}">
+                    <a href="{{ url()->current().'?conversation='.$conversation->id }}" class="lk-conversation-item {{ $isActive ? 'is-active' : '' }}" data-conversation-name="{{ $name }}" data-conversation-presence-id="{{ $conversation->id }}" data-presence-url="{{ route('messages.receipt', ['conversation' => $conversation->id]) }}">
                         @php
                             $initiallyOnline = $isActive && $activeOtherOnline;
                         @endphp
@@ -213,8 +218,8 @@
             @else
                 <div class="lk-chat-empty-state">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 13h5"/></svg>
-                    <h3>No conversation selected</h3>
-                    <p>Choose a recipient to start a conversation.</p>
+                    <h3>New conversation</h3>
+                    <p>Choose a recipient to start a conversation, or select a thread from the list.</p>
                     <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-compose-form">@csrf<select name="recipient_user_id" required><option value="">Select recipient</option>@foreach($contacts ?? [] as $contact)<option value="{{ $contact->id }}">{{ $contact->name }} ({{ str($contact->account_type)->headline() }})</option>@endforeach</select><textarea name="body" maxlength="1000" data-message-body rows="4" placeholder="Type your message">{{ old('body') }}</textarea><span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>@if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false)<span class="lk-attachment-selection"><label class="lk-message-attachment" title="Attach up to 5 files or images" aria-label="Attach up to 5 files or images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/><path d="M15 3v4h4"/></svg><input type="file" name="attachments[]" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.mp3,.wav,.mp4,.mov" data-message-attachment-input><span class="sr-only">Attach up to 5 files or images</span></label><img data-attachment-preview hidden alt="Selected image preview"><span data-attachment-filename hidden></span></span>@endif<button class="lk-chat-send" type="submit">Send Message</button></form>
                 </div>
             @endif

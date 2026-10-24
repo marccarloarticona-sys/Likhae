@@ -95,7 +95,7 @@ class SystemSettingsMonitoringController extends Controller
     {
         $storageMonitor->snapshot([], true, false);
 
-        return redirect()->route('admin.system-settings')
+        return redirect()->to(route('admin.system-settings').'#system-settings-infrastructure')
             ->with('storage_refresh_status', 'Storage measurements were refreshed.');
     }
 
@@ -129,7 +129,7 @@ class SystemSettingsMonitoringController extends Controller
             $message .= ' Scans will remain unavailable until provider credentials are configured.';
         }
 
-        return back()->with('status', $message);
+        return redirect()->to(route('admin.system-settings').'#system-settings-safety')->with('status', $message);
     }
 
     public function errors(Request $request, LaravelLogReader $reader): View

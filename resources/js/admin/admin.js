@@ -7,6 +7,19 @@ import '../shared/payout-destination.js';
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
+    all('[data-admin-password-toggle]').forEach((toggle) => {
+        const form = toggle.closest('.ad-account-panel')?.querySelector('[data-admin-password-form]');
+        const fields = form ? all('[data-admin-password-field]', form) : [];
+        if (!fields.length) return;
+
+        toggle.addEventListener('click', () => {
+            const show = toggle.getAttribute('aria-pressed') !== 'true';
+            fields.forEach((field) => { field.type = show ? 'text' : 'password'; });
+            toggle.setAttribute('aria-pressed', String(show));
+            toggle.textContent = show ? 'Hide passwords' : 'Show passwords';
+        });
+    });
+
     const realtimeCard = one('[data-realtime-transport-card]');
     if (realtimeCard) {
         const mode = one('[data-transport-mode]', realtimeCard);
@@ -103,6 +116,376 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    const adminSearch = one('[data-admin-search]');
+    if (adminSearch) {
+        const form = one('[data-admin-search-form]', adminSearch);
+        const input = one('[data-admin-search-input]', adminSearch);
+        const dropdown = one('[data-admin-search-results]', adminSearch);
+        const heading = one('[data-admin-search-heading]', adminSearch);
+        const options = one('[data-admin-search-options]', adminSearch);
+        const emptyMessage = one('[data-admin-search-empty]', adminSearch);
+        const clearHistory = one('[data-admin-search-clear]', adminSearch);
+        const historyKey = 'likhae-admin-search-history';
+        let activeOption = -1;
+        let optionId = 0;
+
+        const normalizeSearchText = (value) => String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+
+        const aliases = {
+            'dashboard': 'home overview metrics marketplace health activity',
+            'user accounts': 'users buyers sellers admins logistics profiles accounts status pending active suspended banned email id',
+            'products': 'catalog listings product moderation ai safety inventory approval images',
+            'platform marketing': 'campaign campaigns announcement announcements voucher vouchers discount promotion',
+            'categories': 'category subcategory taxonomy product group',
+            'seller compliance': 'seller cases warnings violations policy review product compliance',
+            'refunds disputes': 'refunds refund buyer complaints disputes claims resolution return',
+            'finance payouts': 'finance seller logistics payouts payout commissions COD cash settlements receipts transfers',
+            'shipping rate requests': 'shipping delivery rate fee logistics rider commission tiers regional proposal requests',
+            'additional care rules': 'fragile protection care fee product category rule checkout',
+            'reports': 'analytics sales orders commissions products sellers performance export',
+            'messages': 'messaging inbox conversations chat support users',
+            'notifications': 'alerts updates registration risk finance message',
+            'platform settings': 'configuration registration policy terms privacy platform fee',
+            'system settings': 'health infrastructure database runtime storage capacity errors logs audit preferences moderation ai',
+            'my account': 'profile password security payout destination payment details',
+        };
+
+        const damerauDistance = (left, right) => {
+            const a = left.slice(0, 48);
+            const b = right.slice(0, 48);
+            const rows = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+            for (let i = 0; i <= a.length; i += 1) rows[i][0] = i;
+            for (let j = 0; j <= b.length; j += 1) rows[0][j] = j;
+            for (let i = 1; i <= a.length; i += 1) {
+                for (let j = 1; j <= b.length; j += 1) {
+                    const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                    rows[i][j] = Math.min(
+                        rows[i - 1][j] + 1,
+                        rows[i][j - 1] + 1,
+                        rows[i - 1][j - 1] + cost,
+                    );
+                    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+                        rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+                    }
+                }
+            }
+            return rows[a.length][b.length];
+        };
+
+        const matchScore = (query, searchableText) => {
+            const normalizedQuery = normalizeSearchText(query);
+            const queryWords = normalizedQuery.split(' ').filter((word) => word.length > 1);
+            const normalizedText = normalizeSearchText(searchableText);
+            if (!queryWords.length || !normalizedText) return 0;
+            if (normalizedText.includes(normalizedQuery)) return 1.25;
+
+            const words = [...new Set(normalizedText.split(' '))];
+            const scores = [];
+            for (const queryWord of queryWords) {
+                let best = 0;
+                for (const word of words) {
+                    if (word === queryWord || word.includes(queryWord)) {
+                        best = 1;
+                        break;
+                    }
+                    if (word.startsWith(queryWord) || queryWord.startsWith(word)) {
+                        best = Math.max(best, 0.88);
+                        continue;
+                    }
+                    const limit = queryWord.length < 5 ? 1 : queryWord.length < 9 ? 2 : 3;
+                    if (Math.abs(queryWord.length - word.length) > limit) continue;
+                    const distance = damerauDistance(queryWord, word);
+                    if (distance <= limit) {
+                        best = Math.max(best, 1 - distance / Math.max(queryWord.length, word.length));
+                    }
+                }
+                if (best < 0.58) return 0;
+                scores.push(best);
+            }
+            return scores.reduce((sum, score) => sum + score, 0) / scores.length;
+        };
+
+        const safeLocalHref = (value) => {
+            try {
+                const url = new URL(value, window.location.origin);
+                if (url.origin !== window.location.origin) return '';
+                return `${url.pathname}${url.search}${url.hash}`;
+            } catch (_) {
+                return '';
+            }
+        };
+
+        const readHistory = () => {
+            try {
+                const stored = JSON.parse(window.localStorage.getItem(historyKey) || '[]');
+                if (!Array.isArray(stored)) return [];
+                return stored.map((entry) => {
+                    if (typeof entry === 'string') return { query: entry, href: '' };
+                    return { query: String(entry?.query || ''), href: safeLocalHref(entry?.href || '') };
+                }).filter((entry) => entry.query).slice(0, 6);
+            } catch (_) {
+                return [];
+            }
+        };
+
+        const saveHistory = (query, href) => {
+            const cleaned = String(query || '').trim();
+            const safeHref = safeLocalHref(href);
+            if (!cleaned || !safeHref) return;
+            const next = [{ query: cleaned, href: safeHref }, ...readHistory()
+                .filter((entry) => normalizeSearchText(entry.query) !== normalizeSearchText(cleaned))]
+                .slice(0, 6);
+            try { window.localStorage.setItem(historyKey, JSON.stringify(next)); } catch (_) {}
+        };
+
+        const pageLinks = all('.lk-admin-navigation .ad-sidebar-scroll a[href]')
+            .map((link) => {
+                const label = one('.ad-nav-text', link)?.textContent.trim() || link.textContent.trim();
+                const group = one('.ad-nav-group .ad-nav-heading', link.closest('.ad-nav-group') || document)?.textContent.trim() || 'Admin Center';
+                const url = safeLocalHref(link.href);
+                const extraTerms = aliases[normalizeSearchText(label)] || '';
+                return { label, group, href: url, searchText: `${group} ${label} ${extraTerms}` };
+            })
+            .filter((item) => item.label && item.href);
+
+        const pageSections = (() => {
+            const main = one('#main-content');
+            if (!main) return [];
+            const seen = new Set();
+            return all('h1, h2, h3, h4', main).map((title, index) => {
+                const block = title.closest('.ad-card, article, section') || title.parentElement;
+                if (!block || seen.has(block)) return null;
+                seen.add(block);
+                if (!block.id) block.id = `admin-search-location-${index + 1}`;
+                const text = block.textContent.replace(/\s+/g, ' ').trim();
+                return {
+                    label: title.textContent.replace(/\s+/g, ' ').trim(),
+                    text,
+                    href: `${window.location.pathname}${window.location.search}#${block.id}`,
+                };
+            }).filter((item) => item?.label && item.text);
+        })();
+
+        const setOpen = (open) => {
+            dropdown.hidden = !open;
+            input.setAttribute('aria-expanded', String(open));
+            if (!open) {
+                input.removeAttribute('aria-activedescendant');
+                activeOption = -1;
+            }
+        };
+
+        const makeOption = (item) => {
+            const link = document.createElement('a');
+            link.href = item.href;
+            link.id = `adminSearchOption-${++optionId}`;
+            link.className = 'ad-search-option';
+            link.setAttribute('role', 'option');
+            link.setAttribute('aria-selected', 'false');
+            link.dataset.searchQuery = item.query || item.label;
+            link.dataset.searchHref = item.href;
+
+            const copy = document.createElement('span');
+            copy.className = 'ad-search-option__copy';
+            const title = document.createElement('strong');
+            title.textContent = item.label;
+            copy.append(title);
+            if (item.description) {
+                const description = document.createElement('small');
+                description.textContent = item.description;
+                copy.append(description);
+            }
+
+            const location = document.createElement('span');
+            location.className = 'ad-search-option__location';
+            location.textContent = item.location || item.type || 'Admin page';
+            link.append(copy, location);
+            return link;
+        };
+
+        const renderGroups = (groups, title, emptyText = '') => {
+            heading.textContent = title;
+            options.replaceChildren();
+            let count = 0;
+            groups.forEach((group) => {
+                if (!group.items.length) return;
+                const section = document.createElement('div');
+                section.className = 'ad-search-option-group';
+                section.setAttribute('role', 'group');
+                section.setAttribute('aria-label', group.label);
+                const label = document.createElement('p');
+                label.className = 'ad-search-option-group__title';
+                label.textContent = group.label;
+                section.append(label);
+                group.items.forEach((item) => section.append(makeOption(item)));
+                count += group.items.length;
+                options.append(section);
+            });
+            emptyMessage.hidden = count > 0 || !emptyText;
+            emptyMessage.textContent = emptyText;
+            clearHistory.hidden = title !== 'Recent searches' || count === 0;
+            setOpen(count > 0 || Boolean(emptyText));
+        };
+
+        const showRecentSearches = () => {
+            const recent = readHistory().filter((entry) => entry.href).map((entry) => ({
+                label: entry.query,
+                query: entry.query,
+                href: entry.href,
+                location: 'Recent search',
+            }));
+            if (!recent.length) {
+                setOpen(false);
+                return;
+            }
+            renderGroups([{ label: 'Recent searches', items: recent }], 'Recent searches');
+        };
+
+        const renderSuggestions = (query) => {
+            const pageMatches = pageLinks
+                .map((page) => ({ ...page, score: matchScore(query, page.searchText) }))
+                .filter((page) => page.score >= 0.58)
+                .sort((left, right) => right.score - left.score)
+                .slice(0, 5);
+            const sectionMatches = pageSections
+                .map((section) => ({ ...section, score: matchScore(query, section.text) }))
+                .filter((section) => section.score >= 0.58)
+                .sort((left, right) => right.score - left.score)
+                .slice(0, 3);
+
+            const groups = [];
+            if (pageMatches.length && pageMatches[0].score < 1.02 && normalizeSearchText(query).split(' ').length === 1) {
+                groups.push({
+                    label: 'Did you mean',
+                    items: [{
+                        label: pageMatches[0].label,
+                        href: pageMatches[0].href,
+                        location: pageMatches[0].group,
+                        description: `Closest Admin page match for “${query}”`,
+                    }],
+                });
+            }
+            groups.push({
+                label: 'Admin pages',
+                items: pageMatches.map((page) => ({
+                    label: page.label,
+                    href: page.href,
+                    location: page.group,
+                    description: 'Open this Admin page',
+                })),
+            });
+            groups.push({
+                label: `On ${one('[data-admin-header] h1')?.textContent.trim() || 'this page'}`,
+                items: sectionMatches.map((section) => ({
+                    label: section.label,
+                    href: section.href,
+                    location: 'Current page section',
+                    description: section.text.slice(0, 150),
+                })),
+            });
+
+            const hasMatch = pageMatches.length > 0 || sectionMatches.length > 0;
+            const userUrl = new URL(form.action, window.location.origin);
+            userUrl.searchParams.set('q', query);
+            groups.push({
+                label: 'User accounts',
+                items: [{
+                    label: `Search users for “${query}”`,
+                    href: `${userUrl.pathname}${userUrl.search}`,
+                    location: 'Name, email, or account ID',
+                    description: hasMatch ? 'Open matching Admin user results' : 'No page match. Search users by name, email, or ID.',
+                }],
+            });
+
+            renderGroups(groups, 'Suggestions');
+        };
+
+        const setActiveOption = (index) => {
+            const links = all('[role="option"]', options);
+            if (!links.length) return;
+            activeOption = (index + links.length) % links.length;
+            links.forEach((link, linkIndex) => {
+                const active = linkIndex === activeOption;
+                link.classList.toggle('is-active', active);
+                link.setAttribute('aria-selected', String(active));
+            });
+            input.setAttribute('aria-activedescendant', links[activeOption].id);
+        };
+
+        input.addEventListener('focus', () => {
+            const query = input.value.trim();
+            if (query.length >= 2) renderSuggestions(query);
+            else if (!query) showRecentSearches();
+        });
+        input.addEventListener('input', () => {
+            activeOption = -1;
+            input.removeAttribute('aria-activedescendant');
+            const query = input.value.trim();
+            if (!query) {
+                showRecentSearches();
+                return;
+            }
+            if (query.length < 2) {
+                renderGroups([], 'Suggestions', 'Type at least 2 characters to see Admin page suggestions.');
+                return;
+            }
+            renderSuggestions(query);
+        });
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown' && !dropdown.hidden) {
+                event.preventDefault();
+                setActiveOption(activeOption + 1);
+            } else if (event.key === 'ArrowUp' && !dropdown.hidden) {
+                event.preventDefault();
+                setActiveOption(activeOption < 0 ? 0 : activeOption - 1);
+            } else if (event.key === 'Enter' && activeOption >= 0 && !dropdown.hidden) {
+                event.preventDefault();
+                all('[role="option"]', options)[activeOption]?.click();
+            } else if (event.key === 'Escape') {
+                setOpen(false);
+            }
+        });
+        options.addEventListener('click', (event) => {
+            const link = event.target.closest('[data-search-href]');
+            if (link) saveHistory(link.dataset.searchQuery, link.dataset.searchHref);
+        });
+        clearHistory.addEventListener('click', () => {
+            try { window.localStorage.removeItem(historyKey); } catch (_) {}
+            setOpen(false);
+        });
+        form.addEventListener('submit', (event) => {
+            const query = input.value.trim();
+            if (!query) {
+                event.preventDefault();
+                showRecentSearches();
+                return;
+            }
+
+            if (!dropdown.hidden) {
+                const suggestions = all('[role="option"]', options);
+                const destination = activeOption >= 0 ? suggestions[activeOption] : suggestions[0];
+                if (destination) {
+                    event.preventDefault();
+                    destination.click();
+                    return;
+                }
+            }
+
+            const userUrl = new URL(form.action, window.location.origin);
+            userUrl.searchParams.set('q', query);
+            saveHistory(query, `${userUrl.pathname}${userUrl.search}`);
+            setOpen(false);
+        });
+        document.addEventListener('click', (event) => {
+            if (!adminSearch.contains(event.target)) setOpen(false);
+        });
+    }
+
     const toastRegion = one('[data-toast-region]');
     const showToast = (message) => {
         if (window.lkFeedback) return window.lkFeedback.show(message);
@@ -113,6 +496,90 @@ document.addEventListener('DOMContentLoaded', () => {
         toastRegion.append(toast);
         window.setTimeout(() => toast.remove(), 3200);
     };
+
+    const sellerPayoutFilterForm = one('[data-seller-payout-filter-form]');
+    const sellerPayoutResults = one('[data-seller-payout-results]');
+    if (sellerPayoutFilterForm && sellerPayoutResults) {
+        let activePayoutRefresh;
+        const applyFilterValuesToForm = (url) => {
+            sellerPayoutFilterForm.elements.seller_profile_id.value = url.searchParams.get('seller_profile_id') || '';
+            sellerPayoutFilterForm.elements.requested_from.value = url.searchParams.get('requested_from') || '';
+            sellerPayoutFilterForm.elements.requested_to.value = url.searchParams.get('requested_to') || '';
+        };
+        const filterUrl = () => {
+            const url = new URL(sellerPayoutFilterForm.action, window.location.href);
+            url.search = '';
+            new FormData(sellerPayoutFilterForm).forEach((value, key) => {
+                if (typeof value === 'string' && value.trim()) url.searchParams.set(key, value.trim());
+            });
+            url.hash = 'finance-sellers';
+            return url;
+        };
+        const refreshPayoutResults = async (url, updateHistory = true) => {
+            activePayoutRefresh?.abort();
+            const controller = new AbortController();
+            activePayoutRefresh = controller;
+            sellerPayoutResults.setAttribute('aria-busy', 'true');
+
+            try {
+                const response = await fetch(url, {
+                    headers: { Accept: 'text/html', 'X-Requested-With': 'XMLHttpRequest' },
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (!response.ok) throw new Error('Payout list request failed');
+
+                const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+                const refreshedResults = page.querySelector('[data-seller-payout-results]');
+                if (!refreshedResults) throw new Error('Payout list was not returned');
+
+                sellerPayoutResults.innerHTML = refreshedResults.innerHTML;
+                if (updateHistory) {
+                    window.history.pushState({}, '', `${url.pathname}${url.search}#finance-sellers`);
+                }
+            } catch (error) {
+                if (error.name !== 'AbortError') showToast('Could not refresh seller payouts. Please try again.');
+            } finally {
+                if (activePayoutRefresh === controller) {
+                    activePayoutRefresh = null;
+                    sellerPayoutResults.setAttribute('aria-busy', 'false');
+                }
+            }
+        };
+
+        sellerPayoutFilterForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const requestedFrom = sellerPayoutFilterForm.elements.requested_from.value;
+            const requestedTo = sellerPayoutFilterForm.elements.requested_to.value;
+            if (requestedFrom && requestedTo && requestedTo < requestedFrom) {
+                showToast('The end date must be on or after the start date.');
+                return;
+            }
+            refreshPayoutResults(filterUrl());
+        });
+
+        one('[data-clear-seller-payout-filters]', sellerPayoutFilterForm)?.addEventListener('click', (event) => {
+            event.preventDefault();
+            sellerPayoutFilterForm.reset();
+            refreshPayoutResults(filterUrl());
+        });
+
+        sellerPayoutResults.addEventListener('click', (event) => {
+            const link = event.target.closest('nav[role="navigation"] a[href]');
+            if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            const url = new URL(link.href, window.location.href);
+            if (url.origin !== window.location.origin) return;
+            event.preventDefault();
+            refreshPayoutResults(url);
+        });
+
+        window.addEventListener('popstate', () => {
+            const url = new URL(window.location.href);
+            applyFilterValuesToForm(url);
+            refreshPayoutResults(url, false);
+        });
+    }
 
     all('[data-filter-input]').forEach((input) => {
         const target = input.dataset.filterInput ? one(input.dataset.filterInput) : input.closest('[data-filter-scope]');

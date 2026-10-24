@@ -96,7 +96,7 @@ class ConversationService
         $conversations = $this->listFor($user, false, 100, true);
         $active = $selectedConversationId
             ? $conversations->firstWhere('id', $selectedConversationId)
-            : $conversations->first();
+            : null;
 
         if ($active) {
             $this->markRead($active, $user);

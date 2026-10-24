@@ -784,7 +784,35 @@ window.lkSubscribeMessageThread = (thread, payload = null) => {
     subscribeToThread(thread);
 };
 
+const initializeConversationSearch = () => {
+    document.querySelectorAll('[data-conversation-search]').forEach((input) => {
+        const sidebar = input.closest('.lk-messages-sidebar');
+        const list = sidebar?.querySelector('.lk-conversation-list');
+        if (!list) return;
+
+        const rows = [...list.querySelectorAll('[data-conversation-name]')];
+        const emptyState = list.querySelector('[data-conversation-search-empty]');
+        const filterConversations = () => {
+            const query = input.value.trim().toLocaleLowerCase();
+            let visibleCount = 0;
+
+            rows.forEach((row) => {
+                const name = (row.dataset.conversationName || '').toLocaleLowerCase();
+                const matches = !query || name.includes(query);
+                row.hidden = !matches;
+                if (matches) visibleCount += 1;
+            });
+
+            if (emptyState) emptyState.hidden = !query || visibleCount > 0 || rows.length === 0;
+        };
+
+        input.addEventListener('input', filterConversations);
+        filterConversations();
+    });
+};
+
 const initializeMessages = () => {
+    initializeConversationSearch();
     startPresenceHeartbeat();
     document.querySelectorAll('.lk-chat-stream[data-conversation-id]').forEach(subscribeToThread);
     startConversationListPresencePolling();

@@ -1,7 +1,11 @@
 @extends('layouts.admin.app')
 @section('title', 'Additional Care Rules')
 @section('content')
-<div class="ad-protection-page">
+@php
+    $hasConfiguredProtectionRules = $ready && $rules->total() > 0;
+    $defaultProtectionTab = $hasConfiguredProtectionRules && (!$errors->any() || old('_protection_rule_edit_id')) ? 'rules' : 'create';
+@endphp
+<div class="ad-protection-page" data-default-tab="{{ $defaultProtectionTab }}">
     <header class="ad-page-head">
         <div>
             <span class="ad-overline">Step 8</span>
@@ -23,7 +27,14 @@
         <div class="ad-note is-warning" role="status">Protection-rule tables are not installed yet. No protection fee can be charged until they are available.</div>
     @endif
 
-    <section class="ad-card ad-protection-create" aria-labelledby="protection-create-title">
+    @if($ready)
+        <nav class="ad-protection-tabs" aria-label="Care rule sections">
+            <a href="#protection-create-panel">Create rule</a>
+            <a href="#protection-rules-panel">Configured rules <span>{{ $rules->total() }}</span></a>
+        </nav>
+    @endif
+
+    <section id="protection-create-panel" class="ad-card ad-protection-create ad-protection-tab-panel" aria-labelledby="protection-create-title">
         <div class="ad-card-head">
             <div>
                 <span class="ad-overline">New rule</span>
@@ -47,7 +58,7 @@
     </section>
 
     @if($ready)
-        <section class="ad-card ad-protection-rules" aria-labelledby="protection-rules-title">
+        <section id="protection-rules-panel" class="ad-card ad-protection-rules ad-protection-tab-panel" aria-labelledby="protection-rules-title">
             <div class="ad-card-head">
                 <div>
                     <span class="ad-overline">Rules</span>

@@ -1,10 +1,9 @@
 @extends('layouts.admin.app')
 @section('title', 'Platform Settings')
-@section('subtitle', 'Manage platform access, logistics fees, and published policies.')
+@section('subtitle', 'Manage platform access and published policies.')
 @section('active', 'settings')
 @section('content')
 @php
-    $transferType = old('transfer_commission_type', $settings['transfer_commission_type']);
     $registrationEnabled = old('registration_enabled', $settings['registration_enabled']);
 @endphp
 
@@ -13,7 +12,7 @@
         <div>
             <span class="ad-overline">System configuration</span>
             <h2>Platform Settings</h2>
-            <p>Update registration and logistics fees. Platform commission is fixed by policy.</p>
+            <p>Update marketplace access and published policies. Platform commission is fixed by policy.</p>
         </div>
     </header>
 
@@ -27,11 +26,15 @@
         </div>
     @endif
 
-    <form method="POST" action="{{ route('admin.settings.update') }}" class="ad-platform-settings__form">
+    <nav class="ad-platform-tabs" aria-label="System configuration sections">
+        <a href="{{ route('admin.settings', ['tab' => 'platform']) }}" class="{{ $tab === 'platform' ? 'is-active' : '' }}" @if($tab === 'platform') aria-current="page" @endif>Platform</a>
+        <a href="{{ route('admin.settings', ['tab' => 'policies']) }}" class="{{ $tab === 'policies' ? 'is-active' : '' }}" @if($tab === 'policies') aria-current="page" @endif>Policies</a>
+    </nav>
+
+    @if($tab === 'platform')
+    <form method="POST" action="{{ route('admin.settings.update', ['tab' => 'platform']) }}" class="ad-platform-settings__form">
         @csrf
         @method('PATCH')
-        <input type="hidden" name="commission_rate" value="0.10">
-
         <section class="ad-card ad-platform-card ad-platform-card--basics" aria-labelledby="platform-basics-title">
             <header class="ad-card-head">
                 <div>
@@ -49,6 +52,7 @@
                     <div class="ad-platform-fact">
                         <span>Support email</span>
                         <strong>{{ $settings['support_email'] ?: 'Not configured' }}</strong>
+                        <small>{{ $settings['support_email_from_account'] ? 'Using this Admin account email' : 'Configured platform support contact' }}</small>
                     </div>
                     <div class="ad-platform-fact ad-platform-fact--fixed">
                         <span>Platform commission</span>
@@ -72,80 +76,12 @@
             </div>
         </section>
 
-        <section class="ad-card ad-platform-card" aria-labelledby="transfer-commission-title">
-            <header class="ad-card-head">
-                <div>
-                    <span class="ad-overline">Logistics</span>
-                    <h2 id="transfer-commission-title">Transfer commission</h2>
-                    <p>Choose how much Logistics pays from each sealed manifest.</p>
-                </div>
-            </header>
-            <div class="ad-platform-card__body">
-                <label class="ad-field">
-                    <span>Fee type</span>
-                    <select id="transfer-commission-type" name="transfer_commission_type">
-                        <option value="PERCENT" @selected($transferType === 'PERCENT')>Percentage of shipping fees</option>
-                        <option value="FIXED" @selected($transferType === 'FIXED')>Fixed amount per parcel</option>
-                    </select>
-                </label>
-                <label class="ad-field">
-                    <span data-transfer-value-label>Commission rate</span>
-                    <span class="ad-platform-money-input">
-                        <input id="transfer-commission-value" type="number" name="transfer_commission_value" min="0" max="{{ $transferType === 'PERCENT' ? '100' : '10000' }}" step="0.01" value="{{ old('transfer_commission_value', $settings['transfer_commission_value']) }}" required>
-                        <span data-transfer-value-unit>{{ $transferType === 'PERCENT' ? '%' : 'PHP' }}</span>
-                    </span>
-                    <small data-transfer-value-help>
-                        @if($transferType === 'PERCENT')
-                            This percentage is based on the shipping fees of parcels in the manifest.
-                        @else
-                            This amount is charged once for each parcel in the manifest.
-                        @endif
-                    </small>
-                    @error('transfer_commission_value')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
-                </label>
-                <p class="ad-platform-note">The selected rule is saved with each manifest when it is sealed. Later setting changes do not alter sealed manifests.</p>
-            </div>
-        </section>
-
-        <section class="ad-card ad-platform-card" aria-labelledby="regional-tiers-title">
-            <header class="ad-card-head">
-                <div>
-                    <span class="ad-overline">Shipping</span>
-                    <h2 id="regional-tiers-title">Regional shipping tiers</h2>
-                    <p>Add a fee when a parcel travels between different regions.</p>
-                </div>
-            </header>
-            <div class="ad-platform-card__body">
-                <label class="ad-field">
-                    <span>Additional fee per tier</span>
-                    <span class="ad-platform-money-input ad-platform-money-input--prefix">
-                        <span aria-hidden="true">PHP</span>
-                        <input type="number" name="additional_region_tier_fee" min="0" max="1000000" step="0.01" value="{{ old('additional_region_tier_fee', $settings['additional_region_tier_fee']) }}" required>
-                    </span>
-                    <small>This amount is multiplied by the route’s tier and added to the base shipping fee.</small>
-                    @error('additional_region_tier_fee')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
-                </label>
-
-                <label class="ad-field ad-platform-region-map">
-                    <span>Region pair map</span>
-                    <textarea name="shipping_region_tiers" rows="5" maxlength="10000" spellcheck="false" placeholder="National Capital Region | Central Luzon | 1&#10;Central Luzon | CALABARZON | 2">{{ old('shipping_region_tiers', $settings['shipping_region_tiers']) }}</textarea>
-                    <small>One route per line: <code>Origin Region | Destination Region | Tier</code>. Use official region names and a tier from 1 to 20.</small>
-                    @error('shipping_region_tiers')<small class="ad-platform-field-error">{{ $message }}</small>@enderror
-                </label>
-
-                <div class="ad-platform-note ad-platform-note--soft">
-                    <strong>How tiers work</strong>
-                    <p>Same-region routes use the base fee. Cross-region pairs work in either direction. For example, PHP 6 per tier means a tier 2 route adds PHP 12. The system does not infer distance from region codes.</p>
-                </div>
-            </div>
-        </section>
-
         <div class="ad-platform-settings__actions">
-            <p>Changes apply to new checkouts or manifests. Existing snapshots remain as saved.</p>
-            <button class="ad-btn ad-btn-primary">Save settings</button>
+            <p>Registration changes apply to new account sign-ups.</p>
+            <button class="ad-btn ad-btn-primary">Save platform settings</button>
         </div>
     </form>
-
+    @else
     <section class="ad-card ad-platform-card ad-platform-policies" aria-labelledby="platform-policies-title">
         <header class="ad-card-head">
             <div>
@@ -156,7 +92,7 @@
         </header>
         <div class="ad-platform-card__body">
             @if($policySchemaReady)
-                <form method="POST" action="{{ route('admin.policies.store') }}" class="ad-platform-policy-form">
+                <form method="POST" action="{{ route('admin.policies.store', ['tab' => 'policies']) }}" class="ad-platform-policy-form">
                     @csrf
                     <label class="ad-field">
                         <span>Policy title</span>
@@ -225,29 +161,6 @@
             </div>
         </div>
     </section>
+    @endif
 </div>
 @endsection
-
-@push('scripts')
-<script>
-    const transferType = document.getElementById('transfer-commission-type');
-    const transferValue = document.getElementById('transfer-commission-value');
-    const transferUnit = document.querySelector('[data-transfer-value-unit]');
-    const transferValueLabel = document.querySelector('[data-transfer-value-label]');
-    const transferValueHelp = document.querySelector('[data-transfer-value-help]');
-
-    function updateTransferCommissionFields() {
-        if (!transferType || !transferValue) return;
-        const percentage = transferType.value === 'PERCENT';
-        transferValue.max = percentage ? '100' : '10000';
-        transferUnit.textContent = percentage ? '%' : 'PHP';
-        transferValueLabel.textContent = percentage ? 'Commission rate' : 'Amount per parcel';
-        transferValueHelp.textContent = percentage
-            ? 'This percentage is based on the shipping fees of parcels in the manifest.'
-            : 'This amount is charged once for each parcel in the manifest.';
-    }
-
-    transferType?.addEventListener('change', updateTransferCommissionFields);
-    updateTransferCommissionFields();
-</script>
-@endpush

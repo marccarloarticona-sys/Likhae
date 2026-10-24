@@ -447,8 +447,17 @@ class AdminOperationsController extends Controller
         return view('Admin.complaints.show', compact('dispute'));
     }
 
-    public function finance(FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations): View
+    public function finance(Request $request, FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations): View
     {
+        $requestedToRules = ['nullable', 'date_format:Y-m-d'];
+        if ($request->filled('requested_from')) {
+            $requestedToRules[] = 'after_or_equal:requested_from';
+        }
+        $sellerFinanceFilters = $request->validate([
+            'seller_profile_id' => ['nullable', 'integer', 'exists:seller_profiles,id'],
+            'requested_from' => ['nullable', 'date_format:Y-m-d'],
+            'requested_to' => $requestedToRules,
+        ]);
         $financialTotals = [
             'schema_ready' => $schema->ready(),
             'expected_cod' => 0.0,
@@ -470,6 +479,7 @@ class AdminOperationsController extends Controller
         $codDiscrepancies = null;
         $logisticsPayouts = null;
         $logisticsPayoutReceipts = null;
+        $sellerPayoutSellers = collect();
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
@@ -501,11 +511,29 @@ class AdminOperationsController extends Controller
             $financialTotals['requested_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
             $financialTotals['awaiting_payout_ack'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount');
             $financialTotals['paid_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAID')->sum('payout_amount');
+            $sellerPayoutSellers = SellerProfile::query()
+                ->whereIn('id', SellerSettlement::query()->select('seller_profile_id')->distinct())
+                ->orderBy('business_name')
+                ->get(['id', 'business_name']);
             $sellerSettlements = SellerSettlement::query()
                 ->with(['sellerProfile', 'allocation.shipment', 'sellerOrder.order'])
+                ->when($sellerFinanceFilters['seller_profile_id'] ?? null, fn ($query, $sellerId) => $query->where('seller_profile_id', $sellerId))
+                ->when(($sellerFinanceFilters['requested_from'] ?? null) || ($sellerFinanceFilters['requested_to'] ?? null), function ($query) use ($sellerFinanceFilters): void {
+                    $query->whereExists(function ($requestEvents) use ($sellerFinanceFilters): void {
+                        $requestEvents->selectRaw('1')
+                            ->from('finance_audit_events as payout_requests')
+                            ->whereColumn('payout_requests.auditable_id', 'seller_settlements.id')
+                            ->where('payout_requests.auditable_type', SellerSettlement::class)
+                            ->where('payout_requests.event_type', 'SELLER_PAYOUT_REQUESTED')
+                            ->when($sellerFinanceFilters['requested_from'] ?? null, fn ($events, $date) => $events->whereDate('payout_requests.created_at', '>=', $date))
+                            ->when($sellerFinanceFilters['requested_to'] ?? null, fn ($events, $date) => $events->whereDate('payout_requests.created_at', '<=', $date));
+                    });
+                })
                 ->orderByRaw("CASE WHEN payout_status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
                 ->latest()
-                ->paginate(15, ['*'], 'settlements_page');
+                ->paginate(15, ['*'], 'settlements_page')
+                ->withQueryString()
+                ->fragment('finance-sellers');
             if ($schema->parcelSettlementReady()) {
                 $productProceeds = FinancialLedgerEntry::query()
                     ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
@@ -548,6 +576,8 @@ class AdminOperationsController extends Controller
             'payments' => Payment::with('order.buyer')->latest()->paginate(15),
             'commissions' => CommissionTransaction::with('sellerOrder.sellerProfile.user')->latest()->paginate(15),
             'sellerSettlements' => $sellerSettlements,
+            'sellerPayoutSellers' => $sellerPayoutSellers,
+            'sellerFinanceFilters' => $sellerFinanceFilters,
             'productProceeds' => $productProceeds,
             'logisticsPayouts' => $logisticsPayouts,
             'logisticsPayoutReceipts' => $logisticsPayoutReceipts,
@@ -627,7 +657,8 @@ class AdminOperationsController extends Controller
             ->orderByDesc('so.created_at')
             ->orderByDesc('oi.id')
             ->paginate(20)
-            ->withQueryString();
+            ->withQueryString()
+            ->fragment('reports-transactions');
 
         return view('Admin.reports.index', [
             'orderItemRecords' => $orderItemRecords,
@@ -700,7 +731,7 @@ class AdminOperationsController extends Controller
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
             'messageContext' => app(ConversationContextPresenter::class)->forUser(
                 $request->user(),
-                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+                $conversations->firstWhere('id', $request->integer('conversation')),
             ),
         ]);
     }
@@ -717,17 +748,24 @@ class AdminOperationsController extends Controller
         ])->header('Cache-Control', 'no-store, private');
     }
 
-    public function settings(PolicyAcceptanceService $policyAcceptance): View
+    public function settings(Request $request, PolicyAcceptanceService $policyAcceptance): View
     {
+        $supportEmail = trim((string) PlatformSetting::valueOf('support_email', ''));
+        $supportEmailFromAccount = $supportEmail === '';
+        if ($supportEmailFromAccount) {
+            $supportEmail = (string) $request->user()->email;
+        }
+        $tab = (string) $request->query('tab', 'platform');
+        if (! in_array($tab, ['platform', 'policies'], true)) {
+            $tab = 'platform';
+        }
+
         return view('Admin.settings.index', [
             'settings' => [
                 'platform_name' => PlatformSetting::valueOf('platform_name', 'LIKHAE'),
-                'support_email' => PlatformSetting::valueOf('support_email', ''),
+                'support_email' => $supportEmail,
+                'support_email_from_account' => $supportEmailFromAccount,
                 'commission_rate' => PlatformSetting::commissionRate(),
-                'transfer_commission_type' => PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'),
-                'transfer_commission_value' => PlatformSetting::valueOf('transfer_commission_value', 0),
-                'additional_region_tier_fee' => PlatformSetting::valueOf('additional_region_tier_fee', \App\Services\Finance\RegionShippingRateService::DEFAULT_ADDITIONAL_TIER_FEE),
-                'shipping_region_tiers' => PlatformSetting::valueOf('shipping_region_tiers', ''),
                 'registration_enabled' => (bool) PlatformSetting::valueOf('registration_enabled', true),
             ],
             'policies' => $policyAcceptance->schemaReady()
@@ -735,12 +773,21 @@ class AdminOperationsController extends Controller
                 : PlatformPolicy::latest()->get(),
             'policySchemaReady' => $policyAcceptance->schemaReady(),
             'announcements' => Announcement::latest()->get(),
+            'tab' => $tab,
         ]);
     }
 
     public function account(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager): View
     {
         $adminUser = $request->user();
+        $tab = (string) $request->query('tab', 'account');
+        // Keep older profile, password, and footer security links working after
+        // consolidating those sections into the Account & security tab.
+        if (in_array($tab, ['profile', 'password', 'security'], true)) {
+            $tab = 'account';
+        } elseif (! in_array($tab, ['account', 'payout'], true)) {
+            $tab = 'account';
+        }
         $payoutDestinationReady = $destinations->readyFor('users');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($adminUser);
         $payoutMultipleReady = $destinations->supportsMultipleFor('users');
@@ -748,11 +795,11 @@ class AdminOperationsController extends Controller
 
         return view('Admin.account.index', [
             'adminUser' => $adminUser,
-            'preferences' => $adminUser,
             'payoutDestinationReady' => $payoutDestinationReady,
             'payoutDestinationSaved' => $payoutDestinationSaved,
             'payoutMultipleReady' => $payoutMultipleReady,
             'payoutDestinations' => $payoutDestinations,
+            'tab' => $tab,
         ]);
     }
 
@@ -1256,30 +1303,14 @@ class AdminOperationsController extends Controller
         return back()->with('status', 'Announcement saved.');
     }
 
-    public function updateSettings(Request $request, \App\Services\Finance\RegionShippingRateService $regionShipping): RedirectResponse
+    public function updateSettings(Request $request): RedirectResponse
     {
         $data = $request->validate([
-            'commission_rate' => ['required', 'numeric', 'in:0.10'],
-            'transfer_commission_type' => ['required', Rule::in(['PERCENT', 'FIXED'])],
-            'transfer_commission_value' => ['required', 'numeric', 'min:0', 'max:10000'],
-            'additional_region_tier_fee' => ['required', 'decimal:0,2', 'min:0', 'max:1000000'],
-            'shipping_region_tiers' => ['nullable', 'string', 'max:10000'],
             'registration_enabled' => ['required', 'boolean'],
         ]);
-        if ($data['transfer_commission_type'] === 'PERCENT' && (float) $data['transfer_commission_value'] > 100) {
-            return back()
-                ->withErrors(['transfer_commission_value' => 'The transfer commission percentage cannot exceed 100%.'])
-                ->withInput();
-        }
-        $normalizedRegionTiers = $regionShipping->normalizeTierMap((string) ($data['shipping_region_tiers'] ?? ''));
-        PlatformSetting::put('commission_rate', $data['commission_rate'], 'decimal', $request->user()->id);
-        PlatformSetting::put('transfer_commission_type', $data['transfer_commission_type'], 'string', $request->user()->id);
-        PlatformSetting::put('transfer_commission_value', $data['transfer_commission_value'], 'decimal', $request->user()->id);
-        PlatformSetting::put('additional_region_tier_fee', $data['additional_region_tier_fee'], 'decimal', $request->user()->id);
-        PlatformSetting::put('shipping_region_tiers', $normalizedRegionTiers, 'string', $request->user()->id);
         PlatformSetting::put('registration_enabled', (bool) $data['registration_enabled'], 'boolean', $request->user()->id);
 
-        return back()->with('status', 'Settings updated.');
+        return back()->with('status', 'Platform settings updated.');
     }
 
     public function storePolicy(Request $request, PolicyAcceptanceService $policyAcceptance): RedirectResponse

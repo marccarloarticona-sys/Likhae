@@ -1,7 +1,7 @@
 @extends('layouts.admin.app')
 @section('title','System Settings')
 @section('active','system-settings')
-@section('subtitle','Current database status, storage capacity, and Admin preferences.')
+@section('subtitle','Manage platform status and settings.')
 @push('head')@vite(['resources/css/shared/workspace-settings.css', 'resources/css/admin/system-settings.css'])@endpush
 
 @php
@@ -60,7 +60,7 @@
         <div>
             <span class="ad-overline">Operational monitoring</span>
             <h1 id="system-health-title">System Health Overview</h1>
-            <p>Current database, application runtime, product safety, and storage capacity checks.</p>
+            <p>Review platform status and manage system settings.</p>
         </div>
         <div class="ad-ops-heading-actions">
             <span class="ad-ops-last-checked">Last checked {{ $showTime($health['checked_at']) }}</span>
@@ -68,7 +68,15 @@
         </div>
     </section>
 
-    <section class="ad-ops-grid ad-ops-health-grid" aria-label="System health and capacity">
+    <nav class="ad-ops-tabs" aria-label="Operational monitoring sections">
+        <a href="#system-settings-infrastructure">Infrastructure</a>
+        <a href="#system-settings-safety">Product safety</a>
+        <a href="#system-settings-logs">Logs &amp; audit</a>
+        <a href="#system-settings-preferences">Preferences</a>
+    </nav>
+
+    <section id="system-settings-infrastructure" class="ad-ops-tab-panel" aria-label="Infrastructure, live updates, and storage">
+    <div class="ad-ops-grid ad-ops-health-grid">
         <article class="ad-card ad-ops-monitor-card">
             <header><div><span>Infrastructure</span><h2>Database</h2></div><strong class="ad-status ad-ops-status {{ $statusClass($health['database']['status']) }}">{{ $health['database']['status'] }}</strong></header>
             <dl>
@@ -106,6 +114,48 @@
             <p class="ad-ops-card-note" data-transport-detail role="status">Checking the Reverb connection and server broadcast status.</p>
         </article>
 
+    <article class="ad-card ad-ops-monitor-card ad-ops-storage-card" aria-labelledby="storage-capacity-title">
+        <header class="ad-ops-storage-head">
+            <div><span>Read-only capacity monitoring</span><h2 id="storage-capacity-title">Storage Usage &amp; Capacity</h2></div>
+            <div class="ad-ops-storage-actions">
+                <strong class="ad-status ad-ops-status {{ $statusClass($storage['server_disk']['status']) }}">{{ $storage['server_disk']['status'] }}</strong>
+                <form method="POST" action="{{ route('admin.system-settings.storage.refresh') }}" class="ad-ops-inline-form">
+                    @csrf
+                    <button type="submit" class="ad-btn ad-btn-secondary">Refresh</button>
+                </form>
+            </div>
+        </header>
+        <p class="ad-ops-footnote">
+            Last checked {{ $showTime($storage['checked_at']) }}
+            @if($storage['cached']) (cached, {{ number_format($storage['age_seconds'] / 60, 1) }} minutes old). @else (measured for this request). @endif
+            Measurements are cached for up to five minutes.
+        </p>
+        @if($storageRefreshStatus)<div class="ad-note ad-ops-empty" role="status">{{ $storageRefreshStatus }}</div>@endif
+
+        <dl>
+            <div><dt>Total capacity</dt><dd>{{ $formatBytes($storage['server_disk']['total_bytes']) }}</dd></div>
+            <div><dt>Used</dt><dd>{{ $formatBytes($storage['server_disk']['used_bytes']) }}</dd></div>
+            <div><dt>Available</dt><dd>{{ $formatBytes($storage['server_disk']['available_bytes']) }}</dd></div>
+            <div><dt>Usage</dt><dd>{{ $storage['server_disk']['usage_percent'] === null ? 'Unavailable' : number_format($storage['server_disk']['usage_percent'], 2).'% (warning at '.$storage['server_disk']['warning_percent'].'%, critical at '.$storage['server_disk']['critical_percent'].'%)' }}</dd></div>
+        </dl>
+        <p class="ad-ops-card-note">{{ $storage['server_disk']['source'] }} This volume reading may not reflect a hosting-provider quota.</p>
+
+        <details class="ad-ops-storage-details">
+            <summary><span>File Storage Breakdown</span><span>View measured directories</span></summary>
+            <div class="ad-table-wrap ad-ops-table-wrap"><table class="ad-table ad-ops-table"><thead><tr><th>Storage category</th><th>Used</th><th>Files</th><th>Last updated</th><th>Status</th></tr></thead><tbody>
+            @forelse($storageRows as $category)
+                <tr><td>{{ $category['label'] }}</td><td>{{ $formatBytes($category['bytes']) }}</td><td>{{ number_format($category['files']) }}</td><td>{{ $showTime($category['last_updated']) }}</td><td><span class="ad-status ad-ops-status {{ $statusClass($category['status']) }}">{{ $category['status'] }}</span></td></tr>
+            @empty
+                <tr><td colspan="5">No configured storage directories could be measured.</td></tr>
+            @endforelse
+            </tbody></table></div>
+            <p class="ad-ops-footnote">Directory sizes are not added to server disk usage; categories may share the same volume.</p>
+        </details>
+    </article>
+    </div>
+    </section>
+
+    <section id="system-settings-safety" class="ad-ops-tab-panel" aria-label="Product safety monitoring">
         <article class="ad-card ad-ops-monitor-card">
             <header><div><span>Product safety</span><h2>Product Moderation AI</h2></div><strong class="ad-status ad-ops-status {{ $statusClass($productModerationHealth['status']) }}">{{ $productModerationHealth['status'] }}</strong></header>
             @if(session('status'))<p class="ad-ops-ai-feedback" role="status">{{ session('status') }}</p>@endif
@@ -140,47 +190,9 @@
             </dl>
             <p class="ad-ops-card-note">Credentials are checked without displaying their values. Scan status uses the local scan ledger. Provider quota details are not available from this ledger.</p>
         </article>
-
-        <article class="ad-card ad-ops-monitor-card ad-ops-storage-card" aria-labelledby="storage-capacity-title">
-            <header class="ad-ops-storage-head">
-                <div><span>Read-only capacity monitoring</span><h2 id="storage-capacity-title">Storage Usage &amp; Capacity</h2></div>
-                <div class="ad-ops-storage-actions">
-                    <strong class="ad-status ad-ops-status {{ $statusClass($storage['server_disk']['status']) }}">{{ $storage['server_disk']['status'] }}</strong>
-                    <form method="POST" action="{{ route('admin.system-settings.storage.refresh') }}" class="ad-ops-inline-form">
-                        @csrf
-                        <button type="submit" class="ad-btn ad-btn-secondary">Refresh</button>
-                    </form>
-                </div>
-            </header>
-            <p class="ad-ops-footnote">
-                Last checked {{ $showTime($storage['checked_at']) }}
-                @if($storage['cached']) (cached, {{ number_format($storage['age_seconds'] / 60, 1) }} minutes old). @else (measured for this request). @endif
-                Measurements are cached for up to five minutes.
-            </p>
-            @if($storageRefreshStatus)<div class="ad-note ad-ops-empty" role="status">{{ $storageRefreshStatus }}</div>@endif
-
-            <dl>
-                <div><dt>Total capacity</dt><dd>{{ $formatBytes($storage['server_disk']['total_bytes']) }}</dd></div>
-                <div><dt>Used</dt><dd>{{ $formatBytes($storage['server_disk']['used_bytes']) }}</dd></div>
-                <div><dt>Available</dt><dd>{{ $formatBytes($storage['server_disk']['available_bytes']) }}</dd></div>
-                <div><dt>Usage</dt><dd>{{ $storage['server_disk']['usage_percent'] === null ? 'Unavailable' : number_format($storage['server_disk']['usage_percent'], 2).'% (warning at '.$storage['server_disk']['warning_percent'].'%, critical at '.$storage['server_disk']['critical_percent'].'%)' }}</dd></div>
-            </dl>
-            <p class="ad-ops-card-note">{{ $storage['server_disk']['source'] }} This volume reading may not reflect a hosting-provider quota.</p>
-
-            <details class="ad-ops-storage-details">
-                <summary><span>File Storage Breakdown</span><span>View measured directories</span></summary>
-                <div class="ad-table-wrap ad-ops-table-wrap"><table class="ad-table ad-ops-table"><thead><tr><th>Storage category</th><th>Used</th><th>Files</th><th>Last updated</th><th>Status</th></tr></thead><tbody>
-                @forelse($storageRows as $category)
-                    <tr><td>{{ $category['label'] }}</td><td>{{ $formatBytes($category['bytes']) }}</td><td>{{ number_format($category['files']) }}</td><td>{{ $showTime($category['last_updated']) }}</td><td><span class="ad-status ad-ops-status {{ $statusClass($category['status']) }}">{{ $category['status'] }}</span></td></tr>
-                @empty
-                    <tr><td colspan="5">No configured storage directories could be measured.</td></tr>
-                @endforelse
-                </tbody></table></div>
-                <p class="ad-ops-footnote">Directory sizes are not added to server disk usage; categories may share the same volume.</p>
-            </details>
-        </article>
     </section>
 
+    <section id="system-settings-logs" class="ad-ops-tab-panel" aria-label="System errors and administrative audit history">
     <section class="ad-card ad-ops-section">
         <header class="ad-card-head ad-ops-section-head"><div><span>Application log source</span><h2>Recent System Errors</h2></div><div class="ad-ops-heading-actions"><a href="{{ route('admin.system-settings.errors') }}">View all errors</a><a href="{{ route('admin.system-settings.logs') }}">Open log viewer</a></div></header>
         <p class="ad-ops-footnote"><strong>{{ $errorSummary['status'] }}</strong> — {{ $errorSummary['message'] }} Checked at {{ $showTime($logCheckedAt) }}. Coverage starts {{ $showTime($errorSummary['coverage_start']) }}. Observed errors: last hour {{ $errorSummary['counts']['1 hour'] ?? 'Unknown' }}, 24 hours {{ $errorSummary['counts']['24 hours'] ?? 'Unknown' }}, 7 days {{ $errorSummary['counts']['7 days'] ?? 'Unknown' }}. These are bounded-tail counts, not proof of zero errors.</p>
@@ -209,7 +221,9 @@
         <p class="ad-ops-footnote">This viewer uses the existing append-only audit records and filters to events attributed to Admin accounts. It does not display audit payloads, IP addresses, or user-agent values.</p>
     </section>
 
-    <section class="ad-card ad-ops-section ws-personal-preferences">
+    </section>
+
+    <section id="system-settings-preferences" class="ad-card ad-ops-section ws-personal-preferences ad-ops-tab-panel" aria-label="Admin preferences">
         <header class="ad-card-head ad-ops-section-head"><div><span>Personal workspace experience</span><h2>Admin Preferences</h2></div></header>
         <x-shared.workspace.settings :config="$settingsConfig" :preferences="$preferences" :show-heading="false" />
     </section>

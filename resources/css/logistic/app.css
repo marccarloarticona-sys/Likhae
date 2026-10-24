@@ -1087,3 +1087,382 @@ html.dark #logisticsSidebar .likhae-logo__image--light {
 html.dark #logisticsSidebar .likhae-logo__image--dark {
     display: block !important;
 }
+
+/* Logistics wallet page */
+.lk-logistics-wallet .lk-wallet-metric {
+    min-height: 142px;
+    align-content: start;
+    gap: 8px;
+    padding: 19px 20px;
+}
+
+.lk-logistics-wallet .lk-wallet-metric--available {
+    border-color: #561C17;
+    background: linear-gradient(145deg, #561C17, #79332B);
+    box-shadow: 0 10px 24px rgba(86, 28, 23, .16);
+}
+
+.lk-logistics-wallet .lk-wallet-metric--available .lk-wallet-metric__label,
+.lk-logistics-wallet .lk-wallet-metric--available .lk-wallet-metric__value,
+.lk-logistics-wallet .lk-wallet-metric--available .lk-logistics-wallet__metric-detail {
+    color: #FFF8F2;
+}
+
+.lk-logistics-wallet .lk-wallet-metric--available .lk-wallet-metric__label,
+.lk-logistics-wallet__metric-detail {
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.lk-logistics-wallet .lk-wallet-metric--available .lk-wallet-metric__value {
+    font-size: clamp(24px, 2.3vw, 30px);
+}
+
+.lk-logistics-wallet .lk-wallet-metric--available .lk-logistics-wallet__metric-detail {
+    opacity: .8;
+}
+
+.lk-logistics-wallet__header-actions { justify-content: flex-end; }
+.lk-logistics-wallet__header-link,
+.lk-logistics-wallet__edit-destination {
+    min-height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 14px;
+    border: 1px solid var(--lk-wallet-border);
+    border-radius: 10px;
+    color: var(--lk-wallet-ink);
+    background: var(--lk-wallet-surface);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: center;
+    text-decoration: none;
+    transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
+}
+
+.lk-logistics-wallet__header-link:hover,
+.lk-logistics-wallet__edit-destination:hover {
+    border-color: #C6A99C;
+    background: var(--lk-wallet-soft);
+    transform: translateY(-1px);
+}
+
+.lk-logistics-wallet__header-link:focus-visible,
+.lk-logistics-wallet__edit-destination:focus-visible,
+.lk-logistics-wallet__proof-link:focus-visible,
+.lk-logistics-wallet__share-action button:focus-visible,
+.lk-logistics-wallet__acknowledge button:focus-visible,
+.lk-logistics-wallet__report-issue button:focus-visible {
+    outline: 3px solid rgba(169, 111, 94, .45);
+    outline-offset: 2px;
+}
+
+.lk-logistics-wallet__destination-notice {
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid #E9D2B2;
+    border-radius: 10px;
+    color: #70491F;
+    background: #FFF7EA;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.lk-logistics-wallet__section-kicker,
+.lk-logistics-wallet__record-kicker {
+    display: block;
+    color: var(--lk-wallet-accent);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    line-height: 1.4;
+    text-transform: uppercase;
+}
+
+.lk-logistics-wallet .lk-wallet-panel__head h2 { margin-top: 4px; }
+
+.lk-logistics-wallet__share {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 22px;
+    padding: 19px 20px;
+}
+
+.lk-logistics-wallet .lk-wallet-record > .lk-logistics-wallet__share-copy,
+.lk-logistics-wallet__receipt-identity {
+    min-width: 0;
+    display: grid;
+    justify-items: start;
+    gap: 5px;
+}
+
+.lk-logistics-wallet .lk-wallet-record .lk-logistics-wallet__tracking,
+.lk-logistics-wallet__receipt-identity > strong {
+    color: var(--lk-wallet-ink);
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.lk-logistics-wallet__order {
+    color: var(--lk-wallet-muted);
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.lk-logistics-wallet .lk-wallet-record .lk-logistics-wallet__share-amount {
+    margin-top: 8px;
+    color: var(--lk-wallet-ink);
+    font-size: 18px;
+    font-weight: 800;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+
+.lk-logistics-wallet__share-action {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.lk-logistics-wallet__status {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 10px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 750;
+    line-height: 1.25;
+    letter-spacing: 0;
+    text-align: center;
+    text-transform: none;
+}
+
+.lk-logistics-wallet__status--pending {
+    border-color: #E9D2B2;
+    color: #70491F;
+    background: #FFF7EA;
+}
+
+.lk-logistics-wallet__status--waiting {
+    border-color: #E9D2B2;
+    color: #70491F;
+    background: #FFF7EA;
+}
+
+.lk-logistics-wallet__status--paid {
+    border-color: #C9E2D1;
+    color: #286244;
+    background: #EAF4ED;
+}
+
+.lk-logistics-wallet__share-action form button,
+.lk-logistics-wallet__acknowledge button {
+    min-height: 42px;
+    padding: 10px 15px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.35;
+    cursor: pointer;
+    transition: background-color .15s ease, transform .15s ease;
+}
+
+.lk-logistics-wallet__share-action form button:hover,
+.lk-logistics-wallet__acknowledge button:hover { transform: translateY(-1px); }
+
+.lk-logistics-wallet__save-reminder {
+    max-width: 230px;
+    color: #8A5A21;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.5;
+    text-align: right;
+}
+
+.lk-logistics-wallet__empty {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 19px;
+    border: 1px dashed var(--lk-wallet-border);
+    border-radius: 13px;
+    background: var(--lk-wallet-soft);
+}
+
+.lk-logistics-wallet__empty-icon {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    color: var(--lk-wallet-accent);
+    background: var(--lk-wallet-surface);
+    font-size: 18px;
+    font-weight: 800;
+}
+
+.lk-logistics-wallet__empty strong {
+    color: var(--lk-wallet-ink);
+    font-size: 13px;
+    font-weight: 750;
+}
+
+.lk-logistics-wallet__empty p {
+    margin: 4px 0 0;
+    color: var(--lk-wallet-muted);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.lk-logistics-wallet__receipt { display: grid; gap: 15px; padding: 20px; }
+
+.lk-logistics-wallet__receipt-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.lk-logistics-wallet__receipt-total {
+    display: grid;
+    justify-items: end;
+    gap: 8px;
+    text-align: right;
+}
+
+.lk-logistics-wallet__receipt-total > strong {
+    color: var(--lk-wallet-ink);
+    font-size: 18px;
+    font-weight: 800;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+
+.lk-logistics-wallet__receipt-details {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0;
+    padding: 13px;
+    border: 1px solid var(--lk-wallet-border);
+    border-radius: 11px;
+    background: var(--lk-wallet-soft);
+}
+
+.lk-logistics-wallet__receipt-details > div { min-width: 0; }
+.lk-logistics-wallet__receipt-details dt { color: var(--lk-wallet-muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.lk-logistics-wallet__receipt-details dd { margin: 4px 0 0; color: var(--lk-wallet-ink); font-size: 12px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
+
+.lk-logistics-wallet__proof-link {
+    width: fit-content;
+    color: var(--lk-wallet-accent);
+    font-size: 12px;
+    font-weight: 750;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.lk-logistics-wallet__acknowledge {
+    display: grid;
+    grid-template-columns: minmax(150px, .4fr) minmax(180px, 1fr) auto;
+    align-items: end;
+    gap: 12px;
+    padding-top: 3px;
+}
+
+.lk-logistics-wallet__acknowledge label {
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+    color: var(--lk-wallet-muted);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.lk-logistics-wallet__acknowledge input {
+    width: 100%;
+    min-height: 42px;
+    padding: 9px 11px;
+    border: 1px solid var(--lk-wallet-border);
+    border-radius: 9px;
+    color: var(--lk-wallet-ink);
+    background: var(--lk-wallet-surface);
+    font-size: 13px;
+}
+
+.lk-logistics-wallet__acknowledge input:focus-visible {
+    outline: 3px solid rgba(169, 111, 94, .3);
+    outline-offset: 1px;
+}
+
+.lk-logistics-wallet__report-issue button {
+    min-height: 38px;
+    padding: 8px 11px;
+    border: 1px solid var(--lk-wallet-border);
+    border-radius: 9px;
+    color: var(--lk-wallet-ink);
+    background: var(--lk-wallet-surface);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.lk-logistics-wallet__report-issue button:hover { background: var(--lk-wallet-soft); }
+.lk-logistics-wallet__legacy-note,
+.lk-logistics-wallet__confirmed-note { margin: 0; font-size: 12px; line-height: 1.55; }
+.lk-logistics-wallet__legacy-note { color: #8A5A21; font-weight: 700; }
+.lk-logistics-wallet__confirmed-note { color: #286244; }
+
+html.dark .lk-logistics-wallet .lk-wallet-metric--available {
+    border-color: #6A302A;
+    background: linear-gradient(145deg, #48201B, #321612);
+    box-shadow: none;
+}
+
+html.dark .lk-logistics-wallet__destination-notice,
+html.dark .lk-logistics-wallet__status--pending,
+html.dark .lk-logistics-wallet__status--waiting {
+    border-color: #604A2A;
+    color: #F1D4A6;
+    background: #2A2117;
+}
+
+html.dark .lk-logistics-wallet__status--paid {
+    border-color: #3C6049;
+    color: #B5E0C3;
+    background: #1B2C21;
+}
+
+html.dark .lk-logistics-wallet__save-reminder,
+html.dark .lk-logistics-wallet__legacy-note { color: #F1D4A6; }
+html.dark .lk-logistics-wallet__confirmed-note { color: #B5E0C3; }
+
+@media (max-width: 760px) {
+    .lk-logistics-wallet__header-actions { justify-content: flex-start; }
+    .lk-logistics-wallet__share { align-items: flex-start; }
+    .lk-logistics-wallet__receipt-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+    .lk-logistics-wallet .lk-wallet-metric { min-height: 120px; }
+    .lk-logistics-wallet__share { flex-direction: column; align-items: stretch; gap: 16px; }
+    .lk-logistics-wallet__share-action { align-items: stretch; }
+    .lk-logistics-wallet__share-action form button { width: 100%; }
+    .lk-logistics-wallet__save-reminder { max-width: none; text-align: left; }
+    .lk-logistics-wallet__receipt-head { flex-direction: column; }
+    .lk-logistics-wallet__receipt-total { justify-items: start; text-align: left; }
+    .lk-logistics-wallet__receipt-details { grid-template-columns: 1fr; }
+    .lk-logistics-wallet__acknowledge { grid-template-columns: 1fr; }
+    .lk-logistics-wallet__acknowledge button { width: 100%; }
+}

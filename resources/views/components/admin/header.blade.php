@@ -21,11 +21,19 @@
         </div>
     </div>
 
-    <form class="ad-search" action="{{ route('admin.users') }}" method="GET" role="search">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input name="q" type="search" value="{{ request('q') }}" placeholder="Search users by name, email, or ID..." aria-label="Search Admin Center">
-        <kbd>⌘ K</kbd>
-    </form>
+    <div class="ad-search-wrap" data-admin-search>
+        <form class="ad-search" action="{{ route('admin.users') }}" method="GET" role="search" data-admin-search-form>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input name="q" type="search" value="{{ request('q') }}" placeholder="Search Admin pages or users..." aria-label="Search Admin pages or users" aria-autocomplete="list" aria-expanded="false" aria-controls="adminSearchSuggestions" autocomplete="off" data-admin-search-input>
+            <kbd>⌘ K</kbd>
+        </form>
+        <div class="ad-search-dropdown" id="adminSearchSuggestions" role="listbox" aria-label="Admin search suggestions" hidden data-admin-search-results>
+            <p class="ad-search-dropdown__heading" data-admin-search-heading></p>
+            <div class="ad-search-dropdown__options" data-admin-search-options></div>
+            <p class="ad-search-dropdown__empty" hidden data-admin-search-empty></p>
+            <button type="button" class="ad-search-dropdown__clear" hidden data-admin-search-clear>Clear search history</button>
+        </div>
+    </div>
 
     <div class="ad-header-actions">
         <a class="ad-icon-btn" href="{{ route('admin.messages') }}" aria-label="Messages">

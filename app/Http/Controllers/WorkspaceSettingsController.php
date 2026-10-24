@@ -89,7 +89,12 @@ class WorkspaceSettingsController extends Controller
             Cache::store('database')->forget('message-presence:user:'.$request->user()->id);
         }
 
-        return back()->with('status', $config['center'].' settings updated.');
+        $status = $config['center'].' settings updated.';
+        if ($workspace === 'admin') {
+            return redirect()->to(route('admin.system-settings').'#system-settings-preferences')->with('status', $status);
+        }
+
+        return back()->with('status', $status);
     }
 
     /** @return array<string, mixed> */

@@ -77,6 +77,8 @@ Route::prefix('admin')
         Route::get('/shipping-rate-requests', [AdminShippingRateController::class, 'index'])->name('shipping-rate-requests');
         Route::post('/shipping-rate-requests/initialize-global-rate', [AdminShippingRateController::class, 'initializeGlobalRate'])->name('shipping-rate-requests.initialize');
         Route::post('/shipping-rate-requests/commission-split', [AdminShippingRateController::class, 'updateCommissionSplit'])->name('shipping-rate-requests.commission-split');
+        Route::patch('/shipping-rate-requests/transfer-commission', [AdminShippingRateController::class, 'updateTransferCommission'])->name('shipping-rate-requests.transfer-commission.update');
+        Route::patch('/shipping-rate-requests/regional-tiers', [AdminShippingRateController::class, 'updateRegionalShippingTiers'])->name('shipping-rate-requests.regional-tiers.update');
         Route::get('/shipping-rate-requests/{shippingRateRequest}', [AdminShippingRateController::class, 'show'])
             ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.show');
         Route::post('/shipping-rate-requests/{shippingRateRequest}/approve', [AdminShippingRateController::class, 'approve'])

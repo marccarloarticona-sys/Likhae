@@ -59,7 +59,7 @@ class SellerEngagementController extends Controller
             'messageReadRouteTemplate' => route('seller.messages.read', ['conversation' => '__conversation__']),
             'messageContext' => app(ConversationContextPresenter::class)->forUser(
                 $request->user(),
-                $conversations->firstWhere('id', $request->integer('conversation')) ?: $conversations->first(),
+                $conversations->firstWhere('id', $request->integer('conversation')),
             ),
         ]);
     }

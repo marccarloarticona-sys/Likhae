@@ -17,20 +17,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const registrationProgressStorageKey = 'likhae.registration.progress';
 
     function readSavedRegistrationStep() {
-        const submittedStep = registrationStepInput?.value;
-        if (submittedStep !== undefined && submittedStep !== '') {
-            const parsedStep = Number.parseInt(submittedStep, 10);
-            return Number.isInteger(parsedStep) ? parsedStep : 0;
-        }
-
         try {
             const savedProgress = JSON.parse(sessionStorage.getItem(registrationProgressStorageKey) || 'null');
             if (savedProgress?.role === accountTypeInput?.value) {
                 const parsedStep = Number.parseInt(savedProgress.step, 10);
-                return Number.isInteger(parsedStep) ? parsedStep : 0;
+                if (Number.isInteger(parsedStep) && parsedStep >= 0) {
+                    return parsedStep;
+                }
             }
         } catch {
             // Continue at the first step if session storage is unavailable.
+        }
+
+        const submittedStep = registrationStepInput?.value;
+        if (submittedStep !== undefined && submittedStep !== '') {
+            const parsedStep = Number.parseInt(submittedStep, 10);
+            return Number.isInteger(parsedStep) && parsedStep >= 0 ? parsedStep : 0;
         }
 
         return 0;
@@ -206,6 +208,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     let currentStep = readSavedRegistrationStep();
+    let registrationSubmissionStarted = false;
+
+    function persistRegistrationProgress(step = currentStep) {
+        try {
+            sessionStorage.setItem(registrationProgressStorageKey, JSON.stringify({
+                role: accountTypeInput?.value || 'buyer',
+                step,
+            }));
+        } catch {
+            // The hidden form field remains a fallback when session storage is unavailable.
+        }
+    }
 
 
     /*
@@ -708,14 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
             registrationStepInput.value = String(currentStep);
         }
 
-        try {
-            sessionStorage.setItem(registrationProgressStorageKey, JSON.stringify({
-                role: accountTypeInput?.value || 'buyer',
-                step: currentStep,
-            }));
-        } catch {
-            // The hidden form field still preserves the step across validation redirects.
-        }
+        persistRegistrationProgress(currentStep);
 
 
         /*
@@ -1483,6 +1490,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     event.preventDefault();
                     return;
                 }
+                registrationSubmissionStarted = true;
                 try {
                     sessionStorage.removeItem(registrationProgressStorageKey);
                 } catch {
@@ -1612,6 +1620,8 @@ document.addEventListener('DOMContentLoaded', () => {
         )
         .forEach(
             (input) => {
+
+                input.addEventListener('click', () => persistRegistrationProgress());
 
                 input.addEventListener(
                     'change',
@@ -2403,7 +2413,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     window.addEventListener('pageshow', () => {
-        submitButton.disabled = false;
+        if (submitButton) submitButton.disabled = false;
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (!registrationSubmissionStarted && document.visibilityState === 'hidden') {
+            persistRegistrationProgress();
+        }
+    });
+    window.addEventListener('pagehide', () => {
+        if (!registrationSubmissionStarted) persistRegistrationProgress();
+    });
+    window.addEventListener('pageshow', (event) => {
+        if (!event.persisted) return;
+
+        const restoredStep = readSavedRegistrationStep();
+        const formStep = Number.parseInt(registrationStepInput?.value ?? '', 10);
+        if (restoredStep !== currentStep || formStep !== restoredStep) {
+            showStep(restoredStep);
+        }
     });
     const initialAccountType = accountTypeInput?.value;
 

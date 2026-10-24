@@ -1,9 +1,9 @@
 @extends('layouts.admin.app')
 @section('title', 'Admin Account')
-@section('subtitle', 'Manage your profile, security, notification preferences, and payout destination.')
+@section('subtitle', 'Manage your profile, security, and payout destination.')
 @section('active', 'account')
 @section('content')
-<div class="ad-admin-account" style="display:grid;gap:16px">
+<div class="ad-admin-account ad-admin-account-page">
     @if(session('status') || session('success'))
         <div class="ad-note" role="status">{{ session('status') ?: session('success') }}</div>
     @endif
@@ -11,54 +11,59 @@
         <div class="ad-note is-warning" role="alert">{{ $errors->first() }}</div>
     @endif
 
-    <div class="ad-page-head">
-        <div><span class="ad-overline">Account</span><h2>{{ $adminUser->name }}</h2><p>{{ $adminUser->email }}</p></div>
-    </div>
+    <section class="ad-account-identity" aria-label="Administrator account overview">
+        <div class="ad-account-avatar" aria-hidden="true">{{ mb_strtoupper(mb_substr((string) $adminUser->name, 0, 1)) }}</div>
+        <div class="ad-account-identity-copy">
+            <span class="ad-overline">Administrator account</span>
+            <h2>{{ $adminUser->name }}</h2>
+            <p>{{ $adminUser->email }}</p>
+        </div>
+        <dl class="ad-account-identity-meta">
+            <div><dt>Account ID</dt><dd>#{{ $adminUser->id }}</dd></div>
+            <div><dt>Access level</dt><dd>Administrator</dd></div>
+        </dl>
+    </section>
 
-    <div class="ad-admin-account-grid">
-        <section class="ad-card">
-            <div class="ad-card-head"><div><h2>Profile</h2></div></div>
-            <div class="ad-card-body">
-                <form style="display:grid;gap:12px" method="POST" action="{{ route('admin.account.update') }}">
-                    @csrf @method('PATCH')
-                    <label class="ad-field"><span>First name</span><input name="first_name" value="{{ old('first_name', $adminUser->first_name ?: str($adminUser->name)->before(' ')) }}" required></label>
-                    <label class="ad-field"><span>Last name</span><input name="last_name" value="{{ old('last_name', $adminUser->last_name ?: str($adminUser->name)->after(' ')) }}" required></label>
-                    <label class="ad-field"><span>Email</span><input type="email" name="email" value="{{ old('email', $adminUser->email) }}" required></label>
-                    <label class="ad-field"><span>Contact number</span><input name="contact_number" value="{{ old('contact_number', $adminUser->contact_number) }}"></label>
-                    <button class="ad-btn ad-btn-primary">Save profile</button>
-                </form>
-            </div>
-        </section>
+    <nav class="ad-account-tabs" aria-label="Admin account sections">
+        <a href="{{ route('admin.account', ['tab' => 'account']) }}" class="{{ $tab === 'account' ? 'is-active' : '' }}" @if($tab === 'account') aria-current="page" @endif>Account &amp; security</a>
+        <a href="{{ route('admin.account', ['tab' => 'payout']) }}" class="{{ $tab === 'payout' ? 'is-active' : '' }}" @if($tab === 'payout') aria-current="page" @endif>Payout settings</a>
+    </nav>
 
-        <section class="ad-card">
-            <div class="ad-card-head"><div><h2>Password</h2></div></div>
-            <div class="ad-card-body">
-                <form style="display:grid;gap:12px" method="POST" action="{{ route('admin.account.password') }}">
-                    @csrf @method('PATCH')
-                    <label class="ad-field"><span>Current password</span><input type="password" name="current_password" required></label>
-                    <label class="ad-field"><span>New password</span><input type="password" name="password" required></label>
-                    <label class="ad-field"><span>Confirm new password</span><input type="password" name="password_confirmation" required></label>
-                    <button class="ad-btn ad-btn-primary">Change password</button>
-                </form>
-            </div>
-        </section>
+    @if($tab === 'account')
+        <div class="ad-account-shortcuts" aria-label="Account sections">
+            <a href="#account-profile"><span class="ad-account-shortcut-number">01</span><span class="ad-account-shortcut-copy"><strong>Profile details</strong><small>Update your name and contact information</small></span><span class="ad-account-shortcut-arrow" aria-hidden="true">↘</span></a>
+            <a href="#account-security"><span class="ad-account-shortcut-number">02</span><span class="ad-account-shortcut-copy"><strong>Password &amp; security</strong><small>Change your Admin sign-in password</small></span><span class="ad-account-shortcut-arrow" aria-hidden="true">↘</span></a>
+        </div>
+        <div class="ad-account-panels">
+            <section id="account-profile" class="ad-card ad-account-panel">
+                <div class="ad-card-head"><div><span class="ad-overline">Personal information</span><h2>Profile details</h2><p>Keep your Admin contact information up to date.</p></div></div>
+                <div class="ad-card-body">
+                    <form class="ad-account-form ad-account-form--profile" method="POST" action="{{ route('admin.account.update', ['tab' => 'account']) }}">
+                        @csrf @method('PATCH')
+                        <label class="ad-field"><span>First name</span><input name="first_name" value="{{ old('first_name', $adminUser->first_name ?: str($adminUser->name)->before(' ')) }}" autocomplete="given-name" required></label>
+                        <label class="ad-field"><span>Last name</span><input name="last_name" value="{{ old('last_name', $adminUser->last_name ?: str($adminUser->name)->after(' ')) }}" autocomplete="family-name" required></label>
+                        <label class="ad-field"><span>Email</span><input type="email" name="email" value="{{ old('email', $adminUser->email) }}" autocomplete="email" required></label>
+                        <label class="ad-field"><span>Contact number</span><input type="tel" name="contact_number" value="{{ old('contact_number', $adminUser->contact_number) }}" autocomplete="tel" required></label>
+                        <div class="ad-account-action-row"><small>Your contact details are used for Admin account updates.</small><button type="submit" class="ad-btn ad-btn-primary">Save profile</button></div>
+                    </form>
+                </div>
+            </section>
 
-        <section class="ad-card">
-            <div class="ad-card-head"><div><h2>Notifications</h2></div></div>
-            <div class="ad-card-body">
-                <form style="display:grid;gap:12px" method="POST" action="{{ route('admin.account.preferences') }}">
-                    @csrf @method('PATCH')
-                    @php($prefs = $preferences->notification_preferences ?? [])
-                    @foreach(['registrations' => 'Registration updates', 'risk' => 'Product risk alerts', 'finance' => 'Finance updates', 'messages' => 'Messages'] as $key => $label)
-                        <label><input type="checkbox" name="{{ $key }}" value="1" @checked($prefs[$key] ?? false)> {{ $label }}</label>
-                    @endforeach
-                    <button class="ad-btn ad-btn-primary">Save preferences</button>
-                </form>
-            </div>
-        </section>
-    </div>
-
-        <section class="ad-card payout-section">
+            <section id="account-security" class="ad-card ad-account-panel">
+                <div class="ad-card-head ad-account-security-head"><div><span class="ad-overline">Sign-in access</span><h2>Password &amp; security</h2><p>Use a unique password to protect your Admin account.</p></div><button type="button" class="ad-btn ad-btn-secondary ad-account-password-toggle" data-admin-password-toggle aria-pressed="false">Show passwords</button></div>
+                <div class="ad-card-body">
+                    <form class="ad-account-form" method="POST" action="{{ route('admin.account.password', ['tab' => 'account']) }}" data-admin-password-form>
+                        @csrf @method('PATCH')
+                        <label class="ad-field"><span>Current password</span><input type="password" name="current_password" autocomplete="current-password" data-admin-password-field required></label>
+                        <label class="ad-field"><span>New password</span><input type="password" name="password" autocomplete="new-password" minlength="8" data-admin-password-field aria-describedby="admin-password-help" required><small id="admin-password-help">Use at least 8 characters.</small></label>
+                        <label class="ad-field"><span>Confirm new password</span><input type="password" name="password_confirmation" autocomplete="new-password" minlength="8" data-admin-password-field required></label>
+                        <div class="ad-account-action-row"><small>Your current password is required to save a change.</small><button type="submit" class="ad-btn ad-btn-primary">Change password</button></div>
+                    </form>
+                </div>
+            </section>
+        </div>
+    @else
+        <section class="ad-card payout-section ad-account-payout-panel">
             <div class="ad-card-head payout-section-head">
             <div><span class="payout-overline">Payment destination</span><h2>Admin payout details</h2><p>This is for any future platform withdrawal. Seller and Logistics transfers use the destination saved in their own account settings.</p></div>
             @if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif
@@ -68,6 +73,7 @@
                 @if($payoutMultipleReady)
                     @include('components.shared.payout-destination-manager', [
                         'payoutDestinationRoute' => 'admin.account.payout-destination.update',
+                        'payoutDestinationRouteParameters' => ['tab' => 'payout'],
                         'payoutChangeDescription' => 'Changes apply to future platform withdrawals.',
                         'payoutPurpose' => 'platform withdrawals',
                         'payoutSecurityCopy' => 'This destination is for future platform withdrawals. Seller and Logistics transfers use their own saved default details.',
@@ -87,7 +93,7 @@
                 @php($payoutMethod = old('payout_method', $adminUser->payout_method))
                 <div class="payout-editor">
                 <div class="payout-editor__head"><div><span class="payout-editor__eyebrow">Payout settings</span><h3>{{ $payoutDestinationSaved ? 'Update destination' : 'Add a destination' }}</h3></div><p>Changes apply to future platform withdrawals.</p></div>
-                <form class="ad-admin-payout-form payout-form payout-fields-grid" method="POST" action="{{ route('admin.account.payout-destination.update') }}" data-payout-destination-form>
+                <form class="ad-admin-payout-form payout-form payout-fields-grid" method="POST" action="{{ route('admin.account.payout-destination.update', ['tab' => 'payout']) }}" data-payout-destination-form>
                     @csrf @method('PUT')
                     <label class="ad-field payout-form-field"><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected($payoutMethod === $method)>{{ $method }}</option>@endforeach</select><small>Choose the service receiving this withdrawal.</small></label>
                     <label class="ad-field payout-form-field payout-bank-field" data-payout-bank-field @if($payoutMethod !== 'Bank Transfer') hidden @endif><span>Bank name</span><input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name', $adminUser->payout_bank_name) }}" autocomplete="organization" placeholder="e.g. BPI"></label>
@@ -104,5 +110,6 @@
             @endif
         </div>
     </section>
+    @endif
 </div>
 @endsection

@@ -123,7 +123,7 @@
         @if($featuredProducts->isNotEmpty())
             <div class="lk-product-grid lk-ed-product-grid">
                 @foreach($featuredProducts as $product)
-                    @include('components.guest.product-card', ['product' => $product, 'home' => true])
+                    @include('components.guest.product-card', ['product' => $product])
                 @endforeach
             </div>
         @else
