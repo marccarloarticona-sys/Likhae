@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Seller\Category;
+use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\User;
 use Database\Seeders\DatabaseSeeder;
@@ -102,6 +103,65 @@ class SellerFlashSaleValidationTest extends TestCase
             ->get();
         $this->assertSame([2, 5], $variants->pluck('flash_sale_allocation')->map(fn ($value) => (int) $value)->all());
         $this->assertSame([70.0, 120.0], $variants->pluck('flash_sale_price')->map(fn ($value) => (float) $value)->all());
+    }
+
+    public function test_marketing_center_saves_a_scheduled_flash_sale_for_only_the_selected_variant(): void
+    {
+        $seller = $this->seller();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $category->id,
+            'name' => 'Central Flash Sale Product',
+            'slug' => 'central-flash-sale-product',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $selected = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'CENTRAL-FLASH-ONE',
+            'price' => 100,
+            'stock' => 8,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $untouched = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'CENTRAL-FLASH-TWO',
+            'price' => 150,
+            'stock' => 10,
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+        $start = now()->addHour()->format('Y-m-d H:i:s');
+        $end = now()->addHours(3)->format('Y-m-d H:i:s');
+
+        $this->actingAs($seller)
+            ->from(route('seller.marketing', ['section' => 'flash-sales']))
+            ->patch(route('seller.marketing.flash-sales.update', ['product' => $product, 'section' => 'flash-sales']), [
+                'flash_sale_starts_at' => $start,
+                'flash_sale_ends_at' => $end,
+                'variants' => [
+                    ['id' => $selected->id, 'flash_sale_price' => 80, 'flash_sale_allocation' => 5],
+                    ['id' => $untouched->id, 'flash_sale_price' => null, 'flash_sale_allocation' => null],
+                ],
+            ])
+            ->assertRedirect(route('seller.marketing', ['section' => 'flash-sales']))
+            ->assertSessionHas('status', 'Flash sale prices, allocations, and schedule were saved. Existing order prices remain unchanged.');
+
+        $this->assertSame('80.00', $selected->fresh()->flash_sale_price);
+        $this->assertSame(5, (int) $selected->fresh()->flash_sale_allocation);
+        $this->assertNull($untouched->fresh()->flash_sale_price);
+        $this->assertNull($untouched->fresh()->flash_sale_allocation);
+        $this->assertNotNull($product->fresh()->flash_sale_starts_at);
+
+        $this->actingAs($seller)
+            ->get(route('seller.marketing', ['section' => 'flash-sales']))
+            ->assertOk()
+            ->assertSee('Marketing Center')
+            ->assertSee('Scheduled')
+            ->assertSee('CENTRAL-FLASH-ONE')
+            ->assertSee('CENTRAL-FLASH-TWO');
     }
 
     private function seller(): User

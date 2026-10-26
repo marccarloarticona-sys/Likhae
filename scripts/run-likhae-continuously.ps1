@@ -15,7 +15,7 @@ while ($true) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $logPath = Join-Path $logDir "artisan-dev-$stamp.log"
 
-    "[$(Get-Date -Format s)] Starting Laravel, Apache proxy, Reverb, and Vite." | Add-Content $logPath
+    "[$(Get-Date -Format s)] Starting the Laravel development stack on port 8001." | Add-Content $logPath
     # The Return & Refund form accepts up to 8 MB images and a 200 MB video.
     # PHP's CLI SAPI does not read public/.user.ini, so apply the same limits
     # explicitly when the built-in development server is used.

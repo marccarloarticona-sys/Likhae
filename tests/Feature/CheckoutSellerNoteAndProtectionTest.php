@@ -175,6 +175,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_value' => 10,
             'minimum_order_amount' => 0,
             'maximum_discount_amount' => 20,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         $shippingVoucher = Voucher::query()->create([
@@ -186,6 +187,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'FIXED',
             'discount_value' => 30,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         $selection = [
@@ -231,8 +233,34 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
         $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
 
+        $campaignBudgets = app(\App\Services\Finance\PlatformCampaignBudgetService::class);
+        $productBudget = $campaignBudgets->summary($platformVoucher->fresh());
+        $shippingBudget = $campaignBudgets->summary($shippingVoucher->fresh());
+        $this->assertSame(2000, $productBudget['reserved_cents']);
+        $this->assertSame(0, $productBudget['spent_cents'], 'Pending COD must not recognize campaign expense.');
+        $this->assertSame(9998000, $productBudget['available_cents']);
+        $this->assertSame(3000, $shippingBudget['reserved_cents']);
+        $this->assertSame(0, $shippingBudget['spent_cents'], 'Pending COD must not recognize shipping campaign expense.');
+        $this->assertSame(9997000, $shippingBudget['available_cents']);
+
         $order->update(['status' => 'CANCELLED']);
         $order->sellerOrders()->update(['status' => 'CANCELLED']);
+        foreach ($order->sellerOrders as $sellerOrder) {
+            $campaignBudgets->releaseForSellerOrder($sellerOrder, $fixture['buyer']);
+            $campaignBudgets->releaseForSellerOrder($sellerOrder, $fixture['buyer']);
+        }
+        $this->assertSame(0, $campaignBudgets->summary($platformVoucher->fresh())['reserved_cents']);
+        $this->assertSame(0, $campaignBudgets->summary($platformVoucher->fresh())['spent_cents']);
+        $this->assertSame(0, $campaignBudgets->summary($shippingVoucher->fresh())['reserved_cents']);
+        $this->assertSame(0, $campaignBudgets->summary($shippingVoucher->fresh())['spent_cents']);
+        $this->assertSame(2, \App\Models\Finance\FinancialLedgerEntry::query()
+            ->where('voucher_id', $platformVoucher->id)
+            ->where('entry_type', 'CAMPAIGN_SUBSIDY_RELEASED')
+            ->count());
+        $this->assertSame(2, \App\Models\Finance\FinancialLedgerEntry::query()
+            ->where('voucher_id', $shippingVoucher->id)
+            ->where('entry_type', 'CAMPAIGN_SUBSIDY_RELEASED')
+            ->count());
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($sellerVoucher->id));
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
@@ -283,6 +311,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         $shippingVoucher = Voucher::query()->create([
@@ -294,6 +323,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'FIXED',
             'discount_value' => 30,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         $items = collect([$fixture['itemA'], $otherItem, $fixture['itemB']]);
@@ -352,6 +382,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         $selection = ['platform' => $platformVoucher->code];
@@ -503,6 +534,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'FIXED',
             'discount_value' => 999,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
         Voucher::query()->create([
@@ -514,6 +546,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'discount_type' => 'FIXED',
             'discount_value' => 999,
             'minimum_order_amount' => 0,
+            'campaign_budget_total' => 100000,
             'is_active' => true,
         ]);
 
@@ -1424,6 +1457,132 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
     }
 
     /** @return array<string, mixed> */
+    public function test_variant_scoped_seller_voucher_discounts_only_the_selected_variant_at_checkout(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $selectedVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $unselectedVariant = ProductVariant::query()->create([
+            'product_id' => $fixture['productA']->id,
+            'sku' => 'SKU-A-UNSELECTED',
+            'price' => 200,
+            'stock' => 5,
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+        $unselectedItem = CartItem::query()->create([
+            'cart_id' => $fixture['itemA']->cart_id,
+            'product_variant_id' => $unselectedVariant->id,
+            'quantity' => 1,
+        ]);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'VARIANTONLY10',
+            'name' => 'One variant only',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'applies_to' => 'VARIANTS',
+            'visibility' => 'PUBLIC',
+            'is_active' => true,
+        ]);
+        $voucher->eligibleVariants()->sync([$selectedVariant->id]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $voucher->id]);
+        $selection = ['seller' => [$fixture['sellerA']->id => $voucher->code]];
+        $checkout = app(CheckoutService::class);
+
+        $preview = $checkout->preview(collect([$fixture['itemA'], $unselectedItem]), $selection, $fixture['buyer']);
+        $sellerPreview = $preview['groups'][$fixture['sellerA']->id];
+        $this->assertSame(10.00, (float) $sellerPreview['seller_voucher_discount']);
+        $this->assertSame(1000, $sellerPreview['seller_voucher_item_discounts'][(int) $fixture['itemA']->id]);
+        $this->assertSame(0, $sellerPreview['seller_voucher_item_discounts'][(int) $unselectedItem->id]);
+
+        $order = $checkout->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$fixture['itemA']->id, $unselectedItem->id], 'COD', $selection, null, [], [], (string) str()->uuid(),
+        );
+        $sellerOrder = $order->sellerOrders()->where('seller_profile_id', $fixture['sellerA']->id)->with('items')->sole();
+        $orderedItems = $sellerOrder->items->keyBy('product_variant_id');
+
+        $this->assertSame('10.00', $orderedItems->get($selectedVariant->id)->seller_voucher_discount);
+        $this->assertSame('0.00', $orderedItems->get($unselectedVariant->id)->seller_voucher_discount);
+        $this->assertSame('10.00', $sellerOrder->seller_voucher_discount);
+    }
+
+    public function test_seller_voucher_budget_reserves_confirms_releases_and_reverses_without_platform_funding(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'SELLERBUDGET5',
+            'name' => 'Capped Seller voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 5,
+            'minimum_order_amount' => 0,
+            'applies_to' => 'STORE',
+            'visibility' => 'PUBLIC',
+            'seller_discount_budget_total' => 4.99,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $voucher->id]);
+        $selection = ['seller' => [$fixture['sellerA']->id => $voucher->code]];
+        $checkout = app(CheckoutService::class);
+
+        try {
+            $checkout->preview(collect([$fixture['itemA']]), $selection, $fixture['buyer']);
+            $this->fail('An order above the Seller voucher budget must not receive the voucher.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('seller_voucher_codes.'.$fixture['sellerA']->id, $exception->errors());
+        }
+
+        $voucher->update(['seller_discount_budget_total' => 7.50]);
+        $checkout->preview(collect([$fixture['itemA']]), $selection, $fixture['buyer']);
+        $budgetService = app(\App\Services\Finance\SellerVoucherBudgetService::class);
+        $this->assertSame(0, $budgetService->summary($voucher)['reserved_cents']);
+        $firstOrder = $checkout->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$fixture['itemA']->id], 'COD', $selection, null, [], [], (string) str()->uuid(),
+        );
+        $firstSellerOrder = $firstOrder->sellerOrders()->where('seller_profile_id', $fixture['sellerA']->id)->with('items')->sole();
+        $firstItem = $firstSellerOrder->items->sole();
+        $reserved = $budgetService->summary($voucher->fresh());
+        $this->assertSame(500, $reserved['reserved_cents']);
+        $this->assertSame(0, $reserved['spent_cents']);
+        $this->assertSame(250, $reserved['available_cents']);
+        $this->assertSame(0, \App\Models\Finance\FinancialLedgerEntry::query()->where('voucher_id', $voucher->id)->where('account_type', 'CAMPAIGN_BUDGET')->count());
+
+        $budgetService->consumeForOrderItem($firstItem);
+        $budgetService->consumeForOrderItem($firstItem);
+        $confirmed = $budgetService->summary($voucher->fresh());
+        $this->assertSame(0, $confirmed['reserved_cents']);
+        $this->assertSame(500, $confirmed['spent_cents']);
+        $this->assertSame(1, \App\Models\Finance\FinancialLedgerEntry::query()->where('order_item_id', $firstItem->id)->where('entry_type', 'SELLER_VOUCHER_DISCOUNT_SPENT')->count());
+
+        $budgetService->reverseForOrderItem($firstItem, 2.50, 'test-refund-1');
+        $budgetService->reverseForOrderItem($firstItem, 2.50, 'test-refund-1');
+        $reversed = $budgetService->summary($voucher->fresh());
+        $this->assertSame(250, $reversed['spent_cents']);
+        $this->assertSame(500, $reversed['available_cents']);
+        $this->assertSame(1, \App\Models\Finance\FinancialLedgerEntry::query()->where('order_item_id', $firstItem->id)->where('entry_type', 'SELLER_VOUCHER_DISCOUNT_REVERSAL')->count());
+
+        $secondCart = Cart::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'status' => Cart::STATUS_ACTIVE]);
+        $secondItem = CartItem::query()->create([
+            'cart_id' => $secondCart->id,
+            'product_variant_id' => $fixture['itemA']->product_variant_id,
+            'quantity' => 1,
+        ]);
+        $secondOrder = $checkout->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$secondItem->id], 'COD', $selection, null, [], [], (string) str()->uuid(),
+        );
+        $secondSellerOrder = $secondOrder->sellerOrders()->where('seller_profile_id', $fixture['sellerA']->id)->sole();
+        $this->assertSame(500, $budgetService->summary($voucher->fresh())['reserved_cents']);
+        $secondSellerOrder->update(['status' => 'CANCELLED']);
+        $budgetService->releaseForSellerOrder($secondSellerOrder, $fixture['buyer']);
+        $budgetService->releaseForSellerOrder($secondSellerOrder, $fixture['buyer']);
+        $afterCancel = $budgetService->summary($voucher->fresh());
+        $this->assertSame(0, $afterCancel['reserved_cents']);
+        $this->assertSame(250, $afterCancel['spent_cents']);
+        $this->assertSame(500, $afterCancel['available_cents']);
+        $this->assertSame(1, \App\Models\Finance\FinancialLedgerEntry::query()->where('seller_order_id', $secondSellerOrder->id)->where('entry_type', 'SELLER_VOUCHER_DISCOUNT_RELEASED')->count());
+    }
+
     private function checkoutFixture(): array
     {
         $buyer = User::factory()->create([

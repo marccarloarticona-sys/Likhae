@@ -13,6 +13,9 @@ use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
+use App\Http\Controllers\Communication\MessagingFaqController;
+use App\Http\Controllers\Communication\SmartMessagingController;
+use App\Http\Controllers\Communication\SupportRequestController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
 use Illuminate\Support\Facades\Route;
@@ -101,6 +104,18 @@ Route::prefix('admin')
         Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
+        Route::get('/support-faqs', [MessagingFaqController::class, 'adminIndex'])->name('support-faqs');
+        Route::post('/support-faqs', [MessagingFaqController::class, 'storeAdmin'])->middleware('throttle:30,1')->name('support-faqs.store');
+        Route::patch('/support-faqs/{faq}', [MessagingFaqController::class, 'updateAdmin'])->whereNumber('faq')->middleware('throttle:30,1')->name('support-faqs.update');
+        Route::patch('/support-faqs/{faq}/archive', [MessagingFaqController::class, 'archiveAdmin'])->whereNumber('faq')->name('support-faqs.archive');
+        Route::post('/messages/{conversation}/smart-help/resolve', [SmartMessagingController::class, 'resolve'])
+            ->whereNumber('conversation')->middleware('throttle:30,1')->name('messages.smart-help.resolve');
+        Route::post('/messages/support-requests/{supportRequest}/acknowledge', [SupportRequestController::class, 'acknowledge'])
+            ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.acknowledge');
+        Route::post('/messages/support-requests/{supportRequest}/accept', [SupportRequestController::class, 'accept'])
+            ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.accept');
+        Route::post('/messages/support-requests/{supportRequest}/resolve', [SupportRequestController::class, 'resolve'])
+            ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.resolve');
         Route::get('/messages/stream', [AdminOperationsController::class, 'messageStream'])->name('messages.stream');
         Route::get('/settings', [AdminOperationsController::class, 'settings'])->name('settings');
         Route::get('/system-settings', [SystemSettingsMonitoringController::class, 'show'])

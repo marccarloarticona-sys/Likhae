@@ -7,14 +7,17 @@ use App\Models\Communication\Message;
 use App\Models\User;
 use App\Services\Communication\MessageAttachmentService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Response;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\HeaderUtils;
 
 class ConversationAttachmentController extends Controller
 {
-    public function show(Request $request, int $message, MessageAttachmentService $attachments): BinaryFileResponse|JsonResponse|RedirectResponse
+    public function show(Request $request, int $message, MessageAttachmentService $attachments): Response|JsonResponse|RedirectResponse
     {
         $user = $request->user();
         $isApiToken = false;
@@ -48,16 +51,14 @@ class ConversationAttachmentController extends Controller
             'Cache-Control' => 'private, no-store',
             'X-Content-Type-Options' => 'nosniff',
             'Content-Security-Policy' => "default-src 'none'; sandbox",
+            'Content-Disposition' => HeaderUtils::makeDisposition(
+                $file['is_image'] ? 'inline' : 'attachment',
+                $file['name'],
+                Str::ascii($file['name']) ?: 'attachment',
+            ),
         ];
-        $response = $file['is_image']
-            ? response()->file($file['path'], $headers)
-            : response()->download($file['path'], $file['name'], $headers);
+        $contents = Storage::disk('local')->get($message->attachment_path);
 
-        // BinaryFileResponse may default to public caching unless its private
-        // flag is set explicitly, even when a Cache-Control header was passed.
-        $response->setPrivate();
-        $response->headers->addCacheControlDirective('no-store');
-
-        return $response;
+        return response($contents, 200, $headers);
     }
 }

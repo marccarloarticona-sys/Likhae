@@ -4,6 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\Admin\CommissionTransaction;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\ReturnRefundRequest;
+use App\Models\Buyer\ReturnRefundRequestItem;
+use App\Models\Admin\Dispute;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\FinancialLedgerEntry;
@@ -17,15 +20,21 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Seller\Category;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\SellerReturnRefundRequest;
+use App\Models\Seller\Voucher;
+use App\Models\Returns\CashRefundObligation;
 use App\Models\User;
 use App\Models\Communication\Conversation;
 use App\Models\Communication\Message;
+use App\Support\FinancialRules;
 use App\Services\Finance\CodCollectionService;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\FinancialAllocationService;
 use App\Services\Finance\ProductProceedsService;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\SellerSettlementService;
+use App\Services\Returns\CashRefundWorkflowService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -155,6 +164,333 @@ class ParcelSettlementFlowTest extends TestCase
         $this->assertSame('AUTHORIZED', $settlement->fresh()->payout_status);
         $this->assertDatabaseHas('finance_audit_events', ['event_type' => 'RIDER_HANDOFF_DISCREPANCY_RESOLVED']);
         $this->assertDatabaseHas('finance_audit_events', ['event_type' => 'ADMIN_RESOLVED_PRODUCT_PROCEEDS_DISCREPANCY']);
+    }
+
+    public function test_additional_care_is_split_with_shipping_40_60_and_is_not_left_unallocated(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00');
+        $collection = $this->recordCollection($fixture, '1330.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+
+        $this->assertSame(CodCollection::COLLECTED, $collection->fresh()->status);
+        $this->assertSame('50.00', $allocation->shipping_fee);
+        $this->assertSame('280.00', $allocation->protection_amount);
+        $this->assertSame('ALLOCATED_TO_EARNINGS', $allocation->protection_account_status);
+        $this->assertSame('132.00', $allocation->logistics_allocation);
+        $this->assertSame('198.00', $allocation->rider_allocation);
+        $this->assertSame('900.00', $allocation->seller_payable, 'Additional Care must not reduce Seller product earnings.');
+        $this->assertSame('132.00', $allocation->logisticsPool()->value('total_amount'));
+        $this->assertSame('198.00', $allocation->riderPool()->value('total_amount'));
+        $this->assertDatabaseMissing('financial_ledger_entries', [
+            'shipment_financial_allocation_id' => $allocation->id,
+            'entry_type' => 'PROTECTION_UNALLOCATED',
+        ]);
+        $riderEntry = FinancialLedgerEntry::query()->where('shipment_financial_allocation_id', $allocation->id)->where('entry_type', 'RIDER_ALLOCATION')->firstOrFail();
+        $this->assertSame('280.00', data_get($riderEntry->metadata, 'additional_care_amount'));
+        $this->assertSame('330.00', data_get($riderEntry->metadata, 'combined_delivery_earnings'));
+
+        $retry = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+        $this->assertSame($allocation->id, $retry->id);
+        $this->assertSame(1, $allocation->riderPool()->count());
+        $this->assertSame(1, FinancialLedgerEntry::query()->where('shipment_financial_allocation_id', $allocation->id)->where('entry_type', 'RIDER_ALLOCATION')->count());
+    }
+
+    public function test_additional_care_three_hundred_twenty_pesos_uses_the_same_delivery_split(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '320.00');
+        $this->recordCollection($fixture, '1370.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+
+        $this->assertSame('50.00', $allocation->shipping_fee);
+        $this->assertSame('320.00', $allocation->protection_amount);
+        $this->assertSame('148.00', $allocation->logistics_allocation);
+        $this->assertSame('222.00', $allocation->rider_allocation);
+        $this->assertSame(0, FinancialRules::cents($allocation->shipping_fee) + FinancialRules::cents($allocation->protection_amount)
+            - FinancialRules::cents($allocation->logistics_allocation) - FinancialRules::cents($allocation->rider_allocation));
+    }
+
+    public function test_regional_shipping_amount_is_used_with_additional_care(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00', '75.33');
+        $this->recordCollection($fixture, '1355.33');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+
+        $this->assertSame('75.33', $allocation->shipping_fee);
+        $this->assertSame('280.00', $allocation->protection_amount);
+        $this->assertSame('142.13', $allocation->logistics_allocation);
+        $this->assertSame('213.20', $allocation->rider_allocation);
+    }
+
+    public function test_platform_shipping_voucher_does_not_reduce_pool_or_duplicate_campaign_expense(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00');
+        $fixture['sellerOrder']->update([
+            'shipping_voucher_discount' => '20.00',
+            'platform_shipping_voucher_discount' => '20.00',
+            'funding_snapshot_version' => 1,
+            'grand_total' => '1310.00',
+        ]);
+        $fixture['order']->update(['grand_total' => '1310.00']);
+        $fixture['item']->update([
+            'platform_shipping_voucher_discount' => '20.00',
+            'funding_snapshot_version' => 1,
+        ]);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => 'SHIPTEST20',
+            'benefit_scope' => 'SHIPPING',
+            'campaign_budget_total' => '100.00',
+            'code' => 'SHIPTEST20',
+            'name' => 'Shipping subsidy test',
+            'discount_type' => 'FIXED',
+            'discount_value' => '20.00',
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+        $reservation = app(PlatformCampaignBudgetService::class)->reserve($voucher, $fixture['item'], '20.00', $fixture['buyer'], 'SHIPPING_VOUCHER');
+        $this->assertNotNull($reservation);
+        $this->assertSame($fixture['item']->id, (int) $reservation->order_item_id);
+        $this->assertSame('CAMPAIGN_SUBSIDY_RESERVED', $reservation->entry_type);
+        $this->assertSame('RESERVED', $reservation->status);
+        $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumn('financial_ledger_entries', 'order_item_id'));
+        app(PlatformCampaignBudgetService::class)->consumeForOrderItem($fixture['item']->fresh(), $fixture['buyer']);
+        $this->recordCollection($fixture, '1310.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+
+        $this->assertSame('50.00', $allocation->shipping_fee);
+        $this->assertSame('280.00', $allocation->protection_amount);
+        $this->assertSame('132.00', $allocation->logistics_allocation);
+        $this->assertSame('198.00', $allocation->rider_allocation);
+        $this->assertSame(1, FinancialLedgerEntry::query()->where('order_item_id', $fixture['item']->id)->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE')->count());
+        $this->assertSame('20.00', FinancialLedgerEntry::query()->where('order_item_id', $fixture['item']->id)->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE')->value('amount'));
+    }
+
+    public function test_refund_reversal_uses_the_matching_campaign_source_and_is_idempotent(): void
+    {
+        $fixture = $this->parcelFixture();
+        $campaigns = collect([
+            ['source' => 'PRODUCT_VOUCHER', 'scope' => 'PRODUCT', 'code' => 'PRODREFUND20'],
+            ['source' => 'SHIPPING_VOUCHER', 'scope' => 'SHIPPING', 'code' => 'SHIPREFUND20'],
+        ])->mapWithKeys(function (array $data) use ($fixture): array {
+            $voucher = Voucher::query()->create([
+                'seller_profile_id' => null,
+                'platform_code_key' => $data['code'],
+                'benefit_scope' => $data['scope'],
+                'campaign_budget_total' => '100.00',
+                'code' => $data['code'],
+                'name' => $data['code'],
+                'discount_type' => 'FIXED',
+                'discount_value' => '20.00',
+                'starts_at' => now()->subHour(),
+                'ends_at' => now()->addDay(),
+                'is_active' => true,
+            ]);
+            FinancialLedgerEntry::query()->create([
+                'voucher_id' => $voucher->id,
+                'order_item_id' => $fixture['item']->id,
+                'seller_order_id' => $fixture['sellerOrder']->id,
+                'order_id' => $fixture['order']->id,
+                'account_type' => 'PLATFORM_PROMOTIONAL_EXPENSE',
+                'entry_type' => 'PLATFORM_PROMOTIONAL_EXPENSE',
+                'direction' => 'DEBIT',
+                'amount' => '20.00',
+                'status' => 'POSTED',
+                'idempotency_key' => 'test-campaign-expense-'.$voucher->id,
+                'actor_user_id' => $fixture['buyer']->id,
+                'posted_at' => now(),
+                'metadata' => ['source' => $data['source']],
+            ]);
+
+            return [$data['source'] => $voucher];
+        });
+
+        $budgets = app(PlatformCampaignBudgetService::class);
+        $budgets->reverseForOrderItem($fixture['item'], '5.00', 'test-refund-1', $fixture['buyer'], 'SHIPPING_VOUCHER');
+        $budgets->reverseForOrderItem($fixture['item'], '5.00', 'test-refund-1', $fixture['buyer'], 'SHIPPING_VOUCHER');
+
+        $this->assertSame(1, FinancialLedgerEntry::query()
+            ->where('voucher_id', $campaigns['SHIPPING_VOUCHER']->id)
+            ->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL')
+            ->count());
+        $this->assertSame('5.00', FinancialLedgerEntry::query()
+            ->where('voucher_id', $campaigns['SHIPPING_VOUCHER']->id)
+            ->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL')
+            ->value('amount'));
+        $this->assertSame(0, FinancialLedgerEntry::query()
+            ->where('voucher_id', $campaigns['PRODUCT_VOUCHER']->id)
+            ->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL')
+            ->count());
+        $this->assertSame(1500, $budgets->summary($campaigns['SHIPPING_VOUCHER'])['spent_cents']);
+        $this->assertSame(2000, $budgets->summary($campaigns['PRODUCT_VOUCHER'])['spent_cents']);
+    }
+
+    public function test_pending_cod_and_cancelled_delivery_do_not_create_payout_allocations(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00');
+        app(CodCollectionService::class)->initializeForShipment($fixture['shipment']);
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+
+        $this->assertNull(app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh()));
+        $this->assertDatabaseMissing('shipment_financial_allocations', ['shipment_id' => $fixture['shipment']->id]);
+        $this->assertDatabaseMissing('rider_earning_pools', ['shipment_id' => $fixture['shipment']->id]);
+
+        $cancelled = $this->parcelFixture();
+        $this->setAdditionalCare($cancelled, '280.00');
+        $cancelled['shipment']->update(['current_status' => 'CANCELLED']);
+        $collection = app(CodCollectionService::class)->initializeForShipment($cancelled['shipment']);
+        $this->assertNotNull($collection);
+        $this->assertSame(CodCollection::PENDING, $collection->status);
+        $this->assertNull(app(FinancialAllocationService::class)->initializeForShipment($cancelled['shipment']->fresh()));
+        $this->assertDatabaseMissing('shipment_financial_allocations', ['shipment_id' => $cancelled['shipment']->id]);
+    }
+
+    public function test_refundable_additional_care_partial_refund_reverses_each_share_once(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00');
+        $this->recordCollection($fixture, '1330.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+
+        $dispute = Dispute::query()->create([
+            'dispute_number' => 'REFUND-CARE-'.strtoupper((string) random_int(100000, 999999)),
+            'opened_by_user_id' => $fixture['buyer']->id,
+            'order_id' => $fixture['order']->id,
+            'seller_order_id' => $fixture['sellerOrder']->id,
+            'shipment_id' => $fixture['shipment']->id,
+            'type' => 'RETURN_REFUND',
+            'subject' => 'Partial Additional Care refund',
+            'description' => 'Approved return of part of the eligible delivery charge.',
+            'status' => 'OPEN',
+            'opened_at' => now(),
+        ]);
+        $request = ReturnRefundRequest::query()->create([
+            'request_number' => 'RR-CARE-'.strtoupper((string) random_int(100000, 999999)),
+            'dispute_id' => $dispute->id,
+            'order_id' => $fixture['order']->id,
+            'buyer_user_id' => $fixture['buyer']->id,
+            'issue_category' => 'DAMAGED',
+            'issue_reason' => 'Additional Care adjustment',
+            'solution' => 'REFUND',
+            'description' => 'A partial Additional Care refund was approved.',
+            'refund_method' => 'CASH',
+            'refundable_amount' => '50.00',
+            'requested_amount' => '50.00',
+            'buyer_email' => $fixture['buyer']->email,
+            'status' => 'APPROVED',
+            'submitted_at' => now(),
+        ]);
+        $sellerRequest = SellerReturnRefundRequest::query()->create([
+            'return_refund_request_id' => $request->id,
+            'seller_order_id' => $fixture['sellerOrder']->id,
+            'seller_profile_id' => $fixture['seller']->id,
+            'status' => SellerReturnRefundRequest::STATUS_APPROVED,
+            'requested_amount' => '50.00',
+            'approved_amount' => '50.00',
+            'reviewed_by_user_id' => $fixture['sellerUser']->id,
+            'reviewed_at' => now(),
+        ]);
+        ReturnRefundRequestItem::query()->create([
+            'return_refund_request_id' => $request->id,
+            'seller_return_refund_request_id' => $sellerRequest->id,
+            'order_item_id' => $fixture['item']->id,
+            'quantity' => 1,
+            'refundable_amount' => '50.00',
+        ]);
+        $obligation = CashRefundObligation::query()->create([
+            'seller_return_refund_request_id' => $sellerRequest->id,
+            'return_refund_request_id' => $request->id,
+            'buyer_user_id' => $fixture['buyer']->id,
+            'order_id' => $fixture['order']->id,
+            'seller_order_id' => $fixture['sellerOrder']->id,
+            'approved_amount' => '50.00',
+            'product_refund_amount' => '0.00',
+            'shipping_refund_amount' => '0.00',
+            'protection_refund_amount' => '50.00',
+            'shipping_refund_policy' => 'PENDING_OWNER_POLICY',
+            'protection_refund_policy' => 'REFUNDABLE',
+            'state' => CashRefundObligation::CASH_READY,
+            'idempotency_key' => 'partial-care-refund-'.$sellerRequest->id,
+            'approved_by_user_id' => $fixture['admin']->id,
+            'approved_at' => now(),
+            'cash_ready_by_user_id' => $fixture['admin']->id,
+            'cash_ready_at' => now(),
+        ]);
+        config(['likhae.cash_refund_authorized_account_types' => [User::TYPE_ADMIN]]);
+
+        $refunds = app(CashRefundWorkflowService::class);
+        $refunds->markCashPaid($obligation, $fixture['admin'], 'CARE-PARTIAL-50');
+        $refunds->markCashPaid($obligation->fresh(), $fixture['admin'], 'CARE-PARTIAL-50');
+
+        $this->assertSame('280.00', $allocation->protection_amount);
+        $this->assertSame('112.00', $allocation->logisticsPool()->value('total_amount'));
+        $this->assertSame('168.00', $allocation->riderPool()->value('total_amount'));
+        $this->assertSame('168.00', $allocation->riderPool()->firstOrFail()->participants()->sole()->share_amount);
+        $this->assertDatabaseHas('financial_ledger_entries', [
+            'shipment_financial_allocation_id' => $allocation->id,
+            'account_type' => 'LOGISTICS',
+            'entry_type' => 'REFUND_LOGISTICS_REVERSAL',
+            'direction' => 'DEBIT',
+            'amount' => '20.00',
+            'status' => 'POSTED',
+        ]);
+        $this->assertDatabaseHas('financial_ledger_entries', [
+            'shipment_financial_allocation_id' => $allocation->id,
+            'account_type' => 'RIDER',
+            'entry_type' => 'REFUND_RIDER_REVERSAL',
+            'direction' => 'DEBIT',
+            'amount' => '30.00',
+            'status' => 'POSTED',
+        ]);
+        $this->assertSame(1, FinancialLedgerEntry::query()->where('idempotency_key', 'cash-refund-delivery-LOGISTICS-additional_care-'.$obligation->id)->count());
+        $this->assertSame(1, FinancialLedgerEntry::query()->where('idempotency_key', 'cash-refund-delivery-RIDER-additional_care-'.$obligation->id)->count());
+    }
+
+    public function test_rider_reassignment_after_allocation_does_not_duplicate_the_committed_rider_share(): void
+    {
+        $fixture = $this->parcelFixture();
+        $this->setAdditionalCare($fixture, '280.00');
+        $this->recordCollection($fixture, '1330.00');
+        $fixture['shipment']->update(['current_status' => 'DELIVERED']);
+        $allocation = app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+        $pool = $allocation->riderPool()->firstOrFail();
+        $firstParticipant = $pool->participants()->sole();
+
+        $replacementUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
+        $replacement = RiderProfile::create([
+            'user_id' => $replacementUser->id, 'logistics_center_id' => $fixture['center']->id,
+            'vehicle_type' => 'motorcycle', 'plate_number' => 'FIN-PLATE-03',
+            'drivers_license_number' => 'FIN-LICENSE-03', 'status' => 'ACTIVE',
+        ]);
+        RiderAssignment::create([
+            'shipment_id' => $fixture['shipment']->id, 'rider_profile_id' => $replacement->id,
+            'assignment_type' => RiderAssignment::TYPE_DELIVERY, 'status' => 'COMPLETED',
+        ]);
+
+        app(FinancialAllocationService::class)->initializeForShipment($fixture['shipment']->fresh());
+        $pool->refresh();
+
+        $this->assertSame(1, $pool->participants()->count());
+        $this->assertSame($firstParticipant->id, $pool->participants()->sole()->id);
+        $this->assertSame($fixture['rider']->id, (int) $pool->participants()->sole()->rider_profile_id);
+        $this->assertSame('198.00', $pool->participants()->sole()->share_amount);
+        $this->assertSame('198.00', $pool->total_amount);
+        $this->assertSame('0.00', $pool->unresolved_share_amount);
+        $this->assertSame(1, FinancialLedgerEntry::query()->where('shipment_financial_allocation_id', $allocation->id)->where('entry_type', 'RIDER_ALLOCATION')->count());
     }
 
     public function test_buyer_collection_discrepancy_does_not_allocate_until_admin_resolution(): void
@@ -309,12 +645,20 @@ class ParcelSettlementFlowTest extends TestCase
         $fixture = $this->parcelFixture();
         $sellerOrder = $fixture['sellerOrder'];
         $firstItem = $fixture['item'];
-        $firstItem->update(['original_unit_price' => '600.00', 'unit_price' => '600.00', 'line_total' => '600.00']);
+        $firstItem->update([
+            'original_unit_price' => '600.00', 'unit_price' => '600.00', 'line_total' => '600.00',
+            'protection_fee' => '280.00', 'protection_selected' => true, 'protection_handling_flag' => true,
+        ]);
         $secondItem = $sellerOrder->items()->create([
             'product_name' => 'Second parcel item', 'sku' => 'SECOND', 'original_unit_price' => '400.00',
             'unit_price' => '400.00', 'quantity' => 1, 'discount_amount' => 0, 'line_total' => '400.00',
+            'protection_fee' => '320.00', 'protection_selected' => true, 'protection_handling_flag' => true,
         ]);
-        $sellerOrder->update(['item_subtotal' => '1000.00', 'shipping_fee' => '50.00', 'grand_total' => '1050.00']);
+        $sellerOrder->update([
+            'item_subtotal' => '1000.00', 'shipping_fee' => '50.00',
+            'protection_total' => '600.00', 'grand_total' => '1650.00',
+        ]);
+        $fixture['order']->update(['protection_total' => '600.00', 'grand_total' => '1650.00']);
         $first = $fixture['shipment'];
         $second = Shipment::create([
             'seller_order_id' => $sellerOrder->id, 'order_item_id' => $secondItem->id,
@@ -325,16 +669,26 @@ class ParcelSettlementFlowTest extends TestCase
             'current_status' => 'DELIVERED',
         ]);
         $first->update(['current_status' => 'DELIVERED']);
+        $secondRiderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
+        $secondRider = RiderProfile::create([
+            'user_id' => $secondRiderUser->id, 'logistics_center_id' => $fixture['center']->id,
+            'vehicle_type' => 'motorcycle', 'plate_number' => 'FIN-PLATE-02',
+            'drivers_license_number' => 'FIN-LICENSE-02', 'status' => 'ACTIVE',
+        ]);
+        RiderAssignment::create([
+            'shipment_id' => $second->id, 'rider_profile_id' => $secondRider->id,
+            'assignment_type' => RiderAssignment::TYPE_DELIVERY, 'status' => 'COMPLETED',
+        ]);
         $firstCollection = CodCollection::create([
             'shipment_id' => $first->id, 'seller_order_id' => $sellerOrder->id, 'order_id' => $fixture['order']->id,
             'rider_profile_id' => $fixture['rider']->id, 'logistics_center_id' => $fixture['center']->id,
-            'expected_amount' => '630.00', 'collected_amount' => '630.00', 'status' => CodCollection::COLLECTED,
+            'expected_amount' => '910.00', 'collected_amount' => '910.00', 'status' => CodCollection::COLLECTED,
             'collection_reference' => 'COD-FIRST-PARCEL', 'collected_at' => now(),
         ]);
         CodCollection::create([
             'shipment_id' => $second->id, 'seller_order_id' => $sellerOrder->id, 'order_id' => $fixture['order']->id,
-            'rider_profile_id' => $fixture['rider']->id, 'logistics_center_id' => $fixture['center']->id,
-            'expected_amount' => '420.00', 'collected_amount' => '420.00', 'status' => CodCollection::COLLECTED,
+            'rider_profile_id' => $secondRider->id, 'logistics_center_id' => $fixture['center']->id,
+            'expected_amount' => '740.00', 'collected_amount' => '740.00', 'status' => CodCollection::COLLECTED,
             'collection_reference' => 'COD-SECOND-PARCEL', 'collected_at' => now(),
         ]);
 
@@ -343,11 +697,15 @@ class ParcelSettlementFlowTest extends TestCase
         $secondAllocation = $allocations->initializeForShipment($second);
         $this->assertNotSame($firstAllocation->id, $secondAllocation->id);
         $this->assertSame('30.00', $firstAllocation->shipping_fee);
-        $this->assertSame('18.00', $firstAllocation->rider_allocation);
-        $this->assertSame('12.00', $firstAllocation->logistics_allocation);
+        $this->assertSame('280.00', $firstAllocation->protection_amount);
+        $this->assertSame('186.00', $firstAllocation->rider_allocation);
+        $this->assertSame('124.00', $firstAllocation->logistics_allocation);
         $this->assertSame('20.00', $secondAllocation->shipping_fee);
-        $this->assertSame('12.00', $secondAllocation->rider_allocation);
-        $this->assertSame('8.00', $secondAllocation->logistics_allocation);
+        $this->assertSame('320.00', $secondAllocation->protection_amount);
+        $this->assertSame('204.00', $secondAllocation->rider_allocation);
+        $this->assertSame('136.00', $secondAllocation->logistics_allocation);
+        $this->assertSame($fixture['rider']->id, (int) $firstAllocation->riderPool()->firstOrFail()->participants()->sole()->rider_profile_id);
+        $this->assertSame($secondRider->id, (int) $secondAllocation->riderPool()->firstOrFail()->participants()->sole()->rider_profile_id);
         $this->assertSame(2, SellerSettlement::query()->where('seller_order_id', $sellerOrder->id)->count());
         $this->assertSame('100.00', CommissionTransaction::query()->where('seller_order_id', $sellerOrder->id)->value('commission_amount'));
     }
@@ -360,29 +718,30 @@ class ParcelSettlementFlowTest extends TestCase
         $centerUser = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
         $riderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
         $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
-        $category = Category::create(['name' => 'Finance test category', 'slug' => 'finance-test-category', 'is_active' => true]);
+        $categorySuffix = (string) random_int(100000, 999999);
+        $category = Category::create(['name' => 'Finance test category '.$categorySuffix, 'slug' => 'finance-test-category-'.$categorySuffix, 'is_active' => true]);
         $seller = SellerProfile::create(['user_id' => $sellerUser->id, 'primary_category_id' => $category->id, 'business_name' => 'Finance test seller', 'status' => 'ACTIVE', 'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Seller', 'payout_account_number' => '09170000002']);
         SellerProfile::create(['user_id' => $otherSellerUser->id, 'primary_category_id' => $category->id, 'business_name' => 'Other finance seller', 'status' => 'ACTIVE']);
         $center = LogisticsCenter::create([
-            'owner_user_id' => $centerUser->id, 'code' => 'FINANCE-CENTER', 'business_name' => 'Finance Center', 'status' => 'ACTIVE', 'approved_by_user_id' => $admin->id, 'approved_at' => now(), 'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Center', 'payout_account_number' => '09170000003',
+            'owner_user_id' => $centerUser->id, 'code' => 'FINANCE-CENTER-'.$categorySuffix, 'business_name' => 'Finance Center '.$categorySuffix, 'status' => 'ACTIVE', 'approved_by_user_id' => $admin->id, 'approved_at' => now(), 'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Center', 'payout_account_number' => '09170000003',
         ]);
         $rider = RiderProfile::create([
             'user_id' => $riderUser->id, 'logistics_center_id' => $center->id, 'vehicle_type' => 'motorcycle',
-            'plate_number' => 'FIN-PLATE-01', 'drivers_license_number' => 'FIN-LICENSE-01', 'status' => 'ACTIVE',
+            'plate_number' => 'FIN-PLATE-01-'.$categorySuffix, 'drivers_license_number' => 'FIN-LICENSE-01-'.$categorySuffix, 'status' => 'ACTIVE',
             'payout_method' => 'GCash', 'payout_account_name' => 'Finance Test Rider', 'payout_account_number' => '09170000001',
         ]);
-        $order = Order::create(['order_number' => 'FIN-ORDER-001', 'buyer_user_id' => $buyer->id, 'status' => 'PROCESSING', 'grand_total' => '1050.00']);
+        $order = Order::create(['order_number' => 'FIN-ORDER-'.$categorySuffix, 'buyer_user_id' => $buyer->id, 'status' => 'PROCESSING', 'grand_total' => '1050.00']);
         $sellerOrder = SellerOrder::create([
-            'seller_order_number' => 'FIN-SELLER-ORDER-001', 'order_id' => $order->id, 'seller_profile_id' => $seller->id,
+            'seller_order_number' => 'FIN-SELLER-ORDER-'.$categorySuffix, 'order_id' => $order->id, 'seller_profile_id' => $seller->id,
             'status' => 'COMPLETED', 'item_subtotal' => '1000.00', 'voucher_discount' => '0.00', 'shipping_fee' => '50.00', 'grand_total' => '1050.00',
         ]);
         $item = $sellerOrder->items()->create([
-            'product_name' => 'Finance test item', 'sku' => 'FIN-001', 'original_unit_price' => '1000.00',
+            'product_name' => 'Finance test item', 'sku' => 'FIN-'.$categorySuffix, 'original_unit_price' => '1000.00',
             'unit_price' => '1000.00', 'quantity' => 1, 'discount_amount' => '0.00', 'line_total' => '1000.00',
         ]);
         $shipment = Shipment::create([
             'seller_order_id' => $sellerOrder->id, 'order_item_id' => $item->id,
-            'tracking_number' => 'PARCEL-FIN-001', 'logistics_center_id' => $center->id,
+            'tracking_number' => 'PARCEL-FIN-'.$categorySuffix, 'logistics_center_id' => $center->id,
             'destination_province_code' => '0403400000', 'destination_province_name' => 'Laguna',
             'destination_municipality_code' => '0403424000', 'destination_municipality_name' => 'San Pablo',
             'destination_barangay_code' => '0403424001', 'destination_barangay_name' => 'Bagong Bayan',
@@ -404,6 +763,26 @@ class ParcelSettlementFlowTest extends TestCase
         return $collectionService->recordSuccessfulCollection(
             $fixture['shipment'], $fixture['assignment'], $fixture['riderUser'], ['collected_amount' => $amount],
         );
+    }
+
+    private function setAdditionalCare(array $fixture, string $protectionAmount, string $shippingFee = '50.00'): void
+    {
+        $total = FinancialRules::amount(
+            FinancialRules::cents($fixture['sellerOrder']->item_subtotal)
+            + FinancialRules::cents($shippingFee)
+            + FinancialRules::cents($protectionAmount),
+        );
+        $fixture['item']->update([
+            'protection_fee' => $protectionAmount,
+            'protection_selected' => FinancialRules::cents($protectionAmount) > 0,
+            'protection_handling_flag' => FinancialRules::cents($protectionAmount) > 0,
+        ]);
+        $fixture['sellerOrder']->update([
+            'shipping_fee' => $shippingFee,
+            'protection_total' => $protectionAmount,
+            'grand_total' => $total,
+        ]);
+        $fixture['order']->update(['protection_total' => $protectionAmount, 'grand_total' => $total]);
     }
 
     private function assertFinanceThrows(callable $callback): void

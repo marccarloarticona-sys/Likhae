@@ -19,6 +19,12 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class SellerOrder extends Model
 {
+    private const WAYBILL_READY_STATUSES = [
+        'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKUP_ASSIGNED', 'PICKED_UP',
+        'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY',
+        'DELIVERED', 'DELIVERY_FAILED', 'RETURNED', 'COMPLETED',
+    ];
+
     use HasFactory;
 
     protected $fillable = [
@@ -30,6 +36,11 @@ class SellerOrder extends Model
         'status',
         'item_subtotal',
         'voucher_discount',
+        'seller_voucher_discount',
+        'platform_voucher_discount',
+        'platform_shipping_voucher_discount',
+        'funding_snapshot_version',
+        'commission_rate_snapshot',
         'promotion_discount_total',
         'reward_points_redeemed',
         'reward_points_discount',
@@ -46,6 +57,11 @@ class SellerOrder extends Model
         return [
             'item_subtotal' => 'decimal:2',
             'voucher_discount' => 'decimal:2',
+            'seller_voucher_discount' => 'decimal:2',
+            'platform_voucher_discount' => 'decimal:2',
+            'platform_shipping_voucher_discount' => 'decimal:2',
+            'funding_snapshot_version' => 'integer',
+            'commission_rate_snapshot' => 'decimal:4',
             'promotion_discount_total' => 'decimal:2',
             'reward_points_redeemed' => 'integer',
             'reward_points_discount' => 'decimal:2',
@@ -108,6 +124,11 @@ class SellerOrder extends Model
         return $this->hasOne(SellerSettlement::class);
     }
 
+    public function settlements(): HasMany
+    {
+        return $this->hasMany(SellerSettlement::class);
+    }
+
     public function conversations(): HasMany
     {
         return $this->hasMany(Conversation::class);
@@ -121,6 +142,11 @@ class SellerOrder extends Model
     public function scopeOpen(Builder $query): Builder
     {
         return $query->whereNotIn('status', ['COMPLETED', 'CANCELLED']);
+    }
+
+    public function canPrintWaybills(): bool
+    {
+        return in_array(strtoupper((string) $this->status), self::WAYBILL_READY_STATUSES, true);
     }
 
     public function sellerReturnRefundRequests(): HasMany

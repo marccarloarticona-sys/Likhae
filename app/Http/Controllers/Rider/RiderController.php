@@ -305,7 +305,7 @@ class RiderController extends Controller
             if ($to) $filteredParticipants->whereRaw('COALESCE(approved_at, created_at) <= ?', [$to]);
 
             $earnings = (clone $filteredParticipants)
-                ->with(['pool.shipment', 'assignment.shipment'])
+                ->with(['pool.shipment', 'pool.allocation', 'assignment.shipment'])
                 ->latest()
                 ->paginate(15)
                 ->withQueryString();
@@ -319,15 +319,25 @@ class RiderController extends Controller
                     ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
                     ->all()
                 : [];
-            $earningsRows = $earnings->getCollection()->map(fn (RiderEarningPoolParticipant $participant): array => [
-                'participant_id' => (int) $participant->id,
-                'can_request' => in_array((int) $participant->id, $eligiblePayoutIds, true),
-                'is_simulated' => in_array((int) $participant->id, $simulatedPayoutParticipantIds, true),
-                'date' => ($participant->approved_at ?? $participant->created_at)?->format('M d, Y') ?? 'Date unavailable',
-                'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
-                'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
-                'status' => str($participant->status)->headline(),
-            ]);
+            $earningsRows = $earnings->getCollection()->map(function (RiderEarningPoolParticipant $participant) use ($eligiblePayoutIds, $simulatedPayoutParticipantIds): array {
+                $allocation = $participant->pool?->allocation;
+                $assignment = $participant->assignment;
+
+                return [
+                    'participant_id' => (int) $participant->id,
+                    'can_request' => in_array((int) $participant->id, $eligiblePayoutIds, true),
+                    'is_simulated' => in_array((int) $participant->id, $simulatedPayoutParticipantIds, true),
+                    'date' => ($participant->approved_at ?? $participant->created_at)?->format('M d, Y') ?? 'Date unavailable',
+                    'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
+                    'base_shipping' => $allocation ? 'PHP '.number_format((float) $allocation->shipping_fee, 2) : '—',
+                    'additional_care' => $allocation ? 'PHP '.number_format((float) ($allocation->protection_amount ?? 0), 2) : '—',
+                    'combined_delivery_earnings' => $allocation ? 'PHP '.number_format((float) $allocation->shipping_fee + (float) ($allocation->protection_amount ?? 0), 2) : '—',
+                    'delivery_role' => str($participant->participant_role)->replace('_', ' ')->headline(),
+                    'assignment_status' => str($assignment?->status ?? 'ASSIGNMENT UNAVAILABLE')->replace('_', ' ')->headline(),
+                    'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
+                    'status' => str($participant->status)->headline(),
+                ];
+            });
             $earningsTotal = (float) (clone $filteredParticipants)->sum('share_amount');
             $dailyEarnings = (float) (clone $participantBase)->whereRaw('DATE(COALESCE(approved_at, created_at)) = ?', [$today->toDateString()])->sum('share_amount');
             $weeklyEarnings = (float) (clone $participantBase)->whereRaw('COALESCE(approved_at, created_at) BETWEEN ? AND ?', [$weekStart, now()])->sum('share_amount');
@@ -349,6 +359,11 @@ class RiderController extends Controller
             $earningsRows = $earnings->getCollection()->map(fn ($earning): array => [
                 'date' => $earning->earned_at?->format('M d, Y') ?? $earning->created_at?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
+                'base_shipping' => '—',
+                'additional_care' => '—',
+                'combined_delivery_earnings' => '—',
+                'delivery_role' => 'Delivery',
+                'assignment_status' => str($earning->riderAssignment?->status ?? 'ASSIGNMENT UNAVAILABLE')->replace('_', ' ')->headline(),
                 'amount' => 'PHP '.number_format((float) $earning->amount, 2),
                 'status' => str($earning->status)->headline(),
             ]);

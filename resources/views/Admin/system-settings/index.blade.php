@@ -201,8 +201,14 @@
         @elseif($recentErrors === [])
             <div class="ad-note ad-ops-empty" role="status">No error or warning entries were present in the readable log tail.</div>
         @else
-            <div class="ad-table-wrap ad-ops-table-wrap"><table class="ad-table ad-ops-table"><thead><tr><th>Occurred at</th><th>Severity</th><th>Safe summary</th><th>Source</th></tr></thead><tbody>
-            @foreach($recentErrors as $entry)<tr><td>{{ $showTime($entry['timestamp']) }}</td><td><span class="ad-status ad-ops-status {{ $statusClass($entry['severity']) }}">{{ $entry['severity'] }}</span></td><td>{{ $entry['summary'] }}</td><td>{{ $entry['source'] }}</td></tr>@endforeach
+            <div class="ad-table-wrap ad-ops-table-wrap"><table class="ad-table ad-ops-table"><thead><tr><th>Occurred at</th><th>Severity</th><th>Page / endpoint</th><th>What happened</th><th>Source</th></tr></thead><tbody>
+            @foreach($recentErrors as $entry)<tr>
+                <td>{{ $showTime($entry['timestamp']) }}</td>
+                <td><span class="ad-status ad-ops-status {{ $statusClass($entry['severity']) }}">{{ $entry['severity'] }}</span></td>
+                <td>{{ $entry['request_method'] ? $entry['request_method'].' ' : '' }}{{ $entry['request_path'] ?? 'Page not captured in this log' }}@if($entry['route'])<small class="ad-ops-cell-note">{{ $entry['route'] }}</small>@endif</td>
+                <td>{{ $entry['summary'] }}@if($entry['exception_class'])<small class="ad-ops-cell-note">{{ $entry['exception_class'] }}</small>@endif</td>
+                <td>{{ $entry['source'] }}</td>
+            </tr>@endforeach
             </tbody></table></div>
         @endif
     </section>

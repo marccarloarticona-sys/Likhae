@@ -19,10 +19,10 @@ class SellerOrderValueChartService
         $points = $points->map(function (array $point) use ($sellerProfileId, &$hasOrders): array {
             $aggregate = SellerOrder::query()
                 ->where('seller_orders.seller_profile_id', $sellerProfileId)
-                ->whereNotIn('seller_orders.status', ['CANCELLED'])
+                ->where('seller_orders.status', 'COMPLETED')
                 ->whereHas('order', fn ($query) => $query
-                    ->whereNotIn('status', ['CANCELLED'])
-                    ->whereBetween('placed_at', [$point['from'], $point['to']]))
+                    ->where('status', 'COMPLETED')
+                    ->whereBetween('completed_at', [$point['from'], $point['to']]))
                 ->selectRaw('COUNT(*) AS order_count, COALESCE(SUM(seller_orders.grand_total), 0) AS order_value')
                 ->first();
 

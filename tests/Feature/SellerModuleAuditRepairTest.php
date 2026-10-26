@@ -277,6 +277,9 @@ class SellerModuleAuditRepairTest extends TestCase
         $onlineFixture = $this->orderFixture($profile, 'UNWEIGHED-ORDER', 'PLACED');
         Payment::create(['order_id' => $onlineFixture['order']->id, 'method' => 'ONLINE', 'amount' => '53.00']);
         $this->get(route('seller.orders.waybill.item', [$onlineFixture['sellerOrder'], $onlineFixture['item']]))
+            ->assertStatus(409);
+        $onlineFixture['sellerOrder']->update(['status' => 'CONFIRMED']);
+        $this->get(route('seller.orders.waybill.item', [$onlineFixture['sellerOrder'], $onlineFixture['item']]))
             ->assertOk()->assertSee('Weight not recorded')->assertSee('Prepaid');
     }
 
@@ -478,6 +481,47 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->actingAs($seller)->get(route('seller.orders', ['mode' => 'show', 'order' => 'DOES-NOT-EXIST']))->assertNotFound();
         $this->actingAs($seller)->getJson(route('seller.orders', ['mode' => 'show', 'order' => 'bad!identifier']))->assertStatus(422);
         $this->assertNotSame($fixture['sellerOrder']->id, $foreign['sellerOrder']->id);
+    }
+
+    public function test_parcel_waybill_print_controls_appear_only_after_seller_acceptance(): void
+    {
+        [$seller, $profile] = $this->seller('Waybill Gate Shop');
+        $fixture = $this->orderFixture($profile, 'WAYBILL-GATE', 'PLACED');
+        $secondItem = OrderItem::create([
+            'seller_order_id' => $fixture['sellerOrder']->id,
+            'product_name' => 'Second Waybill Item',
+            'sku' => 'WAYBILL-GATE-SECOND',
+            'unit_price' => '10.00',
+            'quantity' => 1,
+            'discount_amount' => '0.00',
+            'line_total' => '10.00',
+        ]);
+        foreach ([$fixture['item'], $secondItem] as $index => $item) {
+            Shipment::create([
+                'seller_order_id' => $fixture['sellerOrder']->id,
+                'order_item_id' => $item->id,
+                'tracking_number' => 'WAYBILL-GATE-'.($index + 1),
+                'current_status' => 'PLACED',
+                'destination_province_code' => '0403400000',
+                'destination_province_name' => 'Laguna',
+                'destination_municipality_code' => '0403424000',
+                'destination_municipality_name' => 'City of San Pablo',
+                'destination_barangay_code' => '0403424001',
+                'destination_barangay_name' => 'Bagong Bayan II-A',
+            ]);
+        }
+
+        $orderUrl = route('seller.orders', ['mode' => 'show', 'order' => $fixture['sellerOrder']->seller_order_number]);
+        $this->actingAs($seller)->get($orderUrl)
+            ->assertOk()
+            ->assertDontSee('Print all waybills')
+            ->assertDontSee('Print this parcel waybill');
+
+        $fixture['sellerOrder']->update(['status' => 'CONFIRMED']);
+        $this->actingAs($seller)->get($orderUrl)
+            ->assertOk()
+            ->assertSee('Print all waybills')
+            ->assertSee('Print this parcel waybill');
     }
 
     public function test_reviews_are_seller_scoped_filterable_and_show_persisted_replies(): void

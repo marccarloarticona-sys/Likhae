@@ -6,12 +6,14 @@ use App\Http\Middleware\PreventPrivatePageCache;
 use App\Http\Middleware\TrackAdminManagedUserSessions;
 use App\Http\Middleware\EnsureRiderOperationalType;
 use App\Http\Middleware\RequireMandatoryPolicyAcceptance;
+use App\Http\Middleware\AttachSystemLogRequestContext;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -24,7 +26,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Railway and Cloudflare terminate TLS before forwarding to Laravel.
         $middleware->trustProxies(at: '*');
-        $middleware->web(append: [EnsureActiveAccount::class, TrackAdminManagedUserSessions::class, PreventPrivatePageCache::class, RequireMandatoryPolicyAcceptance::class]);
+        $middleware->web(
+            prepend: [AttachSystemLogRequestContext::class],
+            append: [EnsureActiveAccount::class, TrackAdminManagedUserSessions::class, PreventPrivatePageCache::class, RequireMandatoryPolicyAcceptance::class],
+        );
+        $middleware->api(prepend: [AttachSystemLogRequestContext::class]);
         $middleware->redirectGuestsTo(fn (Request $request) => route(
             $request->is('logistics/*', 'rider', 'rider/*') ? 'logistics.login' : 'login'
         ));
@@ -39,6 +45,21 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->report(function (Throwable $exception): void {
+            $request = app()->bound('request') ? request() : null;
+            if (! $request instanceof Request) {
+                return;
+            }
+
+            $context = AttachSystemLogRequestContext::contextFor($request);
+            if ($context === []) {
+                return;
+            }
+
+            Log::withContext($context);
+            app()->terminating(static fn () => Log::withoutContext(array_keys($context)));
+        });
+
         /*
         |--------------------------------------------------------------------------
         | API JSON Exceptions

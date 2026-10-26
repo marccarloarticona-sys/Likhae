@@ -18,7 +18,7 @@ For the Windows/XAMPP development and Cloudflare Tunnel stack, run:
 php artisan serve
 ```
 
-This single command starts and supervises the complete origin: Apache/Cloudflare proxy on port 8000, Laravel on port 8001, Reverb on port 8080, and Vite on port 5173. Cloudflare Tunnel must continue targeting `http://127.0.0.1:8000`. To open the development site directly on another device, connect it to the same Wi-Fi and browse to the computer's LAN address on port 8000 (for example, `http://192.168.1.52:8000`). If Windows Firewall prompts, allow Apache, PHP, and Node on your private network. `VITE_HMR_HOST` can be set in `.env` when the computer has multiple network interfaces.
+This command starts and supervises Apache/Cloudflare proxy on port 8000 when the port is free, Laravel on port 8001, Reverb on port 8080, and Vite on port 5173. Cloudflare Tunnel can continue targeting `http://127.0.0.1:8000`. Open the app directly at `http://127.0.0.1:8001`, or use the computer's LAN address on port 8001 from another device. If port 8000 is already listening, startup skips launching a duplicate Apache proxy while Laravel remains available on port 8001. The existing listener must be the intended proxy for Cloudflare traffic to keep working through the tunnel. If Windows Firewall prompts, allow Apache, PHP, and Node on your private network. `VITE_HMR_HOST` can be set in `.env` when the computer has multiple network interfaces.
 
 The supervised Laravel server uses `serve:uploads` internally so the PHP web process accepts files allowed by the registration form. A standalone PHP or web server must also set `upload_max_filesize` above 8 MB and `post_max_size` above the total multipart request size; `public/.user.ini` supplies the project limits for supported hosted PHP setups.
 
@@ -28,7 +28,7 @@ Verify the full proxy-to-Reverb broadcast path with:
 node scripts/check-reverb.mjs 127.0.0.1 8000
 ```
 
-The command returns success only after Laravel publishes an event and a WebSocket client subscribed through the Apache proxy receives it. `scripts/run-likhae-continuously.ps1` keeps the complete stack running and restarts it after an unexpected supervisor exit.
+The command returns success only after Laravel publishes an event and a WebSocket client subscribed through the Apache proxy receives it. `scripts/run-likhae-continuously.ps1` keeps the development stack running and restarts it after an unexpected supervisor exit.
 
 For production, run Reverb as a long-running process alongside Laravel and point the reverse proxy's WebSocket route to it:
 

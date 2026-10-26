@@ -56,20 +56,42 @@ if (
     \Illuminate\Foundation\DevCommands::register($supervisedServeCommand, 'server');
     \Illuminate\Foundation\DevCommands::artisan('reverb:start', 'reverb');
     $developmentServices = ['server', 'vite', 'reverb'];
+
     $apacheExecutable = 'C:/xampp/apache/bin/httpd.exe';
     $apacheConfig = 'deploy/apache/likhae-reverse-proxy.conf';
 
     if (is_file($apacheExecutable) && is_file(__DIR__.'/'.$apacheConfig)) {
-        \Illuminate\Foundation\DevCommands::register(
-            'php scripts/run-apache-proxy.php',
-            'proxy'
-        );
-        $developmentServices[] = 'proxy';
+        $proxyPortInUse = false;
+
+        foreach (['127.0.0.1', '[::1]'] as $proxyHost) {
+            $proxySocket = @stream_socket_client(
+                'tcp://'.$proxyHost.':8000',
+                $proxyErrorCode,
+                $proxyErrorMessage,
+                0.25
+            );
+
+            if (is_resource($proxySocket)) {
+                fclose($proxySocket);
+                $proxyPortInUse = true;
+                break;
+            }
+        }
+
+        if ($proxyPortInUse) {
+            fwrite(STDERR, "Port 8000 is already in use; skipping a duplicate Apache proxy. Laravel will still serve on port 8001.\n");
+        } else {
+            \Illuminate\Foundation\DevCommands::register(
+                'php scripts/run-apache-proxy.php',
+                'proxy'
+            );
+            $developmentServices[] = 'proxy';
+        }
     }
 
     \Illuminate\Foundation\DevCommands::only(...$developmentServices);
     // Laravel's dev runner supervises and restarts the application server,
-    // reverse proxy, Vite, and Reverb processes automatically.
+    // reverse proxy when needed, Vite, and Reverb processes automatically.
     putenv('LIKHAE_ARTISAN_DEV_SUPERVISED=1');
     $argv = array_slice($argv, 0, 2);
     $argv[1] = 'dev';

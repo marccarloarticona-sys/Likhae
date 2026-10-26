@@ -425,7 +425,11 @@ class SystemSettingsMonitoringController extends Controller
             if (isset($filters['to']) && $entry['timestamp']->gt(Carbon::parse($filters['to'])->endOfDay())) {
                 return false;
             }
-            if (isset($filters['q']) && $filters['q'] !== '' && stripos($entry['summary'].' '.$entry['source'].' '.$entry['severity'], $filters['q']) === false) {
+            $searchable = implode(' ', array_filter([
+                $entry['summary'], $entry['source'], $entry['severity'], $entry['route'],
+                $entry['request_method'], $entry['request_path'], $entry['exception_class'],
+            ]));
+            if (isset($filters['q']) && $filters['q'] !== '' && stripos($searchable, $filters['q']) === false) {
                 return false;
             }
 

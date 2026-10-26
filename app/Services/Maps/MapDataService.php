@@ -80,30 +80,55 @@ class MapDataService
             }
         }
 
-        $inTransitTransferLeg = $shipment->transferLegs?->firstWhere('status', ShipmentTransferLeg::IN_TRANSIT);
-        if ($inTransitTransferLeg) {
+        $transferLegs = ($shipment->transferLegs ?? collect())
+            ->filter(fn (ShipmentTransferLeg $leg): bool => in_array($leg->status, [
+                ShipmentTransferLeg::RELEASED,
+                ShipmentTransferLeg::IN_TRANSIT,
+                ShipmentTransferLeg::RECEIVED,
+            ], true));
+        $seenTransferCenters = [];
+        foreach ($transferLegs as $transferLeg) {
             foreach ([
-                ['center' => $inTransitTransferLeg->originLogisticsCenter, 'role' => 'origin'],
-                ['center' => $inTransitTransferLeg->destinationLogisticsCenter, 'role' => 'destination'],
+                ['center' => $transferLeg->originLogisticsCenter, 'role' => 'origin'],
+                ['center' => $transferLeg->destinationLogisticsCenter, 'role' => 'destination'],
             ] as $transferStop) {
+                $centerId = (int) ($transferStop['center']?->id ?? 0);
+                if ($centerId > 0 && isset($seenTransferCenters[$centerId])) {
+                    continue;
+                }
+
                 $marker = $this->transferCenterMarker(
                     $transferStop['center'],
                     $transferStop['role'],
                     (int) $shipment->id,
-                    (int) $inTransitTransferLeg->id,
+                    (int) $transferLeg->id,
+                    $transferLeg->status,
+                    (int) $transferLeg->sequence_no,
                 );
                 if ($marker) {
+                    if ($centerId > 0) {
+                        $seenTransferCenters[$centerId] = true;
+                    }
                     $markers[] = $marker;
                 }
             }
-        } else {
-            $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
+        }
+
+        $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
+        $centerId = (int) ($center?->id ?? 0);
+        if ($center && ($centerId === 0 || ! isset($seenTransferCenters[$centerId]))) {
             $marker = $this->centerMarker($center);
             if ($marker) {
-                $marker['id'] = 'logistics-center-'.($center?->id ?? 'unknown').'-shipment-'.$shipment->id;
-                $marker['center_id'] = $center?->id;
+                $marker['id'] = 'logistics-center-'.$centerId.'-shipment-'.$shipment->id;
+                $marker['center_id'] = $center->id;
                 $marker['shipment_id'] = $shipment->id;
                 $marker['target_kind'] = 'logistics';
+                if ($transferLegs->isNotEmpty() && $seenTransferCenters !== []) {
+                    $marker['sequence_no'] = (int) $transferLegs->max('sequence_no') + 1;
+                    $marker['center_role'] = 'current';
+                    $marker['label'] = 'Current logistics center';
+                    $marker['title'] = 'Current logistics center';
+                }
                 $markers[] = $marker;
             }
         }
@@ -258,7 +283,7 @@ class MapDataService
         return $marker;
     }
 
-    private function transferCenterMarker(?LogisticsCenter $center, string $role, int $shipmentId, int $legId): ?array
+    private function transferCenterMarker(?LogisticsCenter $center, string $role, int $shipmentId, int $legId, string $status, int $sequenceNo): ?array
     {
         $marker = $this->centerMarker($center);
         if (! $marker) {
@@ -269,7 +294,8 @@ class MapDataService
         $marker['id'] = 'logistics-center-'.$center->id.'-shipment-'.$shipmentId.'-transfer-'.$legId.'-'.$role;
         $marker['shipment_id'] = $shipmentId;
         $marker['center_role'] = $role;
-        $marker['transfer_status'] = ShipmentTransferLeg::IN_TRANSIT;
+        $marker['transfer_status'] = $status;
+        $marker['sequence_no'] = $sequenceNo;
         $marker['label'] = $label;
         $marker['title'] = $label;
 

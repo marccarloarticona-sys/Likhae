@@ -107,22 +107,24 @@
                 <thead class="bg-page-secondary text-[8px] uppercase tracking-[0.12em] text-muted">
                     <tr>
                         <th class="px-4 py-3">Date</th>
-                        <th class="px-4 py-3">Reference</th>
-                        <th class="px-4 py-3">Amount</th>
-                        <th class="px-4 py-3">Status</th>
+                        <th class="px-4 py-3">Delivery and charges</th>
+                        <th class="px-4 py-3">Rider share</th>
+                        <th class="px-4 py-3">Role / assignment</th>
+                        <th class="px-4 py-3">Earning status</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-line text-[10px]">
                     @forelse($earningsRows ?? collect() as $row)
                         <tr>
                             <td class="px-4 py-3">{{ $row['date'] }}</td>
-                            <td class="px-4 py-3">{{ $row['reference'] }}</td>
+                            <td class="px-4 py-3"><strong>{{ $row['reference'] }}</strong><small class="mt-1 block text-muted">Base shipping: {{ $row['base_shipping'] }} · Additional Care: {{ $row['additional_care'] }}</small><small class="mt-1 block text-muted">Combined delivery earnings: {{ $row['combined_delivery_earnings'] }}</small></td>
                             <td class="px-4 py-3">{{ $row['amount'] }}</td>
+                            <td class="px-4 py-3">{{ $row['delivery_role'] }}<small class="mt-1 block text-muted">{{ $row['assignment_status'] }}</small></td>
                             <td class="px-4 py-3">{{ $row['status'] }}@if($row['is_simulated'] ?? false)<br><small class="font-semibold text-amber-700">SIMULATED — NO MONEY TRANSFERRED</small>@endif</td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="4" class="px-4 py-8 text-center text-muted">
+                            <td colspan="5" class="px-4 py-8 text-center text-muted">
                                 No real earnings records are available yet.
                             </td>
                         </tr>

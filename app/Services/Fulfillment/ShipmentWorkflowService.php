@@ -313,7 +313,7 @@ class ShipmentWorkflowService
         }
 
         $status = $source?->current_status ?? 'PLACED';
-        if (! $source && $sellerOrder->status !== 'PLACED') {
+        if (! $source && ! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED'], true)) {
             throw new RuntimeException('A parcel cannot be reconstructed for this seller order without its original shipment record.');
         }
 
@@ -1292,6 +1292,10 @@ class ShipmentWorkflowService
         }
 
         $sellerOrder->update(['status' => 'CANCELLED']);
+        app(\App\Services\Finance\PlatformCampaignBudgetService::class)
+            ->releaseForSellerOrder($sellerOrder, $actor);
+        app(\App\Services\Finance\SellerVoucherBudgetService::class)
+            ->releaseForSellerOrder($sellerOrder, $actor);
         foreach ($shipments as $shipment) {
             $this->recordEvent($shipment, $shipment->current_status, $actor, 'SELLER_ORDER_CANCELLED: '.$reason);
         }

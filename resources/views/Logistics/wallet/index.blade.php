@@ -59,10 +59,14 @@
                 @forelse($pools as $pool)
                     <article class="lk-wallet-record lk-logistics-wallet__share">
                         <div class="lk-logistics-wallet__share-copy">
-                            <span class="lk-logistics-wallet__record-kicker">Shipping share</span>
+                            <span class="lk-logistics-wallet__record-kicker">Delivery earnings · Logistics share</span>
                             <strong class="lk-logistics-wallet__tracking">{{ $pool->shipment?->tracking_number ?? 'Parcel' }}</strong>
                             <span class="lk-logistics-wallet__order">Order {{ $pool->shipment?->sellerOrder?->order?->order_number ?? '—' }}</span>
+                            <span class="lk-logistics-wallet__order">Base shipping: PHP {{ number_format((float) ($pool->allocation?->shipping_fee ?? 0), 2) }}</span>
+                            <span class="lk-logistics-wallet__order">Additional Care: PHP {{ number_format((float) ($pool->allocation?->protection_amount ?? 0), 2) }}</span>
+                            <span class="lk-logistics-wallet__order">Combined eligible delivery earnings: PHP {{ number_format((float) ($pool->allocation?->shipping_fee ?? 0) + (float) ($pool->allocation?->protection_amount ?? 0), 2) }}</span>
                             <strong class="lk-logistics-wallet__share-amount">PHP {{ number_format((float) $pool->total_amount, 2) }}</strong>
+                            <span class="lk-logistics-wallet__order">Logistics share · {{ str($pool->status)->replace('_', ' ')->headline() }}</span>
                         </div>
                         <div class="lk-logistics-wallet__share-action">
                             @if($pool->status === 'PAYOUT_REQUESTED')

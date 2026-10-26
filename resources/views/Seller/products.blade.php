@@ -66,6 +66,9 @@
     @if (in_array($currentMode, ['add', 'edit'], true))
         <div class="sl-page-toolbar">
             <div><a href="{{ route('seller.products') }}" class="sl-editor-back">&larr; Back to Products</a><h2>{{ $editing ? 'Edit '.data_get($product, 'name') : 'Create New Product' }}</h2><p>Add product information, pricing, images, and availability.</p></div>
+            @if($editing && data_get($product, 'db_id'))
+                <a href="{{ route('seller.marketing', ['section' => 'flash-sales', 'product_id' => data_get($product, 'db_id')]) }}" class="sl-btn sl-btn-ghost">Manage flash sale</a>
+            @endif
         </div>
 
         <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}">

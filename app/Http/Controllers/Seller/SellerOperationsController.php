@@ -307,6 +307,7 @@ class SellerOperationsController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless($sellerOrder->canPrintWaybills(), 409, 'Waybills are available after you accept the order.');
 
         try {
             $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
@@ -337,6 +338,7 @@ class SellerOperationsController extends Controller
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless($sellerOrder->canPrintWaybills(), 409, 'Waybills are available after you accept the order.');
         abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
 
         try {

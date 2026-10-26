@@ -15,6 +15,7 @@ use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
+use App\Services\Reports\SellerOrderValueChartService;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -112,6 +113,37 @@ class SellerDashboardFinancialsTest extends TestCase
             ->assertSessionHasErrors('from');
         $this->get(route('seller.reports', ['from' => '2026-10-01', 'to' => 'not-a-date']))
             ->assertSessionHasErrors('to');
+    }
+
+    public function test_seller_order_value_chart_waits_for_parent_order_completion(): void
+    {
+        $this->travelTo(Carbon::parse('2026-10-26 12:00:00', 'Asia/Manila'));
+        $completed = $this->financialRecord(
+            $this->sellerProfile,
+            'COMPLETED',
+            '2026-10-16 12:00:00',
+            '500.00',
+            '0.00',
+            [],
+            '2026-10-10 12:00:00',
+        );
+        $completed->order()->update(['status' => 'COMPLETED', 'completed_at' => now()->subMinutes(30)]);
+
+        $this->financialRecord(
+            $this->sellerProfile,
+            'PLACED',
+            '2026-10-26 11:00:00',
+            '1200.00',
+            '0.00',
+            [],
+            '2026-10-26 11:00:00',
+        );
+
+        $chart = app(SellerOrderValueChartService::class)->build($this->sellerProfile->id, '7');
+
+        $this->assertSame(500.0, $chart['gross']);
+        $this->assertTrue($chart['has_orders']);
+        $this->assertSame(500.0, $chart['chart']->firstWhere('key', now()->toDateString())['total']);
     }
 
     public function test_product_scoped_report_allocates_only_that_products_share_of_the_assessed_order_commission(): void
@@ -461,7 +493,7 @@ class SellerDashboardFinancialsTest extends TestCase
             ->assertSee('Gross sales')
             ->assertSee('Commission')
             ->assertSee('Net sales')
-            ->assertSee('Non-cancelled orders');
+            ->assertSee('Completed orders');
     }
 
     public function test_dashboard_chart_orders_daily_gross_and_zero_fills_the_other_six_days(): void

@@ -5143,6 +5143,18 @@ html.dark .ad-platform-note { color: #F2D2C6; background: #2A1E1A; }
 html.dark .ad-platform-note--soft { color: var(--ad-text); border-color: var(--ad-border); background: #1E1A17; }
 html.dark .ad-platform-region-map code { background: #2A1E1A; }
 
+.ad-campaign-budget-cell { min-width: 230px; }
+.ad-campaign-budget-cell > strong,
+.ad-campaign-budget-cell > small { display: block; margin-bottom: 4px; }
+.ad-campaign-budget-cell progress { width: 100%; height: 7px; accent-color: var(--ad-blue); }
+.ad-campaign-budget-history { margin-top: 7px; color: var(--ad-text); font-size: 8px; }
+.ad-campaign-budget-history > summary { color: var(--ad-blue); cursor: pointer; font-weight: 700; }
+.ad-campaign-budget-history ul { display: grid; gap: 7px; max-height: 180px; overflow: auto; margin: 7px 0 0; padding-left: 16px; }
+.ad-campaign-budget-history li strong,
+.ad-campaign-budget-history li small { display: block; }
+.ad-campaign-budget-history li small { color: var(--ad-muted); }
+html.dark .ad-campaign-budget-history > summary { color: var(--ad-blue); }
+
 @media (max-width: 900px) {
     .ad-platform-settings__form { grid-template-columns: 1fr; }
     .ad-platform-card--basics,

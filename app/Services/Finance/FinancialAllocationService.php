@@ -3,6 +3,7 @@
 namespace App\Services\Finance;
 
 use App\Models\Admin\CommissionTransaction;
+use App\Models\Admin\PlatformSetting;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\LogisticsEarningPool;
@@ -102,6 +103,14 @@ class FinancialAllocationService
             return null;
         }
 
+        if ($sellerOrder->shipments->count() > 1) {
+            // The legacy schema has one allocation and one recipient pair per
+            // seller order. It cannot safely associate charges with separate
+            // parcel recipients, so keep these records for manual review
+            // until per-parcel finance is enabled.
+            return null;
+        }
+
         if ($sellerOrder->shipments->isNotEmpty()
             && $sellerOrder->shipments->contains(fn (Shipment $parcel): bool => ! in_array($parcel->current_status, ['DELIVERED', 'COMPLETED'], true))) {
             // The order-level financial allocation is finalized once, after
@@ -155,6 +164,11 @@ class FinancialAllocationService
             FinancialRules::cents($sellerOrder->voucher_discount)
             + FinancialRules::cents($sellerOrder->reward_points_discount ?? 0),
         );
+        $itemProtectionCents = $items->sum(fn ($item): int => max(0, FinancialRules::cents($item->protection_fee ?? 0)));
+        $protectionCents = $sellerOrder->protection_total !== null
+            ? max(0, FinancialRules::cents($sellerOrder->protection_total))
+            : $itemProtectionCents;
+        $protectionAmount = FinancialRules::amount($protectionCents);
         $calculation = FinancialRules::allocation(
             $items->map(fn ($item): array => [
                 'original_unit_price' => $item->original_unit_price,
@@ -165,6 +179,9 @@ class FinancialAllocationService
             $sellerOrder->shipping_fee,
             (string) $riderPoolPercentage,
             $sellerOrder->shipping_voucher_discount ?? 0,
+            $this->fundingSnapshotForSellerOrder($sellerOrder, $items),
+            $this->commissionRateFor($sellerOrder),
+            $protectionAmount,
         );
 
         $attributes = [
@@ -179,8 +196,8 @@ class FinancialAllocationService
             'seller_payable' => $calculation['seller_payable'],
             'logistics_allocation' => $calculation['logistics_allocation'],
             'rider_allocation' => $calculation['rider_allocation'],
-            'protection_amount' => round((float) ($sellerOrder->protection_total ?? $items->sum(fn ($item) => (float) ($item->protection_fee ?? 0))), 2),
-            'protection_account_status' => ((float) ($sellerOrder->protection_total ?? $items->sum(fn ($item) => (float) ($item->protection_fee ?? 0))) > 0) ? 'PENDING_UNALLOCATED' : 'NOT_APPLICABLE',
+            'protection_amount' => $protectionAmount,
+            'protection_account_status' => $protectionCents > 0 ? 'ALLOCATED_TO_EARNINGS' : 'NOT_APPLICABLE',
             'discount_funding_status' => $calculation['discount_funding_unresolved'] ? 'UNRESOLVED' : 'NOT_APPLICABLE',
             'status' => $calculation['discount_funding_unresolved'] ? 'REVIEW_REQUIRED' : 'PENDING',
             'calculated_at' => now(),
@@ -190,6 +207,37 @@ class FinancialAllocationService
         }
 
         return $attributes;
+    }
+
+    private function fundingSnapshotForSellerOrder($sellerOrder, $items): ?array
+    {
+        if ((int) ($sellerOrder->funding_snapshot_version ?? 0) !== 1
+            || $items->isEmpty()
+            || $items->contains(fn ($item): bool => (int) ($item->funding_snapshot_version ?? 0) !== 1)) {
+            return null;
+        }
+
+        return [
+            'seller_voucher_discount' => $sellerOrder->seller_voucher_discount ?? 0,
+            'platform_voucher_discount' => $sellerOrder->platform_voucher_discount ?? 0,
+            'seller_promotion_discount' => FinancialRules::amount($items->sum(fn ($item): int => FinancialRules::cents($item->promotion_discount_amount ?? 0))),
+            'reward_points_discount' => $sellerOrder->reward_points_discount ?? 0,
+        ];
+    }
+
+    private function fundingSnapshotForItem($sellerOrder, $item): ?array
+    {
+        if ((int) ($sellerOrder->funding_snapshot_version ?? 0) !== 1
+            || (int) ($item->funding_snapshot_version ?? 0) !== 1) {
+            return null;
+        }
+
+        return [
+            'seller_voucher_discount' => $item->seller_voucher_discount ?? 0,
+            'platform_voucher_discount' => $item->platform_voucher_discount ?? 0,
+            'seller_promotion_discount' => $item->promotion_discount_amount ?? 0,
+            'reward_points_discount' => $item->reward_points_discount ?? 0,
+        ];
     }
 
     /** @return array<string, string|null> */
@@ -209,10 +257,14 @@ class FinancialAllocationService
                 'quantity' => $item->quantity,
             ]],
             $parcelAmounts['discount_amount'],
-            $parcelAmounts['shipping_fee'],
+            FinancialRules::amount($parcelAmounts['shipping_fee_cents']),
             $riderPoolPercentage,
-            $parcelAmounts['shipping_discount'],
+            FinancialRules::amount($parcelAmounts['shipping_discount_cents']),
+            $this->fundingSnapshotForItem($sellerOrder, $item),
+            $this->commissionRateFor($sellerOrder),
+            FinancialRules::amount($parcelAmounts['protection_amount_cents']),
         );
+        $protectionCents = $parcelAmounts['protection_amount_cents'];
 
         $attributes = [
             'seller_order_id' => $sellerOrder->id,
@@ -226,9 +278,9 @@ class FinancialAllocationService
             'seller_payable' => $calculation['seller_payable'],
             'logistics_allocation' => $calculation['logistics_allocation'],
             'rider_allocation' => $calculation['rider_allocation'],
-            'protection_amount' => number_format((float) $parcelAmounts['protection_amount'], 2, '.', ''),
-            'protection_account_status' => FinancialRules::cents($parcelAmounts['protection_amount']) > 0
-                ? 'PENDING_UNALLOCATED'
+            'protection_amount' => FinancialRules::amount($protectionCents),
+            'protection_account_status' => $protectionCents > 0
+                ? 'ALLOCATED_TO_EARNINGS'
                 : 'NOT_APPLICABLE',
             'discount_funding_status' => $calculation['discount_funding_unresolved'] ? 'UNRESOLVED' : 'NOT_APPLICABLE',
             'status' => $calculation['discount_funding_unresolved'] ? 'REVIEW_REQUIRED' : 'PENDING',
@@ -273,14 +325,23 @@ class FinancialAllocationService
             $representativeAssignments[$role][$riderId] ??= (int) $assignment->id;
         }
 
+        $weights = [
+            'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
+            'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
+            'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
+        ];
+        $existingParticipants = $pool->participants()->get();
+        $allocatedRoles = $existingParticipants
+            ->filter(fn ($participant): bool => $participant->share_amount !== null && FinancialRules::cents($participant->share_amount) > 0)
+            ->pluck('participant_role')->unique()->all();
+        $pendingRidersByRole = $completedRidersByRole;
+        foreach ($allocatedRoles as $role) {
+            $pendingRidersByRole[$role] = [];
+        }
         $distribution = FinancialRules::riderLegDistribution(
-            FinancialRules::cents((string) $pool->total_amount),
-            $completedRidersByRole,
-            [
-                'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
-                'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
-                'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
-            ],
+            FinancialRules::cents((string) ($pool->unresolved_share_amount ?? $pool->total_amount)),
+            $pendingRidersByRole,
+            $weights,
         );
 
         foreach ($distribution['participants'] as $participantData) {
@@ -332,14 +393,23 @@ class FinancialAllocationService
             $representativeAssignments[$role][$riderId] ??= (int) $assignment->id;
         }
 
+        $weights = [
+            'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
+            'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
+            'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
+        ];
+        $existingParticipants = $pool->participants()->get();
+        $allocatedRoles = $existingParticipants
+            ->filter(fn ($participant): bool => $participant->share_amount !== null && FinancialRules::cents($participant->share_amount) > 0)
+            ->pluck('participant_role')->unique()->all();
+        $pendingRidersByRole = $completedRidersByRole;
+        foreach ($allocatedRoles as $role) {
+            $pendingRidersByRole[$role] = [];
+        }
         $distribution = FinancialRules::riderLegDistribution(
-            FinancialRules::cents((string) $pool->total_amount),
-            $completedRidersByRole,
-            [
-                'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
-                'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
-                'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
-            ],
+            FinancialRules::cents((string) ($pool->unresolved_share_amount ?? $pool->total_amount)),
+            $pendingRidersByRole,
+            $weights,
         );
 
         foreach ($distribution['participants'] as $participantData) {
@@ -396,7 +466,7 @@ class FinancialAllocationService
         $commissionTransaction = CommissionTransaction::query()->firstOrNew(['seller_order_id' => $sellerOrder->id]);
         if (! $commissionTransaction->exists || $commissionTransaction->status === 'PENDING') {
             $commissionTransaction->fill([
-                'commission_rate' => FinancialRules::COMMISSION_RATE,
+                'commission_rate' => $this->commissionRateFor($sellerOrder),
                 'commissionable_amount' => FinancialRules::amount($commissionTotals->sum(fn ($row): int => FinancialRules::cents($row->original_product_amount))),
                 'commission_amount' => FinancialRules::amount($commissionTotals->sum(fn ($row): int => FinancialRules::cents($row->platform_commission))),
                 'status' => $commissionTransaction->status ?: 'PENDING',
@@ -428,14 +498,10 @@ class FinancialAllocationService
         $entries = [
             ['account_type' => 'SELLER', 'entry_type' => 'PRODUCT_REVENUE', 'direction' => 'CREDIT', 'amount' => $allocation->seller_payable ?? 0, 'key' => 'seller-product-'.$allocation->id],
             ['account_type' => 'PLATFORM', 'entry_type' => 'PLATFORM_COMMISSION', 'direction' => 'CREDIT', 'amount' => $allocation->platform_commission, 'key' => 'platform-commission-'.$allocation->id],
-            ['account_type' => 'LOGISTICS', 'entry_type' => 'LOGISTICS_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->logistics_allocation, 'key' => 'logistics-allocation-'.$allocation->id],
-            ['account_type' => 'RIDER', 'entry_type' => 'RIDER_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->rider_allocation, 'key' => 'rider-allocation-'.$allocation->id],
+            ['account_type' => 'LOGISTICS', 'entry_type' => 'LOGISTICS_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->logistics_allocation, 'key' => 'logistics-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'LOGISTICS')],
+            ['account_type' => 'RIDER', 'entry_type' => 'RIDER_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->rider_allocation, 'key' => 'rider-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'RIDER')],
             ['account_type' => 'CASH_CONTROL', 'entry_type' => 'COD_EXPECTED', 'direction' => 'DEBIT', 'amount' => $collection->expected_amount, 'key' => 'cod-expected-'.$allocation->id],
         ];
-        $protectionAmount = FinancialRules::cents($allocation->protection_amount ?? 0);
-        if ($protectionAmount > 0) {
-            $entries[] = ['account_type' => 'PROTECTION_PENDING', 'entry_type' => 'PROTECTION_UNALLOCATED', 'direction' => 'CREDIT', 'amount' => FinancialRules::amount($protectionAmount), 'key' => 'protection-unallocated-'.$allocation->id];
-        }
         foreach ($entries as $entry) {
             FinancialLedgerEntry::query()->firstOrCreate(
                 ['idempotency_key' => $entry['key']],
@@ -450,6 +516,7 @@ class FinancialAllocationService
                     'amount' => $entry['amount'],
                     'status' => $reviewStatus,
                     'posted_at' => now(),
+                    'metadata' => $entry['metadata'] ?? null,
                 ],
             );
         }
@@ -538,7 +605,7 @@ class FinancialAllocationService
         CommissionTransaction::query()->firstOrCreate(
             ['seller_order_id' => $sellerOrder->id],
             [
-                'commission_rate' => FinancialRules::COMMISSION_RATE,
+                'commission_rate' => $this->commissionRateFor($sellerOrder),
                 'commissionable_amount' => $allocation->original_product_amount,
                 'commission_amount' => $allocation->platform_commission,
                 'status' => 'PENDING',
@@ -572,14 +639,10 @@ class FinancialAllocationService
         $entries = [
             ['account_type' => 'SELLER', 'entry_type' => 'PRODUCT_REVENUE', 'direction' => 'CREDIT', 'amount' => $allocation->seller_payable ?? 0, 'key' => 'seller-product-'.$allocation->id],
             ['account_type' => 'PLATFORM', 'entry_type' => 'PLATFORM_COMMISSION', 'direction' => 'CREDIT', 'amount' => $allocation->platform_commission, 'key' => 'platform-commission-'.$allocation->id],
-            ['account_type' => 'LOGISTICS', 'entry_type' => 'LOGISTICS_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->logistics_allocation, 'key' => 'logistics-allocation-'.$allocation->id],
-            ['account_type' => 'RIDER', 'entry_type' => 'RIDER_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->rider_allocation, 'key' => 'rider-allocation-'.$allocation->id],
+            ['account_type' => 'LOGISTICS', 'entry_type' => 'LOGISTICS_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->logistics_allocation, 'key' => 'logistics-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'LOGISTICS')],
+            ['account_type' => 'RIDER', 'entry_type' => 'RIDER_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->rider_allocation, 'key' => 'rider-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'RIDER')],
             ['account_type' => 'CASH_CONTROL', 'entry_type' => 'COD_EXPECTED', 'direction' => 'DEBIT', 'amount' => $sellerOrder->grand_total, 'key' => 'cod-expected-'.$allocation->id],
         ];
-        $protectionAmount = (float) ($allocation->protection_amount ?? 0);
-        if ($protectionAmount > 0) {
-            $entries[] = ['account_type' => 'PROTECTION_PENDING', 'entry_type' => 'PROTECTION_UNALLOCATED', 'direction' => 'CREDIT', 'amount' => $protectionAmount, 'key' => 'protection-unallocated-'.$allocation->id];
-        }
         foreach ($entries as $entry) {
             FinancialLedgerEntry::query()->firstOrCreate(
                 ['idempotency_key' => $entry['key']],
@@ -594,6 +657,7 @@ class FinancialAllocationService
                     'amount' => $entry['amount'],
                     'status' => 'PENDING',
                     'posted_at' => now(),
+                    'metadata' => $entry['metadata'] ?? null,
                 ],
             );
         }
@@ -609,5 +673,29 @@ class FinancialAllocationService
             ['event_type' => 'ALLOCATION_CREATED', 'auditable_type' => ShipmentFinancialAllocation::class, 'auditable_id' => $allocation->id],
             ['after_state' => $allocation->toArray(), 'notes' => 'Step 7 allocation created from immutable checkout snapshots.'],
         );
+    }
+
+    /** @return array{earning_recipient:string,base_shipping_fee:string,additional_care_amount:string,combined_delivery_earnings:string} */
+    private function deliveryEarningsLedgerMetadata(ShipmentFinancialAllocation $allocation, string $recipient): array
+    {
+        $baseShippingCents = FinancialRules::cents($allocation->shipping_fee);
+        $additionalCareCents = FinancialRules::cents($allocation->protection_amount ?? 0);
+
+        return [
+            'earning_recipient' => $recipient,
+            'base_shipping_fee' => FinancialRules::amount($baseShippingCents),
+            'additional_care_amount' => FinancialRules::amount($additionalCareCents),
+            'combined_delivery_earnings' => FinancialRules::amount($baseShippingCents + $additionalCareCents),
+        ];
+    }
+
+    private function commissionRateFor($sellerOrder): float
+    {
+        if ((int) ($sellerOrder->funding_snapshot_version ?? 0) === 1
+            && $sellerOrder->commission_rate_snapshot !== null) {
+            return min(1.0, max(0.0, (float) $sellerOrder->commission_rate_snapshot));
+        }
+
+        return PlatformSetting::commissionRate();
     }
 }

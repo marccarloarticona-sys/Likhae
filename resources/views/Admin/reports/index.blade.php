@@ -28,7 +28,7 @@
     <section class="ad-report-summary" aria-label="Filtered sales summary">
         <article class="ad-report-stat is-sales">
             <span class="ad-report-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2v20m5-15.5C17 4.6 14.9 3.5 12 3.5S7 4.9 7 7s1.7 3.1 5 4 5 2 5 4.2-2.2 3.3-5 3.3-5-1.2-5-3.3"/></svg></span>
-            <span class="ad-report-stat-copy"><span class="ad-report-stat-label">Item sales</span><strong>PHP {{ number_format((float) ($summary->sales ?? 0), 2) }}</strong><small>After seller vouchers, excluding shipping</small></span>
+            <span class="ad-report-stat-copy"><span class="ad-report-stat-label">Buyer product charges</span><strong>PHP {{ number_format((float) ($summary->sales ?? 0), 2) }}</strong><small>After product discounts, excluding shipping</small></span>
         </article>
         <article class="ad-report-stat is-commission">
             <span class="ad-report-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M7 15l4-4 3 2 5-6"/><path d="M16 7h3v3"/></svg></span>
@@ -42,6 +42,21 @@
             <span class="ad-report-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h14v17H5zM8 8h8M8 12h8M8 16h5"/><path d="M9 4V2h6v2"/></svg></span>
             <span class="ad-report-stat-copy"><span class="ad-report-stat-label">Seller orders</span><strong>{{ number_format((int) ($summary->order_count ?? 0)) }}</strong><small>Distinct orders in this report</small></span>
         </article>
+    </section>
+
+    <section class="ad-card ad-card-body ad-report-source-summary" aria-labelledby="report-funding-title">
+        <header class="ad-card-head"><div><span class="ad-overline">Source-aware finance</span><h2 id="report-funding-title">Discount funding and seller entitlement</h2><p>These totals include orders with immutable source snapshots and follow the selected report filters.</p></div></header>
+        <div class="ad-finance-grid ad-finance-grid--four">
+            <div><small>Seller gross entitlement</small><h3>PHP {{ number_format($sourceAwareBreakdown['seller_gross_entitlement'], 2) }}</h3></div>
+            <div><small>Seller-funded reductions</small><h3>PHP {{ number_format($sourceAwareBreakdown['seller_funded_reductions'], 2) }}</h3></div>
+            <div><small>LIKHAE product vouchers</small><h3>PHP {{ number_format($sourceAwareBreakdown['platform_product_vouchers'], 2) }}</h3></div>
+            <div><small>LIKHAE shipping vouchers</small><h3>PHP {{ number_format($sourceAwareBreakdown['platform_shipping_vouchers'], 2) }}</h3></div>
+            <div><small>Buyer product charges</small><h3>PHP {{ number_format($sourceAwareBreakdown['net_buyer_product_charges'], 2) }}</h3></div>
+            <div><small>Reward point redemptions</small><h3>PHP {{ number_format($sourceAwareBreakdown['reward_points'], 2) }}</h3></div>
+            <div><small>Confirmed campaign expense, net</small><h3>PHP {{ number_format($sourceAwareBreakdown['campaign_net_expense'], 2) }}</h3></div>
+            <div><small>Platform commission</small><h3>PHP {{ number_format((float) ($summary->commission ?? 0), 2) }}</h3></div>
+        </div>
+        <p class="ad-report-footnote">Legacy orders without reliable funding snapshots remain in the general sales totals and are excluded from the source-aware breakdown for manual review.</p>
     </section>
 
     <section class="ad-card ad-report-filter-card">
@@ -133,11 +148,11 @@
                 </tbody></table></div>
             </article>
         </div>
-        <p class="ad-report-footnote">Commission is recorded when a seller order is completed. Product and category commission is allocated by item share; void commissions are excluded. Category labels reflect the product's current category.</p>
+        <p class="ad-report-footnote">Commission uses the recorded seller-order commission and is allocated by each item's original-price share. Void commissions are excluded. Category labels reflect the product's current category.</p>
     </section>
 
     <section id="reports-transactions" class="ad-card ad-report-detail-card ad-report-tab-panel" aria-label="Matching product sales transactions">
-        <header class="ad-card-head"><div><span class="ad-overline">Transactions</span><h2>Matching product sales</h2><p>One row per order item. Sales exclude shipping and distribute seller voucher discounts proportionally.</p></div><span class="ad-report-row-count">{{ number_format($orderItemRecords->total()) }} rows</span></header>
+        <header class="ad-card-head"><div><span class="ad-overline">Transactions</span><h2>Matching product sales</h2><p>One row per order item. Buyer product charges exclude shipping and use saved item-level funding allocations when available.</p></div><span class="ad-report-row-count">{{ number_format($orderItemRecords->total()) }} rows</span></header>
         <div class="ad-table-wrap"><table class="ad-table ad-report-table ad-report-detail-table"><thead><tr><th>Seller order</th><th>Buyer</th><th>Shop</th><th>Product</th><th>Category</th><th>Qty</th><th>Item sales</th><th>Commission</th><th>Status</th><th>Date</th></tr></thead><tbody>
             @forelse($orderItemRecords as $item)
                 @php($buyerName = collect([$item->buyer_first_name, $item->buyer_middle_initial, $item->buyer_last_name])->filter()->implode(' '))

@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class FinancialLedgerEntry extends Model
 {
-    protected $fillable = ['shipment_financial_allocation_id', 'shipment_id', 'seller_order_id', 'order_id', 'account_type', 'entry_type', 'direction', 'amount', 'status', 'idempotency_key', 'actor_user_id', 'posted_at', 'paid_at', 'metadata'];
+    protected $fillable = ['shipment_financial_allocation_id', 'shipment_id', 'seller_order_id', 'order_id', 'voucher_id', 'order_item_id', 'account_type', 'entry_type', 'direction', 'amount', 'status', 'idempotency_key', 'actor_user_id', 'posted_at', 'paid_at', 'metadata'];
 
     protected function casts(): array { return ['amount' => 'decimal:2', 'posted_at' => 'datetime', 'paid_at' => 'datetime', 'metadata' => 'array']; }
 

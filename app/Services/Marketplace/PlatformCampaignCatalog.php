@@ -3,6 +3,7 @@
 namespace App\Services\Marketplace;
 
 use App\Models\Seller\Voucher;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 
@@ -60,6 +61,7 @@ class PlatformCampaignCatalog
         return $campaigns
             ->filter(fn (Voucher $campaign): bool => $campaign->usage_limit === null
                 || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit)
+            ->filter(fn (Voucher $campaign): bool => app(PlatformCampaignBudgetService::class)->selectable($campaign))
             ->values();
     }
 }

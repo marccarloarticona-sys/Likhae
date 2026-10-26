@@ -107,7 +107,7 @@
                     </h2>
 
                     <p>
-                        Non-cancelled order value for {{ $marketplacePeriodLabel }}.
+                        Order value updates after an order is completed. Showing orders completed during {{ $marketplacePeriodLabel }}.
                     </p>
                 </div>
 
@@ -124,7 +124,7 @@
                 <div class="ad-chart-summary">
                     <div>
                         <small>
-                            Gross order value
+                            Completed order value
                         </small>
 
                         <strong>
@@ -132,14 +132,14 @@
                         </strong>
 
                         <small>
-                            Non-cancelled orders placed during {{ $marketplacePeriodLabel }} · {{ $marketplaceGroupingLabel }}
+                            Orders completed during {{ $marketplacePeriodLabel }} · {{ $marketplaceGroupingLabel }}
                         </small>
                     </div>
 
                     <div class="ad-chart-legend">
                         <span>
                             <i></i>
-                            Order value
+                            Completed order value
                         </span>
 
                     </div>
@@ -154,7 +154,7 @@
                         </div>
 
                         <div class="ad-chart-area">
-                            <div class="ad-bar-plot" style="--chart-points: {{ $marketplaceChart->count() }}" role="group" aria-label="Order value bar chart for {{ $marketplacePeriodLabel }} grouped as {{ $marketplaceGroupingLabel }}">
+                            <div class="ad-bar-plot" style="--chart-points: {{ $marketplaceChart->count() }}" role="group" aria-label="Completed order value bar chart for {{ $marketplacePeriodLabel }} grouped as {{ $marketplaceGroupingLabel }}">
                                 @foreach($marketplaceChart as $point)
                                     <div
                                         class="ad-bar"
@@ -178,7 +178,7 @@
                         </div>
                     </div>
                 @else
-                    <div class="ad-chart-empty" role="status">No non-cancelled order value in this period.</div>
+                    <div class="ad-chart-empty" role="status">No completed order value in this period.</div>
                 @endif
             </div>
         </article>

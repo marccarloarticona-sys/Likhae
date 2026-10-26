@@ -240,15 +240,85 @@ const setMessageReceipt = (thread, row, state) => {
 const updateMessageReceipts = (thread) => {
     const lastReadAt = Date.parse(thread.dataset.otherLastReadAt || '');
     const recipientOnline = thread.dataset.otherOnline === 'true';
-    thread.querySelectorAll('.lk-message-row.is-mine, .lk-message-row.is-buyer').forEach((row) => {
+    const rows = [...thread.querySelectorAll('.lk-message-row.is-mine, .lk-message-row.is-buyer')];
+    const seenRows = [];
+
+    rows.forEach((row) => {
         if (row.dataset.messagePending === 'true') {
             setMessageReceipt(thread, row, 'sending');
+            row.dataset.messageReceiptState = 'sending';
             return;
         }
 
         const sentAt = Date.parse(row.dataset.messageSentAt || row.querySelector('[data-message-receipt]')?.dataset.messageSentAt || '');
         const wasSeen = Number.isFinite(lastReadAt) && Number.isFinite(sentAt) && sentAt <= lastReadAt;
-        setMessageReceipt(thread, row, wasSeen ? 'seen' : (recipientOnline ? 'delivered' : 'sent'));
+        const state = wasSeen ? 'seen' : (recipientOnline ? 'delivered' : 'sent');
+        setMessageReceipt(thread, row, state);
+        row.dataset.messageReceiptState = state;
+        if (wasSeen) seenRows.push(row);
+    });
+
+    const latestSeenRow = seenRows.reduce((latest, row) => {
+        if (!latest) return row;
+        const sentAt = Date.parse(row.dataset.messageSentAt || '');
+        const latestSentAt = Date.parse(latest.dataset.messageSentAt || '');
+        const messageId = Number(row.dataset.messageId) || 0;
+        const latestMessageId = Number(latest.dataset.messageId) || 0;
+        return sentAt > latestSentAt || (sentAt === latestSentAt && messageId > latestMessageId) ? row : latest;
+    }, null);
+
+    rows.forEach((row) => {
+        const state = row.dataset.messageReceiptState || 'sent';
+        const isLatestSeen = state === 'seen' && row === latestSeenRow;
+        const isExpanded = row.dataset.receiptExpanded === 'true';
+        const isCollapsedSeen = state === 'seen' && !isLatestSeen && !isExpanded;
+        const receipt = row.querySelector('[data-message-receipt]');
+        const meta = row.querySelector('.lk-message-meta');
+
+        if (receipt) receipt.hidden = isCollapsedSeen;
+        row.dataset.receiptLatestSeen = isLatestSeen ? 'true' : 'false';
+        row.classList.toggle('has-collapsed-seen-receipt', isCollapsedSeen);
+
+        if (state === 'seen' && !isLatestSeen && meta) {
+            meta.setAttribute('role', 'button');
+            meta.setAttribute('tabindex', '0');
+            meta.setAttribute('aria-label', isExpanded ? 'Hide seen status for this message' : 'Show seen status for this message');
+            meta.setAttribute('aria-pressed', isExpanded ? 'true' : 'false');
+            meta.setAttribute('title', isExpanded ? 'Click to hide Seen status' : 'Click to show Seen status');
+        } else if (meta) {
+            meta.removeAttribute('role');
+            meta.removeAttribute('tabindex');
+            meta.removeAttribute('aria-label');
+            meta.removeAttribute('aria-pressed');
+            meta.removeAttribute('title');
+        }
+    });
+};
+
+const toggleOlderSeenReceipt = (thread, row) => {
+    if (row.dataset.messageReceiptState !== 'seen' || row.dataset.receiptLatestSeen === 'true') return;
+
+    row.dataset.receiptExpanded = row.dataset.receiptExpanded === 'true' ? 'false' : 'true';
+    updateMessageReceipts(thread);
+};
+
+const bindOlderSeenReceiptToggles = (thread) => {
+    if (thread.dataset.seenReceiptToggleBound === 'true') return;
+    thread.dataset.seenReceiptToggleBound = 'true';
+
+    thread.addEventListener('click', (event) => {
+        const row = event.target.closest('.lk-message-row.is-mine, .lk-message-row.is-buyer');
+        if (!row || !thread.contains(row) || event.target.closest('a, button, input, select, textarea')) return;
+        toggleOlderSeenReceipt(thread, row);
+    });
+
+    thread.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const meta = event.target.closest('.lk-message-meta[role="button"]');
+        const row = meta?.closest('.lk-message-row.is-mine, .lk-message-row.is-buyer');
+        if (!row || !thread.contains(row)) return;
+        event.preventDefault();
+        toggleOlderSeenReceipt(thread, row);
     });
 };
 
@@ -566,6 +636,7 @@ const sameAttachmentSelection = (input, selectedFiles) => {
 const subscribeToThread = (thread) => {
     const conversationId = thread.dataset.conversationId;
     if (!conversationId) return;
+    bindOlderSeenReceiptToggles(thread);
 
     if (!thread.dataset.lastMessageId) {
         const lastMessageId = [...thread.querySelectorAll('[data-message-id]')]
@@ -817,7 +888,142 @@ const initializeMessages = () => {
     document.querySelectorAll('.lk-chat-stream[data-conversation-id]').forEach(subscribeToThread);
     startConversationListPresencePolling();
     document.querySelectorAll('[data-live-message-form]').forEach(bindLiveSend);
+    initializeSmartMessaging();
     subscribeToUserMessages();
+};
+
+const initializeSmartMessaging = () => {
+    document.querySelectorAll('[data-smart-help]').forEach((panel) => {
+        if (panel.dataset.smartHelpBound === 'true') return;
+        panel.dataset.smartHelpBound = 'true';
+        const status = panel.querySelector('[data-smart-help-status]');
+        const answer = panel.querySelector('[data-smart-help-answer]');
+        const answerQuestion = panel.querySelector('[data-smart-help-question]');
+        const answerText = panel.querySelector('[data-smart-help-answer-text]');
+        const answerSource = panel.querySelector('[data-smart-help-source]');
+        const feedback = panel.querySelector('[data-smart-help-feedback]');
+        const handoffRow = panel.querySelector('[data-smart-help-handoff-row]');
+        const token = panel.querySelector('[data-smart-help-token]')?.value || '';
+        let humanHandoff = panel.dataset.humanHandoff === 'true';
+
+        const setStatus = (message, isError = false) => {
+            if (!status) return;
+            status.textContent = message;
+            status.classList.toggle('lk-smart-help-error', isError);
+        };
+        const post = async (url, payload = {}) => {
+            const response = await fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': token,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.message || 'That action could not be completed. Please try again.');
+            return result;
+        };
+        const setHumanHandoff = (message) => {
+            humanHandoff = true;
+            panel.dataset.humanHandoff = 'true';
+            panel.querySelectorAll('[data-smart-question]').forEach((button) => { button.disabled = true; });
+            if (feedback) feedback.hidden = true;
+            if (handoffRow) handoffRow.hidden = true;
+            setStatus(message);
+        };
+
+        panel.querySelectorAll('[data-smart-question]').forEach((button) => button.addEventListener('click', async () => {
+            if (humanHandoff) return;
+            const questionKey = button.dataset.questionKey;
+            if (!questionKey) return;
+            panel.querySelectorAll('[data-smart-question]').forEach((item) => { item.disabled = true; });
+            setStatus('Checking the approved answer and current conversation data…');
+            try {
+                const result = await post(panel.dataset.answerUrl, {
+                    question_key: questionKey,
+                    product_id: panel.dataset.productId || null,
+                    variant_id: panel.dataset.variantId || null,
+                });
+                if (answerQuestion) answerQuestion.textContent = result.question || '';
+                if (answerText) answerText.textContent = result.answer || '';
+                if (answerSource) answerSource.textContent = result.answer_source || 'Suggested answer';
+                if (answer) answer.hidden = false;
+                if (feedback) feedback.hidden = false;
+                setStatus('This is an automated answer. It has not been sent as a chat message.');
+            } catch (error) {
+                setStatus(error.message, true);
+            } finally {
+                if (!humanHandoff) panel.querySelectorAll('[data-smart-question]').forEach((item) => { item.disabled = false; });
+            }
+        }));
+
+        panel.querySelectorAll('[data-smart-feedback]').forEach((button) => button.addEventListener('click', async () => {
+            if (humanHandoff) return;
+            panel.querySelectorAll('[data-smart-feedback]').forEach((item) => { item.disabled = true; });
+            try {
+                const result = await post(panel.dataset.feedbackUrl, { feedback: button.dataset.smartFeedback });
+                if (result.last_feedback === 'RESOLVED') {
+                    setStatus('Glad that helped. You can choose another question or continue the conversation below.');
+                } else {
+                    setStatus('Thanks for letting us know. You can request live help in this same conversation.');
+                }
+            } catch (error) {
+                setStatus(error.message, true);
+            } finally {
+                if (!humanHandoff) panel.querySelectorAll('[data-smart-feedback]').forEach((item) => { item.disabled = false; });
+            }
+        }));
+
+        panel.querySelector('[data-smart-handoff]')?.addEventListener('click', async (event) => {
+            if (humanHandoff) return;
+            const button = event.currentTarget;
+            button.disabled = true;
+            setStatus('Requesting live help in this conversation…');
+            try {
+                const result = await post(panel.dataset.handoffUrl, {
+                    product_id: panel.dataset.productId || null,
+                    variant_id: panel.dataset.variantId || null,
+                    concern: panel.querySelector('[data-smart-concern]')?.value || null,
+                });
+                setHumanHandoff(result.already_requested
+                    ? 'Live help has already been requested. Continue in this conversation.'
+                    : 'Live help requested. Your message and this context stay in the same conversation.');
+            } catch (error) {
+                button.disabled = false;
+                setStatus(error.message, true);
+            }
+        });
+    });
+
+    document.querySelectorAll('[data-smart-resolve]').forEach((button) => {
+        if (button.dataset.smartResolveBound === 'true') return;
+        button.dataset.smartResolveBound = 'true';
+        button.addEventListener('click', async () => {
+            const token = button.dataset.csrf || '';
+            const status = button.closest('[data-support-session]')?.querySelector('[data-support-session-status]');
+            button.disabled = true;
+            try {
+                const response = await fetch(button.dataset.url, {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token, 'X-Requested-With': 'XMLHttpRequest' },
+                    body: JSON.stringify({}),
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.message || 'Could not resolve this request.');
+                if (status) status.textContent = 'Resolved';
+                const context = button.closest('[data-support-session]');
+                if (context) context.dataset.status = 'RESOLVED';
+                button.hidden = true;
+            } catch (error) {
+                if (status) status.textContent = error.message;
+                button.disabled = false;
+            }
+        });
+    });
 };
 
 if (document.readyState === 'loading') {

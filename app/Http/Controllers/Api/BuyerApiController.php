@@ -11,6 +11,8 @@ use App\Models\Buyer\SellerFollower;
 use App\Models\Buyer\WishlistItem;
 use App\Models\Communication\Conversation;
 use App\Models\Communication\ConversationParticipant;
+use App\Models\Logistics\DeliveryAttempt;
+use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Seller\Product;
@@ -154,8 +156,13 @@ class BuyerApiController extends Controller
             ->with([
                 'buyer',
                 'sellerOrders.items.product.images',
+                'sellerOrders.sellerProfile',
                 'sellerOrders.shipment.events',
                 'sellerOrders.shipment.riderAssignments.liveLocation',
+                'sellerOrders.shipments.events',
+                'sellerOrders.shipments.deliveryAttempts',
+                'sellerOrders.shipments.riderAssignments.liveLocation',
+                'sellerOrders.shipments.riderAssignments.riderProfile.user',
                 'address',
                 'payments',
                 'disputes' => fn ($query) => $query
@@ -186,8 +193,13 @@ class BuyerApiController extends Controller
         $order->load([
             'buyer',
             'sellerOrders.items.product.images',
+            'sellerOrders.sellerProfile',
             'sellerOrders.shipment.events',
             'sellerOrders.shipment.riderAssignments.liveLocation',
+            'sellerOrders.shipments.events',
+            'sellerOrders.shipments.deliveryAttempts',
+            'sellerOrders.shipments.riderAssignments.liveLocation',
+            'sellerOrders.shipments.riderAssignments.riderProfile.user',
             'address',
             'payments',
             'disputes' => fn ($query) => $query
@@ -198,50 +210,197 @@ class BuyerApiController extends Controller
         return response()->json(['success' => true, 'data' => $this->orderPayload($order)]);
     }
 
+    public function deliveryAttemptProof(Request $request, DeliveryAttempt $attempt): \Symfony\Component\HttpFoundation\BinaryFileResponse
+    {
+        $this->authorizeBuyer($request);
+        $attempt->loadMissing('shipment.sellerOrder.order');
+        $order = $attempt->shipment?->sellerOrder?->order;
+        abort_unless($order !== null && (int) $order->buyer_user_id === (int) $request->user()->id, 403);
+        abort_unless(filled($attempt->proof_path), 404, 'No proof file is attached to this delivery attempt.');
+
+        $disk = Storage::disk('public');
+        abort_unless($disk->exists($attempt->proof_path), 404, 'Proof file was not found.');
+
+        return response()->file($disk->path($attempt->proof_path));
+    }
+
     public function liveRiderLocation(Request $request, Order $order): JsonResponse
     {
         $this->authorizeBuyer($request);
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
 
-        $order->load('sellerOrders.shipment.riderAssignments.liveLocation');
-        $shipment = $order->sellerOrders->firstWhere('shipment', '!=', null)?->shipment;
+        $order->load('sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.riderAssignments.riderProfile.user');
+        $shipments = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments);
+        $requestedShipmentId = $request->integer('shipment_id');
+        $shipment = $requestedShipmentId > 0
+            ? $shipments->firstWhere('id', $requestedShipmentId)
+            : null;
+
+        if ($requestedShipmentId > 0) {
+            abort_unless($shipment !== null, 404);
+        } else {
+            $shipment = $shipments->firstWhere('current_status', 'OUT_FOR_DELIVERY') ?? $shipments->first();
+        }
 
         return response()->json([
             'success' => true,
             'data' => [
+                'rider' => $this->riderIdentityPayload($shipment),
                 'rider_location' => $this->riderLocationPayload($shipment),
             ],
         ]);
     }
 
-    public function placeOrder(Request $request, CartService $cart, CheckoutService $checkout): JsonResponse
+    public function checkoutOptions(Request $request, CheckoutService $checkout): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $providers = $checkout->availableLogisticsProviders()
+            ->map(fn (LogisticsCenter $provider): array => [
+                'id' => (int) $provider->id,
+                'name' => (string) $provider->business_name,
+                'fee' => (float) $provider->shipping_fee,
+            ])
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'automatic_routing' => $checkout->automaticRoutingReady(),
+            'data' => $providers,
+        ]);
+    }
+
+    public function previewCheckout(Request $request, CartService $cart, CheckoutService $checkout): JsonResponse
     {
         $this->authorizeBuyer($request);
         $data = $request->validate([
-            'cart_item_ids' => ['required', 'array', 'min:1'],
-            'cart_item_ids.*' => ['required', 'integer'],
+            'cart_item_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'cart_item_ids.*' => ['required', 'integer', 'distinct'],
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
-            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
             'voucher_codes' => ['nullable', 'array'],
-            'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            'logistics_center_id' => ['nullable', 'integer'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['required', 'integer', 'distinct'],
             'reward_points' => ['nullable', 'integer', 'min:0'],
         ]);
+
         $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
         $items = $cart->selectedItems($request->user(), $ids);
         abort_unless($items->count() === count($ids), 403, 'One or more cart items do not belong to this buyer.');
         $address = $request->user()->addresses()->findOrFail((int) $data['address_id']);
-        $voucherCodes = collect((array) ($data['voucher_codes'] ?? []))
-            ->mapWithKeys(fn ($value, $key) => [(int) $key => mb_strtoupper(trim((string) $value))])
-            ->filter()
-            ->all();
-        $rewardPoints = (int) ($data['reward_points'] ?? 0);
+        $voucherCodes = $this->normalizeCheckoutVoucherCodes($request, (array) ($data['voucher_codes'] ?? []));
+        $protectionItemIds = array_map('intval', (array) ($data['protection_item_ids'] ?? []));
+        $logisticsCenterId = isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null;
+        $automaticRouting = $checkout->automaticRoutingReady();
+        $provider = null;
+
+        if ($logisticsCenterId !== null) {
+            $provider = $checkout->availableLogisticsProviders()->firstWhere('id', $logisticsCenterId);
+            if (! $provider) {
+                throw ValidationException::withMessages([
+                    'logistics_center_id' => 'Select an active delivery provider.',
+                ]);
+            }
+        }
+        if ($automaticRouting && $provider !== null) {
+            throw ValidationException::withMessages([
+                'logistics_center_id' => 'Manual provider selection is disabled while automatic routing is active.',
+            ]);
+        }
+
+        $preview = $checkout->preview(
+            $items,
+            $voucherCodes,
+            $request->user(),
+            $provider,
+            $automaticRouting ? $address : null,
+            $protectionItemIds,
+            rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
+        );
+        $deliveryAvailability = $automaticRouting
+            ? $checkout->deliveryAvailability($items, $address)
+            : ($provider
+                ? $checkout->deliveryAvailability($items, $address, $provider)
+                : [
+                    'available' => true,
+                    'requires_review' => false,
+                    'message' => 'Delivery provider selection is confirmed at checkout.',
+                ]);
+        $priceSnapshot = $items->mapWithKeys(function (CartItem $item): array {
+            $item->loadMissing('productVariant');
+
+            return [
+                (string) $item->id => number_format((float) $item->productVariant?->final_price, 2, '.', ''),
+            ];
+        })->all();
+        $protectionFees = $items->mapWithKeys(function (CartItem $item): array {
+            $protectionQuote = (array) $item->getAttribute('protection_quote');
+
+            return [
+                (string) $item->id => (float) ($protectionQuote['fee'] ?? 0),
+            ];
+        })->all();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'subtotal' => (float) $preview['subtotal'],
+                'total_discount' => (float) $preview['total_discount'],
+                'shipping_total' => (float) $preview['shipping_total'],
+                'protection_total' => (float) $preview['protection_total'],
+                'protection_fees' => $protectionFees,
+                'grand_total' => (float) $preview['grand_total'],
+                'delivery_availability' => $deliveryAvailability,
+                'price_snapshot' => $priceSnapshot,
+            ],
+        ]);
+    }
+    public function placeOrder(Request $request, CartService $cart, CheckoutService $checkout): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        if (is_string($request->input('contact_number'))) {
+            $normalizedContact = PhilippineMobileNumber::normalize($request->input('contact_number'));
+            if ($normalizedContact !== null) {
+                $request->merge(['contact_number' => $normalizedContact]);
+            }
+        }
+        $data = $request->validate([
+            'cart_item_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'cart_item_ids.*' => ['required', 'integer', 'distinct'],
+            'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
+            'recipient_name' => ['nullable', 'string', 'max:160'],
+            'contact_number' => ['nullable', 'string', 'max:30', 'regex:/^(?:09|\\+?639)\\d{9}$/'],
+            'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
+            'voucher_codes' => ['nullable', 'array'],
+            'logistics_center_id' => ['nullable', 'integer'],
+            'seller_notes' => ['nullable', 'array'],
+            'seller_notes.*' => ['nullable', 'string', 'max:200'],
+            'protection_item_ids' => ['nullable', 'array'],
+            'protection_item_ids.*' => ['required', 'integer', 'distinct'],
+            'checkout_attempt_key' => ['nullable', 'uuid'],
+            'expected_price_snapshot' => ['nullable', 'array'],
+            'expected_price_snapshot.*' => ['nullable', 'numeric', 'min:0'],
+            'reward_points' => ['nullable', 'integer', 'min:0'],
+        ]);
+
+        $ids = array_values(array_unique(array_map('intval', $data['cart_item_ids'])));
+        $items = $cart->selectedItems($request->user(), $ids);
+        abort_unless($items->count() === count($ids), 403, 'One or more cart items do not belong to this buyer.');
+        $address = $request->user()->addresses()->findOrFail((int) $data['address_id']);
+        $voucherCodes = $this->normalizeCheckoutVoucherCodes($request, (array) ($data['voucher_codes'] ?? []));
         $order = $checkout->placeOrder(
             $request->user(),
             $address,
             $items,
             $data['payment_method'],
             $voucherCodes,
-            rewardPointsToRedeem: $rewardPoints,
+            logisticsCenterId: isset($data['logistics_center_id']) ? (int) $data['logistics_center_id'] : null,
+            protectionItemIds: array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
+            sellerNotes: (array) ($data['seller_notes'] ?? []),
+            checkoutAttemptKey: $data['checkout_attempt_key'] ?? null,
+            expectedPriceSnapshot: isset($data['expected_price_snapshot']) ? (array) $data['expected_price_snapshot'] : null,
+            rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
+            recipientName: $data['recipient_name'] ?? null,
+            contactNumber: $data['contact_number'] ?? null,
         );
 
         return response()->json([
@@ -256,7 +415,6 @@ class BuyerApiController extends Controller
             ],
         ], 201);
     }
-
     public function profile(Request $request): JsonResponse
     {
         $this->authorizeBuyer($request);
@@ -552,6 +710,8 @@ class BuyerApiController extends Controller
                 'sellerOrders',
                 'sellerOrders as buyer_uses_count' => fn ($query) => $query
                     ->whereHas('order', fn ($order) => $order->where('buyer_user_id', $request->user()->id)),
+                'buyerClaims as buyer_claims_count' => fn ($query) => $query
+                    ->where('buyer_user_id', $request->user()->id),
             ])
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
@@ -561,28 +721,44 @@ class BuyerApiController extends Controller
                 || $voucher->seller_orders_count < $voucher->usage_limit)
             ->filter(fn (Voucher $voucher): bool => $voucher->per_user_limit === null
                 || $voucher->buyer_uses_count < $voucher->per_user_limit)
-            ->map(fn (Voucher $voucher): array => [
-                'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
-                'status' => $voucher->sellerProfile?->business_name ?? 'Platform voucher',
-                'value' => $voucher->discount_type === 'PERCENT'
-                    ? number_format((float) $voucher->discount_value, 0).'% off'
-                    : '₱'.number_format((float) $voucher->discount_value, 2).' off',
-                'condition' => (float) $voucher->minimum_order_amount > 0
-                    ? 'Minimum spend ₱'.number_format((float) $voucher->minimum_order_amount, 2)
-                    : 'No minimum spend',
-                'code' => $voucher->code,
-                'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
-                'seller_id' => $voucher->seller_profile_id,
-                'seller_name' => $voucher->sellerProfile?->business_name,
-                'discount_type' => $voucher->discount_type,
-                'discount_value' => (float) $voucher->discount_value,
-                'minimum_order_amount' => (float) $voucher->minimum_order_amount,
-                'maximum_discount_amount' => $voucher->maximum_discount_amount === null
-                    ? null
-                    : (float) $voucher->maximum_discount_amount,
-                'campaign_name' => $voucher->code,
-                'can_use' => true,
-            ])
+            ->map(function (Voucher $voucher): array {
+                $benefitScope = Schema::hasColumn('vouchers', 'benefit_scope')
+                    ? strtoupper((string) $voucher->benefit_scope)
+                    : 'PRODUCT';
+                $isSellerVoucher = $voucher->seller_profile_id !== null;
+                $voucherType = $isSellerVoucher
+                    ? 'seller'
+                    : ($benefitScope === 'SHIPPING' ? 'shipping' : 'platform');
+                $isCollected = ! $isSellerVoucher || (int) $voucher->buyer_claims_count > 0;
+
+                return [
+                    'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
+                    'status' => $voucher->sellerProfile?->business_name
+                        ?? ($voucherType === 'shipping' ? 'Shipping voucher' : 'Platform voucher'),
+                    'value' => $voucher->discount_type === 'PERCENT'
+                        ? number_format((float) $voucher->discount_value, 0).'% off'
+                        : '₱'.number_format((float) $voucher->discount_value, 2).' off',
+                    'condition' => (float) $voucher->minimum_order_amount > 0
+                        ? 'Minimum spend ₱'.number_format((float) $voucher->minimum_order_amount, 2)
+                        : 'No minimum spend',
+                    'code' => $voucher->seller_profile_id === null
+                        ? (string) ($voucher->platform_code_key ?? $voucher->code)
+                        : (string) $voucher->code,
+                    'voucher_type' => $voucherType,
+                    'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
+                    'seller_id' => $voucher->seller_profile_id,
+                    'seller_name' => $voucher->sellerProfile?->business_name,
+                    'discount_type' => $voucher->discount_type,
+                    'discount_value' => (float) $voucher->discount_value,
+                    'minimum_order_amount' => (float) $voucher->minimum_order_amount,
+                    'maximum_discount_amount' => $voucher->maximum_discount_amount === null
+                        ? null
+                        : (float) $voucher->maximum_discount_amount,
+                    'campaign_name' => $voucher->code,
+                    'can_use' => $isCollected,
+                    'collected' => $isCollected,
+                ];
+            })
             ->values();
         $voucherHistory = $orders->flatMap(fn ($order) => $order->sellerOrders
             ->whereNotNull('voucher_id')
@@ -752,8 +928,23 @@ class BuyerApiController extends Controller
             'body' => ['nullable', 'string', 'max:1000'],
             'attachment' => $attachments->validationRules(),
             'order_id' => ['nullable', 'integer', Rule::exists('orders', 'id')->where('buyer_user_id', $request->user()->id)],
+            'seller_order_id' => ['nullable', 'integer'],
         ]);
         abort_if(blank($data['body'] ?? null) && ! $request->hasFile('attachment'), 422, 'A message or attachment is required.');
+
+        if (! empty($data['seller_order_id'])) {
+            abort_if(empty($data['order_id']), 422, 'An order is required when a seller order is supplied.');
+            $order = Order::query()
+                ->whereKey($data['order_id'])
+                ->where('buyer_user_id', $request->user()->id)
+                ->firstOrFail();
+            $sellerOrder = $order->sellerOrders()
+                ->with('sellerProfile')
+                ->whereKey($data['seller_order_id'])
+                ->firstOrFail();
+            abort_unless((int) $sellerOrder->sellerProfile?->user_id === (int) $data['recipient_id'], 403, 'The seller order does not belong to this seller.');
+        }
+
         $recipient = SellerProfile::query()
             ->where('status', 'ACTIVE')
             ->whereHas('user', fn ($query) => $query->whereKey($data['recipient_id'])->where('status', 'ACTIVE'))
@@ -765,7 +956,10 @@ class BuyerApiController extends Controller
                 $request->user(),
                 (int) $recipient->user_id,
                 trim((string) ($data['body'] ?? '')),
-                ['order_id' => $data['order_id'] ?? null],
+                array_filter([
+                    'order_id' => $data['order_id'] ?? null,
+                    'seller_order_id' => $data['seller_order_id'] ?? null,
+                ], fn ($value): bool => $value !== null),
                 null,
                 $attachmentPath,
                 $attachmentFile ? $attachments->originalName($attachmentFile) : null,
@@ -792,6 +986,66 @@ class BuyerApiController extends Controller
         ], 201);
     }
 
+    public function sendOrderMessage(Request $request, Order $order, ConversationService $service, MessageAttachmentService $attachments): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
+
+        $data = $request->validate([
+            'seller_order_id' => ['nullable', 'integer'],
+        ]);
+        $sellerOrders = $order->sellerOrders()->with('sellerProfile')->get();
+        $sellerOrder = isset($data['seller_order_id'])
+            ? $sellerOrders->firstWhere('id', (int) $data['seller_order_id'])
+            : ($sellerOrders->count() === 1 ? $sellerOrders->first() : null);
+        if (! $sellerOrder) {
+            throw ValidationException::withMessages([
+                'seller_order_id' => ['Choose the seller order you need help with.'],
+            ]);
+        }
+
+        $seller = $sellerOrder->sellerProfile;
+        abort_unless($seller && $seller->user_id, 422, 'The seller for this order is unavailable.');
+
+        $request->merge([
+            'recipient_id' => (int) $seller->user_id,
+            'order_id' => (int) $order->id,
+            'seller_order_id' => (int) $sellerOrder->id,
+        ]);
+
+        return $this->sendMessage($request, $service, $attachments);
+    }
+
+    private function normalizeCheckoutVoucherCodes(Request $request, array $voucherCodes): array
+    {
+        $structured = array_intersect(['seller', 'platform', 'shipping'], array_keys($voucherCodes)) !== [];
+        if (! $structured) {
+            $request->validate([
+                'voucher_codes.*' => ['nullable', 'string', 'max:80'],
+            ]);
+
+            return collect($voucherCodes)
+                ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+                ->filter()
+                ->all();
+        }
+
+        $request->validate([
+            'voucher_codes.seller' => ['nullable', 'array'],
+            'voucher_codes.seller.*' => ['nullable', 'string', 'max:80'],
+            'voucher_codes.platform' => ['nullable', 'string', 'max:80'],
+            'voucher_codes.shipping' => ['nullable', 'string', 'max:80'],
+        ]);
+
+        return [
+            'seller' => collect((array) ($voucherCodes['seller'] ?? []))
+                ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+                ->filter()
+                ->all(),
+            'platform' => mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? ''))),
+            'shipping' => mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? ''))),
+        ];
+    }
     private function authorizeBuyer(Request $request): void
     {
         abort_unless($request->user()?->isAccountType(User::TYPE_BUYER), 403, 'Buyer access is required.');
@@ -877,16 +1131,50 @@ class BuyerApiController extends Controller
             'unit_price' => (float) $item->unit_price,
             'quantity' => (int) $item->quantity,
         ]))->values();
-        $shipment = $order->sellerOrders->firstWhere('shipment', '!=', null)?->shipment;
+        $parcels = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments)->values();
+        $shipment = $parcels->first();
         $activeReturnRequest = $order->disputes->first(
             fn (Dispute $dispute): bool => $dispute->type === 'RETURN_REFUND'
                 && in_array($dispute->status, ['OPEN', 'UNDER_REVIEW'], true),
         );
-        $events = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipment?->events ?? collect())
+        $events = $parcels->flatMap(fn (Shipment $parcel) => $parcel->events)
             ->sortBy('occurred_at')->values();
+        $sellerOrders = $order->sellerOrders->map(function ($sellerOrder): array {
+            $seller = $sellerOrder->sellerProfile;
+
+            return [
+                'id' => (string) $sellerOrder->id,
+                'seller_order_number' => $sellerOrder->seller_order_number,
+                'status' => $sellerOrder->status,
+                'seller_user_id' => $seller?->user_id,
+                'seller' => [
+                    'id' => $seller?->id,
+                    'user_id' => $seller?->user_id,
+                    'business_name' => $seller?->business_name,
+                    'slug' => $seller?->id ? (string) $seller->id : '',
+                    'avatar_url' => $seller?->avatar_path,
+                ],
+                'products' => $sellerOrder->items->map(fn ($item): array => [
+                    'id' => (string) $item->id,
+                    'product_id' => $item->product_id,
+                    'name' => $item->product_name,
+                    'variant' => $item->variant_description,
+                    'image_url' => $item->product?->images?->first()?->file_path,
+                    'unit_price' => (float) $item->unit_price,
+                    'quantity' => (int) $item->quantity,
+                ])->values(),
+            ];
+        })->values();
+        $primarySellerOrder = $sellerOrders->first();
+
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
+            'seller_orders' => $sellerOrders,
+            'seller_name' => $primarySellerOrder['seller']['business_name'] ?? null,
+            'seller_user_id' => $primarySellerOrder['seller_user_id'] ?? null,
+            'seller_slug' => $primarySellerOrder['seller']['slug'] ?? null,
+            'seller_avatar_url' => $primarySellerOrder['seller']['avatar_url'] ?? null,
             'status' => $order->status,
             'buyer_status' => $activeReturnRequest ? 'returns' : null,
             'buyer_status_label' => $activeReturnRequest ? 'Return / Refund Requested' : null,
@@ -908,6 +1196,31 @@ class BuyerApiController extends Controller
             ] : null,
             'tracking_number' => $shipment?->tracking_number,
             'shipment_id' => $shipment?->id,
+            'parcels' => $parcels->map(fn (Shipment $parcel): array => [
+                'id' => (string) $parcel->id,
+                'tracking_number' => $parcel->tracking_number,
+                'current_status' => $parcel->current_status,
+                'rider' => $this->riderIdentityPayload($parcel),
+                'rider_location' => $this->riderLocationPayload($parcel),
+                'status_label' => str($parcel->current_status)->headline()->toString(),
+                'events' => $parcel->events->map(fn ($event): array => [
+                    'status' => $event->status,
+                    'label' => str($event->status)->headline()->toString(),
+                    'notes' => $event->notes,
+                    'occurred_at' => $event->occurred_at?->toIso8601String(),
+                ])->values(),
+                'delivery_attempts' => $parcel->deliveryAttempts
+                    ->sortByDesc('attempt_number')
+                    ->map(fn (DeliveryAttempt $attempt): array => [
+                        'id' => (string) $attempt->id,
+                        'attempt_number' => (int) $attempt->attempt_number,
+                        'status' => $attempt->status,
+                        'failure_reason' => $attempt->failure_reason,
+                        'attempted_at' => $attempt->attempted_at?->toIso8601String(),
+                        'proof_available' => filled($attempt->proof_path)
+                            && Storage::disk('public')->exists($attempt->proof_path),
+                    ])->values(),
+            ])->values(),
             'rider_location' => $this->riderLocationPayload($shipment),
             'items' => $items,
             'timeline' => $events->map(fn ($event): array => [
@@ -922,6 +1235,37 @@ class BuyerApiController extends Controller
             'allow_review' => $order->status === 'COMPLETED',
             'allow_return_request' => $actionState['can_request_return'],
             'has_active_return_request' => (bool) $activeReturnRequest,
+        ];
+    }
+
+    private function riderIdentityPayload(?Shipment $shipment): ?array
+    {
+        if ($shipment === null) {
+            return null;
+        }
+
+        $assignment = $shipment->riderAssignments
+            ->filter(fn (RiderAssignment $assignment): bool => $assignment->assignment_type === RiderAssignment::TYPE_DELIVERY
+                && in_array($assignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED'], true))
+            ->sortByDesc(fn (RiderAssignment $assignment): int => $assignment->assigned_at?->getTimestamp()
+                ?? $assignment->created_at?->getTimestamp()
+                ?? (int) $assignment->id)
+            ->first();
+        $profile = $assignment?->riderProfile;
+        $user = $profile?->user;
+
+        if ($profile === null || $user === null) {
+            return null;
+        }
+
+        return [
+            'id' => (string) $profile->id,
+            'name' => $user->name,
+            'profile_photo_url' => $user->profile_photo_path
+                ? Storage::disk('public')->url($user->profile_photo_path)
+                : null,
+            'vehicle_type' => $profile->vehicle_type,
+            'plate_number' => $profile->plate_number,
         ];
     }
 

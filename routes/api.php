@@ -6,8 +6,10 @@ use App\Http\Controllers\Api\MobileAuthController;
 use App\Http\Controllers\Api\PlatformEventApiController;
 use App\Http\Controllers\Api\ProductApiController;
 use App\Http\Controllers\Api\RiderApiController;
+use App\Http\Controllers\Api\RiderVehicleProfileController;
 use App\Http\Controllers\Api\TrackingApiController;
 use App\Http\Controllers\Api\WorkflowApiController;
+use App\Http\Controllers\Rider\RiderPickupBatchController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
@@ -74,9 +76,19 @@ Route::prefix('v1')->group(function (): void {
         Route::delete('/buyer/cart/items/{item}', [BuyerApiController::class, 'removeCartItem'])->name('api.v1.buyer.cart.destroy');
         Route::get('/buyer/orders', [BuyerApiController::class, 'orders'])->name('api.v1.buyer.orders.index');
         Route::get('/buyer/orders/{order}', [BuyerApiController::class, 'showOrder'])->name('api.v1.buyer.orders.show');
+        Route::get('/buyer/delivery-attempts/{attempt}/proof', [BuyerApiController::class, 'deliveryAttemptProof'])->name('api.v1.buyer.delivery-attempts.proof');
         Route::get('/buyer/orders/{order}/live-location', [BuyerApiController::class, 'liveRiderLocation'])->name('api.v1.buyer.orders.live-location');
         Route::post('/buyer/orders/{order}/cancel', [BuyerOrderController::class, 'cancel'])->name('api.v1.buyer.orders.cancel');
         Route::post('/buyer/orders/{order}/return-refund', [BuyerOrderController::class, 'returnRefund'])->name('api.v1.buyer.orders.return-refund');
+        Route::get('/buyer/checkout/options', [BuyerApiController::class, 'checkoutOptions'])
+            ->middleware('throttle:60,1')
+            ->name('api.v1.buyer.checkout.options');
+        Route::post('/buyer/cart/preview', [BuyerApiController::class, 'previewCheckout'])
+            ->middleware('throttle:60,1')
+            ->name('api.v1.buyer.cart.preview');
+        Route::post('/buyer/checkout/preview', [BuyerApiController::class, 'previewCheckout'])
+            ->middleware('throttle:60,1')
+            ->name('api.v1.buyer.checkout.preview');
         Route::post('/buyer/checkout', [BuyerApiController::class, 'placeOrder'])->name('api.v1.buyer.checkout.store');
         Route::post('/buyer/orders/items/{item}/review', [BuyerOrderController::class, 'review'])->name('api.v1.buyer.orders.items.review');
         Route::get('/buyer/addresses', [BuyerApiController::class, 'addresses'])->name('api.v1.buyer.addresses.index');
@@ -96,20 +108,23 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/buyer/messages', [BuyerApiController::class, 'conversations'])->name('api.v1.buyer.messages.index');
         Route::get('/buyer/messages/{conversation}', [BuyerApiController::class, 'conversationMessages'])->name('api.v1.buyer.messages.show');
         Route::post('/buyer/messages', [BuyerApiController::class, 'sendMessage'])->name('api.v1.buyer.messages.store');
+        Route::post('/buyer/orders/{order}/messages', [BuyerApiController::class, 'sendOrderMessage'])->name('api.v1.buyer.orders.messages.store');
         Route::post('/buyer/ai/chat', [BuyerAiController::class, 'chat'])->name('api.v1.buyer.ai.chat');
         Route::get('/rider/dashboard', [RiderApiController::class, 'dashboard'])->name('api.v1.rider.dashboard');
         Route::get('/rider/assignments', [RiderApiController::class, 'assignments'])->name('api.v1.rider.assignments.index');
         Route::get('/rider/pickups', [RiderApiController::class, 'pickups'])->name('api.v1.rider.pickups.index');
         Route::post('/rider/pickups/batches/{trip}/accept', [RiderApiController::class, 'acceptPickupBatch'])->name('api.v1.rider.pickups.batches.accept');
         Route::post('/rider/pickups/batches/{trip}/start', [RiderApiController::class, 'startPickupBatch'])->name('api.v1.rider.pickups.batches.start');
-        Route::post('/rider/pickups/batches/{trip}/scan', [RiderApiController::class, 'scanPickupBatch'])->name('api.v1.rider.pickups.batches.scan');
+        Route::post('/rider/pickups/batches/{trip}/scan', [RiderPickupBatchController::class, 'scan'])->name('api.v1.rider.pickups.batches.scan');
         Route::post('/rider/pickups/batches/{trip}/not-collected', [RiderApiController::class, 'markPickupNotCollected'])->name('api.v1.rider.pickups.batches.not-collected');
         Route::post('/rider/pickups/batches/{trip}/finish', [RiderApiController::class, 'finishPickupBatch'])->name('api.v1.rider.pickups.batches.finish');
         Route::post('/rider/pickups/{assignment}/verify', [RiderApiController::class, 'verifyPickup'])->name('api.v1.rider.pickups.verify');
         Route::post('/rider/assignments/{assignment}/location', [RiderApiController::class, 'updateLocation'])->name('api.v1.rider.assignments.location');
         Route::get('/rider/history', [RiderApiController::class, 'history'])->name('api.v1.rider.history.index');
         Route::get('/rider/earnings', [RiderApiController::class, 'earnings'])->name('api.v1.rider.earnings.index');
-        Route::get('/rider/profile', [RiderApiController::class, 'profile'])->name('api.v1.rider.profile.show');
+        Route::get('/rider/profile', [RiderVehicleProfileController::class, 'profile'])->name('api.v1.rider.profile.show');
+        Route::patch('/rider/profile/vehicle', [RiderVehicleProfileController::class, 'updatePlateNumber'])->name('api.v1.rider.profile.vehicle.update');
+        Route::patch('/rider/profile/address', [RiderVehicleProfileController::class, 'updateResidentialAddress'])->name('api.v1.rider.profile.address.update');
         Route::get('/rider/notifications', [RiderApiController::class, 'notifications'])->name('api.v1.rider.notifications.index');
         Route::post('/rider/notifications/read-all', [RiderApiController::class, 'markNotificationsRead'])->name('api.v1.rider.notifications.read-all');
         Route::get('/rider/messages', [RiderApiController::class, 'conversations'])->name('api.v1.rider.messages.index');

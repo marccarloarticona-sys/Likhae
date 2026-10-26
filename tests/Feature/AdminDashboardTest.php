@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Auth\RegistrationApplication;
+use App\Models\Buyer\Order;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -126,5 +127,43 @@ class AdminDashboardTest extends TestCase
             })
             ->assertSee('Recent Accounts Pending Approval')
             ->assertDontSee('Recent orders');
+    }
+
+    public function test_marketplace_chart_counts_completed_orders_by_completion_date_only(): void
+    {
+        $this->freezeTime();
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN]);
+        $buyer = User::factory()->create(['account_type' => User::TYPE_BUYER]);
+        Order::query()->create([
+            'order_number' => 'CHART-COMPLETED-'.uniqid(),
+            'buyer_user_id' => $buyer->id,
+            'status' => 'COMPLETED',
+            'grand_total' => '500.00',
+            'placed_at' => now()->subDays(10),
+            'completed_at' => now()->subHour(),
+        ]);
+        Order::query()->create([
+            'order_number' => 'CHART-PLACED-'.uniqid(),
+            'buyer_user_id' => $buyer->id,
+            'status' => 'PROCESSING',
+            'grand_total' => '1200.00',
+            'placed_at' => now()->subHour(),
+        ]);
+        Order::query()->create([
+            'order_number' => 'CHART-CANCELLED-'.uniqid(),
+            'buyer_user_id' => $buyer->id,
+            'status' => 'CANCELLED',
+            'grand_total' => '900.00',
+            'placed_at' => now()->subHour(),
+            'completed_at' => now()->subMinutes(30),
+        ]);
+
+        $this->actingAs($admin)->get(route('admin.dashboard'))
+            ->assertOk()
+            ->assertViewHas('marketplaceGross', 500.0)
+            ->assertViewHas('marketplaceChart', fn ($chart): bool => $chart->sum('total') === 500.0
+                && $chart->firstWhere('key', now()->subHour()->toDateString())['total'] === 500.0)
+            ->assertSee('Orders completed during')
+            ->assertDontSee('Non-cancelled order value');
     }
 }

@@ -1496,6 +1496,18 @@ class BuyerController extends Controller
             }
         }
 
+        $smartHelpBootstrap = null;
+        if ($activeConversation
+            && $activeConversation->participants->count() === 2
+            && (($active['is_seller'] ?? false) || ($active['is_support'] ?? false))) {
+            $smartHelpBootstrap = app(\App\Services\Communication\SmartMessagingService::class)->bootstrapForBuyer(
+                $request->user(),
+                $activeConversation,
+                isset($referenceProduct['id']) ? (int) $referenceProduct['id'] : null,
+                $request->integer('variant_id') ?: null,
+            );
+        }
+
         return view('buyer.messages', [
             'buyerProducts' => $referenceProduct ? collect([$referenceProduct]) : collect(),
             'conversationRows' => $rows,
@@ -1504,6 +1516,7 @@ class BuyerController extends Controller
             'chatMessages' => $chatMessages,
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
             'messageContext' => app(ConversationContextPresenter::class)->forUser($request->user(), $activeConversation),
+            'smartHelpBootstrap' => $smartHelpBootstrap,
         ]);
     }
 
@@ -1777,7 +1790,8 @@ class BuyerController extends Controller
             ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
                     || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
                 && ($voucher->per_user_limit === null
-                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit))
+                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
+                && app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($voucher))
             ->map(fn (Voucher $voucher): array => [
                 'id' => (int) $voucher->id,
                 'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',

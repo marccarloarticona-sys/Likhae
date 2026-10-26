@@ -46,10 +46,48 @@ final class FinancialRules
             .str_pad((string) ($absolute % 100), 2, '0', STR_PAD_LEFT);
     }
 
-    public static function commissionCents(int $originalProductCents): int
+    public static function commissionCents(int $commissionableProductCents, string|int|float $rate = self::COMMISSION_RATE): int
     {
-        // Fixed 10% merchandise commission, rounded half up using integers.
-        return intdiv($originalProductCents + 5, 10);
+        $rateText = number_format((float) $rate, 6, '.', '');
+        $rateUnits = (int) round((float) $rateText * 1_000_000);
+
+        return intdiv(($commissionableProductCents * $rateUnits) + 500_000, 1_000_000);
+    }
+
+    /** @param array<int, int> $weights @return array<int, int> */
+    public static function allocateCents(int $amountCents, array $weights): array
+    {
+        if ($amountCents < 0) {
+            throw new \InvalidArgumentException('An allocation amount cannot be negative.');
+        }
+        $weights = array_map(fn ($weight): int => max(0, (int) $weight), array_values($weights));
+        $totalWeight = array_sum($weights);
+        if ($totalWeight === 0) {
+            if ($amountCents !== 0) {
+                throw new \InvalidArgumentException('A positive amount cannot be allocated across zero-value lines.');
+            }
+
+            return array_fill(0, count($weights), 0);
+        }
+
+        $shares = [];
+        $remainders = [];
+        $allocated = 0;
+        foreach ($weights as $index => $weight) {
+            $numerator = $amountCents * $weight;
+            $share = intdiv($numerator, $totalWeight);
+            $shares[$index] = $share;
+            $allocated += $share;
+            $remainders[] = ['index' => $index, 'remainder' => $numerator % $totalWeight];
+        }
+        usort($remainders, fn (array $left, array $right): int =>
+            ($right['remainder'] <=> $left['remainder']) ?: ($left['index'] <=> $right['index']));
+        $remaining = $amountCents - $allocated;
+        for ($index = 0; $index < $remaining; $index++) {
+            $shares[$remainders[$index]['index']]++;
+        }
+
+        return $shares;
     }
 
     /**
@@ -62,6 +100,9 @@ final class FinancialRules
         string|int|float $shippingFee = 50,
         string|int|float $riderPoolPercentage = self::DEFAULT_RIDER_POOL_PERCENTAGE,
         string|int|float $shippingVoucherDiscount = 0,
+        ?array $fundingSnapshot = null,
+        string|int|float $commissionRate = self::COMMISSION_RATE,
+        string|int|float $additionalCareFee = 0,
     ): array
     {
         $original = 0;
@@ -75,21 +116,39 @@ final class FinancialRules
 
         $voucher = self::cents($voucherDiscount);
         $shippingDiscount = self::cents($shippingVoucherDiscount);
-        $discount = max(0, $original - $charged) + $voucher + $shippingDiscount;
-        $commission = self::commissionCents($original);
+        $commission = self::commissionCents($original, $commissionRate);
         $shipping = self::cents($shippingFee);
-        $allocation = self::shippingAllocationCents($shipping, $riderPoolPercentage);
-        $discountFundingUnresolved = $discount > 0;
+        $additionalCare = max(0, self::cents($additionalCareFee));
+        $deliveryEarnings = $shipping + $additionalCare;
+        $allocation = self::shippingAllocationCents($deliveryEarnings, $riderPoolPercentage);
+        if ($fundingSnapshot === null) {
+            // Historical combined discounts do not identify who funded them.
+            $discount = max(0, $original - $charged) + $voucher + $shippingDiscount;
+            $discountFundingUnresolved = $discount > 0;
+            $productAmount = max(0, $charged - $voucher);
+            $sellerPayable = $discountFundingUnresolved ? null : self::amount(max(0, $charged - $commission));
+        } else {
+            $sellerVoucher = self::cents($fundingSnapshot['seller_voucher_discount'] ?? 0);
+            $platformVoucher = self::cents($fundingSnapshot['platform_voucher_discount'] ?? 0);
+            $sellerPromotion = self::cents($fundingSnapshot['seller_promotion_discount'] ?? 0);
+            $rewardPoints = self::cents($fundingSnapshot['reward_points_discount'] ?? 0);
+            $sellerMarkdown = max(0, $original - $charged);
+            $discount = $sellerMarkdown + $sellerPromotion + $sellerVoucher + $platformVoucher + $rewardPoints + $shippingDiscount;
+            $discountFundingUnresolved = false;
+            $productAmount = max(0, $charged - $sellerPromotion - $sellerVoucher - $platformVoucher - $rewardPoints);
+            $sellerGross = max(0, $original - $sellerMarkdown - $sellerPromotion - $sellerVoucher);
+            $sellerPayable = self::amount(max(0, $sellerGross - $commission));
+        }
 
         return [
             'original_product_amount' => self::amount($original),
-            'product_amount' => self::amount(max(0, $charged - $voucher)),
+            'product_amount' => self::amount($productAmount),
             'discount_amount' => self::amount($discount),
             'shipping_fee' => self::amount($shipping),
+            'additional_care_amount' => self::amount($additionalCare),
+            'delivery_earnings_amount' => self::amount($deliveryEarnings),
             'platform_commission' => self::amount($commission),
-            'seller_payable' => $discountFundingUnresolved
-                ? null
-                : self::amount(max(0, $charged - $commission)),
+            'seller_payable' => $sellerPayable,
             'logistics_allocation' => self::amount($allocation['logistics_cents']),
             'rider_allocation' => self::amount($allocation['rider_cents']),
             'discount_funding_unresolved' => $discountFundingUnresolved,

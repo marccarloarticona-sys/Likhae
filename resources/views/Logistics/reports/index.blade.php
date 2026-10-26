@@ -87,8 +87,10 @@
 
             <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <article class="border border-line p-4"><span class="text-xs text-muted">Parcels with allocation</span><strong class="mt-1 block text-2xl">{{ number_format($financialSummary['parcel_count']) }}</strong></article>
-                <article class="border border-line p-4"><span class="text-xs text-muted">Recorded shipping fees</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['shipping_fees'], 2) }}</strong></article>
-                <article class="border border-line p-4"><span class="text-xs text-muted">Logistics shipping share allocated</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['logistics_share'], 2) }}</strong></article>
+                <article class="border border-line p-4"><span class="text-xs text-muted">Base shipping charges</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['shipping_fees'], 2) }}</strong></article>
+                <article class="border border-line p-4"><span class="text-xs text-muted">Additional Care charges</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['additional_care'], 2) }}</strong></article>
+                <article class="border border-line p-4"><span class="text-xs text-muted">Combined eligible delivery earnings</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['delivery_charges'], 2) }}</strong></article>
+                <article class="border border-line p-4"><span class="text-xs text-muted">Logistics delivery share allocated</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['logistics_share'], 2) }}</strong></article>
                 <article class="border border-line p-4"><span class="text-xs text-muted">Admin product commission</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['admin_product_commission'], 2) }}</strong></article>
                 <article class="border border-line p-4"><span class="text-xs text-muted">Product proceeds expected</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['proceeds_expected'], 2) }}</strong></article>
                 <article class="border border-line p-4"><span class="text-xs text-muted">Product proceeds received</span><strong class="mt-1 block text-2xl">PHP {{ number_format($financialSummary['proceeds_received'], 2) }}</strong></article>
@@ -107,7 +109,9 @@
                             <th class="px-3 py-3 font-semibold">Parcel / order</th>
                             <th class="px-3 py-3 font-semibold">Transaction</th>
                             <th class="px-3 py-3 font-semibold">Amount / status</th>
-                            <th class="px-3 py-3 font-semibold">Shipping fee</th>
+                            <th class="px-3 py-3 font-semibold">Base shipping</th>
+                            <th class="px-3 py-3 font-semibold">Additional Care</th>
+                            <th class="px-3 py-3 font-semibold">Combined delivery</th>
                             <th class="px-3 py-3 font-semibold">Logistics share</th>
                             <th class="px-3 py-3 font-semibold">Admin commission</th>
                             <th class="px-3 py-3 font-semibold">Rider / area</th>
@@ -125,17 +129,19 @@
                                     @endif
                                 </td>
                                 <td class="px-3 py-3">{{ $transaction['shipping_fee'] !== '' ? 'PHP '.number_format((float) $transaction['shipping_fee'], 2) : '—' }}</td>
+                                <td class="px-3 py-3">{{ $transaction['additional_care'] !== '' ? 'PHP '.number_format((float) $transaction['additional_care'], 2) : '—' }}</td>
+                                <td class="px-3 py-3">{{ $transaction['delivery_earnings'] !== '' ? 'PHP '.number_format((float) $transaction['delivery_earnings'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['logistics_share'] !== '' ? 'PHP '.number_format((float) $transaction['logistics_share'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['admin_product_commission'] !== '' ? 'PHP '.number_format((float) $transaction['admin_product_commission'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['rider'] ?: '—' }}<span class="mt-1 block text-muted">{{ $transaction['area'] ?: '—' }}</span></td>
                             </tr>
                         @empty
-                            <tr><td colspan="8" class="px-3 py-8 text-center text-muted">No financial transactions match these filters.</td></tr>
+                            <tr><td colspan="10" class="px-3 py-8 text-center text-muted">No financial transactions match these filters.</td></tr>
                         @endforelse
                     </tbody>
                 </table>
             </div>
-            <p class="text-xs text-muted">Shipping fees, Logistics share, and Admin product commission appear on each parcel’s allocation entry only. Proceeds handoffs and payouts are separate transactions and are not added into those allocation totals.</p>
+            <p class="text-xs text-muted">Base shipping, Additional Care, combined delivery earnings, Logistics share, and Admin product commission appear on each parcel’s allocation entry. Proceeds handoffs and payouts are separate transactions and are not added into those allocation totals.</p>
             {{ $financialTransactions->links() }}
         @endunless
     </section>

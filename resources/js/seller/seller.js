@@ -190,6 +190,11 @@ document.addEventListener('DOMContentLoaded', () => {
     selectAll('[data-modal-open]').forEach((button) => button.addEventListener('click', () => {
         const modal = select(`[data-modal="${button.dataset.modalOpen}"]`);
         const editPayload = button.dataset.voucherEdit;
+        if (modal && button.dataset.modalOpen === 'campaignModal') {
+            const form = select('[data-voucher-form]', modal);
+            form?.reset();
+            if (form) syncVoucherTargetForm(form);
+        }
         if (modal && editPayload) {
             const form = select('[data-voucher-edit-form]', modal);
             if (!form || !button.dataset.updateUrl) return;
@@ -202,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 discount_value: button.dataset.discountValue,
                 minimum_order_amount: button.dataset.minimumOrderAmount,
                 maximum_discount_amount: button.dataset.maximumDiscountAmount,
+                seller_discount_budget_total: button.dataset.sellerDiscountBudgetTotal,
                 applies_to: button.dataset.appliesTo,
                 visibility: button.dataset.visibility || 'PUBLIC',
                 usage_limit: button.dataset.usageLimit,
@@ -214,8 +220,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (field) field.value = value ?? '';
             });
             const selectedProductIds = new Set((button.dataset.productIds || '').split(',').filter(Boolean));
-            selectAll('[data-voucher-products] option', form).forEach((option) => {
-                option.selected = selectedProductIds.has(option.value);
+            const selectedVariantIds = new Set((button.dataset.variantIds || '').split(',').filter(Boolean));
+            selectAll('[data-voucher-product-checkbox]', form).forEach((checkbox) => {
+                checkbox.checked = selectedProductIds.has(checkbox.value);
+            });
+            selectAll('[data-voucher-variant-checkbox]', form).forEach((checkbox) => {
+                checkbox.checked = selectedVariantIds.has(checkbox.value);
             });
             syncVoucherTargetForm(form);
         }
@@ -224,17 +234,120 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function syncVoucherTargetForm(form) {
         const target = select('[data-voucher-target]', form);
-        const productField = select('[data-voucher-products]', form);
-        const wrapper = productField?.closest('[data-voucher-products-field]');
+        const productWrapper = select('[data-voucher-products-field]', form);
+        const variantWrapper = select('[data-voucher-variants-field]', form);
         const selectingProducts = target?.value === 'PRODUCTS';
-        if (wrapper) wrapper.hidden = !selectingProducts;
-        if (productField) productField.required = Boolean(selectingProducts);
+        const selectingVariants = target?.value === 'VARIANTS';
+        if (productWrapper) productWrapper.hidden = !selectingProducts;
+        if (variantWrapper) variantWrapper.hidden = !selectingVariants;
+        selectAll('[data-voucher-product-checkbox]', form).forEach((field) => { field.disabled = !selectingProducts; });
+        selectAll('[data-voucher-variant-checkbox]', form).forEach((field) => { field.disabled = !selectingVariants; });
+        updateVoucherPickerCounts(form);
+        updateVoucherPricePreview(form);
+    }
+
+    function updateVoucherPickerCounts(form) {
+        const productCount = selectAll('[data-voucher-product-checkbox]:checked', form).length;
+        const variantCount = selectAll('[data-voucher-variant-checkbox]:checked', form).length;
+        select('[data-selected-count="products"]', form)?.replaceChildren(String(productCount));
+        select('[data-selected-count="variants"]', form)?.replaceChildren(String(variantCount));
+    }
+
+    function updateVoucherPricePreview(form) {
+        const preview = select('[data-voucher-preview-text]');
+        if (!preview || !form.closest('.sl-marketing-center')) return;
+        const scope = select('[data-voucher-target]', form)?.value || 'STORE';
+        const pickedProductIds = new Set(selectAll('[data-voucher-product-checkbox]:checked', form).map((field) => field.value));
+        const pickedVariantIds = new Set(selectAll('[data-voucher-variant-checkbox]:checked', form).map((field) => field.value));
+        const prices = selectAll('[data-voucher-variant-checkbox]', form)
+            .filter((field) => scope === 'VARIANTS' ? pickedVariantIds.has(field.value)
+                : scope === 'PRODUCTS' ? pickedProductIds.has(field.closest('[data-voucher-variant-product]')?.dataset.productId)
+                    : true)
+            .map((field) => Number(field.dataset.price))
+            .filter((price) => Number.isFinite(price) && price > 0)
+            .sort((a, b) => a - b);
+        const amount = prices[0];
+        const discountType = select('[name="discount_type"]', form)?.value || 'PERCENT';
+        const discountValue = Math.max(0, Number(select('[name="discount_value"]', form)?.value || 0));
+        const maximum = Number(select('[name="maximum_discount_amount"]', form)?.value || 0);
+        if (!amount || !discountValue) {
+            preview.textContent = 'Choose an eligibility scope and discount to preview the lowest eligible variant price.';
+            return;
+        }
+        let discount = discountType === 'PERCENT' ? amount * Math.min(discountValue, 100) / 100 : Math.min(amount, discountValue);
+        if (maximum > 0) discount = Math.min(discount, maximum);
+        discount = Math.round(discount * 100) / 100;
+        preview.textContent = `Lowest eligible variant: PHP ${amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Estimated discount: PHP ${discount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Price after this voucher: PHP ${Math.max(0, amount - discount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`;
     }
 
     selectAll('[data-voucher-target-form]').forEach((form) => {
         select('[data-voucher-target]', form)?.addEventListener('change', () => syncVoucherTargetForm(form));
+        form.addEventListener('input', (event) => {
+            if (event.target.matches('[data-voucher-search="products"]')) {
+                const query = event.target.value.trim().toLocaleLowerCase();
+                selectAll('[data-voucher-product-row]', form).forEach((row) => { row.hidden = !row.dataset.search.includes(query); });
+            }
+            if (event.target.matches('[data-voucher-search="variants"]')) {
+                const query = event.target.value.trim().toLocaleLowerCase();
+                selectAll('[data-voucher-variant-product]', form).forEach((product) => {
+                    const productMatch = product.dataset.search.includes(query);
+                    let rowMatch = false;
+                    selectAll('[data-voucher-variant-row]', product).forEach((row) => {
+                        row.hidden = !(productMatch || row.dataset.search.includes(query));
+                        rowMatch ||= !row.hidden;
+                    });
+                    product.hidden = !(productMatch || rowMatch);
+                    if (query && !productMatch && rowMatch) product.open = true;
+                });
+            }
+        });
+        form.addEventListener('change', (event) => {
+            if (event.target.matches('[data-voucher-product-checkbox], [data-voucher-variant-checkbox]')) {
+                updateVoucherPickerCounts(form);
+                updateVoucherPricePreview(form);
+            }
+        });
         syncVoucherTargetForm(form);
     });
+    selectAll('[data-select-visible="products"]').forEach((button) => button.addEventListener('click', () => {
+        const form = button.closest('form');
+        selectAll('[data-voucher-product-row]:not([hidden]) [data-voucher-product-checkbox]', form).forEach((checkbox) => { checkbox.checked = true; });
+        updateVoucherPickerCounts(form);
+        updateVoucherPricePreview(form);
+    }));
+    selectAll('[data-clear-selection="products"]').forEach((button) => button.addEventListener('click', () => {
+        const form = button.closest('form');
+        selectAll('[data-voucher-product-checkbox]', form).forEach((checkbox) => { checkbox.checked = false; });
+        updateVoucherPickerCounts(form);
+        updateVoucherPricePreview(form);
+    }));
+    selectAll('[data-select-product-variants]').forEach((button) => button.addEventListener('click', () => {
+        const form = button.closest('form');
+        selectAll('[data-voucher-variant-checkbox]', button.closest('[data-voucher-variant-product]')).forEach((checkbox) => { checkbox.checked = true; });
+        updateVoucherPickerCounts(form);
+        updateVoucherPricePreview(form);
+    }));
+    selectAll('[data-add-bundle-component]').forEach((button) => button.addEventListener('click', (event) => {
+        const form = event.currentTarget.closest('form');
+        const container = select('[data-bundle-components]', form);
+        const template = select('[data-bundle-component-template]');
+        if (!container || !template || container.querySelectorAll('[data-bundle-component]').length >= 10) return;
+        const index = Number(container.dataset.nextIndex || 2);
+        const fragment = template.content.cloneNode(true);
+        fragment.querySelectorAll('[name]').forEach((field) => { field.name = field.name.replaceAll('__INDEX__', String(index)); });
+        container.appendChild(fragment);
+        container.dataset.nextIndex = String(index + 1);
+    }));
+    selectAll('[data-flash-search]').forEach((field) => field.addEventListener('input', () => {
+        const query = field.value.trim().toLocaleLowerCase();
+        selectAll('[data-flash-product]').forEach((product) => { product.hidden = !product.dataset.search.includes(query); });
+    }));
+    const targetedFlashProductId = new URLSearchParams(window.location.search).get('product_id');
+    if (targetedFlashProductId) {
+        const targetedFlashProduct = select(`[data-flash-product-id="${CSS.escape(targetedFlashProductId)}"]`);
+        targetedFlashProduct?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        targetedFlashProduct?.classList.add('is-targeted');
+    }
     selectAll('[data-modal-close]').forEach((button) => button.addEventListener('click', () => closeModal(button.closest('[data-modal]'))));
     selectAll('[data-modal]').forEach((modal) => modal.addEventListener('click', (event) => {
         if (event.target === modal) closeModal(modal);

@@ -36,6 +36,7 @@ class SellerVoucherIntegrationTest extends TestCase
             'discount_value' => 10,
             'minimum_order_amount' => 300,
             'maximum_discount_amount' => 50,
+            'seller_discount_budget_total' => 5000,
             'usage_limit' => 80,
             'per_user_limit' => 2,
             'starts_at' => now()->subHour()->format('Y-m-d H:i:s'),
@@ -53,6 +54,7 @@ class SellerVoucherIntegrationTest extends TestCase
         $this->assertSame(2, $voucher->per_user_limit);
         $this->assertSame(80, $voucher->usage_limit);
         $this->assertSame('300.00', $voucher->minimum_order_amount);
+        $this->assertSame('5000.00', $voucher->seller_discount_budget_total);
     }
 
     public function test_seller_voucher_rejects_invalid_percentage_and_backwards_dates(): void

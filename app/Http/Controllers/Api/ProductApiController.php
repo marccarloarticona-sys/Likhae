@@ -65,6 +65,8 @@ class ProductApiController extends Controller
                     'id' => $sellerProfile->id,
                     'user_id' => $sellerProfile->user_id,
                     'business_name' => $sellerProfile->business_name,
+                    'avatar_path' => $sellerProfile->avatar_path,
+                    'banner_path' => $sellerProfile->banner_path,
                     'category' => $sellerProfile->primaryCategory?->name,
                     'slug' => (string) $sellerProfile->id,
                     'joined_at' => $sellerProfile->created_at?->toIso8601String(),

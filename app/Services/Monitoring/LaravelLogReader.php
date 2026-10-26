@@ -317,17 +317,12 @@ class LaravelLogReader
         } catch (Throwable) {
             return null;
         }
-        $rawMessage = preg_replace('/\s+\{.*$/u', '', (string) $raw['message']) ?? (string) $raw['message'];
+        [$rawMessage, $context] = $this->splitContext((string) $raw['message']);
         $severity = in_array($raw['level'], ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'], true)
             ? strtoupper($raw['level'])
             : 'UNKNOWN';
-        $status = preg_match('/\b(?:http[_ ]?status|status[_ ]?code)\s*[:= ]\s*([1-5][0-9]{2})\b/i', $rawMessage, $matches) === 1
-            ? (int) $matches[1]
-            : null;
-        $exceptionClass = preg_match('/(?<class>[A-Za-z_][A-Za-z0-9_\\\\]*(?:Exception|Error))\b/', $rawMessage, $matches) === 1
-            && $this->isAllowedExceptionClass($matches['class'])
-            ? $matches['class']
-            : null;
+        $status = $this->httpStatus($rawMessage, $context);
+        $exceptionClass = $this->exceptionClass($rawMessage, $context);
 
         $entry = [
             'id' => hash('sha256', $timestamp->toIso8601String().'|'.$severity.'|'.$channel.'|'.$fileName.'|'.$recordIndex),
@@ -337,11 +332,93 @@ class LaravelLogReader
             'source' => $channel,
             'http_status' => $status,
             'exception_class' => $exceptionClass,
-            'route' => null,
-            'request_id' => null,
+            'route' => $this->safeContextString($context, ['system_monitoring_route_name']),
+            'request_path' => $this->safeContextPath($context['system_monitoring_request_path'] ?? null),
+            'request_method' => $this->safeContextMethod($context['system_monitoring_request_method'] ?? null),
+            'request_id' => $this->safeContextRequestId($context['system_monitoring_request_id'] ?? null),
         ];
 
         return $entry;
+    }
+
+    /** @return array{0:string,1:array<string,mixed>} */
+    private function splitContext(string $message): array
+    {
+        if (preg_match('/\s+(?<context>\{.*\})\s*$/s', $message, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+            return [$message, []];
+        }
+
+        $context = json_decode($matches['context'][0], true);
+        if (! is_array($context)) {
+            return [$message, []];
+        }
+
+        return [rtrim(substr($message, 0, $matches['context'][1])), $context];
+    }
+
+    private function httpStatus(string $message, array $context): ?int
+    {
+        $contextStatus = $context['system_monitoring_http_status'] ?? null;
+        if (is_numeric($contextStatus) && (int) $contextStatus >= 100 && (int) $contextStatus <= 599) {
+            return (int) $contextStatus;
+        }
+
+        return preg_match('/\b(?:http(?:[_ ]?status)?|status[_ ]?code)\s*[:= ]\s*([1-5][0-9]{2})\b/i', $message, $matches) === 1
+            ? (int) $matches[1]
+            : null;
+    }
+
+    private function exceptionClass(string $message, array $context): ?string
+    {
+        if (preg_match('/(?<class>[A-Za-z_][A-Za-z0-9_\\\\]*(?:Exception|Error))\b/', $message, $matches) === 1
+            && $this->isAllowedExceptionClass($matches['class'])) {
+            return $matches['class'];
+        }
+
+        $exception = $context['exception'] ?? null;
+        $class = is_array($exception) ? ($exception['class'] ?? null) : null;
+        if (! is_string($class) && is_string($exception)
+            && preg_match('/(?:\[object\]\s*)?\(?(?<class>[A-Za-z_][A-Za-z0-9_\\\\]*(?:Exception|Error))(?=\s*\(|:)/', $exception, $matches) === 1) {
+            $class = $matches['class'];
+        }
+
+        return is_string($class) && $this->isAllowedExceptionClass($class) ? $class : null;
+    }
+
+    private function safeContextString(array $context, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            $value = $context[$key] ?? null;
+            if (is_string($value) && preg_match('/^[A-Za-z0-9_.:-]{1,180}$/', $value) === 1) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function safeContextPath(mixed $value): ?string
+    {
+        if (! is_string($value) || $value === '' || mb_strlen($value) > 255
+            || preg_match('/^\/[A-Za-z0-9._~{}\/:?-]*$/', $value) !== 1) {
+            return null;
+        }
+
+        return $value;
+    }
+
+    private function safeContextMethod(mixed $value): ?string
+    {
+        return is_string($value) && in_array($value, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'OTHER'], true)
+            ? $value
+            : null;
+    }
+
+    private function safeContextRequestId(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^[a-f0-9-]{36}$/i', $value) === 1
+            ? $value
+            : null;
     }
 
     private function isAllowedExceptionClass(string $class): bool
@@ -354,7 +431,8 @@ class LaravelLogReader
             || $class === 'ErrorException'
             || str_starts_with($class, 'App\\')
             || str_starts_with($class, 'Illuminate\\')
-            || str_starts_with($class, 'Symfony\\');
+            || str_starts_with($class, 'Symfony\\')
+            || str_starts_with($class, 'GuzzleHttp\\');
     }
 
     private function safeSummary(string $message, string $severity, ?int $httpStatus, ?string $exceptionClass): string
@@ -366,16 +444,44 @@ class LaravelLogReader
             return 'Product moderation scan failure: '.$matches[1].'; request details withheld.';
         }
         if ($httpStatus !== null && $httpStatus >= 500) {
+            if ($exceptionClass !== null) {
+                return 'HTTP '.$httpStatus.' response recorded: '.$this->exceptionSummary($exceptionClass);
+            }
+
             return 'HTTP '.$httpStatus.' response recorded; request details withheld.';
         }
         if (preg_match('/sqlstate|pdoexception|database|mysql|postgres|sqlsrv|connection refused/i', $message) === 1) {
-            return 'Database failure recorded; connection and query details withheld.';
+            return 'Database query or connection failed; connection and query details withheld.';
         }
         if (preg_match('/timed? out|timeout/i', $message) === 1) {
-            return 'Operation timeout recorded; message details withheld.';
+            return 'The operation timed out; message details withheld.';
         }
         if ($exceptionClass !== null) {
-            return 'Exception recorded ('.class_basename($exceptionClass).'); message details withheld.';
+            return $this->exceptionSummary($exceptionClass);
+        }
+
+        if (preg_match('/\b(?:could not connect|connection refused|connection failed)\b/i', $message) === 1) {
+            return 'A required service could not be reached; connection details withheld.';
+        }
+        if (preg_match('/\b(?:not configured|missing configuration)\b/i', $message) === 1) {
+            return 'A required service setting is missing; configuration details withheld.';
+        }
+        if (preg_match('/\bquota\b.*\b(?:limit|exceed|reached)\b/i', $message) === 1) {
+            return 'A provider quota limit was reached; request details withheld.';
+        }
+        if (preg_match('/\b(?:retry|retries)\b.*\b(?:limit|exhausted|failed)\b/i', $message) === 1) {
+            return 'The operation reached its retry limit and did not complete.';
+        }
+        if (preg_match('/\b(?:invalid|malformed) response\b/i', $message) === 1) {
+            return 'A required service returned an invalid response; response details withheld.';
+        }
+        if (preg_match('/\b(?:mail|email|notification)\b/i', $message) === 1
+            && preg_match('/\b(?:fail(?:ed|ure)?|could not|unable)\b/i', $message) === 1) {
+            return 'Notification delivery failed; recipient details withheld.';
+        }
+        if (preg_match('/\b(?:upload|image|file|proof)\b/i', $message) === 1
+            && preg_match('/\b(?:fail(?:ed|ure)?|could not|unable|exception)\b/i', $message) === 1) {
+            return 'A file upload or storage operation failed; file details withheld.';
         }
 
         return match ($severity) {
@@ -383,6 +489,31 @@ class LaravelLogReader
             'WARNING' => 'Application warning recorded; message details withheld.',
             default => 'Application '.strtolower($severity).' log record; message details withheld.',
         };
+    }
+
+    private function exceptionSummary(string $exceptionClass): string
+    {
+        $shortClass = class_basename($exceptionClass);
+        $description = match ($exceptionClass) {
+            'Illuminate\\Validation\\ValidationException' => 'Request data did not pass validation',
+            'Illuminate\\Database\\Eloquent\\ModelNotFoundException',
+            'Symfony\\Component\\HttpKernel\\Exception\\NotFoundHttpException' => 'The requested page or record was not found',
+            'Illuminate\\Auth\\AuthenticationException' => 'Authentication is required for this request',
+            'Illuminate\\Auth\\Access\\AuthorizationException' => 'Access to this page or action was denied',
+            'Illuminate\\Session\\TokenMismatchException' => 'The session token was invalid or expired',
+            'Illuminate\\Database\\QueryException', 'PDOException' => 'A database query failed',
+            'Illuminate\\Database\\ConnectionException' => 'The application could not connect to the database',
+            'Illuminate\\Http\\Client\\ConnectionException', 'GuzzleHttp\\Exception\\ConnectException' => 'The application could not connect to an external service',
+            'Illuminate\\Queue\\MaxAttemptsExceededException' => 'A background job exhausted its retry limit',
+            'InvalidArgumentException' => 'An operation received an invalid argument',
+            'LogicException' => 'An operation ran in an invalid application state',
+            'TypeError' => 'Application code received a value of the wrong type',
+            'Error', 'ErrorException' => 'A PHP runtime error occurred',
+            'RuntimeException' => 'An application operation could not complete',
+            default => 'An exception occurred',
+        };
+
+        return $description.' ('.$shortClass.'); message details withheld.';
     }
 
     private function unavailable(string $reason): array

@@ -101,8 +101,8 @@ class LogisticsFinancialReportServiceTest extends TestCase
         $this->assertSame('', $row['shipping_fee']);
         $this->assertSame('', $row['logistics_share']);
         $this->assertSame('', $row['admin_product_commission']);
-        $this->assertCount(18, $service->csvHeader());
-        $this->assertSame(18, count($service->csvRow($proceeds)));
+        $this->assertCount(20, $service->csvHeader());
+        $this->assertSame(20, count($service->csvRow($proceeds)));
         $this->assertSame(array_values($row), $service->csvRow($proceeds), 'CSV detail rows must match the screen row values.');
         $csvStream = fopen('php://temp', 'w+');
         $service->writeCsvToStream($csvStream, $center, $filters);
@@ -125,8 +125,10 @@ class LogisticsFinancialReportServiceTest extends TestCase
         $pdfRow = $service->pdfRow($allocation);
         $this->assertSame('LK-1000 / ORD-600', $pdfRow[1]);
         $this->assertSame('PHP 50.00', $pdfRow[5]);
-        $this->assertSame('PHP 20.00', $pdfRow[6]);
-        $this->assertSame('PHP 10.00', $pdfRow[7]);
+        $this->assertSame('PHP 0.00', $pdfRow[6]);
+        $this->assertSame('PHP 50.00', $pdfRow[7]);
+        $this->assertSame('PHP 20.00', $pdfRow[8]);
+        $this->assertSame('PHP 10.00', $pdfRow[9]);
 
         $pdf = app(WorkspaceExportPdfService::class)->render([
             'workspace' => 'Logistics Portal',
@@ -141,14 +143,16 @@ class LogisticsFinancialReportServiceTest extends TestCase
                 'Admin product commission' => 'PHP 10.00',
             ],
             'columns' => [
-                ['label' => 'Date', 'width' => 0.15],
-                ['label' => 'Tracking / order', 'width' => 0.18],
-                ['label' => 'Transaction', 'width' => 0.18],
-                ['label' => 'Amount', 'width' => 0.12],
-                ['label' => 'Status', 'width' => 0.12],
-                ['label' => 'Shipping fee', 'width' => 0.1],
-                ['label' => 'Logistics share', 'width' => 0.1],
-                ['label' => 'Admin commission', 'width' => 0.12],
+                ['label' => 'Date', 'width' => 0.10],
+                ['label' => 'Tracking / order', 'width' => 0.15],
+                ['label' => 'Transaction', 'width' => 0.11],
+                ['label' => 'Amount', 'width' => 0.08],
+                ['label' => 'Status', 'width' => 0.10],
+                ['label' => 'Base shipping', 'width' => 0.09],
+                ['label' => 'Additional Care', 'width' => 0.09],
+                ['label' => 'Combined delivery', 'width' => 0.10],
+                ['label' => 'Logistics share', 'width' => 0.09],
+                ['label' => 'Admin commission', 'width' => 0.09],
             ],
             'rows' => [$pdfRow],
         ]);
@@ -156,6 +160,33 @@ class LogisticsFinancialReportServiceTest extends TestCase
         $this->assertStringContainsString('LK-1000 / ORD-600', $pdf);
         $this->assertStringContainsString('PHP 20.00', $pdf);
         $this->assertStringContainsString('Admin product commission: PHP 10.00', $pdf);
+    }
+
+    public function test_logistics_report_keeps_additional_care_separate_and_in_combined_delivery_total(): void
+    {
+        $this->insertLedger(1, 1000, 'LOGISTICS_ALLOCATION', 'CREDIT', '20.00', 'PENDING', '2026-10-22 09:00:00');
+        DB::table('shipment_financial_allocations')->where('id', 1000)->update([
+            'protection_amount' => '280.00',
+            'logistics_allocation' => '132.00',
+            'rider_allocation' => '198.00',
+        ]);
+        DB::table('financial_ledger_entries')->where('id', 1)->update(['amount' => '132.00']);
+        $center = new LogisticsCenter;
+        $center->id = 1;
+        $service = app(LogisticsFinancialReportService::class);
+
+        $summary = $service->summary($center, []);
+        $this->assertSame(50.0, $summary['shipping_fees']);
+        $this->assertSame(280.0, $summary['additional_care']);
+        $this->assertSame(330.0, $summary['delivery_charges']);
+        $this->assertSame(132.0, $summary['logistics_share']);
+
+        $allocation = $service->query($center, [])->where('entry_type', 'LOGISTICS_ALLOCATION')->firstOrFail();
+        $row = $service->row($allocation);
+        $this->assertSame('50.00', $row['shipping_fee']);
+        $this->assertSame('280.00', $row['additional_care']);
+        $this->assertSame('330.00', $row['delivery_earnings']);
+        $this->assertSame('132.00', $row['logistics_share']);
     }
 
     public function test_date_range_is_inclusive_in_manila_timezone_and_invalid_ranges_are_rejected(): void
@@ -258,6 +289,7 @@ class LogisticsFinancialReportServiceTest extends TestCase
             $table->unsignedBigInteger('seller_order_id');
             $table->unsignedBigInteger('order_id');
             $table->decimal('shipping_fee', 12, 2);
+            $table->decimal('protection_amount', 12, 2)->default(0);
             $table->decimal('logistics_allocation', 12, 2);
             $table->decimal('platform_commission', 12, 2);
             $table->decimal('rider_allocation', 12, 2);

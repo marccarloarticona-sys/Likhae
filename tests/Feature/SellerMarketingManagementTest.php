@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
@@ -102,6 +103,22 @@ class SellerMarketingManagementTest extends TestCase
                 ->assertDontSee('Save Buy X Get Y Offer');
         } finally {
             Schema::clearResolvedInstance('db.schema');
+        }
+    }
+
+    public function test_marketing_center_has_four_working_sections_with_the_current_section_active(): void
+    {
+        foreach ([
+            'vouchers' => 'Your Vouchers',
+            'flash-sales' => 'Variant Flash Sales',
+            'special-offers' => 'Bundle Deals and Buy X Get Y',
+            'overview' => 'Confirmed promotional discounts',
+        ] as $section => $heading) {
+            $this->actingAs($this->seller)
+                ->get(route('seller.marketing', ['section' => $section]))
+                ->assertOk()
+                ->assertSee('aria-current="page"', escape: false)
+                ->assertSee($heading);
         }
     }
 
@@ -248,6 +265,70 @@ class SellerMarketingManagementTest extends TestCase
             ->assertSessionHasErrors('product_ids');
 
         $this->assertDatabaseMissing('vouchers', ['code' => 'TARGETFOREIGN']);
+    }
+
+    public function test_seller_can_target_exact_owned_variants_but_not_another_sellers_variant(): void
+    {
+        $ownedProduct = Product::query()
+            ->where('seller_profile_id', $this->seller->sellerProfile->id)
+            ->where('status', 'ACTIVE')
+            ->firstOrFail();
+        $ownedVariant = $ownedProduct->variants()->where('is_active', true)->firstOrFail();
+        $foreignSeller = $this->createForeignSellerProfile();
+        $foreignProduct = Product::query()->create([
+            'seller_profile_id' => $foreignSeller->id,
+            'category_id' => $this->seller->sellerProfile->primary_category_id,
+            'name' => 'Foreign variant product',
+            'slug' => 'foreign-variant-product',
+            'status' => 'ACTIVE',
+        ]);
+        $foreignVariant = ProductVariant::query()->create([
+            'product_id' => $foreignProduct->id,
+            'sku' => 'FOREIGN-VOUCHER-VARIANT',
+            'price' => 100,
+            'stock' => 2,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($this->seller)
+            ->get(route('seller.marketing', ['section' => 'vouchers']))
+            ->assertOk()
+            ->assertSee('Selected variants only')
+            ->assertSee('name="variant_ids[]"', escape: false)
+            ->assertSee($ownedProduct->name)
+            ->assertDontSee($foreignProduct->name);
+
+        $this->from(route('seller.marketing', ['section' => 'vouchers']))
+            ->post(route('seller.marketing.campaigns.store', ['section' => 'vouchers']), [
+                'code' => 'ONLYONEVARIANT',
+                'name' => 'One variant voucher',
+                'discount_type' => 'PERCENT',
+                'discount_value' => 10,
+                'minimum_order_amount' => 0,
+                'applies_to' => 'VARIANTS',
+                'variant_ids' => [$ownedVariant->id],
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status', 'Voucher saved.');
+
+        $voucher = Voucher::query()->where('code', 'ONLYONEVARIANT')->sole();
+        $this->assertSame('VARIANTS', $voucher->applies_to);
+        $this->assertSame([$ownedVariant->id], $voucher->eligibleVariants()->pluck('product_variants.id')->all());
+
+        $this->from(route('seller.marketing', ['section' => 'vouchers']))
+            ->post(route('seller.marketing.campaigns.store', ['section' => 'vouchers']), [
+                'code' => 'FOREIGNVARIANT',
+                'name' => 'Foreign variant voucher',
+                'discount_type' => 'PERCENT',
+                'discount_value' => 10,
+                'applies_to' => 'VARIANTS',
+                'variant_ids' => [$foreignVariant->id],
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('variant_ids');
+
+        $this->assertDatabaseMissing('vouchers', ['code' => 'FOREIGNVARIANT']);
     }
 
     public function test_claimed_voucher_terms_cannot_be_changed_but_name_and_pause_remain_available(): void

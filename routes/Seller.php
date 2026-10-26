@@ -12,6 +12,9 @@ use App\Http\Controllers\Seller\SellerPickupRequestController;
 use App\Http\Controllers\Seller\SellerReturnRefundController;
 use App\Http\Controllers\Seller\SellerProductController;
 use App\Http\Controllers\Seller\SellerPromotionController;
+use App\Http\Controllers\Communication\MessagingFaqController;
+use App\Http\Controllers\Communication\SmartMessagingController;
+use App\Http\Controllers\Communication\SupportRequestController;
 use App\Http\Controllers\WorkspaceAiController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -101,6 +104,15 @@ Route::prefix('seller')
         Route::post('/logistics/{sellerOrder}/pickup', [SellerOrderController::class, 'handover'])->name('logistics.pickup');
 
         Route::get('/messages', [SellerEngagementController::class, 'messages'])->name('messages');
+        Route::get('/messages/faqs', [MessagingFaqController::class, 'sellerIndex'])->name('messages.faqs');
+        Route::post('/messages/faqs', [MessagingFaqController::class, 'storeSeller'])->middleware('throttle:30,1')->name('messages.faqs.store');
+        Route::patch('/messages/faqs/{faq}', [MessagingFaqController::class, 'updateSeller'])->whereNumber('faq')->middleware('throttle:30,1')->name('messages.faqs.update');
+        Route::patch('/messages/faqs/{faq}/archive', [MessagingFaqController::class, 'archiveSeller'])->whereNumber('faq')->name('messages.faqs.archive');
+        Route::post('/messages/{conversation}/smart-help/resolve', [SmartMessagingController::class, 'resolve'])
+            ->whereNumber('conversation')->middleware('throttle:30,1')->name('messages.smart-help.resolve');
+        Route::post('/messages/support-requests/{supportRequest}/acknowledge', [SupportRequestController::class, 'acknowledge'])->whereNumber('supportRequest')->name('messages.support-requests.acknowledge');
+        Route::post('/messages/support-requests/{supportRequest}/accept', [SupportRequestController::class, 'accept'])->whereNumber('supportRequest')->name('messages.support-requests.accept');
+        Route::post('/messages/support-requests/{supportRequest}/resolve', [SupportRequestController::class, 'resolve'])->whereNumber('supportRequest')->name('messages.support-requests.resolve');
         Route::get('/messages/stream', [SellerEngagementController::class, 'stream'])->name('messages.stream');
         Route::post('/messages/{conversation}/read', [SellerEngagementController::class, 'markConversationRead'])
             ->whereNumber('conversation')
@@ -118,6 +130,8 @@ Route::prefix('seller')
         Route::post('/marketing/campaigns', [SellerEngagementController::class, 'storeCampaign'])->name('marketing.campaigns.store');
         Route::patch('/marketing/campaigns/{voucher}', [SellerEngagementController::class, 'updateCampaign'])->name('marketing.campaigns.update');
         Route::patch('/marketing/campaigns/{voucher}/toggle', [SellerEngagementController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
+        Route::patch('/marketing/flash-sales/{product}', [SellerEngagementController::class, 'updateFlashSales'])->name('marketing.flash-sales.update');
+        Route::patch('/marketing/flash-sales/{product}/end', [SellerEngagementController::class, 'endFlashSales'])->name('marketing.flash-sales.end');
         Route::get('/promotions', [SellerPromotionController::class, 'index'])->name('promotions');
         Route::post('/promotions', [SellerPromotionController::class, 'store'])->name('promotions.store');
         Route::patch('/promotions/{promotion}/toggle', [SellerPromotionController::class, 'toggle'])->name('promotions.toggle');

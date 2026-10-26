@@ -48,6 +48,11 @@ class LegacyShipmentCompatibilityTest extends TestCase
 
         $this->actingAs($seller)
             ->get(route('seller.orders.waybill', $sellerOrder))
+            ->assertStatus(409);
+
+        $sellerOrder->update(['status' => 'CONFIRMED']);
+        $this->actingAs($seller)
+            ->get(route('seller.orders.waybill', $sellerOrder))
             ->assertOk()
             ->assertSee('LEGACY-TRACKING-001')
             ->assertSee('Legacy parcel contents: Legacy Item A, Legacy Item B. This tracking number covers the legacy parcel.');

@@ -59,6 +59,9 @@ class SellerOrderController extends Controller
             'shipments.logisticsCenter.address',
             'shipments.sellerOrder.sellerProfile.businessAddress',
         ];
+        if (Schema::hasTable('seller_settlements')) {
+            $orderRelations[] = 'settlements';
+        }
         if (Schema::hasTable('cod_collections')) {
             $orderRelations = [...$orderRelations, 'items.shipment.codCollection', 'shipments.codCollection'];
         }
@@ -407,11 +410,22 @@ class SellerOrderController extends Controller
                 && $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
             'parcels_need_setup' => $items->contains(fn ($item): bool => ! $item->shipment)
                 || $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
+            'can_print_waybills' => $order->canPrintWaybills(),
             'packed' => $shipments->isNotEmpty() && $shipments->every($packedCheckpoint),
             'product_search' => $items->pluck('product_name')->filter()->implode(' '),
             'total' => (float) $order->grand_total,
             'item_subtotal' => (float) $order->item_subtotal,
             'voucher_discount' => (float) $order->voucher_discount,
+            'seller_voucher_discount' => (int) ($order->funding_snapshot_version ?? 0) === 1 ? (float) $order->seller_voucher_discount : null,
+            'platform_voucher_discount' => (int) ($order->funding_snapshot_version ?? 0) === 1 ? (float) $order->platform_voucher_discount : null,
+            'funding_snapshot_version' => (int) ($order->funding_snapshot_version ?? 0),
+            'seller_commission' => $order->relationLoaded('settlements') ? (float) $order->settlements->sum('platform_commission') : null,
+            'seller_earnings' => $order->relationLoaded('settlements') && $order->settlements->every(fn ($row): bool => $row->seller_payable !== null)
+                ? (float) $order->settlements->sum('seller_payable')
+                : null,
+            'settlement_status' => $order->relationLoaded('settlements') && $order->settlements->isNotEmpty()
+                ? $order->settlements->pluck('payout_status')->unique()->implode(', ')
+                : null,
             'reward_points_redeemed' => (int) ($order->reward_points_redeemed ?? 0),
             'reward_points_discount' => (float) ($order->reward_points_discount ?? 0),
             'voucher_code' => $order->voucher?->code,

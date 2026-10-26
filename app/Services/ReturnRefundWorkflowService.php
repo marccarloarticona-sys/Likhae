@@ -180,11 +180,11 @@ class ReturnRefundWorkflowService
             ->where('items.order_item_id', $orderItemId)
             ->where(function ($query): void {
                 $query
-                    ->whereNotIn('seller_requests.status', SellerReturnRefundRequest::FINAL_STATUSES)
+                    ->where('seller_requests.status', '<>', SellerReturnRefundRequest::STATUS_REJECTED)
                     ->orWhere(function ($legacy): void {
                         $legacy
                             ->whereNull('items.seller_return_refund_request_id')
-                            ->whereNotIn('requests.status', ['COMPLETED', 'REJECTED', 'RESOLVED']);
+                            ->where('requests.status', '<>', 'REJECTED');
                     });
             })
             ->sum('items.quantity');

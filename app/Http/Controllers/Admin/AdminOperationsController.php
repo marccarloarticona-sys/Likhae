@@ -21,6 +21,8 @@ use App\Models\Communication\Conversation;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\LogisticsEarningPool;
+use App\Models\Finance\RiderEarningPool;
+use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\RiderRemittance;
 use App\Models\Finance\SellerSettlement;
 use App\Models\Finance\ShipmentFinancialAllocation;
@@ -28,6 +30,7 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\Voucher;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\RefundPayout;
 use App\Models\Buyer\ReturnRefundEvidence;
@@ -37,6 +40,8 @@ use App\Services\Communication\ConversationService;
 use App\Services\Communication\ConversationMessageSender;
 use App\Services\Communication\MessageAttachmentService;
 use App\Services\Communication\ConversationContextPresenter;
+use App\Services\Communication\SmartMessagingService;
+use App\Services\Communication\SupportOverviewService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
@@ -44,6 +49,7 @@ use App\Services\PolicyAcceptanceService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use App\Support\PayoutDestinationInput;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -468,11 +474,29 @@ class AdminOperationsController extends Controller
             'seller_payable' => 0.0,
             'logistics_allocation' => 0.0,
             'rider_allocation' => 0.0,
+            'delivery_charges_collected' => 0.0,
+            'base_shipping_charges' => 0.0,
+            'additional_care_charges' => 0.0,
+            'pending_allocations' => 0.0,
+            'refund_adjustments' => 0.0,
             'unresolved_settlements' => 0,
             'available_payouts' => 0.0,
             'requested_payouts' => 0.0,
             'awaiting_payout_ack' => 0.0,
             'paid_payouts' => 0.0,
+            'gross_product_sales' => 0.0,
+            'seller_markdowns' => 0.0,
+            'seller_promotions' => 0.0,
+            'seller_voucher_discounts' => 0.0,
+            'platform_voucher_discounts' => 0.0,
+            'platform_shipping_voucher_discounts' => 0.0,
+            'reward_points_discounts' => 0.0,
+            'net_buyer_product_charges' => 0.0,
+            'campaign_reserved' => 0.0,
+            'campaign_spent' => 0.0,
+            'campaign_available' => 0.0,
+            'campaign_setup_required' => 0,
+            'campaign_reconciliation_mismatches' => 0,
         ];
         $sellerSettlements = null;
         $productProceeds = null;
@@ -495,6 +519,76 @@ class AdminOperationsController extends Controller
             $financialTotals['seller_payable'] = (float) ShipmentFinancialAllocation::query()->sum('seller_payable');
             $financialTotals['logistics_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('logistics_allocation');
             $financialTotals['rider_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('rider_allocation');
+            $financialTotals['base_shipping_charges'] = (float) ShipmentFinancialAllocation::query()->sum('shipping_fee');
+            if (Schema::hasColumn('shipment_financial_allocations', 'protection_amount')) {
+                $financialTotals['additional_care_charges'] = (float) ShipmentFinancialAllocation::query()->sum('protection_amount');
+            }
+            $financialTotals['delivery_charges_collected'] = $financialTotals['base_shipping_charges'] + $financialTotals['additional_care_charges'];
+            if (Schema::hasColumn('shipment_financial_allocations', 'protection_account_status')) {
+                $financialTotals['pending_allocations'] += (float) ShipmentFinancialAllocation::query()
+                    ->whereIn('protection_account_status', ['PENDING_UNALLOCATED', 'PENDING_OWNER_POLICY'])
+                    ->sum('protection_amount');
+            }
+            if (Schema::hasTable('rider_earning_pools')) {
+                $financialTotals['pending_allocations'] += (float) RiderEarningPool::query()->sum('unresolved_share_amount');
+            }
+            if (Schema::hasTable('logistics_earning_pools')) {
+                $financialTotals['pending_allocations'] += (float) LogisticsEarningPool::query()->sum('unresolved_share_amount');
+            }
+            if (Schema::hasTable('financial_ledger_entries')) {
+                $financialTotals['refund_adjustments'] = (float) FinancialLedgerEntry::query()
+                    ->whereIn('entry_type', ['REFUND_LOGISTICS_REVERSAL', 'REFUND_RIDER_REVERSAL'])
+                    ->sum('amount');
+            }
+            if (Schema::hasColumn('order_items', 'original_unit_price')) {
+                $financialTotals['gross_product_sales'] = (float) DB::table('order_items')
+                    ->whereNotNull('original_unit_price')
+                    ->selectRaw('COALESCE(SUM(original_unit_price * quantity), 0) as total')
+                    ->value('total');
+                if (Schema::hasColumn('order_items', 'funding_snapshot_version')) {
+                    $financialTotals['seller_markdowns'] = (float) DB::table('order_items')
+                        ->where('funding_snapshot_version', 1)->sum('discount_amount');
+                }
+            }
+            if (Schema::hasColumn('seller_orders', 'promotion_discount_total')) {
+                $promotionQuery = SellerOrder::query();
+                if (Schema::hasColumn('seller_orders', 'funding_snapshot_version')) {
+                    $promotionQuery->where('funding_snapshot_version', 1);
+                }
+                $financialTotals['seller_promotions'] = (float) $promotionQuery->sum('promotion_discount_total');
+            }
+            if (Schema::hasColumn('seller_orders', 'funding_snapshot_version')) {
+                $financialTotals['seller_voucher_discounts'] = (float) SellerOrder::query()
+                    ->where('funding_snapshot_version', 1)->sum('seller_voucher_discount');
+            }
+            if (Schema::hasColumn('order_items', 'funding_snapshot_version')) {
+                $sourceItems = DB::table('order_items')->where('funding_snapshot_version', 1);
+                $financialTotals['platform_voucher_discounts'] = (float) (clone $sourceItems)->sum('platform_voucher_discount');
+                $financialTotals['platform_shipping_voucher_discounts'] = (float) (clone $sourceItems)->sum('platform_shipping_voucher_discount');
+                $financialTotals['reward_points_discounts'] = (float) (clone $sourceItems)->sum('reward_points_discount');
+                $financialTotals['net_buyer_product_charges'] = (float) DB::table('order_items')
+                    ->where('funding_snapshot_version', 1)
+                    ->selectRaw('COALESCE(SUM(CASE WHEN line_total - seller_voucher_discount - platform_voucher_discount - reward_points_discount > 0 THEN line_total - seller_voucher_discount - platform_voucher_discount - reward_points_discount ELSE 0 END), 0) as total')
+                    ->value('total');
+            }
+            if (Schema::hasColumn('financial_ledger_entries', 'voucher_id')
+                && Schema::hasColumn('financial_ledger_entries', 'order_item_id')) {
+                $budgetService = app(PlatformCampaignBudgetService::class);
+                Voucher::query()->whereNull('seller_profile_id')->whereNotNull('platform_code_key')->get()
+                    ->each(function (Voucher $campaign) use (&$financialTotals, $budgetService): void {
+                        $budget = $budgetService->summary($campaign);
+                        $financialTotals['campaign_reserved'] += $budget['reserved_cents'] / 100;
+                        $financialTotals['campaign_spent'] += $budget['spent_cents'] / 100;
+                        if ($budget['allocated_cents'] === null) {
+                            $financialTotals['campaign_setup_required']++;
+                        } else {
+                            $financialTotals['campaign_available'] += ($budget['available_cents'] ?? 0) / 100;
+                        }
+                        if ($budget['reconciliation_mismatch']) {
+                            $financialTotals['campaign_reconciliation_mismatches']++;
+                        }
+                    });
+            }
             $financialTotals['unresolved_settlements'] = SellerSettlement::query()->where('payout_status', 'REVIEW_REQUIRED')->count();
             $availableSeller = SellerSettlement::query()
                 ->whereIn('payout_status', ['PENDING', 'FAILED'])
@@ -555,6 +649,7 @@ class AdminOperationsController extends Controller
                 $financialTotals['requested_payouts'] += (float) LogisticsEarningPool::query()->where('status', 'PAYOUT_REQUESTED')->sum('total_amount');
                 $financialTotals['awaiting_payout_ack'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->sum('amount');
                 $financialTotals['paid_payouts'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->sum('amount');
+                $financialTotals['paid_payouts'] += (float) RiderEarningPoolParticipant::query()->where('status', 'PAID')->sum('share_amount');
                 $logisticsPayouts = LogisticsEarningPool::query()
                     ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
                     ->where('total_amount', '>', 0)
@@ -602,6 +697,40 @@ class AdminOperationsController extends Controller
         $commissionExpression = $this->reportAllocatedCommissionExpression();
 
         $summary = (clone $items)->selectRaw("\n            COALESCE(SUM($salesExpression), 0) AS sales,\n            COALESCE(SUM($commissionExpression), 0) AS commission,\n            COALESCE(SUM(oi.quantity), 0) AS units_sold,\n            COUNT(DISTINCT so.id) AS order_count\n        ")->first();
+
+        $sourceAwareBreakdown = [
+            'seller_gross_entitlement' => 0.0,
+            'seller_funded_reductions' => 0.0,
+            'platform_product_vouchers' => 0.0,
+            'platform_shipping_vouchers' => 0.0,
+            'reward_points' => 0.0,
+            'net_buyer_product_charges' => 0.0,
+            'campaign_net_expense' => 0.0,
+        ];
+        if (Schema::hasColumn('seller_orders', 'funding_snapshot_version')) {
+            $sourceItems = (clone $items)->where('so.funding_snapshot_version', 1);
+            $breakdown = (clone $sourceItems)->selectRaw("\n                COALESCE(SUM(CASE WHEN oi.line_total - oi.seller_voucher_discount > 0 THEN oi.line_total - oi.seller_voucher_discount ELSE 0 END), 0) AS seller_gross_entitlement,\n                COALESCE(SUM(CASE WHEN (oi.original_unit_price * oi.quantity) - (oi.line_total - oi.seller_voucher_discount) > 0 THEN (oi.original_unit_price * oi.quantity) - (oi.line_total - oi.seller_voucher_discount) ELSE 0 END), 0) AS seller_funded_reductions,\n                COALESCE(SUM(oi.platform_voucher_discount), 0) AS platform_product_vouchers,\n                COALESCE(SUM(oi.reward_points_discount), 0) AS reward_points,\n                COALESCE(SUM(CASE WHEN oi.line_total - oi.seller_voucher_discount - oi.platform_voucher_discount - oi.reward_points_discount > 0 THEN oi.line_total - oi.seller_voucher_discount - oi.platform_voucher_discount - oi.reward_points_discount ELSE 0 END), 0) AS net_buyer_product_charges\n            ")->first();
+            foreach (array_keys($sourceAwareBreakdown) as $key) {
+                if ($key !== 'platform_shipping_vouchers' && $key !== 'campaign_net_expense') {
+                    $sourceAwareBreakdown[$key] = (float) ($breakdown->{$key} ?? 0);
+                }
+            }
+            $sellerOrderIds = (clone $sourceItems)->select('so.id')->distinct();
+            if (Schema::hasColumn('seller_orders', 'platform_shipping_voucher_discount')) {
+                $sourceAwareBreakdown['platform_shipping_vouchers'] = (float) DB::table('seller_orders')
+                    ->whereIn('id', $sellerOrderIds)->sum('platform_shipping_voucher_discount');
+            }
+            if (Schema::hasColumn('financial_ledger_entries', 'order_item_id')) {
+                $sourceItemIds = (clone $sourceItems)->select('oi.id');
+                $campaignEntries = DB::table('financial_ledger_entries')
+                    ->whereIn('order_item_id', $sourceItemIds)
+                    ->whereIn('entry_type', ['PLATFORM_PROMOTIONAL_EXPENSE', 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL'])
+                    ->where('status', 'POSTED');
+                $sourceAwareBreakdown['campaign_net_expense'] = (float) (clone $campaignEntries)
+                    ->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE')->sum('amount')
+                    - (float) (clone $campaignEntries)->where('entry_type', 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL')->sum('amount');
+            }
+        }
 
         $sortColumn = match ($filters['sort'] ?? 'sales') {
             'units' => 'units_sold',
@@ -666,6 +795,7 @@ class AdminOperationsController extends Controller
             'shops' => $shops,
             'categories' => $categories,
             'products' => $products,
+            'sourceAwareBreakdown' => $sourceAwareBreakdown,
             'shopOptions' => SellerProfile::query()->with('primaryCategory')->orderBy('business_name')->get(['id', 'business_name', 'primary_category_id']),
             'categoryOptions' => Category::query()->with('parent')->where('is_active', true)->whereNull('archived_at')->orderBy('parent_id')->orderBy('name')->get(),
             'productOptions' => Product::query()->with('sellerProfile')->orderBy('name')->get(['id', 'name', 'seller_profile_id']),
@@ -710,29 +840,50 @@ class AdminOperationsController extends Controller
 
     private function reportItemSalesExpression(): string
     {
-        return 'CASE WHEN so.item_subtotal > 0 THEN oi.line_total * GREATEST(so.item_subtotal - so.voucher_discount, 0) / so.item_subtotal ELSE 0 END';
+        if (Schema::hasColumn('seller_orders', 'funding_snapshot_version')) {
+            return 'CASE WHEN so.funding_snapshot_version = 1 THEN CASE WHEN oi.line_total - oi.seller_voucher_discount - oi.platform_voucher_discount - oi.reward_points_discount > 0 THEN oi.line_total - oi.seller_voucher_discount - oi.platform_voucher_discount - oi.reward_points_discount ELSE 0 END WHEN so.item_subtotal > 0 THEN CASE WHEN oi.line_total - (so.voucher_discount + so.reward_points_discount) * oi.line_total / so.item_subtotal > 0 THEN oi.line_total - (so.voucher_discount + so.reward_points_discount) * oi.line_total / so.item_subtotal ELSE 0 END ELSE 0 END';
+        }
+
+        return 'CASE WHEN so.item_subtotal > 0 THEN CASE WHEN oi.line_total - (so.voucher_discount + so.reward_points_discount) * oi.line_total / so.item_subtotal > 0 THEN oi.line_total - (so.voucher_discount + so.reward_points_discount) * oi.line_total / so.item_subtotal ELSE 0 END ELSE 0 END';
     }
 
     private function reportAllocatedCommissionExpression(): string
     {
-        return "CASE WHEN ct.status IS NOT NULL AND ct.status <> 'VOID' AND so.item_subtotal > 0 THEN ct.commission_amount * oi.line_total / so.item_subtotal ELSE 0 END";
+        return "CASE WHEN ct.status IS NOT NULL AND ct.status <> 'VOID' AND so.item_subtotal > 0 THEN ct.commission_amount * COALESCE(oi.original_unit_price, oi.unit_price) * oi.quantity / NULLIF((SELECT SUM(COALESCE(oi2.original_unit_price, oi2.unit_price) * oi2.quantity) FROM order_items oi2 WHERE oi2.seller_order_id = so.id), 0) ELSE 0 END";
     }
 
-    public function messages(Request $request, ConversationService $conversationService): View
+    public function messages(Request $request, ConversationService $conversationService, SupportOverviewService $supportOverview): View
     {
-        $conversations = $conversationService->workspaceThreads(
-            $request->user(),
-            $request->integer('conversation') ?: null,
-        );
+        $conversationId = $request->integer('conversation') ?: null;
+        $section = (string) $request->query('section', '');
+        if (! in_array($section, ['overview', 'chats'], true)) {
+            $section = $conversationId ? 'chats' : 'overview';
+        }
+        $conversations = $section === 'chats'
+            ? $conversationService->workspaceThreads($request->user(), $conversationId)
+            : collect();
+        $selectedRequest = $request->integer('request') ?: null;
+        $statusFilter = $request->query('status');
+        $statusFilter = is_string($statusFilter) ? $statusFilter : null;
+        $search = $request->query('q');
+        $search = is_string($search) ? mb_substr(trim($search), 0, 120) : '';
+        $supportOverviewReady = $supportOverview->schemaReady();
+        $overview = $section === 'overview' && $supportOverviewReady
+            ? $supportOverview->overview($request->user(), $statusFilter, $search, $selectedRequest)
+            : null;
 
         return view('Admin.messages.index', [
+            'section' => $section,
+            'supportOverview' => $overview,
+            'supportOverviewReady' => $supportOverviewReady,
             'conversations' => $conversations,
-            'contacts' => User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']),
+            'contacts' => $section === 'chats' ? User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']) : collect(),
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),
             'messageContext' => app(ConversationContextPresenter::class)->forUser(
                 $request->user(),
-                $conversations->firstWhere('id', $request->integer('conversation')),
+                $section === 'chats' ? $conversations->firstWhere('id', $conversationId) : null,
             ),
+            'supportStates' => $section === 'chats' ? app(SmartMessagingService::class)->statesFor($conversations) : [],
         ]);
     }
 
@@ -1837,7 +1988,7 @@ class AdminOperationsController extends Controller
         return $this->pdfDownload(
             $pdf->render([
                 'title' => 'Finance commission report',
-                'description' => 'Platform commission transactions using the existing 10% commission rule.',
+                'description' => 'Platform commission transactions use the configured rate saved with each eligible order.',
                 'generated_at' => now()->format('M j, Y g:i A T'),
                 'generated_by' => $request->user()?->name ?: 'Authorized Admin',
                 'filters' => [['label' => 'Scope', 'value' => 'All commission transactions']],
@@ -1845,6 +1996,7 @@ class AdminOperationsController extends Controller
                     ['label' => 'Settled commission', 'value' => 'PHP '.number_format($settled, 2)],
                     ['label' => 'Pending / accrued', 'value' => 'PHP '.number_format($pending, 2)],
                     ['label' => 'Transactions', 'value' => number_format($commissions->count())],
+                    ...$this->campaignBudgetPdfSummary(),
                 ],
                 'table_title' => 'Commission detail',
                 'columns' => [
@@ -1861,6 +2013,39 @@ class AdminOperationsController extends Controller
             ]),
             'likhae-admin-finance-'.now()->format('Ymd-His').'.pdf',
         );
+    }
+
+    /** @return list<array{label:string,value:string}> */
+    private function campaignBudgetPdfSummary(): array
+    {
+        if (! Schema::hasTable('financial_ledger_entries')
+            || ! Schema::hasColumn('vouchers', 'campaign_budget_total')
+            || ! Schema::hasColumn('vouchers', 'platform_code_key')
+            || ! Schema::hasColumn('financial_ledger_entries', 'voucher_id')
+            || ! Schema::hasColumn('financial_ledger_entries', 'order_item_id')) {
+            return [];
+        }
+
+        $totals = ['reserved' => 0, 'spent' => 0, 'available' => 0, 'pending_setup' => 0];
+        $budgets = app(PlatformCampaignBudgetService::class);
+        Voucher::query()->whereNull('seller_profile_id')->whereNotNull('platform_code_key')->get()
+            ->each(function (Voucher $campaign) use (&$totals, $budgets): void {
+                $summary = $budgets->summary($campaign);
+                $totals['reserved'] += $summary['reserved_cents'];
+                $totals['spent'] += $summary['spent_cents'];
+                if ($summary['available_cents'] === null) {
+                    $totals['pending_setup']++;
+                } else {
+                    $totals['available'] += $summary['available_cents'];
+                }
+            });
+
+        return [
+            ['label' => 'Campaign reserved funds', 'value' => 'PHP '.number_format($totals['reserved'] / 100, 2)],
+            ['label' => 'Net campaign expense', 'value' => 'PHP '.number_format($totals['spent'] / 100, 2)],
+            ['label' => 'Available campaign funds', 'value' => 'PHP '.number_format($totals['available'] / 100, 2)],
+            ['label' => 'Campaigns pending budget setup', 'value' => number_format($totals['pending_setup'])],
+        ];
     }
 
     public function exportReport(Request $request, AdminReportPdfService $pdf)
@@ -1940,7 +2125,7 @@ class AdminOperationsController extends Controller
                 ],
                 'rows' => $rows,
                 'empty_message' => 'No sales match the selected report filters.',
-                'footnote' => 'Item sales exclude shipping and allocate seller voucher discounts by item share. Void commissions are excluded.',
+                'footnote' => 'Item sales show buyer product charges for source-aware orders. Legacy orders with unverified funding remain in general totals for manual review. Void commissions are excluded.',
             ]),
             'likhae-admin-sales-commission-'.now()->format('Ymd-His').'.pdf',
         );

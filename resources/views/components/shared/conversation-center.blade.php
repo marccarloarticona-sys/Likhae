@@ -75,8 +75,11 @@
     .lk-unified-messages .lk-message-meta .lk-message-time { margin-top: 0; }
     .lk-unified-messages .lk-message-row.is-mine .lk-message-meta { justify-content: flex-end; }
     .lk-unified-messages .lk-message-receipt { display: inline-flex; align-items: center; gap: 4px; color: var(--msg-muted-2); font-size: 10px; font-weight: 700; line-height: 1; }
+    .lk-unified-messages .lk-message-receipt[hidden] { display: none; }
     .lk-unified-messages .lk-message-row.is-mine .lk-message-receipt { color: #D6A58D; }
     .lk-unified-messages .lk-message-seen-avatar { width: 16px; height: 16px; border: 1px solid rgba(255,255,255,.9); border-radius: 999px; object-fit: cover; }
+    .lk-unified-messages .lk-message-row.has-collapsed-seen-receipt,.lk-unified-messages .lk-message-row.has-collapsed-seen-receipt .lk-message-meta { cursor: pointer; }
+    .lk-unified-messages .lk-message-meta[role="button"]:focus-visible { outline: 2px solid #C19771; outline-offset: 3px; border-radius: 4px; }
     .lk-unified-messages .lk-chat-form { display: flex; align-items: center; gap: 10px; padding: 14px; border-top: 1px solid var(--msg-border); }
     .lk-unified-messages .lk-chat-input { min-width: 0; flex: 1; min-height: 42px; padding: 0 15px; border: 1px solid var(--msg-border); border-radius: 14px; background: var(--msg-card); color: var(--msg-text); font-size: 12px; outline: none; }
     .lk-unified-messages .lk-chat-input:focus { border-color: #C19771; box-shadow: 0 0 0 4px rgba(86,28,23,.08); }
@@ -106,6 +109,9 @@
     .lk-unified-messages .lk-compose-form select { min-height: 42px; padding: 0 12px; border: 1px solid var(--msg-border); border-radius: 12px; background: var(--msg-card); color: var(--msg-text); }
     .lk-unified-messages .lk-compose-form textarea { padding: 12px; border: 1px solid var(--msg-border); border-radius: 12px; background: var(--msg-card); color: var(--msg-text); font-size: 12px; resize: vertical; }
     .lk-unified-messages .lk-status-message { padding: 12px 14px; border: 1px solid #B9DEC8; border-radius: 12px; background: #EFFAF2; color: #256F4A; font-size: 12px; font-weight: 700; }
+    .lk-unified-messages .lk-support-session { display: grid; gap: 5px; padding: 11px 14px; border-bottom: 1px solid var(--msg-border); background: #FFF8EE; color: #5B2018; font-size: 11px; }
+    .lk-unified-messages .lk-support-session button { justify-self: start; padding: 6px 10px; border: 1px solid #C19771; border-radius: 999px; background: #FFF; color: #5B2018; font: inherit; font-weight: 800; cursor: pointer; }
+    .lk-unified-messages .lk-support-badge { display: inline-flex; margin-top: 4px; padding: 3px 7px; border-radius: 999px; background: #F9E7CF; color: #6B301A; font-size: 9px; font-weight: 800; }
     @media (max-width: 1023px) { .lk-unified-messages .lk-messages-shell { grid-template-columns: minmax(210px,30%) minmax(0,1fr); grid-template-rows: minmax(0,1fr); } .lk-unified-messages .lk-messages-sidebar { border-right: 1px solid var(--msg-border); border-bottom: 0; } }
     @media (max-width: 767px) {
         .lk-unified-messages .lk-messages-shell { height: calc(100dvh - 260px); min-height: 260px; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr); border-radius: 18px; }
@@ -166,6 +172,7 @@
                         <div class="lk-conversation-copy">
                             <div class="lk-conversation-top"><strong class="lk-conversation-name">{{ $name }}</strong><span class="lk-conversation-time">{{ $conversation->latestMessage?->sent_at?->diffForHumans() ?? $conversation->updated_at?->diffForHumans() }}</span></div>
                             <p class="lk-conversation-preview">{{ $messagePreview }}</p>
+                            @if(in_array(data_get($supportStates ?? [], $conversation->id.'.request_status'), ['NEW', 'AWAITING_RESPONSE', 'IN_PROGRESS'], true))<span class="lk-support-badge">Live help · {{ str((string) data_get($supportStates, $conversation->id.'.request_status'))->replace('_', ' ')->title() }}</span>@endif
                             @if(($conversation->unread_count ?? 0) > 0)<span class="lk-conversation-unread" data-conversation-unread aria-label="{{ $conversation->unread_count }} unread messages">{{ $conversation->unread_count }}</span>@endif
                         </div>
                     </a>
@@ -179,6 +186,15 @@
             @if($activeConversation && $activeOther)
                 @php
                     $activeMessages = $activeConversation->messages ?? collect();
+                    $lastSeenMessageId = $activeOtherReadAt
+                        ? $activeMessages->filter(function ($candidate) use ($activeOtherReadAt) {
+                            $candidateSentAt = $candidate->sent_at ?? $candidate->created_at;
+
+                            return (int) $candidate->sender_user_id === (int) auth()->id()
+                                && $candidateSentAt
+                                && $candidateSentAt->lte($activeOtherReadAt);
+                        })->last()?->id
+                        : null;
                 @endphp
                 <div class="lk-chat-head">
                     <button type="button" class="lk-chat-back" data-mobile-conversation-list aria-label="Back to conversations" title="Back to conversations"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><span>Chats</span></button>
@@ -196,6 +212,26 @@
                         @if(!empty($messageContext['items']))<div>Items: {{ implode(', ', $messageContext['items']) }}</div>@endif
                     </div>
                 @endif
+                @php
+                    $activeSupportState = data_get($supportStates ?? [], $activeConversation->id);
+                    $supportRequestId = data_get($activeSupportState, 'request_id');
+                    $supportRequestStatus = data_get($activeSupportState, 'request_status');
+                    $hasActiveHumanRequest = filled($supportRequestId) && in_array($supportRequestStatus, ['NEW', 'AWAITING_RESPONSE', 'IN_PROGRESS'], true);
+                    $supportSnapshot = data_get($activeSupportState, 'context', []);
+                    $requestRoutePrefix = auth()->user()->isAccountType(\App\Models\User::TYPE_ADMIN) ? 'admin' : 'seller';
+                @endphp
+                @if($hasActiveHumanRequest)
+                    <section class="lk-support-session" data-support-session data-status="{{ $supportRequestStatus }}">
+                        <strong>Buyer requested live help · {{ str((string) $supportRequestStatus)->replace('_', ' ')->title() }}</strong>
+                        @if(filled(data_get($supportSnapshot, 'question')))<span>Question: {{ data_get($supportSnapshot, 'question') }}</span>@endif
+                        @if(filled(data_get($supportSnapshot, 'product')))<span>Product: {{ data_get($supportSnapshot, 'product') }}</span>@endif
+                        @if(filled(data_get($supportSnapshot, 'variant')))<span>Variant: {{ data_get($supportSnapshot, 'variant') }}</span>@endif
+                        @if(filled(data_get($supportSnapshot, 'order_number')))<span>Order #{{ data_get($supportSnapshot, 'order_number') }} · {{ str((string) data_get($supportSnapshot, 'order_status'))->replace('_', ' ')->title() }}</span>@endif
+                        @if($supportRequestStatus === 'NEW')<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.acknowledge', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark awaiting response</button></form>@endif
+                        @if(in_array($supportRequestStatus, ['NEW', 'AWAITING_RESPONSE'], true))<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.accept', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Accept request</button></form>@endif
+                        <form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.resolve', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark resolved</button></form>
+                    </section>
+                @endif
                 <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-user-id="{{ $activeOther->id }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" data-other-last-read-at="{{ $activeOtherReadAt?->toIso8601String() }}" data-read-url="{{ route('messages.read', ['conversation' => $activeConversation->id]) }}" data-read-url-template="{{ route('messages.read', ['conversation' => '__conversation__']) }}" data-receipt-url="{{ route('messages.receipt', ['conversation' => $activeConversation->id]) }}" data-receipt-url-template="{{ route('messages.receipt', ['conversation' => '__conversation__']) }}" @if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
                     <div class="lk-chat-day"><span>Conversation</span></div>
                     @forelse($activeMessages as $message)
@@ -205,10 +241,11 @@
                         @php
                             $messageSentAt = $message->sent_at ?? $message->created_at;
                             $wasSeen = $fromMe && $activeOtherReadAt && $messageSentAt && $messageSentAt->lte($activeOtherReadAt);
+                            $isLatestSeen = $wasSeen && (string) $message->id === (string) $lastSeenMessageId;
                         @endphp
                         <div class="lk-message-row {{ $fromMe ? 'is-mine' : '' }}" data-message-id="{{ $message->id }}" data-message-sender-id="{{ $message->sender_user_id }}" @if($messageSentAt) data-message-sent-at="{{ $messageSentAt->toIso8601String() }}" @endif>
                             @unless($fromMe)<img class="lk-message-small-avatar" src="{{ $activeOtherAvatar }}" alt="{{ $activeOtherName }}" loading="lazy" decoding="async">@endunless
-                            <div>@if(filled($message->body) && !(filled($message->attachment_path) && in_array(trim((string)$message->body), ['[Photo]', '[File]'], true)))<div class="lk-message-bubble">{{ $message->body }}</div>@endif @if(($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) && filled($message->attachment_path))@include('components.shared.message-attachment',['message'=>$message])@endif<div class="lk-message-meta"><span class="lk-message-time">{{ $messageSentAt?->diffForHumans() }}</span>@if($fromMe)<span class="lk-message-receipt" data-message-receipt data-message-sent-at="{{ $messageSentAt?->toIso8601String() }}" data-receipt-state="{{ $wasSeen ? 'seen' : 'sent' }}"><span data-message-receipt-text>{{ $wasSeen ? 'Seen' : 'Sent' }}</span>@if($wasSeen)<img class="lk-message-seen-avatar" data-message-receipt-avatar src="{{ $activeOtherAvatar }}" alt="" title="Seen by {{ $activeOtherName }}">@endif</span>@endif</div></div>
+                            <div>@if(filled($message->body) && !(filled($message->attachment_path) && in_array(trim((string)$message->body), ['[Photo]', '[File]'], true)))<div class="lk-message-bubble">{{ $message->body }}</div>@endif @if(($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) && filled($message->attachment_path))@include('components.shared.message-attachment',['message'=>$message])@endif<div class="lk-message-meta"><span class="lk-message-time">{{ $messageSentAt?->diffForHumans() }}</span>@if($fromMe)<span class="lk-message-receipt" data-message-receipt data-message-sent-at="{{ $messageSentAt?->toIso8601String() }}" data-receipt-state="{{ $wasSeen ? 'seen' : 'sent' }}" @if($wasSeen && !$isLatestSeen) hidden @endif><span data-message-receipt-text>{{ $wasSeen ? 'Seen' : 'Sent' }}</span>@if($wasSeen)<img class="lk-message-seen-avatar" data-message-receipt-avatar src="{{ $activeOtherAvatar }}" alt="" title="Seen by {{ $activeOtherName }}">@endif</span>@endif</div></div>
                         </div>
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message.</div>

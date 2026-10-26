@@ -35,9 +35,9 @@ class AdminDashboardController extends Controller
         [$periodStart, $periodLabel, $groupingLabel, $marketplaceChart] = $this->marketplaceChart($marketplacePeriod);
 
         $marketplaceOrders = Order::query()
-            ->whereNotIn('status', ['CANCELLED'])
-            ->whereBetween('placed_at', [$periodStart, now()])
-            ->get(['placed_at', 'grand_total']);
+            ->where('status', 'COMPLETED')
+            ->whereBetween('completed_at', [$periodStart, now()])
+            ->get(['completed_at', 'grand_total']);
         $marketplaceChart = $this->fillMarketplaceChart($marketplaceChart, $marketplaceOrders);
         $marketplaceScale = $this->marketplaceScale($marketplaceChart);
         $marketplaceChart = $marketplaceChart->map(function (array $point) use ($marketplaceScale): array {
@@ -177,7 +177,7 @@ class AdminDashboardController extends Controller
     {
         return $points->map(function (array $point) use ($orders): array {
             $point['total'] = (float) $orders
-                ->filter(fn (Order $order): bool => $order->placed_at->betweenIncluded($point['from'], $point['to']->endOfDay()))
+                ->filter(fn (Order $order): bool => $order->completed_at?->betweenIncluded($point['from'], $point['to']->endOfDay()) ?? false)
                 ->sum('grand_total');
 
             return $point;

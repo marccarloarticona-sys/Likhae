@@ -159,6 +159,12 @@ class CodCollectionService
                 );
             }
             $shipment->loadMissing('sellerOrder.order', 'sellerOrder.items', 'orderItem');
+            if ($status === CodCollection::COLLECTED && $shipment->orderItem) {
+                $campaignBudgets = app(PlatformCampaignBudgetService::class);
+                $campaignBudgets->consumeForOrderItem($shipment->orderItem, $actor);
+                app(SellerVoucherBudgetService::class)->consumeForOrderItem($shipment->orderItem, $actor);
+                $campaignBudgets->recordRewardPointsExpense($shipment->orderItem, $actor);
+            }
             $parcelAmount = $shipment->orderItem
                 ? OrderItemParcelAmount::forItem($shipment->sellerOrder, $shipment->orderItem)
                 : null;

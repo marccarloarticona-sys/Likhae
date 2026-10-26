@@ -997,6 +997,10 @@
                     </div>
                 @endif
 
+                @if(!empty($smartHelpBootstrap))
+                    @include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap])
+                @endif
+
                 <div
                     id="chatMessages"
                     class="lk-chat-stream"

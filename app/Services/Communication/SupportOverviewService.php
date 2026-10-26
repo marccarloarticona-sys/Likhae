@@ -1,0 +1,148 @@
+<?php
+
+namespace App\Services\Communication;
+
+use App\Models\Communication\ConversationSupportInteraction;
+use App\Models\Communication\ConversationSupportRequest;
+use App\Models\Communication\MessagingFaq;
+use App\Models\User;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+class SupportOverviewService
+{
+    public function __construct(private readonly ConversationAuthorizationService $authorization) {}
+
+    public function schemaReady(): bool
+    {
+        return Schema::hasTable('conversation_support_requests')
+            && Schema::hasTable('conversation_support_interactions')
+            && Schema::hasTable('conversation_support_sessions')
+            && Schema::hasColumn('conversation_support_sessions', 'current_request_id')
+            && Schema::hasColumn('conversation_support_sessions', 'selected_category_snapshot');
+    }
+
+    /** @return array{requests:LengthAwarePaginator,stats:array<string,int>,top_faqs:\Illuminate\Support\Collection<int,MessagingFaq>,selected:?ConversationSupportRequest,filter:?string,search:string} */
+    public function overview(User $recipient, ?string $filter = null, string $search = '', ?int $selectedId = null): array
+    {
+        $base = $this->scopeForRecipient($recipient);
+        $counts = (clone $base)->select('status', DB::raw('COUNT(*) as aggregate'))->groupBy('status')->pluck('aggregate', 'status');
+
+        $query = (clone $base)->with([
+            'requester:id,name',
+            'selectedFaq:id,question,category',
+            'acceptedBy:id,name',
+            'acknowledgedBy:id,name',
+            'resolvedBy:id,name',
+            'conversation:id,order_id,seller_order_id,shipment_id',
+        ])->addSelect([
+            'last_buyer_message' => DB::table('messages')->select('body')
+                ->whereColumn('messages.conversation_id', 'conversation_support_requests.conversation_id')
+                ->whereColumn('messages.sender_user_id', 'conversation_support_requests.requester_user_id')
+                ->orderByDesc('sent_at')->orderByDesc('id')->limit(1),
+            'last_buyer_message_at' => DB::table('messages')->select('sent_at')
+                ->whereColumn('messages.conversation_id', 'conversation_support_requests.conversation_id')
+                ->whereColumn('messages.sender_user_id', 'conversation_support_requests.requester_user_id')
+                ->orderByDesc('sent_at')->orderByDesc('id')->limit(1),
+        ]);
+
+        if ($filter && in_array($filter, [
+            ConversationSupportRequest::NEW,
+            ConversationSupportRequest::AWAITING_RESPONSE,
+            ConversationSupportRequest::IN_PROGRESS,
+            ConversationSupportRequest::RESOLVED,
+        ], true)) {
+            $query->where('status', $filter);
+        }
+
+        $search = trim($search);
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $query->where(fn (Builder $nested) => $nested
+                ->where('category', 'like', $like)
+                ->orWhere('selected_question', 'like', $like)
+                ->orWhere('unresolved_concern', 'like', $like)
+                ->orWhere('order_reference', 'like', $like)
+                ->orWhereHas('requester', fn (Builder $buyer) => $buyer->where('name', 'like', $like)));
+        }
+
+        $requests = $query->orderByRaw("CASE status WHEN 'NEW' THEN 0 WHEN 'AWAITING_RESPONSE' THEN 1 WHEN 'IN_PROGRESS' THEN 2 ELSE 3 END")
+            ->orderByDesc('requested_at')->paginate(12)->withQueryString();
+
+        $interactions = ConversationSupportInteraction::query()->whereHas('supportSession', fn (Builder $session) => $session->where('recipient_user_id', $recipient->id));
+        $faqStats = [
+            'faq_resolved' => (clone $interactions)->where('feedback', 'RESOLVED')->count(),
+            'faq_unresolved' => (clone $interactions)->where('feedback', 'UNRESOLVED')->count(),
+        ];
+        $topFaqs = MessagingFaq::query()
+            ->where('owner_type', $recipient->isAccountType(User::TYPE_ADMIN) ? MessagingFaq::OWNER_ADMIN : MessagingFaq::OWNER_SELLER)
+            ->when($recipient->isAccountType(User::TYPE_ADMIN), fn (Builder $faq) => $faq->whereNull('seller_profile_id'))
+            ->when($recipient->isAccountType(User::TYPE_SELLER), fn (Builder $faq) => $faq->where('seller_profile_id', $recipient->sellerProfile?->id))
+            ->where('selection_count', '>', 0)
+            ->orderByDesc('selection_count')->orderBy('id')->limit(3)->get(['id', 'question', 'category', 'selection_count']);
+
+        $selected = $selectedId ? (clone $this->scopeForRecipient($recipient))
+            ->with([
+                'requester:id,name',
+                'selectedFaq:id,question,category',
+                'acknowledgedBy:id,name',
+                'acceptedBy:id,name',
+                'resolvedBy:id,name',
+                'interactions.selectedFaq:id,question,category',
+                'conversation:id,order_id,seller_order_id,shipment_id',
+            ])
+            ->addSelect([
+                'last_buyer_message' => DB::table('messages')->select('body')
+                    ->whereColumn('messages.conversation_id', 'conversation_support_requests.conversation_id')
+                    ->whereColumn('messages.sender_user_id', 'conversation_support_requests.requester_user_id')
+                    ->orderByDesc('sent_at')->orderByDesc('id')->limit(1),
+                'last_buyer_message_at' => DB::table('messages')->select('sent_at')
+                    ->whereColumn('messages.conversation_id', 'conversation_support_requests.conversation_id')
+                    ->whereColumn('messages.sender_user_id', 'conversation_support_requests.requester_user_id')
+                    ->orderByDesc('sent_at')->orderByDesc('id')->limit(1),
+            ])->whereKey($selectedId)->firstOrFail() : null;
+
+        if ($selected) {
+            $this->authorization->assertCanAccess($recipient, $selected->conversation);
+            $participantIds = $selected->conversation->participantRecords()->whereNull('left_at')->pluck('user_id')->map(fn ($id) => (int) $id)->all();
+            abort_unless(count($participantIds) === 2
+                && in_array((int) $selected->requester_user_id, $participantIds, true)
+                && in_array((int) $selected->recipient_user_id, $participantIds, true), 403);
+        }
+
+        return [
+            'requests' => $requests,
+            'stats' => [
+                'new' => (int) $counts->get(ConversationSupportRequest::NEW, 0),
+                'awaiting_response' => (int) $counts->get(ConversationSupportRequest::AWAITING_RESPONSE, 0),
+                'in_progress' => (int) $counts->get(ConversationSupportRequest::IN_PROGRESS, 0),
+                'resolved' => (int) $counts->get(ConversationSupportRequest::RESOLVED, 0),
+                ...$faqStats,
+            ],
+            'top_faqs' => $topFaqs,
+            'selected' => $selected,
+            'filter' => $filter,
+            'search' => $search,
+        ];
+    }
+
+    private function scopeForRecipient(User $recipient): Builder
+    {
+        abort_unless($recipient->isActive(), 403);
+        if ($recipient->isAccountType(User::TYPE_SELLER)) {
+            $profile = $recipient->sellerProfile;
+            abort_unless($profile?->status === 'ACTIVE', 403);
+
+            return ConversationSupportRequest::query()
+                ->where('recipient_user_id', $recipient->id)
+                ->where('seller_profile_id', $profile->id);
+        }
+        abort_unless($recipient->isAccountType(User::TYPE_ADMIN), 403);
+
+        return ConversationSupportRequest::query()
+            ->where('recipient_user_id', $recipient->id)
+            ->whereNull('seller_profile_id');
+    }
+}

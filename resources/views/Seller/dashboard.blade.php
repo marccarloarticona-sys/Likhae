@@ -88,7 +88,7 @@
     <div class="sl-dashboard-performance">
         <section class="sl-card sl-dashboard-trend" aria-labelledby="seller-order-value-title">
             <header class="sl-card-head">
-                <div><span class="sl-eyebrow">Sales trend</span><h2 id="seller-order-value-title">Order value</h2><p>Buyer order totals for {{ $orderValueChart['period_label'] }}. Includes shipping and Additional Care; this is not your payout.</p></div>
+                <div><span class="sl-eyebrow">Sales trend</span><h2 id="seller-order-value-title">Completed order value</h2><p>Orders completed during {{ $orderValueChart['period_label'] }}. Includes shipping and Additional Care; this is not your payout.</p></div>
                 <form method="GET" action="{{ route('seller.dashboard') }}" class="sl-order-value-filter">
                     <input type="hidden" name="from" value="{{ $financialFrom->toDateString() }}">
                     <input type="hidden" name="to" value="{{ $financialTo->toDateString() }}">
@@ -100,8 +100,8 @@
                 </form>
             </header>
             <div class="sl-chart-summary sl-order-value-summary">
-                <div><span>Order value</span><strong>{{ $peso }}{{ number_format($orderValueChart['gross'], 2) }}</strong><small>Non-cancelled orders · {{ $orderValueChart['grouping_label'] }}</small></div>
-                <span class="sl-order-value-legend"><i></i>Order value</span>
+                <div><span>Completed order value</span><strong>{{ $peso }}{{ number_format($orderValueChart['gross'], 2) }}</strong><small>Completed orders · {{ $orderValueChart['grouping_label'] }}</small></div>
+                <span class="sl-order-value-legend"><i></i>Completed order value</span>
             </div>
             @if ($orderValueChart['has_orders'])
                 <div class="sl-order-value-chart">
@@ -111,7 +111,7 @@
                         @endforeach
                     </div>
                     <div class="sl-order-value-chart-area">
-                        <div class="sl-order-value-bars" style="--chart-points: {{ $orderValueChart['chart']->count() }}" role="group" aria-label="Seller order value chart for {{ $orderValueChart['period_label'] }} grouped as {{ $orderValueChart['grouping_label'] }}">
+                        <div class="sl-order-value-bars" style="--chart-points: {{ $orderValueChart['chart']->count() }}" role="group" aria-label="Completed seller order value chart for {{ $orderValueChart['period_label'] }} grouped as {{ $orderValueChart['grouping_label'] }}">
                             @foreach ($orderValueChart['chart'] as $point)
                                 <div class="sl-order-value-bar" style="--bar-height: {{ $point['height'] }}%" role="img" tabindex="0" title="{{ $point['date'] }}: {{ $point['exact'] }}" aria-label="{{ $point['date'] }}: {{ $point['exact'] }}">
                                     <i aria-hidden="true"></i>
@@ -127,7 +127,7 @@
                     </div>
                 </div>
             @else
-                <div class="sl-order-value-empty" role="status">No non-cancelled order value in this period.</div>
+                <div class="sl-order-value-empty" role="status">No completed order value in this period.</div>
             @endif
         </section>
 

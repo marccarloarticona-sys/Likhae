@@ -7,6 +7,7 @@ use App\Models\Logistics\LogisticsCenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 final class LogisticsFinancialReportService
 {
@@ -76,7 +77,7 @@ final class LogisticsFinancialReportService
 
     /**
      * @param array<string, mixed> $filters
-     * @return array{parcel_count:int,transaction_count:int,shipping_fees:float,logistics_share:float,proceeds_expected:float,proceeds_received:float,proceeds_discrepancies:int,payout_requested:float,payout_pending_ack:float,payout_paid:float,admin_product_commission:float}
+     * @return array{parcel_count:int,transaction_count:int,shipping_fees:float,additional_care:float,delivery_charges:float,logistics_share:float,proceeds_expected:float,proceeds_received:float,proceeds_discrepancies:int,payout_requested:float,payout_pending_ack:float,payout_paid:float,admin_product_commission:float}
      */
     public function summary(LogisticsCenter $center, array $filters): array
     {
@@ -87,11 +88,16 @@ final class LogisticsFinancialReportService
 
         $shippingAndCommission = $allocationEntries()
             ->join('shipment_financial_allocations as report_allocations', 'report_allocations.id', '=', 'financial_ledger_entries.shipment_financial_allocation_id');
+        $hasAdditionalCareColumn = Schema::hasColumn('shipment_financial_allocations', 'protection_amount');
 
         return [
             'parcel_count' => (clone $allocationEntries())->distinct('shipment_id')->count('shipment_id'),
             'transaction_count' => (clone $base)->count(),
             'shipping_fees' => (float) (clone $shippingAndCommission)->sum('report_allocations.shipping_fee'),
+            'additional_care' => $hasAdditionalCareColumn ? (float) (clone $shippingAndCommission)->sum('report_allocations.protection_amount') : 0.0,
+            'delivery_charges' => $hasAdditionalCareColumn
+                ? (float) (clone $shippingAndCommission)->sum(DB::raw('report_allocations.shipping_fee + report_allocations.protection_amount'))
+                : (float) (clone $shippingAndCommission)->sum('report_allocations.shipping_fee'),
             'logistics_share' => (float) $allocationEntries()->sum('financial_ledger_entries.amount'),
             'proceeds_expected' => (float) $proceedsEntries()->sum('financial_ledger_entries.amount'),
             'proceeds_received' => $this->receivedProceedsTotal($proceedsEntries()),
@@ -151,6 +157,8 @@ final class LogisticsFinancialReportService
             'amount' => number_format((float) $entry->amount, 2, '.', ''),
             'status' => $entry->status,
             'shipping_fee' => $isAllocation && $allocation ? number_format((float) $allocation->shipping_fee, 2, '.', '') : '',
+            'additional_care' => $isAllocation && $allocation ? number_format((float) ($allocation->protection_amount ?? 0), 2, '.', '') : '',
+            'delivery_earnings' => $isAllocation && $allocation ? number_format((float) $allocation->shipping_fee + (float) ($allocation->protection_amount ?? 0), 2, '.', '') : '',
             'logistics_share' => $isAllocation && $allocation ? number_format((float) $allocation->logistics_allocation, 2, '.', '') : '',
             'admin_product_commission' => $isAllocation && $allocation ? number_format((float) $allocation->platform_commission, 2, '.', '') : '',
             'expected' => (string) ($metadata['amount_expected'] ?? ($entry->entry_type === 'PRODUCT_PROCEEDS_REMITTANCE' ? $entry->amount : '')),
@@ -166,8 +174,8 @@ final class LogisticsFinancialReportService
     {
         return [
             'Date', 'Tracking', 'Order', 'Service area', 'Destination', 'Delivery rider',
-            'Transaction', 'Direction', 'Amount PHP', 'Status', 'Shipping fee PHP',
-            'Logistics shipping share PHP', 'Admin product commission PHP', 'Expected PHP',
+            'Transaction', 'Direction', 'Amount PHP', 'Status', 'Base shipping PHP', 'Additional Care PHP',
+            'Combined delivery earnings PHP', 'Logistics share PHP', 'Admin product commission PHP', 'Expected PHP',
             'Submitted PHP', 'Received PHP', 'Discrepancy PHP', 'Reference',
         ];
     }
@@ -194,7 +202,9 @@ final class LogisticsFinancialReportService
         foreach ([
             ['Parcels with allocation', (string) $summary['parcel_count']],
             ['Recorded shipping fees PHP', number_format($summary['shipping_fees'], 2, '.', '')],
-            ['Logistics shipping share PHP', number_format($summary['logistics_share'], 2, '.', '')],
+            ['Additional Care charges PHP', number_format($summary['additional_care'], 2, '.', '')],
+            ['Total delivery charges PHP', number_format($summary['delivery_charges'], 2, '.', '')],
+            ['Logistics delivery share PHP', number_format($summary['logistics_share'], 2, '.', '')],
             ['Admin product commission PHP', number_format($summary['admin_product_commission'], 2, '.', '')],
             ['Product proceeds expected PHP', number_format($summary['proceeds_expected'], 2, '.', '')],
             ['Product proceeds received PHP', number_format($summary['proceeds_received'], 2, '.', '')],
@@ -225,6 +235,8 @@ final class LogisticsFinancialReportService
             'PHP '.$row['amount'],
             $row['status'],
             $row['shipping_fee'] === '' ? '' : 'PHP '.$row['shipping_fee'],
+            $row['additional_care'] === '' ? '' : 'PHP '.$row['additional_care'],
+            $row['delivery_earnings'] === '' ? '' : 'PHP '.$row['delivery_earnings'],
             $row['logistics_share'] === '' ? '' : 'PHP '.$row['logistics_share'],
             $row['admin_product_commission'] === '' ? '' : 'PHP '.$row['admin_product_commission'],
         ];

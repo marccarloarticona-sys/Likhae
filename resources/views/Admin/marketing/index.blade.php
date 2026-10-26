@@ -11,7 +11,7 @@
             <span class="ad-overline">Marketplace Growth</span>
             <h2>Platform Marketing</h2>
         </div>
-        @if($section === 'campaigns' && $campaignsReady)
+        @if($section === 'campaigns' && $campaignsReady && $campaignBudgetReady)
             <button type="button" class="ad-btn ad-btn-primary" data-marketing-campaign-open="create">+ Create Campaign</button>
         @endif
     </div>
@@ -30,19 +30,24 @@
                 <div>
                     <span class="ad-overline">Voucher Campaigns</span>
                     <h2 id="marketing-campaigns-heading">Platform Campaigns</h2>
-                    <p>Platform-managed buyer vouchers redeemable across participating seller shops at checkout.</p>
+                    <p>Platform campaigns and LIKHAE-funded discounts. New redemptions require an authorized allocation.</p>
                 </div>
             </header>
 
             @unless($campaignsReady)
                 <div class="ad-note is-warning" role="status">Platform campaign storage is not installed yet. The additive voucher migration is prepared but has not been applied. Campaign creation and management will be available after it is applied.</div>
             @else
+                @unless($campaignBudgetReady)
+                    <div class="ad-note is-warning" role="status">Campaign budgets are awaiting the additive finance migration. Existing campaigns remain visible; new platform voucher redemptions are held until budgets can be tracked.</div>
+                @endunless
                 <div class="ad-table-wrap ad-marketing-table-wrap">
                     <table class="ad-table">
-                        <thead><tr><th>Campaign</th><th>Benefit</th><th>Minimum</th><th>Usage</th><th>Validity</th><th>Status</th><th>Actions</th></tr></thead>
+                        <thead><tr><th>Campaign</th><th>Benefit</th><th>Minimum</th><th>Usage</th><th>Budget & history</th><th>Validity</th><th>Status</th><th>Actions</th></tr></thead>
                         <tbody>
                             @forelse($campaigns as $campaign)
                                 @php
+                                    $budgetSummary = $campaignBudgetSummaries[$campaign->id] ?? ['allocated_cents' => null, 'reserved_cents' => 0, 'spent_cents' => 0, 'available_cents' => null, 'usage_percent' => 0, 'status' => 'Pending Budget Setup', 'reconciliation_mismatch' => false];
+                                    $budgetHistory = $campaignBudgetHistory[$campaign->id] ?? collect();
                                     $campaignStatus = ! $campaign->is_active
                                         ? 'Paused'
                                         : ($campaign->starts_at?->isFuture()
@@ -70,6 +75,18 @@
                                     <td>{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 2).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off<small>Max discount: {{ $campaign->maximum_discount_amount === null ? 'No cap' : '₱'.number_format((float) $campaign->maximum_discount_amount, 2) }}</small></td>
                                     <td>₱{{ number_format((float) $campaign->minimum_order_amount, 2) }}</td>
                                     <td>{{ number_format((int) $campaign->redemption_count) }} / {{ $campaign->usage_limit ?: 'Unlimited' }}<small>Per buyer: {{ $campaign->per_user_limit ?: 'Unlimited' }}</small></td>
+                                    <td class="ad-campaign-budget-cell">
+                                        <strong>Total: {{ $budgetSummary['allocated_cents'] === null ? 'Pending setup' : '₱'.number_format($budgetSummary['allocated_cents'] / 100, 2) }}</strong>
+                                        <small>Reserved: ₱{{ number_format($budgetSummary['reserved_cents'] / 100, 2) }} · Spent: ₱{{ number_format($budgetSummary['spent_cents'] / 100, 2) }}</small>
+                                        <small>Available: {{ $budgetSummary['available_cents'] === null ? '—' : '₱'.number_format($budgetSummary['available_cents'] / 100, 2) }}</small>
+                                        <span class="ad-status {{ $budgetSummary['status'] === 'Available' ? 'is-active' : ($budgetSummary['status'] === 'Low Budget' ? 'is-pending' : 'is-review') }}">{{ $budgetSummary['status'] }}</span>
+                                        @if($budgetSummary['reconciliation_mismatch'])<small class="ad-note is-warning" role="alert">Budget ledger exceeds the allocation. Pause redemptions and reconcile.</small>@endif
+                                        @if($budgetSummary['allocated_cents'] !== null)<progress max="100" value="{{ $budgetSummary['usage_percent'] }}" aria-label="Budget usage {{ number_format($budgetSummary['usage_percent'], 1) }} percent"></progress>@endif
+                                        <details class="ad-campaign-budget-history"><summary>History ({{ $budgetHistory->count() }})</summary>
+                                            @if($budgetHistory->isEmpty())<small>No budget transactions recorded.</small>
+                                            @else<ul>@foreach($budgetHistory as $entry)<li><strong>{{ str_replace('_', ' ', $entry->entry_type) }}</strong> · ₱{{ number_format((float) $entry->amount, 2) }}<small>{{ $entry->created_at?->format('M j, Y H:i') }} · {{ data_get($entry->metadata, 'reason', data_get($entry->metadata, 'source', 'Finance event')) }} · {{ $entry->actor?->name ?: 'System' }}</small></li>@endforeach</ul>@endif
+                                        </details>
+                                    </td>
                                     <td>{{ $campaign->starts_at?->format('M j, Y H:i') ?? 'Now' }} – {{ $campaign->ends_at?->format('M j, Y H:i') ?? 'No end' }}</td>
                                     <td><span class="ad-status {{ $campaignStatusClass }}">{{ $campaignStatus }}</span></td>
                                     <td>
@@ -82,6 +99,7 @@
                                                 data-minimum="{{ $campaign->minimum_order_amount }}" data-maximum="{{ $campaign->maximum_discount_amount }}"
                                                 data-usage-limit="{{ $campaign->usage_limit }}" data-per-user-limit="{{ $campaign->per_user_limit }}"
                                                 data-starts-at="{{ $campaign->starts_at?->format('Y-m-d\TH:i') }}" data-ends-at="{{ $campaign->ends_at?->format('Y-m-d\TH:i') }}"
+                                                @if($campaignBudgetReady) data-budget="{{ $campaign->campaign_budget_total }}" @endif
                                                 data-image-url="{{ $campaignImageUrl }}" data-image-alt="{{ $campaign->image_alt }}" data-theme-color="{{ $campaign->theme_color }}">Edit</button>
                                             <form method="POST" action="{{ route('admin.marketing.campaigns.toggle', $campaign) }}">
                                                 @csrf @method('PATCH')
@@ -91,13 +109,13 @@
                                     </td>
                                 </tr>
                             @empty
-                                <tr><td colspan="7" class="ad-marketing-empty">No platform campaigns yet. Create one to make a LIKHAE voucher available to buyers.</td></tr>
+                                <tr><td colspan="8" class="ad-marketing-empty">No platform campaigns yet. Create one and authorize its funding before buyers can redeem it.</td></tr>
                             @endforelse
                         </tbody>
                     </table>
                 </div>
                 {{ $campaigns->links() }}
-                <p class="ad-marketing-finance-note">Campaigns set the buyer discount and redemption rules only. Finance must review how redeemed discounts are funded and settled.</p>
+                <p class="ad-marketing-finance-note">Budget reservations are created with an order. Spent funds are recorded only after confirmed COD collection; cancelled commitments release back to the campaign.</p>
             @endunless
         </section>
 
@@ -106,7 +124,7 @@
                 <div class="ad-marketing-modal-content" role="dialog" aria-modal="true" aria-labelledby="marketing-campaign-modal-title">
                     <button type="button" class="ad-marketing-modal-close" data-marketing-modal-close aria-label="Close">×</button>
                     <h3 id="marketing-campaign-modal-title">Create Platform Campaign</h3>
-                    <p class="ad-marketing-modal-help">Set the checkout discount and redemption rules here. Funding and settlement assignments require separate finance review.</p>
+                    <p class="ad-marketing-modal-help">Every platform discount is funded by LIKHAE and reserves funds when the order is placed.</p>
                     <form method="POST" enctype="multipart/form-data" action="{{ route('admin.marketing.campaigns.store') }}" id="marketing-campaign-form">
                         @csrf
                         <input type="hidden" name="_method" id="marketing-campaign-method" value="POST">
@@ -121,6 +139,16 @@
                             <label class="ad-field"><span>Maximum discount</span><input id="campaign-maximum" name="maximum_discount_amount" type="number" min="0.01" step="0.01" value="{{ old('maximum_discount_amount') }}"></label>
                             <label class="ad-field"><span>Total redemptions</span><input id="campaign-usage-limit" name="usage_limit" type="number" min="1" value="{{ old('usage_limit') }}"></label>
                             <label class="ad-field"><span>Uses per buyer</span><input id="campaign-per-user-limit" name="per_user_limit" type="number" min="1" value="{{ old('per_user_limit') }}"></label>
+                            @if($campaignBudgetReady)
+                                <label class="ad-field"><span>Total allocated fund (₱)</span><input id="campaign-budget-total" name="campaign_budget_total" type="number" min="0.01" step="0.01" value="{{ old('campaign_budget_total') }}" required></label>
+                                <label class="ad-field"><span>Budget change reason</span><input id="campaign-budget-reason" name="campaign_budget_reason" maxlength="500" value="{{ old('campaign_budget_reason') }}" placeholder="Initial campaign allocation" required></label>
+                            @else
+                                <div class="ad-note is-warning is-full" role="status">
+                                    Fund configuration is unavailable until the campaign finance migration is applied. Campaign details can still be edited; funding and redemptions stay paused until allocations can be recorded.
+                                </div>
+                                <label class="ad-field"><span>Total allocated fund (₱)</span><input id="campaign-budget-total" type="number" placeholder="Unavailable until finance setup" disabled aria-disabled="true"></label>
+                                <label class="ad-field"><span>Budget change reason</span><input id="campaign-budget-reason" type="text" placeholder="Unavailable until finance setup" disabled aria-disabled="true"></label>
+                            @endif
                             <label class="ad-field"><span>Starts at</span><input id="campaign-starts-at" name="starts_at" type="datetime-local" value="{{ old('starts_at') }}"></label>
                             <label class="ad-field"><span>Ends at</span><input id="campaign-ends-at" name="ends_at" type="datetime-local" value="{{ old('ends_at') }}"></label>
                         </div>
@@ -317,10 +345,12 @@
                 maximum: document.getElementById('campaign-maximum'),
                 usageLimit: document.getElementById('campaign-usage-limit'),
                 perUserLimit: document.getElementById('campaign-per-user-limit'),
+                budgetTotal: document.getElementById('campaign-budget-total'),
+                budgetReason: document.getElementById('campaign-budget-reason'),
                 startsAt: document.getElementById('campaign-starts-at'),
                 endsAt: document.getElementById('campaign-ends-at'),
             };
-            const initial = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
+            const initial = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field?.value || '']));
             const initialMedia = {
                 imageAlt: document.getElementById('campaign-image-alt')?.value || '',
                 themeColor: document.getElementById('campaign-theme-color')?.value || '',
@@ -392,6 +422,8 @@
                     fields.maximum.value = button.dataset.maximum || '';
                     fields.usageLimit.value = button.dataset.usageLimit || '';
                     fields.perUserLimit.value = button.dataset.perUserLimit || '';
+                    if (fields.budgetTotal) fields.budgetTotal.value = button.dataset.budget || '';
+                    if (fields.budgetReason) fields.budgetReason.value = '';
                     fields.startsAt.value = button.dataset.startsAt || '';
                     fields.endsAt.value = button.dataset.endsAt || '';
                     if (imageField) imageField.value = '';
@@ -400,7 +432,7 @@
                     if (removeImageField) removeImageField.checked = false;
                     setImagePreview(button.dataset.imageUrl || '', button.dataset.imageUrl ? 'Current campaign image' : '');
                 } else {
-                    Object.entries(fields).forEach(([key, field]) => { field.value = initial[key]; });
+                    Object.entries(fields).forEach(([key, field]) => { if (field) field.value = initial[key]; });
                     if (imageField) imageField.value = '';
                     if (imageAltField) imageAltField.value = initialMedia.imageAlt;
                     if (themeColorField) themeColorField.value = initialMedia.themeColor;
@@ -417,7 +449,7 @@
             modal.querySelectorAll('[data-marketing-modal-close]').forEach((button) => button.addEventListener('click', close));
             modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
             document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal.classList.contains('is-open')) close(); });
-            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color'))
+            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('campaign_budget_total') || $errors->has('campaign_budget_reason') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color'))
                 const failedCampaignId = @json(old('editing_campaign'));
                 const editButton = Array.from(document.querySelectorAll('[data-marketing-campaign-open="edit"]'))
                     .find((button) => button.dataset.campaignId === String(failedCampaignId));
@@ -425,7 +457,7 @@
                 const failedButton = editButton || createButton;
                 if (failedButton) {
                     open(failedButton);
-                    Object.entries(fields).forEach(([key, field]) => { field.value = initial[key]; });
+                    Object.entries(fields).forEach(([key, field]) => { if (field) field.value = initial[key]; });
                     if (imageAltField) imageAltField.value = initialMedia.imageAlt;
                     if (themeColorField) themeColorField.value = initialMedia.themeColor;
                     if (removeImageField) removeImageField.checked = initialMedia.removeImage;

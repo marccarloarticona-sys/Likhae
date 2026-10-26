@@ -36,6 +36,8 @@ use App\Services\Marketplace\CartService;
 use App\Support\AddressCoordinateValidator;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
+use App\Support\FinancialRules;
+use App\Support\OrderItemParcelAmount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -210,7 +212,7 @@ class BuyerOrderController extends Controller
             'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
             'sellerOrders.shipments.deliveryAttempts', 'sellerOrders.shipments.riderAssignments.riderProfile.user',
             'sellerOrders.shipments.riderAssignments.liveLocation', 'sellerOrders.shipments.logisticsCenter.address',
-            'address', 'payments', 'disputes',
+            'platformVoucher', 'shippingVoucher', 'address', 'payments', 'disputes',
         ];
         if ($this->returnRefundStorageReady()) {
             $orderRelations[] = 'disputes.returnRefundRequest';
@@ -519,6 +521,10 @@ class BuyerOrderController extends Controller
             $cancelledAt = now();
             foreach ($activeSellerOrders as $sellerOrder) {
                 $sellerOrder->update(['status' => 'CANCELLED']);
+                app(\App\Services\Finance\PlatformCampaignBudgetService::class)
+                    ->releaseForSellerOrder($sellerOrder, $request->user());
+                app(\App\Services\Finance\SellerVoucherBudgetService::class)
+                    ->releaseForSellerOrder($sellerOrder, $request->user());
             }
             foreach ($shipments as $shipment) {
                 ShipmentEvent::query()->create([
@@ -693,7 +699,14 @@ class BuyerOrderController extends Controller
             $quantity = (int) ($data['quantities'][$itemId] ?? 0);
             $remaining = max(0, (int) $item->quantity - $workflow->activeClaimedQuantity((int) $item->id));
             abort_unless($quantity > 0 && $quantity <= $remaining, 422, 'Choose a valid quantity that has not already been claimed.');
-            $amount = round(((float) $item->line_total / max((int) $item->quantity, 1)) * $quantity, 2);
+            $sellerOrder = $order->sellerOrders->firstWhere('id', (int) $item->seller_order_id);
+            abort_unless($sellerOrder, 422, 'The selected item has no valid seller order.');
+            $amount = OrderItemParcelAmount::buyerProductRefundSliceCents(
+                $sellerOrder,
+                $item,
+                $workflow->activeClaimedQuantity((int) $item->id),
+                $quantity,
+            ) / 100;
             $selectedItems[] = ['item' => $item, 'quantity' => $quantity, 'amount' => $amount];
             $totalRefund += $amount;
         }
@@ -703,6 +716,34 @@ class BuyerOrderController extends Controller
             $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
+            $lockedItems = OrderItem::query()
+                ->whereIn('id', $itemIds)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            abort_unless($lockedItems->count() === $itemIds->count(), 422, 'One or more selected items are no longer available.');
+            $lockedSellerOrders = $lockedOrder->sellerOrders()
+                ->with('items')
+                ->whereIn('id', $lockedItems->pluck('seller_order_id')->unique())
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $selectedItems = [];
+            $totalRefundCents = 0;
+            foreach ($itemIds as $itemId) {
+                $freshItem = $lockedItems->get($itemId);
+                $quantity = (int) ($data['quantities'][$itemId] ?? 0);
+                $claimed = $workflow->activeClaimedQuantity((int) $freshItem->id);
+                abort_unless($quantity > 0 && $quantity <= ((int) $freshItem->quantity - $claimed), 422, 'One or more item quantities were claimed while this request was being submitted.');
+                $sellerOrder = $lockedSellerOrders->get((int) $freshItem->seller_order_id);
+                abort_unless($sellerOrder, 422, 'The selected item has no valid seller order.');
+                $amountCents = OrderItemParcelAmount::buyerProductRefundSliceCents($sellerOrder, $freshItem, $claimed, $quantity);
+                $selectedItems[] = ['item' => $freshItem, 'quantity' => $quantity, 'amount' => FinancialRules::amount($amountCents)];
+                $totalRefundCents += $amountCents;
+            }
+            $totalRefund = $totalRefundCents / 100;
             $requestNumber = 'RR-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
             $description = trim($data['description']);
             // The legacy dispute-based creation block remains below only as a
@@ -753,7 +794,7 @@ class BuyerOrderController extends Controller
             $selectedBySeller = collect($selectedItems)->groupBy(fn (array $selected): int => (int) $selected['item']->seller_order_id);
             foreach ($selectedBySeller as $sellerOrderId => $sellerItems) {
                 $sellerOrder = $lockedOrder->sellerOrders()->with('sellerProfile.user')->whereKey($sellerOrderId)->firstOrFail();
-                $sellerTotal = round($sellerItems->sum('amount'), 2);
+                $sellerTotal = FinancialRules::amount($sellerItems->sum(fn (array $selected): int => FinancialRules::cents($selected['amount'])));
                 $sellerRequest = SellerReturnRefundRequest::create([
                     'return_refund_request_id' => $returnRequest->id,
                     'seller_order_id' => $sellerOrder->id,

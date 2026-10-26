@@ -9,6 +9,7 @@ use App\Models\Seller\Voucher;
 use App\Services\Notifications\AnnouncementDestination;
 use App\Services\Notifications\AnnouncementNotificationPublisher;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -23,9 +24,10 @@ use Throwable;
 
 class AdminMarketingController extends Controller
 {
-    public function index(Request $request, AnnouncementDestination $destinations): View
+    public function index(Request $request, AnnouncementDestination $destinations, PlatformCampaignBudgetService $budgets): View
     {
         $campaignsReady = $this->campaignSchemaReady();
+        $campaignBudgetReady = $this->campaignBudgetSchemaReady();
         $campaigns = $campaignsReady
             ? Voucher::query()->whereNull('seller_profile_id')->latest()->paginate(15, ['*'], 'campaigns_page')->withQueryString()
             : Voucher::query()->whereRaw('1 = 0')->latest()->paginate(15, ['*'], 'campaigns_page')->withQueryString();
@@ -34,10 +36,19 @@ class AdminMarketingController extends Controller
             'redemption_count',
             $redemptionCounts->get($voucher->id, 0),
         ));
+        $budgetSummaries = $campaigns->getCollection()->mapWithKeys(fn (Voucher $voucher): array => [
+            $voucher->id => $budgets->summary($voucher),
+        ]);
+        $budgetHistory = $campaignBudgetReady
+            ? $campaigns->getCollection()->mapWithKeys(fn (Voucher $voucher): array => [$voucher->id => $budgets->history($voucher)])
+            : collect();
 
         return view('Admin.marketing.index', [
             'campaigns' => $campaigns,
             'campaignsReady' => $campaignsReady,
+            'campaignBudgetReady' => $campaignBudgetReady,
+            'campaignBudgetSummaries' => $budgetSummaries,
+            'campaignBudgetHistory' => $budgetHistory,
             'marketingMediaReady' => $this->marketingMediaSchemaReady(),
             'announcementDestinationOptions' => $destinations->options(),
             'announcements' => Announcement::query()->latest()->paginate(10, ['*'], 'announcements_page')->withQueryString(),
@@ -50,8 +61,8 @@ class AdminMarketingController extends Controller
 
     public function storeCampaign(Request $request): RedirectResponse
     {
-        if (! $this->campaignSchemaReady()) {
-            return redirect()->route('admin.marketing')->with('status', 'Platform campaigns are read-only until the prepared voucher migration is applied.');
+        if (! $this->campaignSchemaReady() || ! $this->campaignBudgetSchemaReady()) {
+            return redirect()->route('admin.marketing')->with('status', 'Campaign finance fields are read-only until the additive campaign budget migration is applied.');
         }
 
         $data = $this->validatedCampaign($request);
@@ -71,12 +82,19 @@ class AdminMarketingController extends Controller
         }
 
         try {
-            DB::transaction(fn () => Voucher::query()->create(array_merge($data, [
-                'seller_profile_id' => null,
-                'platform_code_key' => $code,
-                'code' => $code,
-                'is_active' => true,
-            ])));
+            DB::transaction(function () use ($data, $code, $request): void {
+                $budget = $data['campaign_budget_total'];
+                $reason = $data['campaign_budget_reason'];
+                unset($data['campaign_budget_reason']);
+                $campaign = Voucher::query()->create(array_merge($data, [
+                    'seller_profile_id' => null,
+                    'platform_code_key' => $code,
+                    'code' => $code,
+                    'campaign_budget_total' => null,
+                    'is_active' => true,
+                ]));
+                app(PlatformCampaignBudgetService::class)->setAllocation($campaign, $budget, $reason, $request->user());
+            });
         } catch (Throwable $exception) {
             if ($newPath && $newPath !== $existingPath) {
                 Storage::disk('public')->delete($newPath);
@@ -85,7 +103,7 @@ class AdminMarketingController extends Controller
             throw $exception;
         }
 
-        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform voucher campaign created. It defines checkout discounts only; finance must review funding and settlement.');
+        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign created with an authorized budget allocation.');
     }
 
     public function updateCampaign(Request $request, Voucher $voucher): RedirectResponse
@@ -93,6 +111,7 @@ class AdminMarketingController extends Controller
         abort_unless($this->campaignSchemaReady(), 404);
         abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
 
+        $campaignBudgetReady = $this->campaignBudgetSchemaReady();
         $data = $this->validatedCampaign($request);
         $code = mb_strtoupper(trim($data['code']));
         if (Voucher::query()->whereRaw('UPPER(code) = ?', [$code])->whereKeyNot($voucher->getKey())->exists()) {
@@ -108,10 +127,18 @@ class AdminMarketingController extends Controller
         }
 
         try {
-            DB::transaction(fn () => $voucher->update(array_merge($data, [
-                'platform_code_key' => $code,
-                'code' => $code,
-            ])));
+            DB::transaction(function () use ($voucher, $data, $code, $request, $campaignBudgetReady): void {
+                $locked = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
+                if ($campaignBudgetReady) {
+                    $budget = $data['campaign_budget_total'];
+                    $reason = $data['campaign_budget_reason'];
+                    unset($data['campaign_budget_total'], $data['campaign_budget_reason']);
+                }
+                $locked->update(array_merge($data, ['platform_code_key' => $code, 'code' => $code]));
+                if ($campaignBudgetReady) {
+                    app(PlatformCampaignBudgetService::class)->setAllocation($locked, $budget, $reason, $request->user());
+                }
+            });
         } catch (Throwable $exception) {
             if ($newPath && $newPath !== $oldPath) {
                 Storage::disk('public')->delete($newPath);
@@ -124,7 +151,7 @@ class AdminMarketingController extends Controller
             $this->deleteMarketingImageIfUnused($oldPath);
         }
 
-        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign updated. Existing redemptions and orders are unchanged.');
+        return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign updated. Existing orders and funding history are unchanged.');
     }
 
     private function validatedCampaign(Request $request): array
@@ -142,6 +169,11 @@ class AdminMarketingController extends Controller
             'starts_at' => ['nullable', 'date'],
             'ends_at' => ['nullable', 'date'],
         ];
+
+        if ($this->campaignBudgetSchemaReady()) {
+            $rules['campaign_budget_total'] = ['required', 'numeric', 'min:0.01', 'max:9999999999.99'];
+            $rules['campaign_budget_reason'] = ['required', 'string', 'max:500'];
+        }
 
         if ($this->marketingMediaSchemaReady()) {
             $rules += $this->marketingMediaRules('campaign_image');
@@ -166,6 +198,10 @@ class AdminMarketingController extends Controller
         abort_unless($this->campaignSchemaReady(), 404);
         abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
 
+        if (! $voucher->is_active) {
+            abort_unless($this->campaignBudgetSchemaReady(), 409, 'Campaign budget finance fields are not installed.');
+            abort_unless(app(PlatformCampaignBudgetService::class)->selectable($voucher), 409, 'Allocate additional budget before resuming this campaign.');
+        }
         $voucher->update(['is_active' => ! $voucher->is_active]);
 
         return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign status updated. Existing redemptions and orders are unchanged.');
@@ -439,5 +475,14 @@ class AdminMarketingController extends Controller
     {
         return Schema::hasColumn('vouchers', 'seller_profile_id')
             && Schema::hasColumn('vouchers', 'platform_code_key');
+    }
+
+    private function campaignBudgetSchemaReady(): bool
+    {
+        return Schema::hasColumn('vouchers', 'campaign_budget_total')
+            && Schema::hasColumn('seller_orders', 'seller_voucher_discount')
+            && Schema::hasColumn('order_items', 'seller_voucher_discount')
+            && Schema::hasColumn('financial_ledger_entries', 'voucher_id')
+            && Schema::hasColumn('financial_ledger_entries', 'order_item_id');
     }
 }

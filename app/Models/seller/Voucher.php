@@ -14,6 +14,8 @@ class Voucher extends Model
         'seller_profile_id',
         'platform_code_key',
         'benefit_scope',
+        'campaign_budget_total',
+        'seller_discount_budget_total',
         'applies_to',
         'visibility',
         'code',
@@ -38,6 +40,8 @@ class Voucher extends Model
             'discount_value' => 'decimal:2',
             'minimum_order_amount' => 'decimal:2',
             'maximum_discount_amount' => 'decimal:2',
+            'campaign_budget_total' => 'decimal:2',
+            'seller_discount_budget_total' => 'decimal:2',
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
             'is_active' => 'boolean',
@@ -72,5 +76,10 @@ class Voucher extends Model
     public function eligibleProducts(): BelongsToMany
     {
         return $this->belongsToMany(Product::class, 'voucher_products')->withTimestamps();
+    }
+
+    public function eligibleVariants(): BelongsToMany
+    {
+        return $this->belongsToMany(ProductVariant::class, 'voucher_variants', 'voucher_id', 'product_variant_id')->withTimestamps();
     }
 }

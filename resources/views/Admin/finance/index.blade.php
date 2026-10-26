@@ -52,11 +52,34 @@
         <section class="ad-finance-metric-group" aria-labelledby="finance-allocation-title">
             <header class="ad-finance-metric-group__head"><div><span class="ad-overline">Parcel allocation</span><h3 id="finance-allocation-title">How proceeds are allocated</h3></div><p>Breakdown across the platform, Seller, Logistics, and Rider.</p></header>
             <div class="ad-finance-grid ad-finance-grid--four">
+                <div><small>Total delivery charges collected</small><h3>PHP {{ number_format($financialTotals['delivery_charges_collected'], 2) }}</h3></div>
+                <div><small>Base shipping portion</small><h3>PHP {{ number_format($financialTotals['base_shipping_charges'], 2) }}</h3></div>
+                <div><small>Additional Care portion</small><h3>PHP {{ number_format($financialTotals['additional_care_charges'], 2) }}</h3></div>
                 <div><small>Platform commission</small><h3>PHP {{ number_format($financialTotals['platform_commission'], 2) }}</h3></div>
                 <div><small>Seller payable</small><h3>PHP {{ number_format($financialTotals['seller_payable'], 2) }}</h3></div>
                 <div><small>Logistics share</small><h3>PHP {{ number_format($financialTotals['logistics_allocation'], 2) }}</h3></div>
                 <div><small>Rider share</small><h3>PHP {{ number_format($financialTotals['rider_allocation'], 2) }}</h3></div>
+                <div><small>Pending recipient / policy allocation</small><h3>PHP {{ number_format($financialTotals['pending_allocations'], 2) }}</h3></div>
+                <div><small>Refund adjustments posted</small><h3>PHP {{ number_format($financialTotals['refund_adjustments'], 2) }}</h3></div>
             </div>
+        </section>
+        <section class="ad-finance-metric-group" aria-labelledby="finance-campaign-title">
+            <header class="ad-finance-metric-group__head"><div><span class="ad-overline">Source-aware totals</span><h3 id="finance-campaign-title">Product funding and campaign position</h3></div><p>Seller reductions and LIKHAE campaign costs stay separate from seller payables.</p></header>
+            <div class="ad-finance-grid ad-finance-grid--five">
+                <div><small>Gross product sales</small><h3>PHP {{ number_format($financialTotals['gross_product_sales'], 2) }}</h3></div>
+                <div><small>Seller markdowns and promotions</small><h3>PHP {{ number_format($financialTotals['seller_markdowns'] + $financialTotals['seller_promotions'], 2) }}</h3></div>
+                <div><small>Seller-funded vouchers</small><h3>PHP {{ number_format($financialTotals['seller_voucher_discounts'], 2) }}</h3></div>
+                <div><small>LIKHAE product vouchers</small><h3>PHP {{ number_format($financialTotals['platform_voucher_discounts'], 2) }}</h3></div>
+                <div><small>LIKHAE shipping vouchers</small><h3>PHP {{ number_format($financialTotals['platform_shipping_voucher_discounts'], 2) }}</h3></div>
+                <div><small>Reward points applied</small><h3>PHP {{ number_format($financialTotals['reward_points_discounts'], 2) }}</h3></div>
+                <div><small>Buyer product charges (source-aware orders)</small><h3>PHP {{ number_format($financialTotals['net_buyer_product_charges'], 2) }}</h3></div>
+                <div><small>Campaign commitments</small><h3>PHP {{ number_format($financialTotals['campaign_reserved'], 2) }}</h3></div>
+                <div><small>Net campaign expense</small><h3>PHP {{ number_format($financialTotals['campaign_spent'], 2) }}</h3></div>
+                <div><small>Available campaign funds</small><h3>PHP {{ number_format($financialTotals['campaign_available'], 2) }}</h3></div>
+            </div>
+            @if($financialTotals['campaign_setup_required'] > 0 || $financialTotals['campaign_reconciliation_mismatches'] > 0)
+                <p class="ad-note is-warning" role="status">{{ $financialTotals['campaign_setup_required'] }} campaign(s) need an authorized budget setup. {{ $financialTotals['campaign_reconciliation_mismatches'] }} campaign(s) have a negative available balance and require finance review.</p>
+            @endif
         </section>
     </div>
 @else

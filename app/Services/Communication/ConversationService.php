@@ -249,6 +249,11 @@ class ConversationService
             return $message;
         });
 
+        app(SmartMessagingService::class)->markHumanReply(
+            Conversation::query()->findOrFail($message->conversation_id),
+            $sender,
+        );
+
         $broadcast = function () use ($message, $sender, $recipientUserId): void {
             try {
                 // Stop repeated WebSocket failures from making every message

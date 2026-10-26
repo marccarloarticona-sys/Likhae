@@ -14,6 +14,51 @@ class ShippingRateAllocationTest extends TestCase
         $this->assertSame(['rider_cents' => 3000, 'logistics_cents' => 2000], FinancialRules::shippingAllocation('50.00', '60.0000'));
     }
 
+    public function test_fifty_shipping_plus_two_hundred_eighty_additional_care_splits_on_the_combined_pool(): void
+    {
+        $allocation = FinancialRules::allocation(
+            [['original_unit_price' => '1000.00', 'charged_unit_price' => '1000.00', 'quantity' => 1]],
+            shippingFee: '50.00',
+            riderPoolPercentage: '60.0000',
+            additionalCareFee: '280.00',
+        );
+
+        $this->assertSame('50.00', $allocation['shipping_fee']);
+        $this->assertSame('280.00', $allocation['additional_care_amount']);
+        $this->assertSame('330.00', $allocation['delivery_earnings_amount']);
+        $this->assertSame('132.00', $allocation['logistics_allocation']);
+        $this->assertSame('198.00', $allocation['rider_allocation']);
+    }
+
+    public function test_fifty_shipping_plus_three_hundred_twenty_additional_care_splits_exactly(): void
+    {
+        $allocation = FinancialRules::allocation(
+            [['original_unit_price' => '1000.00', 'charged_unit_price' => '1000.00', 'quantity' => 1]],
+            shippingFee: '50.00',
+            riderPoolPercentage: '60.0000',
+            additionalCareFee: '320.00',
+        );
+
+        $this->assertSame('370.00', $allocation['delivery_earnings_amount']);
+        $this->assertSame('148.00', $allocation['logistics_allocation']);
+        $this->assertSame('222.00', $allocation['rider_allocation']);
+    }
+
+    public function test_platform_shipping_discount_does_not_reduce_delivery_earnings_entitlement(): void
+    {
+        $allocation = FinancialRules::allocation(
+            [['original_unit_price' => '1000.00', 'charged_unit_price' => '1000.00', 'quantity' => 1]],
+            shippingFee: '50.00',
+            riderPoolPercentage: '60.0000',
+            shippingVoucherDiscount: '20.00',
+            additionalCareFee: '280.00',
+        );
+
+        $this->assertSame('330.00', $allocation['delivery_earnings_amount']);
+        $this->assertSame('132.00', $allocation['logistics_allocation']);
+        $this->assertSame('198.00', $allocation['rider_allocation']);
+    }
+
     public function test_sixty_peso_shipping_splits_into_thirty_six_rider_and_twenty_four_logistics(): void
     {
         $this->assertSame(['rider_cents' => 3600, 'logistics_cents' => 2400], FinancialRules::shippingAllocation('60.00', '60.0000'));
