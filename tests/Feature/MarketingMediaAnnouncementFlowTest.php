@@ -13,7 +13,7 @@ use App\Services\Marketplace\CheckoutService;
 use App\Services\Notifications\AnnouncementDestination;
 use App\Services\Notifications\AnnouncementNotificationPublisher;
 use Database\Seeders\DatabaseSeeder;
-use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -21,7 +21,7 @@ use Tests\TestCase;
 
 class MarketingMediaAnnouncementFlowTest extends TestCase
 {
-    use DatabaseTransactions;
+    use RefreshDatabase;
 
     public static function loginRedirectCases(): array
     {
@@ -57,6 +57,8 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
             'maximum_discount_amount' => 20,
             'usage_limit' => 50,
             'per_user_limit' => 1,
+            'campaign_budget_total' => 100000,
+            'campaign_budget_reason' => 'Initial test campaign allocation',
             'starts_at' => now()->subHour()->format('Y-m-d H:i:s'),
             'ends_at' => now()->addDay()->format('Y-m-d H:i:s'),
             'campaign_image' => UploadedFile::fake()->image('event.png'),
@@ -727,6 +729,8 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
             'maximum_discount_amount' => 20,
             'usage_limit' => 50,
             'per_user_limit' => 1,
+            'campaign_budget_total' => 100000,
+            'campaign_budget_reason' => 'Initial test campaign allocation',
             'starts_at' => now()->subHour()->format('Y-m-d H:i:s'),
             'ends_at' => now()->addDay()->format('Y-m-d H:i:s'),
         ], $overrides);
