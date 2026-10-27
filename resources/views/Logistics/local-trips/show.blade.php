@@ -27,17 +27,10 @@
             @endif
         </section>
     @else
-        <p class="text-sm text-muted">{{ $trip->items->count() }}/{{ $trip->approved_parcel_capacity }} parcels loaded</p>
-        @if($trip->status === 'LOADING')
-            <form method="POST" action="{{ route('logistics.local-trips.items.store', $trip->id) }}" class="flex gap-2 border border-line bg-surface p-4">
-                @csrf
-                <select name="rider_assignment_id" required class="min-w-0 flex-1 border border-line bg-white px-3 py-2">
-                    <option value="">Select eligible assignment</option>
-                    @foreach($assignments as $assignment)<option value="{{ $assignment->id }}">#{{ $assignment->id }} · {{ $assignment->shipment?->tracking_number }} · {{ $assignment->status }}</option>@endforeach
-                </select>
-                <button class="bg-primary px-4 py-2 font-semibold text-white">Add parcel</button>
-            </form>
-        @endif
+        <section class="border border-line bg-surface p-4">
+            <p class="text-sm text-muted">{{ $trip->items->count() }}/{{ $trip->approved_parcel_capacity }} parcels loaded. Assign or add parcels through Rider Assignment so each parcel and trip stay in sync.</p>
+            <a class="mt-3 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white" href="{{ route('logistics.assignments') }}">Open Rider Assignment</a>
+        </section>
         <div class="flex flex-wrap gap-2">
             @if(in_array($trip->status, ['READY','IN_PROGRESS']))<form method="POST" action="{{ route('logistics.local-trips.close', $trip->id) }}">@csrf<button class="border border-line px-4 py-2 font-semibold">Close trip</button></form>@endif
         </div>

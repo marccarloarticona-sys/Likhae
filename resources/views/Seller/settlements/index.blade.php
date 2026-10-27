@@ -1,21 +1,21 @@
 @extends('layouts.seller.app')
 @section('title', 'Wallet & payouts')
 @section('active', 'payouts')
-@section('subtitle', 'Review your seller payable balance, request payouts, and acknowledge receipts.')
+@section('subtitle', 'Only Admin-recorded payouts count toward your paid-out balance. Review unpaid proceeds and confirm receipts here.')
 
 @section('content')
 <div class="sl-page lk-wallet-page">
     @if(session('status'))<div class="lk-wallet-alert lk-wallet-alert--success" role="status">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="lk-wallet-alert lk-wallet-alert--error" role="alert">{{ $errors->first() }}</div>@endif
     <div class="sl-page-toolbar lk-wallet-header">
-        <div class="lk-wallet-header__copy"><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Request payout for eligible parcel proceeds. Admin transfers funds outside Likhae, then records the reference and proof here.</p></div>
+        <div class="lk-wallet-header__copy"><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Your paid-out balance includes transfers recorded by Admin, whether awaiting your receipt confirmation or already confirmed. Eligible and requested proceeds remain unpaid.</p></div>
         <div class="lk-wallet-actions"><a href="{{ route('seller.messages') }}" class="sl-btn sl-btn-ghost">Contact Support</a><a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a></div>
     </div>
     @if($ready)
         <section class="sl-card lk-wallet-metrics" aria-label="Payout balance summary">
-            @foreach([['Available to request', 'available'], ['Requested from Admin', 'requested'], ['Awaiting receipt confirmation', 'awaiting_ack'], ['Paid', 'paid']] as [$label, $key])
-                <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">{{ $label }}</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances[$key], 2) }}</strong></article>
-            @endforeach
+            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Paid-out balance</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['paid_out'], 2) }}</strong><small>₱{{ number_format((float) $payoutBalances['awaiting_ack'], 2) }} awaiting receipt confirmation · ₱{{ number_format((float) $payoutBalances['paid'], 2) }} confirmed</small></article>
+            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · available to request</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['available'], 2) }}</strong></article>
+            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · requested from Admin</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['requested'], 2) }}</strong></article>
         </section>
     @endif
     <section class="sl-card payout-section">

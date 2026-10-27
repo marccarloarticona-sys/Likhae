@@ -16,7 +16,6 @@
         'transfers' => ['logistics.transfers', 'logistics.transfers.*'],
         'local-trips' => ['logistics.local-trips', 'logistics.local-trips.*'],
         'assignments' => ['logistics.assignments', 'logistics.assignments.*'],
-        'dispatch' => ['logistics.dispatch', 'logistics.dispatch.*'],
         'monitoring' => ['logistics.parcels.tracking'],
         'returns' => ['logistics.returns', 'logistics.returns.*'],
         'reports' => ['logistics.reports', 'logistics.reports.*'],
@@ -105,8 +104,24 @@
         </div>
 
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Parcel Operations</span>
+            <span class="sl-nav-label">Monitoring</span>
+            <a href="{{ route('logistics.parcels') }}"
+               class="sl-nav-link {{ $active === 'parcels' ? 'is-active' : '' }}"
+               data-title="All Parcels">
+                <span class="sl-nav-icon">{!! $icon('parcels') !!}</span>
+                <span class="sl-nav-text">All Parcels</span>
+            </a>
+            <a href="{{ route('logistics.parcels.tracking') }}"
+               class="sl-nav-link {{ $active === 'monitoring' ? 'is-active' : '' }}"
+               data-title="Delivery Monitoring">
+                <span class="sl-nav-icon">{!! $icon('monitor') !!}</span>
+                <span class="sl-nav-text">Delivery Monitoring</span>
+                @if(($sidebarCounts['monitoring'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['monitoring'] }}</span>@endif
+            </a>
+        </div>
 
+        <div class="sl-nav-section">
+            <span class="sl-nav-label">Pickups &amp; Intake</span>
             <a href="{{ route('logistics.pickups') }}"
                class="sl-nav-link {{ $active === 'pickup-requests' ? 'is-active' : '' }}"
                data-title="Pickup Requests">
@@ -122,14 +137,10 @@
                 <span class="sl-nav-text">Incoming Parcels</span>
                 @if(($sidebarCounts['incoming'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['incoming'] }}</span>@endif
             </a>
+        </div>
 
-            <a href="{{ route('logistics.parcels') }}"
-               class="sl-nav-link {{ $active === 'parcels' ? 'is-active' : '' }}"
-               data-title="All Parcels">
-                <span class="sl-nav-icon">{!! $icon('parcels') !!}</span>
-                <span class="sl-nav-text">All Parcels</span>
-            </a>
-
+        <div class="sl-nav-section">
+            <span class="sl-nav-label">Sorting</span>
             <a href="{{ route('logistics.sorting') }}"
                class="sl-nav-link {{ $active === 'sorting' ? 'is-active' : '' }}"
                data-title="Parcel Sorting">
@@ -137,21 +148,20 @@
                 <span class="sl-nav-text">Parcel Sorting</span>
                 @if(($sidebarCounts['sorting'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['sorting'] }}</span>@endif
             </a>
+        </div>
 
+        <div class="sl-nav-section">
+            <span class="sl-nav-label">Hub Transfers</span>
             <a href="{{ route('logistics.transfers') }}"
                class="sl-nav-link {{ $active === 'transfers' ? 'is-active' : '' }}"
                data-title="Hub Transfers">
                 <span class="sl-nav-icon">{!! $icon('parcels') !!}</span>
                 <span class="sl-nav-text">Hub Transfers</span>
             </a>
+        </div>
 
-            <a href="{{ route('logistics.local-trips') }}"
-               class="sl-nav-link {{ $active === 'local-trips' ? 'is-active' : '' }}"
-               data-title="Local Rider Trips">
-                <span class="sl-nav-icon">{!! $icon('shipping') !!}</span>
-                <span class="sl-nav-text">Local Rider Trips</span>
-            </a>
-
+        <div class="sl-nav-section">
+            <span class="sl-nav-label">Delivery</span>
             <a href="{{ route('logistics.assignments') }}"
                class="sl-nav-link {{ $active === 'assignments' ? 'is-active' : '' }}"
                data-title="Rider Assignment">
@@ -159,21 +169,16 @@
                 <span class="sl-nav-text">Rider Assignment</span>
                 @if(($sidebarCounts['assignments'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['assignments'] }}</span>@endif
             </a>
-
-            <a href="{{ route('logistics.dispatch') }}"
-               class="sl-nav-link {{ $active === 'dispatch' ? 'is-active' : '' }}"
-               data-title="Dispatch Board">
+            <a href="{{ route('logistics.local-trips') }}"
+               class="sl-nav-link {{ $active === 'local-trips' ? 'is-active' : '' }}"
+               data-title="Delivery Trip Overview">
                 <span class="sl-nav-icon">{!! $icon('shipping') !!}</span>
-                <span class="sl-nav-text">Dispatch Board</span>
+                <span class="sl-nav-text">Delivery Trip Overview</span>
             </a>
+        </div>
 
-            <a href="{{ route('logistics.parcels.tracking') }}"
-               class="sl-nav-link {{ $active === 'monitoring' ? 'is-active' : '' }}"
-               data-title="Delivery Monitoring">
-                <span class="sl-nav-icon">{!! $icon('monitor') !!}</span>
-                <span class="sl-nav-text">Delivery Monitoring</span>
-                @if(($sidebarCounts['monitoring'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['monitoring'] }}</span>@endif
-            </a>
+        <div class="sl-nav-section">
+            <span class="sl-nav-label">Returns</span>
             <a href="{{ route('logistics.returns') }}"
                class="sl-nav-link {{ $active === 'returns' ? 'is-active' : '' }}"
                data-title="Return to Seller">

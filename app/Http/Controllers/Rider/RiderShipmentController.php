@@ -96,7 +96,7 @@ class RiderShipmentController extends Controller
         $data = $request->validate([
             'action' => ['required', 'string', 'in:accept,start,pickup_complete,delivery_success,delivery_failed,reject'],
             'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
-            'scanned_code' => ['required_if:action,pickup_complete,delivery_success', 'nullable', 'string', 'max:150'],
+            'scanned_code' => ['required_if:action,pickup_complete', 'nullable', 'string', 'max:150'],
             'failure_reason' => ['required_if:action,delivery_failed', 'nullable', 'string', 'max:1000'],
             'attempt_status' => ['nullable', 'string', 'in:FAILED,RESCHEDULED'],
             'next_attempt_at' => ['required_if:attempt_status,RESCHEDULED', 'nullable', 'date', 'after:now'],
@@ -144,6 +144,31 @@ class RiderShipmentController extends Controller
             }
 
             throw $exception;
+        }
+
+        if ($data['action'] === 'delivery_failed') {
+            $latestAttempt = $result->shipment?->deliveryAttempts()
+                ->orderByDesc('attempt_number')
+                ->first();
+
+            if ($latestAttempt?->status === 'RESCHEDULED' && $latestAttempt->next_attempt_at) {
+                $scheduledAt = $latestAttempt->next_attempt_at
+                    ->timezone(config('app.timezone'))
+                    ->format('M j, Y g:i A');
+
+                return back()->with('status', 'Redelivery scheduled for '.$scheduledAt.'. Return the parcel to your Logistics Center for a verified handoff before the retry.');
+            }
+
+            $failureReason = (string) ($latestAttempt?->failure_reason ?? '');
+            $buyerRefused = preg_match('/(?:buyer|recipient|customer)\\s+(?:refused|rejected|declined)(?:\\s+the)?\\s+(?:parcel|delivery)/i', $failureReason) === 1;
+            $returnStarted = ($buyerRefused || (int) ($latestAttempt?->attempt_number ?? 0) >= 3)
+                && app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class)->hasOpenWorkflow($result->shipment);
+
+            if ($returnStarted) {
+                return back()->with('status', 'Return to Seller started automatically. Bring the parcel to your Logistics Center and complete the handoff scan; it stays in your custody until staff confirm receipt.');
+            }
+
+            return back()->with('status', 'Failed delivery recorded. Keep the parcel secure and follow the next handoff instructions from Logistics.');
         }
 
         return back()->with('status', 'Rider assignment updated.');

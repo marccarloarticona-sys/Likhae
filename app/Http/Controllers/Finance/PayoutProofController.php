@@ -33,6 +33,19 @@ class PayoutProofController extends Controller
         );
     }
 
+    public function rider(Request $request, FinancialLedgerEntry $entry): StreamedResponse
+    {
+        $rider = $request->user()->riderProfile;
+        abort_unless($rider
+            && $entry->entry_type === 'RIDER_PAYOUT'
+            && (int) data_get($entry->metadata, 'rider_profile_id') === (int) $rider->id, 403);
+
+        return $this->download(
+            data_get($entry->metadata, 'payout_proof_path'),
+            data_get($entry->metadata, 'payout_proof_name'),
+        );
+    }
+
     public function adminSeller(Request $request, SellerSettlement $settlement): StreamedResponse
     {
         abort_unless($request->user()->isAccountType(User::TYPE_ADMIN), 403);

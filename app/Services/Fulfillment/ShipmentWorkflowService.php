@@ -454,9 +454,12 @@ class ShipmentWorkflowService
         User $assigner,
         bool $allowPickupAreaOverride = false,
         ?string $pickupAreaOverrideReason = null,
+        bool $allowDeliveryAreaOverride = false,
+        ?string $deliveryAreaOverrideReason = null,
+        bool $allowUnavailableDeliveryTakeover = false,
     ): RiderAssignment
     {
-        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason): RiderAssignment {
+        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason, $allowDeliveryAreaOverride, $deliveryAreaOverrideReason, $allowUnavailableDeliveryTakeover): RiderAssignment {
             $shipment = Shipment::query()
                 ->whereKey($shipment->id)
                 ->with('serviceArea')
@@ -472,6 +475,9 @@ class ShipmentWorkflowService
             if (! in_array($assignmentType, ['PICKUP', 'DELIVERY'], true)) {
                 throw new RuntimeException('Assignment type must be PICKUP or DELIVERY.');
             }
+            if ($allowDeliveryAreaOverride && $assignmentType !== RiderAssignment::TYPE_DELIVERY) {
+                throw new RuntimeException('A delivery coverage exception can only be used for a delivery assignment.');
+            }
 
             $priorPickupAssignment = $assignmentType === 'PICKUP'
                 ? $shipment->riderAssignments()
@@ -482,6 +488,29 @@ class ShipmentWorkflowService
                     ->first()
                 : null;
             $isPickupReassignment = $priorPickupAssignment !== null;
+            $priorDeliveryAssignment = $assignmentType === RiderAssignment::TYPE_DELIVERY
+                ? $shipment->riderAssignments()
+                    ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                    ->with('riderProfile.user')
+                    ->lockForUpdate()
+                    ->first()
+                : null;
+            if ($allowUnavailableDeliveryTakeover) {
+                $priorRider = $priorDeliveryAssignment?->riderProfile;
+                $priorRiderUnavailable = $priorDeliveryAssignment?->status === 'ASSIGNED'
+                    && (! $priorRider?->is_online
+                        || ! ($priorRider?->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false));
+                $assigner->loadMissing('logisticsCenter');
+                if ($assignmentType !== RiderAssignment::TYPE_DELIVERY
+                    || $shipment->current_status !== 'ASSIGNED_TO_RIDER'
+                    || ! $priorRiderUnavailable
+                    || $assigner->account_type !== User::TYPE_LOGISTICS
+                    || $assigner->status !== User::STATUS_ACTIVE
+                    || (int) $assigner->logisticsCenter?->id !== (int) $rider->logistics_center_id) {
+                    throw new RuntimeException('A delivery takeover is allowed only before the assigned rider accepts, and only when that rider is offline or has a stale location.');
+                }
+            }
 
             if ($assignmentType === 'PICKUP') {
                 $sellerOrder = SellerOrder::query()->whereKey($shipment->seller_order_id)->lockForUpdate()->firstOrFail();
@@ -521,6 +550,18 @@ class ShipmentWorkflowService
                     throw new RuntimeException('A reason is required for a pickup coverage override.');
                 }
             }
+            if ($allowDeliveryAreaOverride) {
+                $assigner->loadMissing('logisticsCenter');
+                if ($assigner->account_type !== User::TYPE_LOGISTICS
+                    || $assigner->status !== User::STATUS_ACTIVE
+                    || ! $assigner->logisticsCenter
+                    || (int) $assigner->logisticsCenter->id !== (int) $rider->logistics_center_id) {
+                    throw new RuntimeException('Only an active authorized logistics center account can approve a delivery coverage exception.');
+                }
+                if (blank(trim((string) $deliveryAreaOverrideReason))) {
+                    throw new RuntimeException('A reason is required for a delivery coverage exception.');
+                }
+            }
 
             $pickupArea = null;
 
@@ -547,7 +588,11 @@ class ShipmentWorkflowService
                     throw new RuntimeException('The selected rider is not assigned to the seller pickup area. Assign that area to the rider or choose another rider.');
                 }
             } else {
-                $this->requireShipmentStatus($shipment, ['SORTED', 'DELIVERY_FAILED'], 'assign a delivery rider');
+                $this->requireShipmentStatus(
+                    $shipment,
+                    $allowUnavailableDeliveryTakeover ? ['ASSIGNED_TO_RIDER'] : ['SORTED', 'DELIVERY_FAILED'],
+                    $allowUnavailableDeliveryTakeover ? 'take over an unavailable delivery assignment' : 'assign a delivery rider',
+                );
 
                 if (app(ShipmentReturnWorkflowService::class)->hasOpenWorkflow($shipment)) {
                     throw new RuntimeException('This undelivered parcel must return to Logistics before another delivery assignment can start.');
@@ -562,7 +607,7 @@ class ShipmentWorkflowService
                     throw new RuntimeException('The rider does not belong to this shipment logistics center.');
                 }
 
-                if (! $this->riderCoversShipmentDestinationArea($shipment, $rider)) {
+                if (! $this->riderCoversShipmentDestinationArea($shipment, $rider) && ! $allowDeliveryAreaOverride) {
                     throw new RuntimeException('The selected rider is not assigned to the parcel destination area. Assign that area to the rider or choose another rider.');
                 }
             }
@@ -573,7 +618,9 @@ class ShipmentWorkflowService
                 ->update([
                     'status' => 'CANCELLED',
                     'cancelled_at' => now(),
-                    'rejection_reason' => 'Replaced by a newer assignment.',
+                    'rejection_reason' => $allowUnavailableDeliveryTakeover
+                        ? 'Reassigned because the previous rider was offline or had a stale location before accepting.'
+                        : 'Replaced by a newer assignment.',
                 ]);
 
             $activeLocalJobs = $rider->assignments()
@@ -598,7 +645,11 @@ class ShipmentWorkflowService
                 app(CodCollectionService::class)->attachDeliveryRider($shipment, $assignment);
                 app(FinancialAllocationService::class)->syncRiderParticipant($shipment, $assignment->rider_profile_id, 'DELIVERY', $assignment->id);
                 $shipment->update(['current_status' => 'ASSIGNED_TO_RIDER']);
-                $this->recordEvent($shipment, 'ASSIGNED_TO_RIDER', $assigner, 'Delivery rider assigned.', $assignment);
+                $note = $allowUnavailableDeliveryTakeover
+                    ? 'Delivery rider reassigned from '.($priorDeliveryAssignment?->riderProfile?->user?->name ?? 'the unavailable rider').' to '.($rider->user?->name ?? 'the new rider').'; the previous rider had not accepted and was offline or had a stale location.'
+                    : 'Delivery rider assigned.';
+                $note .= $allowDeliveryAreaOverride ? ' Temporary coverage exception: '.trim((string) $deliveryAreaOverrideReason) : '';
+                $this->recordEvent($shipment, 'ASSIGNED_TO_RIDER', $assigner, $note, $assignment);
             } else {
                 app(FinancialAllocationService::class)->syncRiderParticipant($shipment, $assignment->rider_profile_id, 'PICKUP', $assignment->id);
                 $shipment->update(['current_status' => 'PICKUP_ASSIGNED']);
@@ -1407,10 +1458,10 @@ class ShipmentWorkflowService
     {
         $this->requireAssignmentStatus($assignment, ['ASSIGNED'], 'accept this assignment');
         $offerMinutes = max(1, (int) config('rider.assignment_offer_minutes', 15));
-        if ($assignment->assignment_type === RiderAssignment::TYPE_DELIVERY
+        if ($assignment->assignment_type === RiderAssignment::TYPE_PICKUP
             && $assignment->assigned_at
             && $assignment->assigned_at->lte(now()->subMinutes($offerMinutes))) {
-            throw new RuntimeException('This delivery offer has expired. Refresh the dispatch queue for a new assignment.');
+            throw new RuntimeException('This pickup offer has expired. Refresh the pickup queue for a new assignment.');
         }
         $assignment->update([
             'status' => 'ACCEPTED',
@@ -1510,27 +1561,12 @@ class ShipmentWorkflowService
         $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'complete delivery');
         $this->requireShipmentStatus($shipment, ['OUT_FOR_DELIVERY'], 'complete delivery');
 
-        $scannedCode = trim((string) ($payload['scanned_code'] ?? ''));
-        if ($scannedCode === '' || ! hash_equals($shipment->tracking_number, $scannedCode)) {
-            throw ValidationException::withMessages(['scanned_code' => 'Tracking number does not match this job. Scan the assigned waybill before completing delivery.']);
-        }
-
         $proofPath = trim((string) ($payload['proof_path'] ?? ''));
         if ($proofPath === '') {
             throw ValidationException::withMessages(['proof_file' => 'A delivery proof photo is required before marking the parcel delivered.']);
         }
 
         app(CodCollectionService::class)->recordSuccessfulCollection($shipment, $assignment, $actor, $payload);
-        $this->recordScan(
-            $shipment,
-            $actor,
-            'DELIVERY_VERIFIED',
-            strtoupper((string) ($payload['scan_method'] ?? 'MANUAL')),
-            $scannedCode,
-            'SUCCESS',
-            null,
-            $assignment,
-        );
 
         $attemptNumber = (int) $shipment->deliveryAttempts()->count() + 1;
 

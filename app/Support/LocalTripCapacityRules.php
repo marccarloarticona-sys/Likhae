@@ -17,6 +17,11 @@ final class LocalTripCapacityRules
         return min(self::MAX_PARCELS_PER_TRIP, $approvedCapacity);
     }
 
+    public static function effectiveCapacity(?int $tripCapacity, ?int $riderCapacity): int
+    {
+        return min(self::approvedCapacity($tripCapacity), self::approvedCapacity($riderCapacity));
+    }
+
     public static function remainingCapacity(?int $approvedCapacity, int $activeParcelCount): int
     {
         if ($approvedCapacity === null || $approvedCapacity < 1) {

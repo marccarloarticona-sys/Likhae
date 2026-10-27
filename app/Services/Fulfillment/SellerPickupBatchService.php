@@ -16,6 +16,7 @@ use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\User;
 use App\Services\AccountNotificationService;
+use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Support\LocalTripCapacityRules;
 use App\Support\RiderVehicleType;
 use Illuminate\Support\Collection;
@@ -32,6 +33,7 @@ final class SellerPickupBatchService
         private readonly ShipmentWorkflowService $workflow,
         private readonly LocalRiderTripService $trips,
         private readonly AccountNotificationService $notifications,
+        private readonly RiderAssignmentOfferExpiryService $offers,
     ) {}
 
     /** @param list<int> $shipmentIds */
@@ -349,30 +351,43 @@ final class SellerPickupBatchService
 
     public function accept(User $actor, RiderLocalTrip $trip): RiderLocalTrip
     {
-        return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
-            $trip = $this->lockedPickupTrip($trip);
-            $this->assertTripRider($actor, $trip);
-            if ($trip->status !== RiderLocalTrip::LOADING || $trip->items->isEmpty()) {
-                throw new RuntimeException('Only an assigned seller pickup batch can be accepted.');
-            }
-            $this->assertBatchCapacity($trip);
+        if ($this->expireOverduePickupOffers($actor, $trip)) {
+            throw new RuntimeException('This pickup offer expired and was returned to Logistics. Refresh Pickups for current work.');
+        }
 
-            $activeItems = $trip->items->filter(fn (RiderLocalTripItem $item): bool => $item->riderAssignment?->status !== 'CANCELLED');
-            if ($activeItems->isEmpty()) {
-                throw new RuntimeException('No active parcels remain in this seller pickup batch.');
-            }
-            foreach ($activeItems as $item) {
-                $assignment = $item->riderAssignment;
-                if (! $assignment || $assignment->status !== 'ASSIGNED') {
-                    throw new RuntimeException('Every parcel in this batch must still be assigned before acceptance.');
+        try {
+            return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
+                $trip = $this->lockedPickupTrip($trip);
+                $this->assertTripRider($actor, $trip);
+                if ($trip->status !== RiderLocalTrip::LOADING || $trip->items->isEmpty()) {
+                    throw new RuntimeException('Only an assigned seller pickup batch can be accepted.');
                 }
-                $this->workflow->riderTransition($assignment, 'accept', $actor);
-            }
-            $trip->update(['status' => RiderLocalTrip::READY]);
-            $this->updateLinkedPickupRequestStatus($trip, 'ACCEPTED');
+                $this->assertBatchCapacity($trip);
 
-            return $trip->refresh();
-        });
+                $activeItems = $trip->items->filter(fn (RiderLocalTripItem $item): bool => $item->riderAssignment?->status !== 'CANCELLED');
+                if ($activeItems->isEmpty()) {
+                    throw new RuntimeException('No active parcels remain in this seller pickup batch.');
+                }
+                foreach ($activeItems as $item) {
+                    $assignment = $item->riderAssignment;
+                    if (! $assignment || $assignment->status !== 'ASSIGNED') {
+                        throw new RuntimeException('Every parcel in this batch must still be assigned before acceptance.');
+                    }
+                    $this->workflow->riderTransition($assignment, 'accept', $actor);
+                }
+                $trip->update(['status' => RiderLocalTrip::READY]);
+                $this->updateLinkedPickupRequestStatus($trip, 'ACCEPTED');
+
+                return $trip->refresh();
+            });
+        } catch (RuntimeException $exception) {
+            if (str_contains($exception->getMessage(), 'pickup offer has expired')
+                && $this->expireOverduePickupOffers($actor, $trip)) {
+                throw new RuntimeException('This pickup offer expired and was returned to Logistics. Refresh Pickups for current work.', 0, $exception);
+            }
+
+            throw $exception;
+        }
     }
 
     public function start(User $actor, RiderLocalTrip $trip): RiderLocalTrip
@@ -518,6 +533,24 @@ final class SellerPickupBatchService
             ->where('rider_local_trip_id', $trip->id)
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->update(['status' => $status]);
+    }
+
+    private function expireOverduePickupOffers(User $actor, RiderLocalTrip $trip): bool
+    {
+        $ownedTrip = RiderLocalTrip::query()
+            ->whereKey($trip->id)
+            ->where('rider_profile_id', $actor->riderProfile?->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->with('items.riderAssignment')
+            ->first();
+        foreach ($ownedTrip?->items ?? collect() as $item) {
+            $assignment = $item->riderAssignment;
+            if ($assignment && $this->offers->isExpired($assignment) && $this->offers->expireDue($assignment)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function finishLinkedPickupRequest(RiderLocalTrip $trip): void

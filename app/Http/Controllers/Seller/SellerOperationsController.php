@@ -81,12 +81,18 @@ class SellerOperationsController extends Controller
         $financeSchema = app(FinanceSchemaReadiness::class);
         if ($financeSchema->step7Ready()) {
             $settlements = SellerSettlement::query()->where('seller_profile_id', $seller->id);
+            $recordedPayouts = (clone $settlements)
+                ->whereIn('payout_status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                ->whereNotNull('paid_at');
+            if ($financeSchema->parcelSettlementReady()) {
+                $recordedPayouts->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'));
+            }
             $settlementSummary = [
                 'schema_ready' => true,
                 'pending' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
                 'authorized' => (float) (clone $settlements)->where('payout_status', 'AUTHORIZED')->sum('seller_payable'),
-                'awaiting_ack' => (float) (clone $settlements)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount'),
-                'paid' => (float) (clone $settlements)->where('payout_status', 'PAID')->sum('payout_amount'),
+                'awaiting_ack' => (float) (clone $recordedPayouts)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount'),
+                'paid' => (float) (clone $recordedPayouts)->where('payout_status', 'PAID')->sum('payout_amount'),
                 'outstanding' => (float) (clone $settlements)->where('payout_status', '!=', 'PAID')->sum('outstanding_balance'),
                 'review_required' => (clone $settlements)->where('payout_status', 'REVIEW_REQUIRED')->count(),
             ];
@@ -516,19 +522,22 @@ class SellerOperationsController extends Controller
             'commission_refund_reversal' => 0.0,
         ];
         if ($financeSchemaReady) {
+            $payoutReferenceGuard = app(FinanceSchemaReadiness::class)->parcelSettlementReady()
+                ? " AND (payout_external_reference IS NULL OR payout_external_reference NOT LIKE 'SIM-%')"
+                : '';
             $recognizedOrderIds = fn () => $salesSummary->recognizedOrderIdsQuery($sellerId, $from, $to, $selectedProduct?->id);
             $settlements = SellerSettlement::query()
                 ->where('seller_profile_id', $sellerId)
                 ->whereIn('seller_order_id', $recognizedOrderIds());
-            $settlementTotals = (clone $settlements)->selectRaw(<<<'SQL'
+            $settlementTotals = (clone $settlements)->selectRaw(<<<SQL
                 COALESCE(SUM(original_product_amount), 0) as original_product_amount,
                 COALESCE(SUM(discount_amount), 0) as discounts,
                 COALESCE(SUM(seller_payable), 0) as seller_payable,
-                COALESCE(SUM(CASE WHEN payout_status = 'PAID' THEN payout_amount ELSE 0 END), 0) as settled_payouts,
+                COALESCE(SUM(CASE WHEN payout_status = 'PAID' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as settled_payouts,
                 COALESCE(SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED') THEN outstanding_balance ELSE 0 END), 0) as pending_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'AUTHORIZED' THEN seller_payable ELSE 0 END), 0) as authorized_balance,
-                COALESCE(SUM(CASE WHEN payout_status = 'PAYOUT_PENDING_ACK' THEN payout_amount ELSE 0 END), 0) as awaiting_ack_balance,
-                COALESCE(SUM(CASE WHEN payout_status = 'PAID' THEN payout_amount ELSE 0 END), 0) as paid_balance,
+                COALESCE(SUM(CASE WHEN payout_status = 'PAYOUT_PENDING_ACK' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as awaiting_ack_balance,
+                COALESCE(SUM(CASE WHEN payout_status = 'PAID' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as paid_balance,
                 COALESCE(SUM(CASE WHEN payout_status != 'PAID' THEN outstanding_balance ELSE 0 END), 0) as outstanding_balance,
                 SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'AUTHORIZED', 'REVIEW_REQUIRED', 'PAYOUT_PENDING_ACK') THEN 1 ELSE 0 END) as pending_settlement,
                 SUM(CASE WHEN payout_status = 'REVIEW_REQUIRED' THEN 1 ELSE 0 END) as review_required_count

@@ -11,9 +11,8 @@
     $routeActive = [
         'dashboard' => ['rider.dashboard'],
         'pickups' => ['rider.pickups', 'rider.pickups.*', 'rider.parcels.*'],
-        'deliveries' => ['rider.deliveries', 'rider.deliveries.*'],
+        'deliveries' => ['rider.deliveries', 'rider.deliveries.*', 'rider.trips', 'rider.trips.*'],
         'returns' => ['rider.returns', 'rider.returns.*'],
-        'trips' => ['rider.trips', 'rider.trips.*'],
         'transfers' => ['rider.transfers', 'rider.transfers.*'],
         'history' => ['rider.history', 'rider.history.*'],
         'wallet' => ['rider.wallet', 'rider.earnings', 'rider.earnings.*'],
@@ -87,18 +86,12 @@
         <div class="sl-nav-section">
             <span class="sl-nav-label">Deliveries</span>
 
-            <a href="{{ route('rider.deliveries') }}"
-               class="sl-nav-link {{ $active === 'deliveries' ? 'is-active' : '' }}"
-               data-title="Delivery Assignments">
-                <span class="sl-nav-icon">{!! $icon('delivery') !!}</span>
-                <span class="sl-nav-text">Delivery Assignments</span>
-                @if(($sidebarCounts['deliveries'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['deliveries'] }}</span>@endif
-            </a>
             <a href="{{ route('rider.trips') }}"
-               class="sl-nav-link {{ $active === 'trips' ? 'is-active' : '' }}"
-               data-title="Local Trips">
+               class="sl-nav-link {{ $active === 'deliveries' ? 'is-active' : '' }}"
+               data-title="Delivery Batches">
                 <span class="sl-nav-icon">{!! $icon('delivery') !!}</span>
-                <span class="sl-nav-text">Local Trips</span>
+                <span class="sl-nav-text">Delivery Batches</span>
+                @if(($sidebarCounts['deliveries'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['deliveries'] }}</span>@endif
             </a>
             <a href="{{ route('rider.returns') }}"
                class="sl-nav-link {{ $active === 'returns' ? 'is-active' : '' }}"

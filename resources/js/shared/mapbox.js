@@ -7,6 +7,7 @@ const ROUTE_RECALCULATION_DISTANCE_METERS = 100;
 const ROUTE_OFF_PATH_DISTANCE_METERS = 100;
 const ROUTE_MAX_AGE_MS = 120000;
 const ROUTE_RETRY_DELAY_MS = 30000;
+const ORDER_ROUTE_POLL_INTERVAL_MS = 10000;
 
 let mapboxPromise;
 
@@ -139,19 +140,37 @@ function orderRouteProgress(status, stops, routeState, shipmentMarkers) {
     const totalDistance = legDistances.reduce((sum, distance) => sum + distance, 0);
     if (!totalDistance) return 0;
 
-    const centerIndex = stops.findIndex((stop) => stop.kind === 'center');
-    const centerDistance = centerIndex > 0
-        ? legDistances.slice(0, centerIndex).reduce((sum, distance) => sum + distance, 0)
+    const centerIndices = stops
+        .map((stop, index) => stop.kind === 'center' ? index : -1)
+        .filter((index) => index >= 0);
+    const firstCenterIndex = centerIndices[0] ?? -1;
+    const lastCenterIndex = centerIndices[centerIndices.length - 1] ?? -1;
+    const distanceToCenter = (index) => index > 0
+        ? legDistances.slice(0, index).reduce((sum, distance) => sum + distance, 0)
         : 0;
+    const firstCenterDistance = distanceToCenter(firstCenterIndex);
+    const lastCenterDistance = distanceToCenter(lastCenterIndex);
+    const receivedCenterIndices = stops
+        .map((stop, index) => ({ stop, index }))
+        .filter(({ stop }) => stop.kind === 'center'
+            && stop.center_role === 'destination'
+            && stop.transfer_status === 'RECEIVED')
+        .map(({ index }) => index);
+    const lastReceivedCenterIndex = receivedCenterIndices[receivedCenterIndices.length - 1] ?? -1;
     let distance = 0;
 
     switch (status) {
         case 'AT_SORTING_CENTER':
         case 'SORTED':
+            distance = lastReceivedCenterIndex >= 0
+                ? distanceToCenter(lastReceivedCenterIndex)
+                : firstCenterDistance;
+            break;
         case 'ASSIGNED_TO_RIDER':
         case 'OUT_FOR_DELIVERY':
         case 'DELIVERY_FAILED':
-            distance = centerDistance;
+            // Final-mile assignment only happens after the parcel reaches its delivery hub.
+            distance = lastCenterDistance;
             break;
         case 'DELIVERED':
         case 'COMPLETED':
@@ -170,7 +189,7 @@ function orderRouteProgress(status, stops, routeState, shipmentMarkers) {
         && markerCoordinates(marker));
     if (rider && ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED'].includes(status)) {
         const geometry = routeState.legGeometries || [];
-        const deliveryLegIndex = centerIndex >= 0 ? centerIndex : 0;
+        const deliveryLegIndex = lastCenterIndex >= 0 ? lastCenterIndex : 0;
         const deliveryLeg = geometry[deliveryLegIndex];
         const riderCoordinates = markerCoordinates(rider);
         const position = deliveryLeg && riderCoordinates
@@ -342,6 +361,7 @@ function drawOrderRoutes(map, mapboxgl, markers, shell) {
         const stops = shipmentMarkers
             .filter((marker) => Object.prototype.hasOwnProperty.call(routeOrder, marker.kind))
             .sort((a, b) => routeOrder[a.kind] - routeOrder[b.kind]
+                || (Number(a.sequence_no) || 0) - (Number(b.sequence_no) || 0)
                 || (centerRoleOrder[a.center_role] ?? 0) - (centerRoleOrder[b.center_role] ?? 0))
             .filter((marker) => markerCoordinates(marker));
         const stopCoordinates = stops.map(markerCoordinates);
@@ -1268,23 +1288,37 @@ function setRealtimeConnectionState(shell, state) {
     shell._likhaeRealtimeNotice = connected ? '' : 'Realtime updates unavailable; polling fallback is active.';
     shell._likhaeRealtimeNoticeError = !connected;
     updateStatus(shell, connected
-        ? 'Realtime tracking connected; waiting for the next location update.'
+        ? shell.dataset.mapOrderRoute === 'true'
+            ? 'Realtime tracking connected; route checks run every 10 seconds.'
+            : 'Realtime tracking connected; waiting for the next location update.'
         : 'Realtime tracking is reconnecting; polling fallback is active.', !connected);
 }
 
 function syncPollingFallback(shell, map, mapboxgl) {
-    if (shell._likhaeRealtimeConnectionState === 'connected') {
+    const connected = shell._likhaeRealtimeConnectionState === 'connected';
+    const orderRoute = shell.dataset.mapOrderRoute === 'true';
+    if (connected && !orderRoute) {
         if (shell._likhaeTrackingTimer) window.clearInterval(shell._likhaeTrackingTimer);
         shell._likhaeTrackingTimer = null;
+        shell._likhaeTrackingTimerIntervalMs = null;
+        shell._likhaeTrackingTimerMode = null;
         return;
     }
 
-    if (shell._likhaeTrackingTimer) return;
-    pollTracking(shell, map, mapboxgl, { fallback: true });
+    const intervalMs = orderRoute ? ORDER_ROUTE_POLL_INTERVAL_MS : 5000;
+    const mode = connected ? 'connected' : 'fallback';
+    if (shell._likhaeTrackingTimer
+        && shell._likhaeTrackingTimerIntervalMs === intervalMs
+        && shell._likhaeTrackingTimerMode === mode) return;
+
+    if (shell._likhaeTrackingTimer) window.clearInterval(shell._likhaeTrackingTimer);
+    pollTracking(shell, map, mapboxgl, { fallback: !connected });
     shell._likhaeTrackingTimer = window.setInterval(
-        () => pollTracking(shell, map, mapboxgl, { fallback: true }),
-        shell.dataset.mapOrderRoute === 'true' ? 12000 : 5000,
+        () => pollTracking(shell, map, mapboxgl, { fallback: !connected }),
+        intervalMs,
     );
+    shell._likhaeTrackingTimerIntervalMs = intervalMs;
+    shell._likhaeTrackingTimerMode = mode;
 }
 
 function leaveEchoChannels(shell) {

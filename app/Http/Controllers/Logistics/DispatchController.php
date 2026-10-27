@@ -21,6 +21,7 @@ use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
+use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\TransferManifestService;
@@ -72,10 +73,11 @@ class DispatchController extends Controller
         return view('logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
     }
 
-    public function pickups(Request $request, LogisticsSchemaReadiness $schema): View
+    public function pickups(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
+        $offers->expireDuePickupOffers(logisticsCenterId: (int) $center->id);
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -651,14 +653,14 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => 'Local rider trip schema is not installed; final-mile dispatch is disabled.'])->withInput();
         }
 
-        $createdNewTrip = (int) $data['local_trip_id'] === 0;
+        $autoGroup = (int) $data['local_trip_id'] === 0;
         try {
             $trip = $dispatch->dispatch(
                 $request->user(),
                 $center,
                 $shipment,
                 RiderProfile::query()->findOrFail((int) $data['rider_profile_id']),
-                $createdNewTrip ? null : (int) $data['local_trip_id'],
+                $autoGroup ? null : (int) $data['local_trip_id'],
             );
         } catch (\RuntimeException $exception) {
             return back()
@@ -666,12 +668,123 @@ class DispatchController extends Controller
                 ->withInput();
         }
 
-        if ($createdNewTrip) {
+        if ($autoGroup) {
             return redirect()->route('logistics.local-trips.show', $trip->id)
-                ->with('status', 'A compatible loading trip was created and the parcel was added. The rider can accept and start the trip.');
+                ->with('status', 'Parcel added to delivery batch #'.$trip->id.'. Batches follow the rider’s approved parcel capacity, up to 10 parcels. The rider can accept and start the batch together.');
         }
 
         return back()->with('status', 'Parcel added to local trip #'.$trip->id.'. Add other parcels from the same barangay to group their deliveries.');
+    }
+
+    public function autoMatchDelivery(Request $request, Shipment $shipment, LogisticsSchemaReadiness $schema, FinalMileDispatchService $dispatch, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+        $this->ensureShipmentBelongsToCenter($shipment, $center);
+
+        if (! $schema->localTripsReady() || ! $schema->riderAvailabilityReady()) {
+            return back()->withErrors(['rider_profile_id' => 'Nearest-rider matching needs local trip support and live rider availability enabled.']);
+        }
+
+        $shipment->loadMissing('sellerOrder.order.address', 'serviceArea');
+        $destination = $shipment->sellerOrder?->order?->address;
+        if (! $destination || ! is_numeric($destination->latitude) || ! is_numeric($destination->longitude)) {
+            return back()->withErrors(['rider_profile_id' => 'Auto-match needs a confirmed map pin for the buyer destination.']);
+        }
+
+        $currentAssignment = $shipment->riderAssignments()
+            ->where('assignment_type', 'DELIVERY')
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->with('riderProfile')
+            ->latest('id')
+            ->first();
+        $takingOverUnavailableRider = false;
+        if ($currentAssignment) {
+            $currentRider = $currentAssignment->riderProfile;
+            $takingOverUnavailableRider = $currentAssignment->status === 'ASSIGNED'
+                && (! $currentRider?->is_online
+                    || ! ($currentRider?->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false));
+            if (! $takingOverUnavailableRider) {
+                return back()->withErrors(['rider_profile_id' => 'A delivery can be taken over only before the assigned rider accepts, and when that rider is offline or has a stale location.']);
+            }
+        }
+
+        $candidates = RiderProfile::query()
+            ->where('logistics_center_id', $center->id)
+            ->where('status', 'ACTIVE')
+            ->where('is_online', true)
+            ->whereNotNull('availability_latitude')
+            ->whereNotNull('availability_longitude')
+            ->where('availability_location_updated_at', '>=', now()->subMinutes(2))
+            ->whereIn('vehicle_type', RiderVehicleType::localValues())
+            ->whereNotNull('approved_parcel_capacity')
+            ->where('approved_parcel_capacity', '>', 0)
+            ->whereHas('user', fn ($query) => $query
+                ->where('account_type', User::TYPE_RIDER)
+                ->where('status', User::STATUS_ACTIVE))
+            ->whereHas('areaAssignments', fn ($query) => $query
+                ->where('is_active', true)
+                ->whereHas('serviceArea', fn ($area) => $area
+                    ->where('is_active', true)
+                    ->where('logistics_center_id', $center->id)))
+            ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
+            ->with(['user', 'areaAssignments.serviceArea.locations'])
+            ->get()
+            ->filter(fn (RiderProfile $candidate): bool =>
+                LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) > 0)
+            ->map(function (RiderProfile $candidate) use ($destination, $workflow, $shipment): RiderProfile {
+                $candidate->setAttribute('covers_destination', $workflow->riderCoversShipmentDestinationArea($shipment, $candidate));
+                $candidate->setAttribute('destination_distance_km', $this->distanceKm(
+                    (float) $destination->latitude,
+                    (float) $destination->longitude,
+                    (float) $candidate->availability_latitude,
+                    (float) $candidate->availability_longitude,
+                ));
+
+                return $candidate;
+            });
+
+        $areaCandidates = $candidates->where('covers_destination', true);
+        $usedCoverageException = $areaCandidates->isEmpty();
+        $rider = ($usedCoverageException ? $candidates : $areaCandidates)
+            ->sortBy(fn (RiderProfile $candidate): string => sprintf('%012.6f-%03d-%012d',
+                (float) $candidate->destination_distance_km,
+                (int) $candidate->active_assignments_count,
+                (int) $candidate->id,
+            ))
+            ->first();
+
+        if (! $rider) {
+            return back()->withErrors(['rider_profile_id' => 'No active online rider in this hub has a recent location and available capacity.']);
+        }
+
+        $reason = 'Temporary nearest-rider coverage exception: no online, capacity-ready rider assigned to this destination barangay.';
+        try {
+            $trip = $dispatch->dispatch(
+                $request->user(),
+                $center,
+                $shipment,
+                $rider,
+                null,
+                $usedCoverageException,
+                $reason,
+                $takingOverUnavailableRider,
+                true,
+            );
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['rider_profile_id' => $exception->getMessage()]);
+        }
+
+        $status = 'Auto-matched '.$rider->user?->name.' as the nearest online rider for delivery batch #'.$trip->id.'.';
+        if ($usedCoverageException) {
+            $status .= ' Temporary coverage exception recorded because no available rider covers this barangay.';
+        }
+        if ($takingOverUnavailableRider) {
+            $status .= ' The previous unaccepted assignment was cancelled because its rider was unavailable.';
+        }
+
+        return redirect()->route('logistics.local-trips.show', $trip->id)->with('status', $status);
     }
 
     public function assignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches): RedirectResponse
@@ -1085,7 +1198,7 @@ class DispatchController extends Controller
         }
 
         return redirect()
-            ->route('logistics.dispatch', ['tracking' => $shipment->tracking_number])
+            ->route('logistics.assignments', ['tracking' => $shipment->tracking_number])
             ->with('status', 'Parcel sorted. Assign the rider responsible for this destination area.');
     }
 

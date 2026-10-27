@@ -33,6 +33,34 @@ class SmartMessagingService
         }
         $session = $sessionQuery->where('conversation_id', $conversation->id)->first();
 
+        $interactionHistory = collect();
+        if ($session && $this->supportRequestHistoryReady()) {
+            $interactionHistory = ConversationSupportInteraction::query()
+                ->where('conversation_support_session_id', $session->id)
+                ->where('requester_user_id', $buyer->id)
+                ->orderByDesc('id')
+                ->limit(20)
+                ->get(['question_snapshot', 'answer_snapshot', 'answer_source', 'feedback', 'created_at'])
+                ->reverse()
+                ->values()
+                ->map(fn (ConversationSupportInteraction $interaction): array => [
+                    'question' => $interaction->question_snapshot,
+                    'answer' => $interaction->answer_snapshot,
+                    'source' => $interaction->answer_source,
+                    'feedback' => $interaction->feedback,
+                    'created_at' => $interaction->created_at?->toIso8601String(),
+                ]);
+        }
+        if ($interactionHistory->isEmpty() && filled($session?->answer_snapshot) && filled($session?->selected_question_snapshot)) {
+            $interactionHistory->push([
+                'question' => $session->selected_question_snapshot,
+                'answer' => $session->answer_snapshot,
+                'source' => $session->answer_source_snapshot,
+                'feedback' => $session->last_feedback,
+                'created_at' => $session->selected_at?->toIso8601String(),
+            ]);
+        }
+
         $suggestions = $recipientType === MessagingFaq::OWNER_ADMIN
             ? $this->adminQuestions($context)
             : $this->sellerQuestions($recipient, $context);
@@ -47,6 +75,7 @@ class SmartMessagingService
             'product_id' => $context['product']['id'] ?? null,
             'variant_id' => $context['variant']['id'] ?? null,
             'suggestions' => $suggestions,
+            'history' => $interactionHistory,
             'session' => $this->sessionPayload($session),
             'answer_url' => route('buyer.messages.smart-help.answer', ['conversation' => $conversation->id]),
             'feedback_url' => route('buyer.messages.smart-help.feedback', ['conversation' => $conversation->id]),

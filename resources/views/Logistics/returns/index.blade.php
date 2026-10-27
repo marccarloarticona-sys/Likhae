@@ -22,15 +22,23 @@
             @csrf
             <div>
                 <h2 class="text-base font-bold text-ink">Receive parcels from a completed rider route</h2>
-                <p class="mt-1 text-sm text-muted">Scan or enter tracking numbers, one per line. Each parcel is validated and recorded separately; a failed scan does not confirm receipt.</p>
+                <p class="mt-1 text-sm text-muted">Scan waybill barcodes with your camera or enter tracking numbers, one per line. Each parcel is validated and recorded separately; a failed scan does not confirm receipt.</p>
             </div>
+            <x-shared.parcel-scanner
+                :action="route('logistics.returns.receive-batch')"
+                title="Scan waybill QR or barcode"
+                description="Start the camera and scan each parcel. Scans are added to the tracking list below; review it before confirming receipt."
+                :scanner-only="true"
+                append-target="#return-batch-tracking-numbers"
+                method-target="#return-batch-scan-method"
+            />
             <label class="grid gap-1 text-sm font-semibold">Tracking numbers
-                <textarea name="tracking_numbers" rows="4" maxlength="10000" required class="w-full border border-line p-3 font-mono text-sm" placeholder="LK...&#10;LK..."></textarea>
+                <textarea id="return-batch-tracking-numbers" name="tracking_numbers" rows="4" maxlength="10000" required class="w-full border border-line p-3 font-mono text-sm" placeholder="LK...&#10;LK..."></textarea>
             </label>
             <div class="flex flex-wrap items-end gap-3">
                 <label class="grid gap-1 text-sm font-semibold">Scan method
-                    <select name="scan_method" required class="border border-line bg-white px-3 py-2 text-sm">
-                        <option value="MANUAL">Manual entry</option><option value="QR">QR scan</option><option value="BARCODE">Barcode scan</option>
+                    <select id="return-batch-scan-method" name="scan_method" required class="border border-line bg-white px-3 py-2 text-sm">
+                        <option value="MANUAL" @selected(old('scan_method', 'MANUAL') === 'MANUAL')>Manual entry</option><option value="QR" @selected(old('scan_method') === 'QR')>QR scan</option><option value="BARCODE" @selected(old('scan_method') === 'BARCODE')>Barcode scan</option>
                     </select>
                 </label>
                 <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Verify and receive parcels</button>

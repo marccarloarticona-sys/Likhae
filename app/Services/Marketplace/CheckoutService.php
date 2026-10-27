@@ -295,9 +295,9 @@ class CheckoutService
         $shippingVoucherDiscountTotal = 0.0;
         $protectionTotal = 0.0;
         $selectedProtectionIds = collect($protectionItemIds)->map(fn ($id): int => (int) $id)->unique()->values();
-        // Step 7: one fixed charge per seller-order/shipment, never per item unit.
-        // The provider is selected separately from the charge; API checkout may
-        // resolve the provider from the destination service area.
+        // Step 7: one fixed charge per parcel (one shipment per order item),
+        // never per item unit. The provider is selected separately from the
+        // charge; API checkout may resolve it from the destination service area.
         $ratePolicy = $this->shippingRates->currentPolicy(lockForUpdate: $lockVoucherUsage);
         $shippingFee = (float) $ratePolicy['shipping_fee'];
         $destinationForPricing = $automaticDestination;
@@ -418,7 +418,8 @@ class CheckoutService
                 'reward_points_redeemed' => 0,
                 'reward_points_discount' => 0.0,
                 'reward_points_item_discounts' => [],
-                'shipping_fee' => $groupShippingFee,
+                'shipping_fee' => 0.0,
+                'per_parcel_shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'shipping_rate_snapshot' => $shippingSnapshot,
                 'routing_review_required' => $groupNeedsRoutingReview,
@@ -436,6 +437,22 @@ class CheckoutService
             $groups[$sellerId]['item_subtotal'] += $lineTotal;
             $groups[$sellerId]['protection_total'] += $itemProtectionFee;
         }
+
+        foreach ($groups as &$group) {
+            $parcelCount = $group['items']->count();
+            $perParcelShippingCents = FinancialRules::cents($group['per_parcel_shipping_fee']);
+            $totalShippingCents = $perParcelShippingCents * $parcelCount;
+            $group['shipping_fee'] = (float) FinancialRules::amount($totalShippingCents);
+            $group['shipping_rate_snapshot'] = [
+                ...$group['shipping_rate_snapshot'],
+                'pricing_basis' => 'PER_PARCEL',
+                'parcel_count' => $parcelCount,
+                'per_parcel_shipping_fee' => FinancialRules::amount($perParcelShippingCents),
+                'total_shipping_fee' => FinancialRules::amount($totalShippingCents),
+            ];
+            unset($group['per_parcel_shipping_fee']);
+        }
+        unset($group);
 
         $unknownProtectionIds = $selectedProtectionIds->diff($items->pluck('id')->map(fn ($id): int => (int) $id));
         if ($unknownProtectionIds->isNotEmpty()) {

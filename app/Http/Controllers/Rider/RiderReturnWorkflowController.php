@@ -20,6 +20,7 @@ class RiderReturnWorkflowController extends Controller
 
         $relations = [
             'shipment.sellerOrder.order.address',
+            'shipment.deliveryAttempts',
             'shipment.sellerOrder.sellerProfile.businessAddress',
             'originalDeliveryAssignment', 'returnRider.user', 'logisticsCenter.address',
         ];

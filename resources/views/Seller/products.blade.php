@@ -119,8 +119,6 @@
                         <label class="sl-field sl-span-2"><span>SKU</span><input name="sku" maxlength="100" value="{{ old('sku', data_get($singleVariant, 'sku')) }}" placeholder="Generated automatically when blank"><small>Leave blank to create a SKU automatically.</small></label>
                         <label class="sl-field"><span>Discount type</span><select name="discount_type" data-single-discount-type><option value="none" @selected($singleDiscountType === 'none')>No discount</option><option value="percentage" @selected($singleDiscountType === 'percentage')>Percentage</option><option value="fixed" @selected($singleDiscountType === 'fixed')>Fixed amount</option></select></label>
                         <label class="sl-field"><span data-single-discount-label>{{ $singleDiscountType === 'fixed' ? 'Discount amount (₱)' : 'Discount (%)' }}</span><div class="sl-input-prefix"><i data-single-discount-prefix @if($singleDiscountType !== 'fixed') hidden @endif>₱</i><input name="discount_value" data-single-discount-value type="number" min="0" max="999999.99" step="0.01" value="{{ $singleDiscountValue ?: 0 }}" placeholder="0" aria-label="Discount value"></div></label>
-                        <label class="sl-field"><span>Flash-sale price</span><div class="sl-input-prefix"><i>₱</i><input name="flash_sale_price" type="number" min="0.01" max="999999.99" step="0.01" value="{{ old('flash_sale_price', data_get($singleVariant, 'flash_sale_price')) }}" placeholder="Optional"></div><small>Overrides the Seller discount while the sale is active.</small></label>
-                        <label class="sl-field"><span>Flash-sale allocation</span><input name="flash_sale_allocation" type="number" min="1" max="999999" step="1" value="{{ old('flash_sale_allocation', data_get($singleVariant, 'flash_sale_allocation')) }}" placeholder="Units"><small>Only this many units can use the flash price.</small></label>
                         <label class="sl-field"><span>Accepted payment</span><select name="payment_method"><option value="cod_online" @selected($singlePaymentMethod === 'cod_online')>COD + Online</option><option value="cod" @selected($singlePaymentMethod === 'cod')>COD only</option><option value="online" @selected($singlePaymentMethod === 'online')>Online only</option></select></label>
                         <label class="sl-field"><span>Availability</span><select name="is_active"><option value="1" @selected((bool) $singleActive)>Available</option><option value="0" @selected(! (bool) $singleActive)>Unavailable</option></select></label>
                     </div>
@@ -141,7 +139,7 @@
                         <button type="button" class="sl-btn sl-btn-ghost sl-btn-sm" data-clear-bulk-discount>Clear Discount</button><button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-apply-bulk>Apply</button>
                     </div>
                     <div class="sl-variation-table" data-variation-list>
-                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Flash price</span><span>Flash units</span><span>Weight (kg)</span><span>Discount type</span><span>Discount</span><span>Payment</span><span>Availability</span><span></span></div>
+                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span><span>Discount type</span><span>Discount</span><span>Payment</span><span>Availability</span><span></span></div>
                         @foreach($variationRows as $index => $row)
                             @php $variantDiscountType = strtolower((string) data_get($row, 'discount_type', 'none')); $variantDiscountType = in_array($variantDiscountType, ['none', 'percentage', 'fixed'], true) ? $variantDiscountType : 'none'; @endphp
                             <div class="sl-variation-row">
@@ -153,8 +151,6 @@
                                 <input name="variants[{{ $index }}][sku]" value="{{ data_get($row, 'sku') }}" placeholder="Auto-generated SKU" aria-label="Variant SKU">
                                 <input name="variants[{{ $index }}][price]" type="number" min="0" step="0.01" value="{{ data_get($row, 'price') }}" placeholder="Price" aria-label="Variant price">
                                 <input name="variants[{{ $index }}][stock]" type="number" min="0" value="{{ data_get($row, 'stock') }}" aria-label="Variant stock">
-                                <input name="variants[{{ $index }}][flash_sale_price]" type="number" min="0.01" max="999999.99" step="0.01" value="{{ data_get($row, 'flash_sale_price') }}" placeholder="Flash price" aria-label="Variant flash-sale price">
-                                <input name="variants[{{ $index }}][flash_sale_allocation]" type="number" min="1" max="999999" step="1" value="{{ data_get($row, 'flash_sale_allocation') }}" placeholder="Units" aria-label="Variant flash-sale allocation">
                                 <input name="variants[{{ $index }}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ data_get($row, 'weight_kg') }}" placeholder="kg" aria-label="Weight per item in kilograms">
                                 <select name="variants[{{ $index }}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" @selected($variantDiscountType === 'none')>None</option><option value="percentage" @selected($variantDiscountType === 'percentage')>Percentage</option><option value="fixed" @selected($variantDiscountType === 'fixed')>Fixed</option></select>
                                 <input name="variants[{{ $index }}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="{{ data_get($row, 'discount_value', 0) ?: 0 }}" placeholder="0" aria-label="Discount value">
@@ -169,14 +165,6 @@
                         <div class="sl-variation-assignment-help">Choose an image in a row, or use the Image control below to apply the same existing image to all or selected variants.</div>
                     </div>
                     </div>
-                    @if(\Illuminate\Support\Facades\Schema::hasColumn('products', 'flash_sale_starts_at') && \Illuminate\Support\Facades\Schema::hasColumn('products', 'flash_sale_ends_at'))
-                        <div class="mt-5 border-t border-stone-200 pt-4">
-                            <div class="sl-form-grid sl-form-grid-2">
-                                <label class="sl-field"><span>Flash sale starts at</span><input name="flash_sale_starts_at" type="datetime-local" value="{{ old('flash_sale_starts_at', data_get($product, 'flash_sale_starts_at')?->format('Y-m-d\\TH:i')) }}"><small>Leave blank to start immediately. The flash price takes priority during this window.</small></label>
-                                <label class="sl-field"><span>Flash sale ends at</span><input name="flash_sale_ends_at" type="datetime-local" value="{{ old('flash_sale_ends_at', data_get($product, 'flash_sale_ends_at')?->format('Y-m-d\\TH:i')) }}"><small>After this time, the regular Seller price applies.</small></label>
-                            </div>
-                        </div>
-                    @endif
                 </section>
             </div>
             @if($errors->any())<div class="sl-form-errors" role="alert"><strong>Product could not be saved.</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif

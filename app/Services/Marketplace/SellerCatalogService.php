@@ -95,8 +95,11 @@ class SellerCatalogService
                 }
                 if (Schema::hasColumn('products', 'flash_sale_starts_at')
                     && Schema::hasColumn('products', 'flash_sale_ends_at')) {
-                    $productAttributes['flash_sale_starts_at'] = $request->input('flash_sale_starts_at') ?: null;
-                    $productAttributes['flash_sale_ends_at'] = $request->input('flash_sale_ends_at') ?: null;
+                    foreach (['flash_sale_starts_at', 'flash_sale_ends_at'] as $flashSaleScheduleField) {
+                        if ($request->exists($flashSaleScheduleField)) {
+                            $productAttributes[$flashSaleScheduleField] = $request->input($flashSaleScheduleField) ?: null;
+                        }
+                    }
                 }
                 $product->fill($productAttributes);
 
@@ -629,7 +632,7 @@ class SellerCatalogService
         }
 
         if ($variantRows->isEmpty()) {
-            $variantRows = collect([[
+            $singleVariantRow = [
                 'id' => $request->input('single_variant_id'),
                 'sku' => $request->input('sku') ?: 'LK-'.$product->id.'-DEFAULT',
                 'price' => $request->input('price'),
@@ -638,10 +641,14 @@ class SellerCatalogService
                 'values' => '',
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
-                'flash_sale_price' => $request->input('flash_sale_price'),
-                'flash_sale_allocation' => $request->input('flash_sale_allocation'),
                 'is_active' => true,
-            ]]);
+            ];
+            foreach (['flash_sale_price', 'flash_sale_allocation'] as $flashSaleVariantField) {
+                if ($request->exists($flashSaleVariantField)) {
+                    $singleVariantRow[$flashSaleVariantField] = $request->input($flashSaleVariantField);
+                }
+            }
+            $variantRows = collect([$singleVariantRow]);
         }
 
         $keptIds = [];
@@ -733,21 +740,26 @@ class SellerCatalogService
             );
 
             $variant ??= new ProductVariant(['product_id' => $product->id]);
-            $variant->fill([
+            $variantAttributes = [
                 'product_id' => $product->id,
                 'product_image_id' => $productImage?->id,
                 'sku' => $sku,
                 'price' => (float) $price,
                 'discount_type' => $discountType,
                 'discount_value' => $discountValue,
-                'flash_sale_price' => filled($flashSalePrice) ? (float) $flashSalePrice : null,
-                'flash_sale_allocation' => filled($flashSaleAllocation) ? (int) $flashSaleAllocation : null,
                 'payment_method' => $paymentMethod ?: 'cod_online',
                 'stock' => (int) $stock,
                 'weight_kg' => Arr::get($row, 'weight_kg', $request->input('weight_kg')),
                 'is_default' => $index === 0,
                 'is_active' => filter_var(Arr::get($row, 'is_active', $request->input('is_active', true)), FILTER_VALIDATE_BOOLEAN),
-            ]);
+            ];
+            if (Arr::exists($row, 'flash_sale_price')) {
+                $variantAttributes['flash_sale_price'] = filled($flashSalePrice) ? (float) $flashSalePrice : null;
+            }
+            if (Arr::exists($row, 'flash_sale_allocation')) {
+                $variantAttributes['flash_sale_allocation'] = filled($flashSaleAllocation) ? (int) $flashSaleAllocation : null;
+            }
+            $variant->fill($variantAttributes);
             $variant->save();
 
             $variant->optionValues()->sync($valueIds);
@@ -813,7 +825,7 @@ class SellerCatalogService
 
         return collect($combinations)->map(function (array $values) use ($product, $request): array {
             $suffix = collect($values)->map(fn ($value) => Str::slug($value))->implode('-');
-            return [
+            $row = [
                 'sku' => ($request->input('sku') ?: 'LK-'.$product->id).'-'.Str::upper($suffix ?: Str::random(5)),
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
@@ -821,11 +833,16 @@ class SellerCatalogService
                 'values' => implode(',', $values),
                 'discount_type' => $request->input('discount_type', 'none'),
                 'discount_value' => $request->input('discount_value', 0),
-                'flash_sale_price' => $request->input('flash_sale_price'),
-                'flash_sale_allocation' => $request->input('flash_sale_allocation'),
                 'payment_method' => $request->input('payment_method', 'cod_online'),
                 'is_active' => true,
             ];
+            foreach (['flash_sale_price', 'flash_sale_allocation'] as $flashSaleVariantField) {
+                if ($request->exists($flashSaleVariantField)) {
+                    $row[$flashSaleVariantField] = $request->input($flashSaleVariantField);
+                }
+            }
+
+            return $row;
         });
     }
 

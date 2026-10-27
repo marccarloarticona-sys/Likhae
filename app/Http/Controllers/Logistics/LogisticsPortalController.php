@@ -19,6 +19,8 @@ use App\Models\Logistics\Shipment;
 use App\Models\Logistics\TransferManifest;
 use App\Models\Rider\RiderAreaAssignment;
 use App\Models\Rider\RiderProfile;
+use App\Models\Rider\RiderProfileUpdateDocument;
+use App\Models\Rider\RiderProfileUpdateRequest;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\AccountNotificationService;
@@ -47,8 +49,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\View\View;
 
 class LogisticsPortalController extends Controller
@@ -262,6 +266,19 @@ class LogisticsPortalController extends Controller
             ->orderByDesc('id')
             ->paginate(15);
 
+        if (Schema::hasTable('rider_profile_update_requests')) {
+            $pendingProfileUpdates = RiderProfileUpdateRequest::query()
+                ->where('status', 'PENDING')
+                ->whereIn('rider_profile_id', $riders->getCollection()->modelKeys())
+                ->selectRaw('rider_profile_id, COUNT(*) as pending_count')
+                ->groupBy('rider_profile_id')
+                ->pluck('pending_count', 'rider_profile_id');
+            $riders->getCollection()->each(fn (RiderProfile $rider) => $rider->setAttribute(
+                'pending_profile_update_count',
+                (int) ($pendingProfileUpdates[$rider->id] ?? 0),
+            ));
+        }
+
         $riders->getCollection()->each(function (RiderProfile $rider): void {
             $rider->setAttribute('remaining_parcel_capacity', LocalTripCapacityRules::remainingCapacity(
                 $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
@@ -293,6 +310,11 @@ class LogisticsPortalController extends Controller
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
         $rider->load(['user', 'areaAssignments.serviceArea', 'assignments.shipment.sellerOrder.sellerProfile.businessAddress', 'assignments.shipment.sellerOrder.order.address', 'assignments.shipment.riderAssignments.liveLocation', 'assignments.shipment.logisticsCenter.address', 'assignments.liveLocation', 'earnings', 'moderationLogs.actor']);
+        $profileUpdateSchemaReady = Schema::hasTable('rider_profile_update_requests')
+            && Schema::hasTable('rider_profile_update_documents');
+        $profileUpdateRequests = $profileUpdateSchemaReady
+            ? $rider->profileUpdateRequests()->with(['documents', 'submitter', 'reviewer'])->limit(10)->get()
+            : collect();
         $rider->setAttribute('active_assignments_count', $rider->assignments
             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
             ->count());
@@ -332,7 +354,133 @@ class LogisticsPortalController extends Controller
             'isLocalRider' => $isLocalRider,
             'manifestSchemaReady' => $schema->manifestReady(),
             'localTripsSchemaReady' => $schema->localTripsReady(),
+            'profileUpdateSchemaReady' => $profileUpdateSchemaReady,
+            'profileUpdateRequests' => $profileUpdateRequests,
         ]);
+    }
+
+    public function riderProfileUpdateDocument(
+        Request $request,
+        RiderProfile $rider,
+        RiderProfileUpdateRequest $profileUpdateRequest,
+        RiderProfileUpdateDocument $document,
+    ): \Symfony\Component\HttpFoundation\StreamedResponse {
+        $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
+        abort_unless((int) $rider->logistics_center_id === (int) $center->id, 404);
+        abort_unless((int) $profileUpdateRequest->rider_profile_id === (int) $rider->id, 404);
+        abort_unless((int) $document->rider_profile_update_request_id === (int) $profileUpdateRequest->id, 404);
+        abort_unless(Storage::disk('registrations')->exists($document->file_path), 404);
+
+        $extension = pathinfo($document->file_path, PATHINFO_EXTENSION);
+        $filename = strtolower($document->document_type).($extension ? '.'.$extension : '');
+
+        return Storage::disk('registrations')->response(
+            $document->file_path,
+            $filename,
+            ['Content-Type' => $document->mime_type ?: 'application/octet-stream', 'Cache-Control' => 'private, no-store'],
+            $request->boolean('download') ? 'attachment' : 'inline',
+        );
+    }
+
+    public function approveRiderProfileUpdate(
+        Request $request,
+        RiderProfile $rider,
+        RiderProfileUpdateRequest $profileUpdateRequest,
+    ): RedirectResponse {
+        $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
+        abort_unless((int) $rider->logistics_center_id === (int) $center->id, 404);
+        abort_unless((int) $profileUpdateRequest->rider_profile_id === (int) $rider->id, 404);
+
+        $data = $request->validate(['review_notes' => ['nullable', 'string', 'max:1000']]);
+        $uniqueness = Validator::make([
+            'vehicle_type' => $profileUpdateRequest->vehicle_type,
+            'plate_number' => $profileUpdateRequest->plate_number,
+            'drivers_license_number' => $profileUpdateRequest->drivers_license_number,
+        ], [
+            'vehicle_type' => ['required', Rule::in(RiderVehicleType::acceptedValues())],
+            'plate_number' => ['required', 'string', Rule::unique('rider_profiles', 'plate_number')->ignore($rider->id)],
+            'drivers_license_number' => ['required', 'string', Rule::unique('rider_profiles', 'drivers_license_number')->ignore($rider->id)],
+        ]);
+        if ($uniqueness->fails()) {
+            return back()->withErrors($uniqueness)->withInput();
+        }
+
+        DB::transaction(function () use ($request, $rider, $profileUpdateRequest, $data): void {
+            $lockedRequest = RiderProfileUpdateRequest::query()
+                ->whereKey($profileUpdateRequest->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($lockedRequest->status === 'PENDING', 409, 'This profile update has already been reviewed.');
+
+            $lockedRider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
+            $vehicleTypeChanged = (string) $lockedRider->vehicle_type !== (string) $lockedRequest->vehicle_type;
+            $profileChanges = [
+                'vehicle_type' => $lockedRequest->vehicle_type,
+                'plate_number' => mb_strtoupper(trim($lockedRequest->plate_number)),
+                'drivers_license_number' => mb_strtoupper(trim($lockedRequest->drivers_license_number)),
+            ];
+            if ($vehicleTypeChanged) {
+                $profileChanges += [
+                    'approved_parcel_capacity' => null,
+                    'approved_weight_capacity_kg' => null,
+                    'approved_volume_capacity_liters' => null,
+                    'is_online' => false,
+                    'availability_latitude' => null,
+                    'availability_longitude' => null,
+                    'availability_location_updated_at' => null,
+                ];
+            }
+            $lockedRider->update($profileChanges);
+
+            $lockedRequest->documents()->update([
+                'verification_status' => 'VERIFIED',
+                'verified_by_user_id' => $request->user()->id,
+                'verified_at' => now(),
+                'rejection_reason' => null,
+            ]);
+            $lockedRequest->update([
+                'status' => 'APPROVED',
+                'review_notes' => $data['review_notes'] ?? null,
+                'reviewed_by_user_id' => $request->user()->id,
+                'reviewed_at' => now(),
+            ]);
+        });
+
+        return back()->with('status', 'Rider profile update approved and verified details applied.');
+    }
+
+    public function rejectRiderProfileUpdate(
+        Request $request,
+        RiderProfile $rider,
+        RiderProfileUpdateRequest $profileUpdateRequest,
+    ): RedirectResponse {
+        $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
+        abort_unless((int) $rider->logistics_center_id === (int) $center->id, 404);
+        abort_unless((int) $profileUpdateRequest->rider_profile_id === (int) $rider->id, 404);
+        $data = $request->validate(['review_notes' => ['required', 'string', 'min:3', 'max:1000']]);
+
+        DB::transaction(function () use ($request, $profileUpdateRequest, $data): void {
+            $lockedRequest = RiderProfileUpdateRequest::query()
+                ->whereKey($profileUpdateRequest->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($lockedRequest->status === 'PENDING', 409, 'This profile update has already been reviewed.');
+
+            $lockedRequest->documents()->update([
+                'verification_status' => 'REJECTED',
+                'verified_by_user_id' => $request->user()->id,
+                'verified_at' => now(),
+                'rejection_reason' => trim($data['review_notes']),
+            ]);
+            $lockedRequest->update([
+                'status' => 'REJECTED',
+                'review_notes' => trim($data['review_notes']),
+                'reviewed_by_user_id' => $request->user()->id,
+                'reviewed_at' => now(),
+            ]);
+        });
+
+        return back()->with('status', 'Rider profile update rejected. The current verified profile remains unchanged.');
     }
 
     public function updateRiderCapacity(Request $request, RiderProfile $rider, LogisticsSchemaReadiness $schema): RedirectResponse

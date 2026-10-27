@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
+use App\Models\Rider\RiderProfile;
+use App\Models\Rider\RiderProfileUpdateRequest;
 use App\Models\Buyer\Address;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\FinancialLedgerEntry;
@@ -25,11 +27,14 @@ use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
 use App\Services\Maps\MapDataService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
@@ -48,19 +53,34 @@ class RiderController extends Controller
         $rider = $this->rider($request);
         abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
 
-        if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true)
-            || $rider->user?->status !== User::STATUS_ACTIVE) {
+        $availability = DB::transaction(function () use ($rider, $data): ?bool {
+            $lockedRider = RiderProfile::query()
+                ->whereKey($rider->id)
+                ->with('user')
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (! in_array($lockedRider->status, ['ACTIVE', 'WARNED'], true)
+                || $lockedRider->user?->status !== User::STATUS_ACTIVE) {
+                return null;
+            }
+
+            $online = (bool) $data['is_online'];
+            $lockedRider->update([
+                'is_online' => $online,
+                'availability_latitude' => $online ? ($data['latitude'] ?? null) : null,
+                'availability_longitude' => $online ? ($data['longitude'] ?? null) : null,
+                'availability_location_updated_at' => $online && isset($data['latitude'], $data['longitude']) ? now() : null,
+            ]);
+
+            return $online;
+        });
+
+        if ($availability === null) {
             return back()->withErrors(['is_online' => 'Only active riders can change their availability.']);
         }
 
-        $rider->update([
-            'is_online' => (bool) $data['is_online'],
-            'availability_latitude' => (bool) $data['is_online'] ? ($data['latitude'] ?? null) : null,
-            'availability_longitude' => (bool) $data['is_online'] ? ($data['longitude'] ?? null) : null,
-            'availability_location_updated_at' => (bool) $data['is_online'] && isset($data['latitude'], $data['longitude']) ? now() : null,
-        ]);
-
-        return back()->with('status', $rider->is_online ? 'You are now online and available for assignments.' : 'You are now offline.');
+        return back()->with('status', $availability ? 'You are now online and available for assignments.' : 'You are now offline. Existing parcels remain assigned to you.');
     }
 
     public function updateAvailabilityLocation(Request $request, LogisticsSchemaReadiness $schema): JsonResponse|RedirectResponse
@@ -85,13 +105,14 @@ class RiderController extends Controller
             : back()->with('status', 'Your dispatch location was updated.');
     }
 
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): View|RedirectResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): View|RedirectResponse
     {
         $rider = $this->rider($request);
         if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
             return redirect()->route('rider.transfers');
         }
         abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
+        $offers->expireDuePickupOffers((int) $rider->id);
 
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $finance = $this->financeSummary($rider, app(FinanceSchemaReadiness::class));
@@ -105,7 +126,6 @@ class RiderController extends Controller
         $riderStats = [
             ['label' => 'Pending pickups', 'value' => $pendingPickupCount],
             ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
-                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
                 ->count()],
             ['label' => 'In progress', 'value' => (clone $assignments)->where('status', 'IN_PROGRESS')->count()],
             ['label' => 'COD unremitted', 'value' => 'PHP '.number_format($finance['unremitted_cash'], 2)],
@@ -193,10 +213,16 @@ class RiderController extends Controller
         return view('rider.pickups.index', compact('pickups', 'pickupStats', 'assignments', 'rider'));
     }
 
-    public function pickupShow(Request $request, RiderAssignment $assignment, LogisticsSchemaReadiness $schema): RedirectResponse
+    public function pickupShow(Request $request, RiderAssignment $assignment, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): RedirectResponse
     {
         $rider = $this->rider($request);
         abort_unless((int) $assignment->rider_profile_id === (int) $rider->id && $assignment->assignment_type === 'PICKUP', 403);
+        if ($offers->isExpired($assignment) && $offers->expireDue($assignment)) {
+            return redirect()->route('rider.pickups')->with('status', 'This pickup offer expired and was returned to Logistics for reassignment. Refresh Pickups for current work.');
+        }
+        if ($offers->wasExpired($assignment)) {
+            return redirect()->route('rider.pickups')->with('status', 'This pickup offer expired and was returned to Logistics for reassignment. Refresh Pickups for current work.');
+        }
         abort_unless($schema->sellerPickupBatchesReady(), 503, 'Seller pickup batch workflow is unavailable until its additive schema migration is installed.');
 
         $pickupTrip = $assignment->localTripItems()->with('trip')->latest('id')->first()?->trip;
@@ -209,63 +235,28 @@ class RiderController extends Controller
         return redirect()->route('rider.pickups.batches.show', $pickupTrip->id);
     }
 
-    public function deliveries(Request $request): View
+    public function deliveries(Request $request): RedirectResponse
     {
-        $rider = $this->rider($request);
-
-        $assignments = RiderAssignment::query()
-            ->where('rider_profile_id', $rider->id)
-            ->delivery()
-            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
-            ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
-            ->with(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.sellerProfile.user'])
-            ->latest()
-            ->paginate(15);
-        $deliveries = $assignments->getCollection()->map(function (RiderAssignment $assignment): array {
-            $shipment = $assignment->shipment;
-            $order = $shipment?->sellerOrder?->order;
-
-            return [
-                'id' => $assignment->id,
-                'image' => $this->assignmentImage($assignment),
-                'tracking' => $shipment?->tracking_number ?? 'Tracking unavailable',
-                'buyer' => $order?->address?->recipient_name ?? $order?->buyer?->name ?? 'Buyer unavailable',
-                'address' => $order?->address?->formatted() ?? 'Address unavailable',
-                'amount' => 'PHP '.number_format((float) ($shipment?->sellerOrder?->grand_total ?? 0), 2),
-                'status_label' => str($shipment?->current_status ?? $assignment->status)->headline(),
-            ];
-        });
-        $deliveryQuery = RiderAssignment::query()->where('rider_profile_id', $rider->id)->delivery();
-        $deliveryStats = [
-            'active' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
-                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
-                ->count(),
-            'assigned' => (clone $deliveryQuery)->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
-                ->where(fn ($query) => $query->where('status', '<>', 'ASSIGNED')->orWhereNull('assigned_at')->orWhere('assigned_at', '>', $this->offerCutoff()))
-                ->count(),
-            'out_for_delivery' => (clone $deliveryQuery)->where('status', 'IN_PROGRESS')->whereHas('shipment', fn ($query) => $query->where('current_status', 'OUT_FOR_DELIVERY'))->count(),
-            'delivered_today' => (clone $deliveryQuery)->where('status', 'COMPLETED')->whereDate('completed_at', today())->count(),
-            'failed_today' => (clone $deliveryQuery)->whereHas('deliveryAttempts', fn ($query) => $query->whereDate('attempted_at', today())->whereIn('status', ['FAILED', 'RESCHEDULED', 'RETURNED']))->count(),
-        ];
-
-        return view('rider.deliveries.index', compact('deliveries', 'deliveryStats', 'assignments', 'rider'));
+        return redirect()->route('rider.trips');
     }
 
-    public function deliveryShow(Request $request, RiderAssignment $assignment): View
+    public function deliveryShow(Request $request, RiderAssignment $assignment): View|RedirectResponse
     {
         $rider = $this->rider($request);
         abort_unless((int) $assignment->rider_profile_id === (int) $rider->id && $assignment->assignment_type === 'DELIVERY', 403);
 
         $assignment->load(['shipment.sellerOrder.items.product.images', 'shipment.sellerOrder.order.address', 'shipment.sellerOrder.order.payments', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.deliveryAttempts', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.codCollection', 'liveLocation']);
+        $deliveryTrip = $assignment->localTripItems()
+            ->with('trip')
+            ->whereHas('trip', fn ($query) => $query->where('trip_type', RiderLocalTrip::TYPE_DELIVERY))
+            ->latest('id')
+            ->first()?->trip;
 
         $shipment = $assignment->shipment;
         $order = $shipment->sellerOrder->order;
         $parcel = [
             'tracking' => $shipment->tracking_number,
             'status' => $assignment->status,
-            'offer_expired' => $assignment->status === 'ASSIGNED'
-                && $assignment->assigned_at
-                && $assignment->assigned_at->lte($this->offerCutoff()),
             'status_label' => str($assignment->status)->replace('_', ' ')->upper()->toString(),
             'shipment_status' => $shipment->current_status,
             'shipment_status_label' => str($shipment->current_status)->replace('_', ' ')->upper()->toString(),
@@ -280,7 +271,8 @@ class RiderController extends Controller
 
         // Delivery navigation needs only the rider and the saved buyer address.
         $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, false, $request->user());
-        return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'mapMarkers'));
+        $returnHandoffPending = app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class)->hasOpenWorkflow($shipment);
+        return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'deliveryTrip', 'mapMarkers', 'returnHandoffPending'));
     }
 
     public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View
@@ -341,14 +333,21 @@ class RiderController extends Controller
             $earningsTotal = (float) (clone $filteredParticipants)->sum('share_amount');
             $dailyEarnings = (float) (clone $participantBase)->whereRaw('DATE(COALESCE(approved_at, created_at)) = ?', [$today->toDateString()])->sum('share_amount');
             $weeklyEarnings = (float) (clone $participantBase)->whereRaw('COALESCE(approved_at, created_at) BETWEEN ? AND ?', [$weekStart, now()])->sum('share_amount');
+            $realRiderPayouts = FinancialLedgerEntry::query()
+                ->where('entry_type', 'RIDER_PAYOUT')
+                ->where('metadata->rider_profile_id', $rider->id)
+                ->whereNotNull('paid_at')
+                ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
+                ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
             $poolSummary = [
                 'schema_ready' => true,
                 'unallocated' => (float) RiderEarningPool::query()->whereHas('participants', fn ($query) => $query->where('rider_profile_id', $rider->id))->sum('unresolved_share_amount'),
                 'accrued' => $earningsTotal,
                 'available' => (float) $eligiblePayoutParticipants->sum('share_amount'),
                 'requested' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_REQUESTED')->sum('share_amount'),
-                'awaiting_ack' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_PENDING_ACK')->sum('share_amount'),
-                'paid' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAID')->sum('share_amount'),
+                'awaiting_ack' => (float) (clone $realRiderPayouts)->where('status', 'PAYOUT_PENDING_ACK')->sum('amount'),
+                'paid' => (float) (clone $realRiderPayouts)->where('status', 'PAID')->sum('amount'),
+                'paid_out' => (float) (clone $realRiderPayouts)->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])->sum('amount'),
             ];
         } else {
             $legacyBase = $rider->earnings();
@@ -378,6 +377,7 @@ class RiderController extends Controller
                 'requested' => 0.0,
                 'awaiting_ack' => 0.0,
                 'paid' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount'),
+                'paid_out' => (float) $rider->earnings()->where('status', 'PAID')->sum('amount'),
             ];
         }
         $earningsNotice = 'Cash held and rider earnings are separate. Cross-hub pool shares remain pending until policy approval.';
@@ -460,8 +460,19 @@ class RiderController extends Controller
             ->orderByDesc('id')
             ->first();
         $riderDocuments = $riderApplication?->documents ?? collect();
+        $profileUpdateSchemaReady = Schema::hasTable('rider_profile_update_requests')
+            && Schema::hasTable('rider_profile_update_documents');
+        $profileUpdateRequests = $profileUpdateSchemaReady
+            ? $rider->profileUpdateRequests()->with('documents')->limit(5)->get()
+            : collect();
 
-        return view('rider.profile.index', compact('rider', 'residentialAddress', 'riderDocuments'));
+        return view('rider.profile.index', compact(
+            'rider',
+            'residentialAddress',
+            'riderDocuments',
+            'profileUpdateRequests',
+            'profileUpdateSchemaReady',
+        ));
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse
@@ -481,6 +492,100 @@ class RiderController extends Controller
         }
 
         return back()->with('status', 'Account profile updated.');
+    }
+
+    public function submitProfileUpdate(Request $request): RedirectResponse
+    {
+        abort_unless(
+            Schema::hasTable('rider_profile_update_requests') && Schema::hasTable('rider_profile_update_documents'),
+            503,
+            'Vehicle and document updates are temporarily unavailable until the profile review workflow is installed.',
+        );
+
+        $rider = $this->rider($request);
+        $data = $request->validate([
+            'vehicle_type' => ['required', Rule::in(RiderVehicleType::acceptedValues())],
+            'plate_number' => ['required', 'string', 'max:50', Rule::unique('rider_profiles', 'plate_number')->ignore($rider->id)],
+            'drivers_license_number' => ['required', 'string', 'max:100', Rule::unique('rider_profiles', 'drivers_license_number')->ignore($rider->id)],
+            'vehicle_or_cr' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:10240'],
+            'drivers_license' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:10240'],
+        ]);
+
+        $requestedVehicleType = strtolower(trim($data['vehicle_type']));
+        $requestedPlate = mb_strtoupper(trim($data['plate_number']));
+        $requestedLicense = mb_strtoupper(trim($data['drivers_license_number']));
+        $vehicleChanged = $requestedVehicleType !== strtolower((string) $rider->vehicle_type)
+            || $requestedPlate !== mb_strtoupper(trim((string) $rider->plate_number));
+        $licenseChanged = $requestedLicense !== mb_strtoupper(trim((string) $rider->drivers_license_number));
+
+        if ($vehicleChanged && ! $request->hasFile('vehicle_or_cr')) {
+            throw ValidationException::withMessages([
+                'vehicle_or_cr' => 'Upload the vehicle OR/CR when changing the vehicle type or plate number.',
+            ]);
+        }
+
+        if ($licenseChanged && ! $request->hasFile('drivers_license')) {
+            throw ValidationException::withMessages([
+                'drivers_license' => 'Upload a new driver’s license document when changing the license number.',
+            ]);
+        }
+
+        if (! $vehicleChanged && ! $licenseChanged && ! $request->hasFile('vehicle_or_cr') && ! $request->hasFile('drivers_license')) {
+            throw ValidationException::withMessages([
+                'profile_update' => 'Change a vehicle or license detail, or upload a replacement document before submitting.',
+            ]);
+        }
+
+        $files = collect([
+            'vehicle_or_cr' => ['type' => 'VEHICLE_OR_CR', 'file' => $request->file('vehicle_or_cr')],
+            'drivers_license' => ['type' => 'DRIVERS_LICENSE', 'file' => $request->file('drivers_license')],
+        ])->filter(fn (array $item): bool => $item['file'] !== null);
+        $storedPaths = [];
+
+        try {
+            DB::transaction(function () use ($rider, $request, $files, &$storedPaths, $requestedVehicleType, $requestedPlate, $requestedLicense): void {
+                $lockedRider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
+                if ($lockedRider->profileUpdateRequests()->where('status', 'PENDING')->exists()) {
+                    throw ValidationException::withMessages([
+                        'profile_update' => 'A vehicle or document update is already awaiting Logistics review.',
+                    ]);
+                }
+
+                $update = $lockedRider->profileUpdateRequests()->create([
+                    'submitted_by_user_id' => $request->user()->id,
+                    'vehicle_type' => $requestedVehicleType,
+                    'plate_number' => $requestedPlate,
+                    'drivers_license_number' => $requestedLicense,
+                    'status' => 'PENDING',
+                    'submitted_at' => now(),
+                ]);
+
+                foreach ($files as $input => $item) {
+                    $file = $item['file'];
+                    $path = $file->store('registration/rider-profile-updates/'.$lockedRider->id, 'registrations');
+                    if (! is_string($path) || $path === '') {
+                        throw new \RuntimeException('A profile document could not be stored.');
+                    }
+                    $storedPaths[] = $path;
+
+                    $update->documents()->create([
+                        'document_type' => $item['type'],
+                        'file_path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'verification_status' => 'PENDING',
+                    ]);
+                }
+            });
+        } catch (\Throwable $exception) {
+            foreach ($storedPaths as $path) {
+                Storage::disk('registrations')->delete($path);
+            }
+
+            throw $exception;
+        }
+
+        return back()->with('status', 'Vehicle and document updates were sent to Logistics for re-verification.');
     }
 
     public function updateResidentialAddress(Request $request): RedirectResponse
@@ -603,11 +708,6 @@ class RiderController extends Controller
         }
 
         return back()->with('status', 'Message sent.');
-    }
-
-    private function offerCutoff(): \Illuminate\Support\Carbon
-    {
-        return now()->subMinutes(max(1, (int) config('rider.assignment_offer_minutes', 15)));
     }
 
     /** @return array{from: string, to: string} */

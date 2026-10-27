@@ -104,8 +104,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
 
         Route::get('/assignments', [DispatchController::class, 'assignments'])->name('assignments');
         Route::post('/assignments/{shipment}/assign', [DispatchController::class, 'assign'])->name('assignments.assign');
-        Route::get('/dispatch', [DispatchController::class, 'assignments'])->name('dispatch');
-        Route::post('/dispatch/{shipment}/assign', [DispatchController::class, 'assign'])->name('dispatch.assign');
+        Route::post('/assignments/{shipment}/auto-match', [DispatchController::class, 'autoMatchDelivery'])->name('assignments.auto-match');
+        Route::redirect('/dispatch', '/logistics/assignments');
 
         Route::get('/transfers', [TransferController::class, 'index'])->name('transfers');
         Route::post('/transfers', [TransferController::class, 'store'])->name('transfers.store');
@@ -122,9 +122,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/transfer-manifest-items/{item}/receive', [TransferController::class, 'receiveItem'])->name('transfers.items.receive');
 
         Route::get('/local-trips', [LocalTripController::class, 'index'])->name('local-trips');
-        Route::post('/local-trips', [LocalTripController::class, 'store'])->name('local-trips.store');
         Route::get('/local-trips/{trip}', [LocalTripController::class, 'show'])->name('local-trips.show');
-        Route::post('/local-trips/{trip}/items', [LocalTripController::class, 'addAssignment'])->name('local-trips.items.store');
         Route::post('/local-trips/{trip}/load', [LocalTripController::class, 'load'])->name('local-trips.load');
         Route::post('/local-trips/{trip}/close', [LocalTripController::class, 'close'])->name('local-trips.close');
 
@@ -140,6 +138,9 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/riders/applications/{application}/documents/{document}/verify', [RiderApplicationController::class, 'verifyDocument'])->name('riders.application.documents.verify');
         Route::post('/riders/applications/{application}/documents/{document}/reject', [RiderApplicationController::class, 'rejectDocument'])->name('riders.application.documents.reject');
         Route::get('/riders/{rider}', [LogisticsPortalController::class, 'riderShow'])->name('riders.show');
+        Route::get('/riders/{rider}/profile-updates/{profileUpdateRequest}/documents/{document}', [LogisticsPortalController::class, 'riderProfileUpdateDocument'])->name('riders.profile-updates.documents.show');
+        Route::post('/riders/{rider}/profile-updates/{profileUpdateRequest}/approve', [LogisticsPortalController::class, 'approveRiderProfileUpdate'])->name('riders.profile-updates.approve');
+        Route::post('/riders/{rider}/profile-updates/{profileUpdateRequest}/reject', [LogisticsPortalController::class, 'rejectRiderProfileUpdate'])->name('riders.profile-updates.reject');
         Route::patch('/riders/{rider}/moderation', [LogisticsPortalController::class, 'moderateRider'])->name('riders.moderation.update');
         Route::patch('/riders/{rider}/area', [LogisticsPortalController::class, 'reassignRiderArea'])->name('riders.area.update');
         Route::patch('/riders/{rider}/capacity', [LogisticsPortalController::class, 'updateRiderCapacity'])->name('riders.capacity.update');

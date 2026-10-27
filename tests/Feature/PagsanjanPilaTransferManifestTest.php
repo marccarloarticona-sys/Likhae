@@ -298,28 +298,17 @@ class PagsanjanPilaTransferManifestTest extends TestCase
         $this->actingAs($fixture['driverUser'])
             ->get(route('rider.transfers.show', $manifest))
             ->assertOk()
-            ->assertSee('Scan each parcel as it is loaded for departure');
-        $this->post(route('rider.transfers.start', $manifest), ['scanned_codes' => []])
-            ->assertSessionHasErrors('scanned_codes');
-        $wrongDepartureCodes = $codes;
-        $wrongDepartureCodes[$items[0]->id] = 'WRONG-TRACKING-CODE';
-        $this->assertRuntimeFailure(
-            fn () => $service->driverStart($fixture['driverUser'], $manifest, $wrongDepartureCodes),
-            'does not match the shipment assigned to this transfer leg',
-        );
-        $this->post(route('rider.transfers.start', $manifest), [
-            'scanned_codes' => $codes,
-            'scan_method' => 'BARCODE',
-        ])->assertRedirect();
+            ->assertSee('Start transfer')
+            ->assertDontSee('Scan each parcel as it is loaded for departure')
+            ->assertDontSee('scanned_codes[');
+        $this->post(route('rider.transfers.start', $manifest))->assertRedirect();
         $manifest = $manifest->fresh();
         $this->assertSame('IN_TRANSIT', $manifest->status);
         foreach ($items as $item) {
             $this->assertSame(ShipmentTransferLeg::IN_TRANSIT, $item->transferLeg->fresh()->status);
-            $this->assertDatabaseHas('parcel_scans', [
+            $this->assertDatabaseMissing('parcel_scans', [
                 'transfer_leg_id' => $item->transfer_leg_id,
                 'scan_type' => 'TRANSFER_DEPARTURE',
-                'scanned_code' => $codes[$item->id],
-                'result' => 'SUCCESS',
             ]);
         }
 

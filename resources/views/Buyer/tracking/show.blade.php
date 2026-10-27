@@ -69,7 +69,7 @@
         <p>Destination: {{ $shipment->destination_barangay_name }}, {{ $shipment->destination_municipality_name }}</p>
     </div>
     <x-shared.status-guidance :status="str($shipment->current_status)->replace('_', ' ')->title()" :next="$trackingNextStep" :actor="$trackingNextActor" />
-    <x-shared.mapbox :markers="$mapMarkers" title="Parcel location" height="220px" :allow-user-location="false" navigation/>
+    <x-shared.mapbox :markers="$mapMarkers" title="Parcel location" height="220px" :allow-user-location="false" :order-route="true" navigation/>
     <div class="rounded-2xl border bg-white p-5"><h2 class="font-bold">Timeline</h2><ol class="mt-3 space-y-3" aria-label="Shipment progress timeline">@foreach($timelineRows as $index => $row)<li class="flex items-start gap-3" @if($index === $currentTimelineIndex) aria-current="step" @endif><span class="mt-1 h-3 w-3 shrink-0 rounded-full {{ $index === $currentTimelineIndex ? 'bg-red-900 ring-4 ring-red-100' : ($row['event'] ? 'bg-red-900' : 'border-2 border-stone-300') }}" aria-hidden="true"></span><div><strong class="text-sm {{ $index === $currentTimelineIndex ? 'text-red-900' : 'text-stone-800' }}">{{ $row['label'] }}</strong>@if($row['event']?->occurred_at)<time class="mt-1 block text-xs text-stone-500" datetime="{{ $row['event']->occurred_at->toIso8601String() }}">{{ $row['event']->occurred_at->timezone('Asia/Manila')->format('M j, Y g:i A') }}</time>@endif</div></li>@endforeach</ol></div>
 </div>
 @endsection

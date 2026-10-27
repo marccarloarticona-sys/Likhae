@@ -33,6 +33,7 @@ class SellerFinanceController extends Controller
             'available' => 0.0,
             'requested' => 0.0,
             'awaiting_ack' => 0.0,
+            'paid_out' => 0.0,
             'paid' => 0.0,
         ];
         if ($ready) {
@@ -52,10 +53,18 @@ class SellerFinanceController extends Controller
                 ->sum('seller_payable');
             $payoutBalances['requested'] = (float) SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
+            $recordedPayouts = fn () => SellerSettlement::query()
+                ->where('seller_profile_id', $seller->id)
+                ->whereIn('payout_status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                ->whereNotNull('paid_at')
+                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'));
             $payoutBalances['awaiting_ack'] = (float) SellerSettlement::query()
-                ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount');
+                ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_PENDING_ACK')->whereNotNull('paid_at')
+                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'))->sum('payout_amount');
             $payoutBalances['paid'] = (float) SellerSettlement::query()
-                ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAID')->sum('payout_amount');
+                ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAID')->whereNotNull('paid_at')
+                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'))->sum('payout_amount');
+            $payoutBalances['paid_out'] = (float) $recordedPayouts()->sum('payout_amount');
         }
 
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');

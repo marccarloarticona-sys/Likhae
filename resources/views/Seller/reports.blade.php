@@ -56,12 +56,12 @@
             <div><span>Original product gross</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['original_product_amount'], 2) }}@else Unavailable @endif</strong></div>
             <div><span>Discounts</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['discounts'], 2) }}@else Unavailable @endif</strong></div>
             <div><span>Assessed commission</span><strong>{{ $currency.number_format($reportSummary['commission'], 2) }}</strong></div>
-            <div><span>Seller payable</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['seller_payable'], 2) }}@else Unavailable @endif</strong></div>
-            <div><span>Pending / requested / review</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['pending_balance'], 2) }}@else Unavailable @endif</strong></div>
-            <div><span>Authorized</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['authorized_balance'], 2) }}@else Unavailable @endif</strong></div>
-            <div><span>Awaiting seller receipt</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['awaiting_ack_balance'] ?? 0, 2) }}@else Unavailable @endif</strong></div>
-            <div><span>Paid</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['paid_balance'], 2) }}@else Unavailable @endif</strong></div>
-            <div><span>Outstanding</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['outstanding_balance'], 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Seller payable before payout · not wallet balance</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['seller_payable'], 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Unpaid · pending / requested / review</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['pending_balance'], 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Authorized · unpaid</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['authorized_balance'], 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Paid out · awaiting seller confirmation</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['awaiting_ack_balance'] ?? 0, 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Received and confirmed by seller</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['paid_balance'], 2) }}@else Unavailable @endif</strong></div>
+            <div><span>Outstanding unpaid settlement</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['outstanding_balance'], 2) }}@else Unavailable @endif</strong></div>
             <div><span>Open settlement records</span><strong>@if($settlementDataReady){{ number_format($reportSummary['pending_settlement']) }}@else Unavailable @endif</strong></div>
             <div><span>Review required</span><strong>@if($settlementDataReady){{ number_format($reportSummary['review_required_count']) }}@else Unavailable @endif</strong></div>
             <div><span>Seller refund adjustments</span><strong>@if($settlementDataReady){{ $currency.number_format($reportSummary['seller_refund_adjustment'], 2) }}@else Unavailable @endif</strong></div>

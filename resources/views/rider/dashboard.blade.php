@@ -41,7 +41,7 @@
             <p class="mt-2 text-sm text-muted">Scanning verifies the assigned parcel and opens its authorized workflow. It does not record pickup, custody, or delivery by itself.</p>
             <div class="mt-5 flex flex-wrap gap-2">
                 <a href="{{ route('rider.pickups') }}" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink">Pickup Jobs</a>
-                <a href="{{ route('rider.deliveries') }}" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink">Deliveries</a>
+                <a href="{{ route('rider.trips') }}" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink">Delivery Batches</a>
                 <a href="{{ route('rider.transfers') }}" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink">Hub Transfers</a>
             </div>
         </article>

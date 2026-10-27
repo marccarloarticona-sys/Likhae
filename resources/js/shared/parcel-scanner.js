@@ -148,9 +148,10 @@ export function initializeParcelScanners() {
         const message = scanner.querySelector('[data-scanner-message]');
         const input = scanner.querySelector('[data-scanner-input]');
         const method = scanner.querySelector('[data-scanner-method]');
-        const handoff = scanner.closest('[data-transfer-handoff]')
-            || (scanner.dataset.scannerFillMatching === 'true' ? document.querySelector('[data-transfer-handoff]') : null);
-        const autoSubmit = scanner.dataset.scannerAutosubmit !== 'false' && !handoff;
+        const transferScan = scanner.closest('[data-transfer-handoff], [data-transfer-scan-container]')
+            || (scanner.dataset.scannerFillMatching === 'true' ? document.querySelector('[data-transfer-handoff], [data-transfer-scan-container]') : null);
+        const scanMode = transferScan?.dataset.transferScanContainer || 'release';
+        const autoSubmit = scanner.dataset.scannerAutosubmit !== 'false' && !transferScan;
         const form = scanner.querySelector('[data-scanner-form]') || (autoSubmit ? scanner.closest('form') : null);
         if (!video || !placeholder || !start || !stop || !input || !message) return;
         if (form) {
@@ -164,36 +165,44 @@ export function initializeParcelScanners() {
         let cameraRequest = 0;
         let lastCode = '';
         let lastCodeAt = 0;
-        const handoffInputs = [...(handoff?.querySelectorAll('[data-expected-tracking]') || [])];
-        const handoffProgress = handoff?.querySelector('[data-handoff-progress]');
+        const transferScanInputs = [...(transferScan?.querySelectorAll('[data-expected-tracking]') || [])];
+        const transferScanProgress = transferScan?.querySelector('[data-transfer-scan-progress], [data-handoff-progress]');
         const manifestProgress = document.querySelector('[data-manifest-handoff-progress]');
         const normalizeTrackingCode = (value) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
-        const findHandoffInput = (value) => {
+        const findTransferScanInput = (value) => {
             const normalized = normalizeTrackingCode(value);
-            const exact = handoffInputs.find((field) => normalizeTrackingCode(field.dataset.expectedTracking) === normalized);
+            const exact = transferScanInputs.find((field) => normalizeTrackingCode(field.dataset.expectedTracking) === normalized);
             if (exact) return exact;
             const codesInPayload = String(value ?? '').toUpperCase().match(/TRK-\d{8}-[A-Z0-9]+/g) || [];
-            return handoffInputs.find((field) => codesInPayload.includes(normalizeTrackingCode(field.dataset.expectedTracking)));
+            return transferScanInputs.find((field) => codesInPayload.includes(normalizeTrackingCode(field.dataset.expectedTracking)));
         };
-        const setHandoffStatus = (row, label, color = 'text-muted') => {
+        const setTransferScanStatus = (row, label, color = 'text-muted') => {
             const status = row.querySelector('[data-scan-verification]');
             if (!status) return;
             status.textContent = label;
             status.className = `text-xs font-semibold ${color}`;
         };
-        const submitHandoffItem = async (field, scanMethod) => {
+        const submitTransferParcel = async (field, scanMethod, allowMissingWithoutScan = false) => {
             const row = field.closest('form[data-transfer-parcel-row]');
             if (!row || row.dataset.released === 'true' || scanner.dataset.scannerSubmitting === 'true') return;
             const button = row.querySelector('button[type="submit"]');
             const rowMethod = row.querySelector('[name="scan_method"]');
             const tracking = field.dataset.expectedTracking;
+            const outcome = row.querySelector('[name="outcome"]')?.value || 'RECEIVED';
+            const missingWithoutScan = scanMode === 'receive' && outcome === 'MISSING' && allowMissingWithoutScan;
             scanner.dataset.scannerSubmitting = 'true';
             row.dataset.handoffBusy = 'true';
-            field.value = tracking;
+            field.value = missingWithoutScan ? '' : tracking;
             if (rowMethod) rowMethod.value = scanMethod;
             if (button) button.disabled = true;
-            setHandoffStatus(row, 'Releasing...', 'text-blue-700');
-            message.textContent = `Saving handoff for ${tracking}...`;
+            const progressVerb = scanMode === 'receive' ? 'Receiving' : 'Releasing';
+            const statusLabel = scanMode === 'receive'
+                ? (outcome === 'MISSING' ? 'Missing' : outcome === 'DAMAGED' ? 'Damaged' : 'Received')
+                : 'Released';
+            setTransferScanStatus(row, `${progressVerb}...`, 'text-blue-700');
+            message.textContent = missingWithoutScan
+                ? 'Saving the missing-parcel exception...'
+                : `Saving ${scanMode === 'receive' ? 'receipt' : 'handoff'} for ${tracking}...`;
 
             try {
                 const response = await fetch(row.action, {
@@ -209,26 +218,30 @@ export function initializeParcelScanners() {
 
                 row.dataset.released = 'true';
                 field.readOnly = true;
-                if (button) button.textContent = 'Released';
-                setHandoffStatus(row, 'Released', 'text-green-700');
-                if (handoffProgress) handoffProgress.textContent = `${payload.released_count} / ${payload.total_count}`;
-                if (manifestProgress) {
+                if (button) button.textContent = statusLabel;
+                setTransferScanStatus(row, statusLabel, outcome === 'MISSING' || outcome === 'DAMAGED' ? 'text-amber-800' : 'text-green-700');
+                const completedCount = payload.completed_count ?? payload.released_count ?? payload.received_count ?? 0;
+                if (transferScanProgress) transferScanProgress.textContent = `${completedCount} / ${payload.total_count}`;
+                if (manifestProgress && scanMode === 'release') {
                     manifestProgress.textContent = `· ${payload.released_count} / ${payload.total_count} parcels released`;
                     manifestProgress.classList.remove('hidden');
                 }
                 [...document.querySelectorAll('[data-transfer-leg-status]')]
                     .find((cell) => cell.dataset.transferLegStatus === String(payload.item_id))
-                    ?.querySelector('strong')?.replaceChildren(document.createTextNode('Released'));
-                message.textContent = `${tracking} released. ${payload.released_count} of ${payload.total_count} parcels handed off.`;
-                if (payload.manifest_status === 'RELEASED') {
+                    ?.querySelector('strong')?.replaceChildren(document.createTextNode(statusLabel));
+                message.textContent = scanMode === 'receive'
+                    ? `${missingWithoutScan ? 'Missing parcel recorded' : `${tracking} ${statusLabel.toLowerCase()} at destination`}. ${completedCount} of ${payload.total_count} parcels accounted for.`
+                    : `${tracking} released. ${payload.released_count} of ${payload.total_count} parcels handed off.`;
+                if ((scanMode === 'release' && payload.manifest_status === 'RELEASED')
+                    || (scanMode === 'receive' && payload.pending_count === 0)) {
                     stopCamera();
                     window.location.reload();
                 }
             } catch (error) {
-                field.value = '';
+                if (!missingWithoutScan) field.value = '';
                 if (rowMethod) rowMethod.value = 'MANUAL';
                 if (button) button.disabled = false;
-                setHandoffStatus(row, 'Awaiting scan');
+                setTransferScanStatus(row, scanMode === 'receive' ? 'Awaiting receipt scan' : 'Awaiting scan');
                 message.textContent = error.message || 'Could not save the scan. Try again.';
                 input.focus({ preventScroll: true });
             } finally {
@@ -236,53 +249,67 @@ export function initializeParcelScanners() {
                 scanner.dataset.scannerSubmitting = 'false';
             }
         };
-        const applyHandoffCode = (value, scanMethod = 'BARCODE') => {
+        const applyTransferScanCode = (value, scanMethod = 'BARCODE') => {
             const code = String(value ?? '').trim();
             if (!code || scanner.dataset.scannerSubmitting === 'true') return false;
-            const matchingInput = findHandoffInput(code);
+            const matchingInput = findTransferScanInput(code);
             if (!matchingInput) {
                 message.textContent = `No parcel in this manifest matches ${code}.`;
                 return false;
             }
-            if (matchingInput.closest('[data-transfer-parcel-row]')?.dataset.released === 'true') {
+            const row = matchingInput.closest('[data-transfer-parcel-row]');
+            if (scanMode === 'receive' && row?.querySelector('[name="outcome"]')?.value === 'MISSING') {
                 input.value = '';
-                message.textContent = `${matchingInput.dataset.expectedTracking} was already released.`;
+                message.textContent = 'A missing parcel cannot be confirmed by scanning. Choose Received or Damaged to scan it.';
+                return true;
+            }
+            if (row?.dataset.released === 'true') {
+                input.value = '';
+                message.textContent = scanMode === 'receive'
+                    ? `${matchingInput.dataset.expectedTracking} was already accounted for.`
+                    : `${matchingInput.dataset.expectedTracking} was already released.`;
                 return true;
             }
             input.value = '';
-            void submitHandoffItem(matchingInput, scanMethod);
+            void submitTransferParcel(matchingInput, scanMethod);
             return true;
         };
-        handoff?.addEventListener('input', (event) => {
+        transferScan?.addEventListener('input', (event) => {
             const field = event.target;
             if (field?.matches?.('[data-expected-tracking]')) {
-                const matchingInput = findHandoffInput(field.value);
+                const matchingInput = findTransferScanInput(field.value);
                 if (matchingInput) {
                     const code = field.value;
                     if (matchingInput !== field) field.value = '';
-                    applyHandoffCode(code, 'BARCODE');
+                    applyTransferScanCode(code, 'BARCODE');
                 }
             }
         });
-        handoff?.querySelectorAll('form[data-transfer-parcel-row]').forEach((row) => {
+        transferScan?.querySelectorAll('form[data-transfer-parcel-row]').forEach((row) => {
             row.addEventListener('submit', (event) => {
                 event.preventDefault();
-                applyHandoffCode(row.querySelector('[data-expected-tracking]')?.value, row.querySelector('[name="scan_method"]')?.value || 'MANUAL');
+                const field = row.querySelector('[data-expected-tracking]');
+                const scanMethod = row.querySelector('[name="scan_method"]')?.value || 'MANUAL';
+                if (scanMode === 'receive' && row.querySelector('[name="outcome"]')?.value === 'MISSING') {
+                    void submitTransferParcel(field, scanMethod, true);
+                    return;
+                }
+                applyTransferScanCode(field?.value, scanMethod);
             });
         });
-        handoff?.addEventListener('keydown', (event) => {
+        transferScan?.addEventListener('keydown', (event) => {
             if (event.key !== 'Enter' || !event.target?.matches?.('[data-expected-tracking]')) return;
             event.preventDefault();
-            applyHandoffCode(event.target.value, 'BARCODE');
+            applyTransferScanCode(event.target.value, 'BARCODE');
         });
-        if (handoff && input.type !== 'hidden') {
+        if (transferScan && input.type !== 'hidden') {
             input.addEventListener('input', () => {
-                if (findHandoffInput(input.value)) applyHandoffCode(input.value, 'BARCODE');
+                if (findTransferScanInput(input.value)) applyTransferScanCode(input.value, 'BARCODE');
             });
             input.addEventListener('keydown', (event) => {
                 if (event.key !== 'Enter') return;
                 event.preventDefault();
-                applyHandoffCode(input.value, 'BARCODE');
+                applyTransferScanCode(input.value, 'BARCODE');
             });
         }
 
@@ -338,11 +365,39 @@ export function initializeParcelScanners() {
             lastCode = code;
             lastCodeAt = now;
             input.value = code;
-            if (method) method.value = result.getBarcodeFormat() === BarcodeFormat.QR_CODE ? 'QR' : 'BARCODE';
+            const detectedMethod = result.getBarcodeFormat() === BarcodeFormat.QR_CODE ? 'QR' : 'BARCODE';
+            if (method) method.value = detectedMethod;
             navigator.vibrate?.(45);
 
-            if (handoff) {
-                applyHandoffCode(code, method?.value || 'BARCODE');
+            if (transferScan) {
+                applyTransferScanCode(code, method?.value || 'BARCODE');
+                return;
+            }
+
+            if (scanner.dataset.scannerAppendTarget) {
+                const target = document.querySelector(scanner.dataset.scannerAppendTarget);
+                if (!target) {
+                    message.textContent = 'The tracking list is unavailable. Refresh the page and try again.';
+                    input.value = '';
+                    return;
+                }
+
+                const currentCodes = String(target.value || '').split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean);
+                const normalizedCode = normalizeTrackingCode(code);
+                if (currentCodes.some((value) => normalizeTrackingCode(value) === normalizedCode)) {
+                    message.textContent = `${code} is already in the tracking list. Scan the next parcel.`;
+                } else {
+                    currentCodes.push(code);
+                    target.value = currentCodes.join('\n');
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    if (currentCodes.length === 1 && scanner.dataset.scannerMethodTarget) {
+                        const methodTarget = document.querySelector(scanner.dataset.scannerMethodTarget);
+                        if (methodTarget) methodTarget.value = detectedMethod;
+                    }
+                    message.textContent = `Added ${code} to the tracking list (${currentCodes.length}). Scan the next parcel or verify and receive.`;
+                }
+                input.value = '';
+                scanner.dataset.scannerSubmitting = 'false';
                 return;
             }
 

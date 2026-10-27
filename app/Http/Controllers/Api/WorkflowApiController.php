@@ -63,7 +63,7 @@ class WorkflowApiController extends Controller
         $data = $request->validate([
             'action' => ['required', Rule::in(['accept', 'start', 'pickup_complete', 'delivery_success', 'delivery_failed', 'reject'])],
             'scan_method' => ['nullable', Rule::in(['QR', 'BARCODE', 'MANUAL'])],
-            'scanned_code' => ['required_if:action,pickup_complete,delivery_success', 'nullable', 'string', 'max:150'],
+            'scanned_code' => ['required_if:action,pickup_complete', 'nullable', 'string', 'max:150'],
             'receiver_name' => ['required_if:action,delivery_success', 'nullable', 'string', 'max:200'],
             'failure_reason' => ['required_if:action,delivery_failed', 'nullable', 'string', 'max:1000'],
             'attempt_status' => ['nullable', Rule::in(['FAILED', 'RESCHEDULED'])],

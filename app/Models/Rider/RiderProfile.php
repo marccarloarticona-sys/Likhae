@@ -115,6 +115,11 @@ class RiderProfile extends Model
         return $this->hasMany(RiderRemittance::class);
     }
 
+    public function profileUpdateRequests(): HasMany
+    {
+        return $this->hasMany(RiderProfileUpdateRequest::class)->latest('submitted_at');
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->whereIn('status', ['ACTIVE', 'WARNED']);

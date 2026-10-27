@@ -113,8 +113,8 @@
                 ],
                 [
                     'label' => 'Rider Assignment',
-                    'href' => route('logistics.dispatch'),
-                    'active' => ['logistics.dispatch'],
+                    'href' => route('logistics.assignments'),
+                    'active' => ['logistics.assignments'],
                     'icon' => 'assignment',
                 ],
                 [

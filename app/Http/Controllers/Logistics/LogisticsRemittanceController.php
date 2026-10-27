@@ -19,6 +19,7 @@ use App\Support\PayoutDestinationInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 use RuntimeException;
 
@@ -58,11 +59,18 @@ class LogisticsRemittanceController extends Controller
         $eligiblePools = LogisticsEarningPool::query()
             ->where('logistics_center_id', $center->id)
             ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds);
+        $realPayouts = fn () => FinancialLedgerEntry::query()
+            ->where('entry_type', 'LOGISTICS_PAYOUT')
+            ->where('metadata->logistics_center_id', $center->id)
+            ->whereNotNull('paid_at')
+            ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
+            ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
         $payoutSummary = [
             'available' => $ready ? (float) (clone $eligiblePools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('total_amount') : 0.0,
             'requested' => $ready ? (float) (clone $eligiblePools)->where('status', 'PAYOUT_REQUESTED')->sum('total_amount') : 0.0,
-            'awaiting_ack' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->where('metadata->logistics_center_id', $center->id)->sum('amount') : 0.0,
-            'paid' => $ready ? (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->where('metadata->logistics_center_id', $center->id)->sum('amount') : 0.0,
+            'awaiting_ack' => $ready ? (float) $realPayouts()->where('status', 'PAYOUT_PENDING_ACK')->sum('amount') : 0.0,
+            'paid' => $ready ? (float) $realPayouts()->where('status', 'PAID')->sum('amount') : 0.0,
+            'paid_out' => $ready ? (float) $realPayouts()->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])->sum('amount') : 0.0,
         ];
         $payoutDestinationReady = $destinations->readyFor('logistics_centers');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($center);
@@ -285,16 +293,38 @@ class LogisticsRemittanceController extends Controller
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
             'payout_method' => ['required', 'string', 'in:GCash,Maya,Bank Transfer,Manual,Other'],
-            'payout_external_reference' => ['nullable', 'string', 'max:150'],
+            'payout_external_reference' => ['required_if:payout_method,Manual', 'nullable', 'string', 'max:150'],
+            'payout_proof' => ['required_if:payout_method,Manual', 'nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
+        $proofPath = null;
+        $proofName = null;
+        if ($data['payout_method'] === 'Manual') {
+            $proofPath = $data['payout_proof']->store('payout-proofs', 'local');
+            if (! $proofPath) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['payout_proof' => 'The payout proof could not be saved. Please retry.']);
+            }
+            $proofName = $data['payout_proof']->getClientOriginalName();
+        }
         try {
-            $service->recordRiderPayout(
+            $recorded = $service->recordRiderPayout(
                 $request->user(), $entry, $data['amount'], $data['payout_method'],
                 $data['payout_external_reference'] ?? null, $data['notes'] ?? null,
+                $proofPath, $proofName,
             );
+            if ($proofPath && data_get($recorded->metadata, 'payout_proof_path') !== $proofPath) {
+                Storage::disk('local')->delete($proofPath);
+            }
         } catch (RuntimeException $exception) {
+            if ($proofPath) {
+                Storage::disk('local')->delete($proofPath);
+            }
             throw \Illuminate\Validation\ValidationException::withMessages(['amount' => $exception->getMessage()]);
+        } catch (\Throwable $exception) {
+            if ($proofPath) {
+                Storage::disk('local')->delete($proofPath);
+            }
+            throw $exception;
         }
 
         $message = $simulatedPayouts->isOnlineMethod($data['payout_method'])

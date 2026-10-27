@@ -46,10 +46,10 @@ return new class extends Migration
             Schema::create('conversation_support_interactions', function (Blueprint $table): void {
                 $table->id();
                 $table->foreignId('conversation_id')->constrained('conversations')->cascadeOnDelete();
-                $table->foreignId('conversation_support_session_id')->constrained('conversation_support_sessions')->cascadeOnDelete();
-                $table->foreignId('support_request_id')->nullable()->constrained('conversation_support_requests')->nullOnDelete();
-                $table->foreignId('requester_user_id')->constrained('users')->cascadeOnDelete();
-                $table->foreignId('selected_faq_id')->nullable()->constrained('messaging_faqs')->nullOnDelete();
+                $table->foreignId('conversation_support_session_id')->constrained('conversation_support_sessions', 'id', 'support_interactions_session_fk')->cascadeOnDelete();
+                $table->foreignId('support_request_id')->nullable()->constrained('conversation_support_requests', 'id', 'support_interactions_request_fk')->nullOnDelete();
+                $table->foreignId('requester_user_id')->constrained('users', 'id', 'support_interactions_requester_fk')->cascadeOnDelete();
+                $table->foreignId('selected_faq_id')->nullable()->constrained('messaging_faqs', 'id', 'support_interactions_faq_fk')->nullOnDelete();
                 $table->string('question_key', 100)->nullable();
                 $table->string('category', 60)->default('Other concerns');
                 $table->string('question_snapshot', 300);
@@ -63,6 +63,37 @@ return new class extends Migration
                 $table->index(['support_request_id', 'created_at'], 'support_interactions_request_time_idx');
                 $table->index(['selected_faq_id', 'feedback'], 'support_interactions_faq_feedback_idx');
             });
+        }
+
+        // MySQL identifiers are limited to 64 characters. If a previous run
+        // created the table before a generated FK name exceeded that limit,
+        // complete the missing constraints and indexes on retry.
+        foreach ([
+            ['conversation_support_session_id', 'support_interactions_session_fk', 'conversation_support_sessions', 'cascade'],
+            ['support_request_id', 'support_interactions_request_fk', 'conversation_support_requests', 'null'],
+            ['requester_user_id', 'support_interactions_requester_fk', 'users', 'cascade'],
+            ['selected_faq_id', 'support_interactions_faq_fk', 'messaging_faqs', 'null'],
+        ] as [$column, $name, $reference, $deleteAction]) {
+            if (! Schema::hasForeignKey('conversation_support_interactions', [$column])) {
+                Schema::table('conversation_support_interactions', function (Blueprint $table) use ($column, $name, $reference, $deleteAction): void {
+                    $foreign = $table->foreign($column, $name)->references('id')->on($reference);
+                    if ($deleteAction === 'cascade') {
+                        $foreign->cascadeOnDelete();
+                    } else {
+                        $foreign->nullOnDelete();
+                    }
+                });
+            }
+        }
+
+        foreach ([
+            'support_interactions_conversation_time_idx' => ['conversation_id', 'created_at'],
+            'support_interactions_request_time_idx' => ['support_request_id', 'created_at'],
+            'support_interactions_faq_feedback_idx' => ['selected_faq_id', 'feedback'],
+        ] as $name => $columns) {
+            if (! Schema::hasIndex('conversation_support_interactions', $name)) {
+                Schema::table('conversation_support_interactions', fn (Blueprint $table) => $table->index($columns, $name));
+            }
         }
 
         if (Schema::hasTable('conversation_support_sessions')) {

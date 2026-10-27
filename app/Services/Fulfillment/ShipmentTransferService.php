@@ -101,7 +101,7 @@ final class ShipmentTransferService
         }, $scanMethod);
     }
 
-    public function depart(ShipmentTransferLeg $leg, User $actor, string $scannedCode, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
+    public function depart(ShipmentTransferLeg $leg, User $actor, ?string $scannedCode = null, string $scanMethod = 'MANUAL'): ShipmentTransferLeg
     {
         $this->assertReady();
 
@@ -115,7 +115,9 @@ final class ShipmentTransferService
                 throw new RuntimeException('Only a released transfer leg can depart.');
             }
 
-            $this->recordScan($locked, $actor, $scannedCode, 'TRANSFER_DEPARTURE', $scanMethod);
+            if (filled($scannedCode)) {
+                $this->recordScan($locked, $actor, (string) $scannedCode, 'TRANSFER_DEPARTURE', $scanMethod);
+            }
             $locked->update(['status' => ShipmentTransferLeg::IN_TRANSIT]);
             $this->recordReturnProgressForLeg($locked, $actor, 'Return parcel is in transit between sorting centers.');
 

@@ -2,8 +2,11 @@
 
 namespace Tests\Unit;
 
+use App\Models\Buyer\OrderItem;
+use App\Models\Seller\SellerOrder;
 use App\Support\FinancialRules;
 use App\Support\OrderItemParcelAmount;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use PHPUnit\Framework\TestCase;
 
 class FinancialRulesTest extends TestCase
@@ -41,6 +44,75 @@ class FinancialRulesTest extends TestCase
         $this->assertSame('100.00', $allocation['original_product_amount']);
         $this->assertSame('50.00', $allocation['shipping_fee']);
         $this->assertSame('10.00', $allocation['platform_commission']);
+    }
+
+    public function test_per_parcel_snapshot_gives_each_order_item_its_full_shipping_fee(): void
+    {
+        $firstItem = new OrderItem([
+            'id' => 1,
+            'line_total' => '1169.10',
+            'quantity' => 1,
+            'protection_fee' => '0.00',
+        ]);
+        $secondItem = new OrderItem([
+            'id' => 2,
+            'line_total' => '81061.00',
+            'quantity' => 1,
+            'protection_fee' => '0.00',
+        ]);
+        $sellerOrder = new SellerOrder([
+            'shipping_fee' => '100.00',
+            'voucher_discount' => '0.00',
+            'reward_points_discount' => '0.00',
+            'shipping_voucher_discount' => '0.00',
+            'protection_total' => '0.00',
+            'shipping_rate_snapshot' => [
+                'pricing_basis' => 'PER_PARCEL',
+                'parcel_count' => 2,
+                'per_parcel_shipping_fee' => '50.00',
+                'total_shipping_fee' => '100.00',
+            ],
+        ]);
+        $sellerOrder->setRelation('items', new EloquentCollection([$firstItem, $secondItem]));
+
+        $firstParcel = OrderItemParcelAmount::forItem($sellerOrder, $firstItem);
+        $secondParcel = OrderItemParcelAmount::forItem($sellerOrder, $secondItem);
+
+        $this->assertEquals(50.0, $firstParcel['shipping_fee']);
+        $this->assertEquals(50.0, $secondParcel['shipping_fee']);
+
+        $firstAllocation = FinancialRules::allocation(
+            [['original_unit_price' => '1169.10', 'charged_unit_price' => '1169.10', 'quantity' => 1]],
+            shippingFee: $firstParcel['shipping_fee'],
+        );
+        $this->assertSame('30.00', $firstAllocation['rider_allocation']);
+        $this->assertSame('20.00', $firstAllocation['logistics_allocation']);
+    }
+
+    public function test_legacy_order_without_per_parcel_snapshot_keeps_its_saved_fee_proration(): void
+    {
+        $firstItem = new OrderItem([
+            'id' => 1,
+            'line_total' => '1169.10',
+            'quantity' => 1,
+            'protection_fee' => '0.00',
+        ]);
+        $secondItem = new OrderItem([
+            'id' => 2,
+            'line_total' => '81061.00',
+            'quantity' => 1,
+            'protection_fee' => '0.00',
+        ]);
+        $sellerOrder = new SellerOrder([
+            'shipping_fee' => '50.00',
+            'voucher_discount' => '0.00',
+            'reward_points_discount' => '0.00',
+            'shipping_voucher_discount' => '0.00',
+            'protection_total' => '0.00',
+        ]);
+        $sellerOrder->setRelation('items', new EloquentCollection([$firstItem, $secondItem]));
+
+        $this->assertSame(0.71, OrderItemParcelAmount::forItem($sellerOrder, $firstItem)['shipping_fee']);
     }
 
     public function test_basic_fifty_peso_case_balances_to_one_hundred_peso_cod(): void

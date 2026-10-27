@@ -713,7 +713,7 @@ class BuyerOrderController extends Controller
 
         $storedProofPaths = [];
         try {
-            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
+            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $lockedItems = OrderItem::query()

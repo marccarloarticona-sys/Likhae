@@ -80,6 +80,9 @@
                     @elseif($rider->vehicleRole() === 'INTER_LOGISTICS')
                         <span class="mt-1 block text-[8px] text-muted">Approved capacity: {{ $rider->approved_parcel_capacity ?? '—' }} parcels · {{ $rider->approved_weight_capacity_kg ?? '—' }} kg · {{ $rider->approved_volume_capacity_liters ?? '—' }} L</span>
                     @endif
+                    @if(($rider->pending_profile_update_count ?? 0) > 0)
+                        <span class="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[8px] font-semibold text-amber-900">{{ $rider->pending_profile_update_count }} profile update{{ $rider->pending_profile_update_count === 1 ? '' : 's' }} awaiting review</span>
+                    @endif
                 </div>
 
                 <div class="flex items-center gap-2">

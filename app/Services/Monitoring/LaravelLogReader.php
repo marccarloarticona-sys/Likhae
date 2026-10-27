@@ -475,8 +475,7 @@ class LaravelLogReader
         if (preg_match('/\b(?:invalid|malformed) response\b/i', $message) === 1) {
             return 'A required service returned an invalid response; response details withheld.';
         }
-        if (preg_match('/\b(?:mail|email|notification)\b/i', $message) === 1
-            && preg_match('/\b(?:fail(?:ed|ure)?|could not|unable)\b/i', $message) === 1) {
+        if (preg_match('/\b(?:(?:notification|mail|email)(?:\s+(?:delivery|dispatch|sending))?\s+(?:was\s+)?(?:fail(?:ed|ure)?|could not|unable)|(?:fail(?:ed|ure)?|could not|unable)\s+to\s+(?:send|deliver)\s+(?:the\s+)?(?:notification|mail|email))\b/i', $message) === 1) {
             return 'Notification delivery failed; recipient details withheld.';
         }
         if (preg_match('/\b(?:upload|image|file|proof)\b/i', $message) === 1

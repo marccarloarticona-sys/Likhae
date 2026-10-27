@@ -18,6 +18,7 @@
                 $isReturnRider = (int) $workflow->return_rider_profile_id === (int) $rider->id;
                 $isPendingReturnRider = $returnEnhancementsReady && (int) $workflow->pending_return_rider_profile_id === (int) $rider->id;
                 $sellerProfile = $shipment?->sellerOrder?->sellerProfile;
+                $latestDeliveryAttempt = $shipment?->deliveryAttempts?->sortByDesc('attempt_number')->first();
             @endphp
             <article class="rounded-3xl border border-line bg-surface p-6">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -29,6 +30,9 @@
                         <p class="mt-1 text-sm text-muted">Center: {{ $workflow->logisticsCenter?->business_name ?? 'Sorting center' }}</p>
                         @if($returnEnhancementsReady)
                             <p class="mt-1 text-sm text-muted">Disposition: {{ $workflow->return_disposition === 'REDELIVERY' ? 'Bring back for redelivery' : 'Return to seller' }} · Failed attempts: {{ $shipment?->deliveryAttempts?->count() ?? 0 }}</p>
+                            @if($workflow->return_disposition === 'REDELIVERY' && $latestDeliveryAttempt?->status === 'RESCHEDULED' && $latestDeliveryAttempt->next_attempt_at)
+                                <p class="mt-1 text-sm font-semibold text-primary">Redelivery scheduled: {{ $latestDeliveryAttempt->next_attempt_at->timezone(config('app.timezone'))->format('M j, Y g:i A') }}</p>
+                            @endif
                         @endif
                         @if($workflow->status === 'AWAITING_CENTER_HANDOFF')
                             <p class="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><strong>Pending Return to Logistics.</strong> Complete the rest of the route and bring this parcel to the center. You remain responsible until staff confirm receipt.</p>

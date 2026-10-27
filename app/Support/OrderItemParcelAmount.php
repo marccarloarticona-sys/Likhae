@@ -91,7 +91,15 @@ final class OrderItemParcelAmount
             $platformVoucherCents = 0;
             $rewardPointsCents = 0;
         }
-        $shippingShares = self::shares(FinancialRules::cents($sellerOrder->shipping_fee), $weights, $totalWeight);
+        $shippingRateSnapshot = is_array($sellerOrder->shipping_rate_snapshot)
+            ? $sellerOrder->shipping_rate_snapshot
+            : [];
+        $perParcelShippingFee = $shippingRateSnapshot['per_parcel_shipping_fee'] ?? null;
+        $usesPerParcelPricing = ($shippingRateSnapshot['pricing_basis'] ?? null) === 'PER_PARCEL'
+            && is_numeric($perParcelShippingFee);
+        $shippingShares = $usesPerParcelPricing
+            ? []
+            : self::shares(FinancialRules::cents($sellerOrder->shipping_fee), $weights, $totalWeight);
 
         $itemProtectionTotal = $items->sum(fn (OrderItem $item): int => max(0, FinancialRules::cents($item->protection_fee ?? 0)));
         $sellerProtectionTotal = max(0, FinancialRules::cents($sellerOrder->protection_total ?? $itemProtectionTotal / 100));
@@ -101,7 +109,9 @@ final class OrderItemParcelAmount
 
         $productCents = max(0, FinancialRules::cents($items[$shareIndex]->line_total));
         $discountCents = $sourceAware ? $discountCents : ($discountShares[$shareIndex] ?? 0);
-        $shippingCents = $shippingShares[$shareIndex] ?? 0;
+        $shippingCents = $usesPerParcelPricing
+            ? max(0, FinancialRules::cents($perParcelShippingFee))
+            : ($shippingShares[$shareIndex] ?? 0);
         $shippingDiscountCents = $shippingDiscountShares[$shareIndex] ?? 0;
         $protectionCents = $protectionShares[$shareIndex] ?? 0;
         $totalCents = max(0, $productCents - $discountCents + $shippingCents - $shippingDiscountCents + $protectionCents);

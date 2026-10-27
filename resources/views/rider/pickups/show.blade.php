@@ -31,6 +31,9 @@
         <h1 class="mt-3 text-2xl font-bold text-ink">{{ $pickup->seller?->business_name ?? 'Seller unavailable' }}</h1>
         <p class="mt-2 text-sm font-semibold text-muted">{{ $total }} {{ str('parcel')->plural($total) }} Â· {{ $collected }}/{{ $total }} collected</p>
         <p class="mt-4 text-sm text-muted">Status: <strong class="text-ink">{{ $pickupStatusLabel }}</strong></p>
+        @if($pickup->status === 'LOADING')
+            <p class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Accept this pickup batch within 15 minutes of assignment. If it is not accepted, Logistics can assign it to another eligible rider.</p>
+        @endif
 
         @php
             [$pickupNextStep, $pickupNextActor] = match ($pickup->status) {

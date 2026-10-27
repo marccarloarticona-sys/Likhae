@@ -470,6 +470,84 @@
 
 @if($cartItems->isNotEmpty() && $addresses->isNotEmpty())
     <script>
+        (() => {
+            const platformDialog = document.getElementById('checkout-platform-voucher-dialog');
+            const shippingDialog = document.getElementById('checkout-shipping-voucher-dialog');
+            const dialogFor = (trigger) => trigger.matches('[data-open-platform-vouchers]')
+                ? platformDialog
+                : shippingDialog;
+
+            const openDialog = (dialog) => {
+                if (!dialog || dialog.open) return;
+                if (typeof dialog.showModal === 'function') {
+                    try {
+                        dialog.showModal();
+                        return;
+                    } catch (error) {
+                        // Keep the picker usable if native modal mode is unavailable.
+                    }
+                }
+                dialog.setAttribute('open', '');
+            };
+
+            const closeDialog = (dialog) => {
+                if (!dialog) return;
+                if (dialog.open && typeof dialog.close === 'function') {
+                    try {
+                        dialog.close();
+                        return;
+                    } catch (error) {
+                        // Fall back to closing a non-modal dialog.
+                    }
+                }
+                dialog.removeAttribute('open');
+            };
+
+            document.addEventListener('click', (event) => {
+                if (!(event.target instanceof Element)) return;
+                const trigger = event.target.closest('[data-open-platform-vouchers], [data-open-shipping-vouchers]');
+                if (trigger) {
+                    event.preventDefault();
+                    openDialog(dialogFor(trigger));
+                    return;
+                }
+
+                const closeButton = event.target.closest('[data-close-platform-vouchers], [data-close-shipping-vouchers]');
+                if (closeButton) {
+                    closeDialog(closeButton.closest('dialog'));
+                    return;
+                }
+
+                if (event.target === platformDialog || event.target === shippingDialog) {
+                    closeDialog(event.target);
+                }
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key !== 'Escape') return;
+                [platformDialog, shippingDialog].forEach((dialog) => {
+                    if (!dialog?.open) return;
+                    try {
+                        if (dialog.matches(':modal')) return;
+                    } catch (error) {
+                        // Older browsers may not recognize the :modal selector.
+                    }
+                    closeDialog(dialog);
+                });
+            });
+
+            @if($errors->has('platform_voucher_code'))
+                openDialog(platformDialog);
+            @endif
+            @if($errors->has('shipping_voucher_code'))
+                openDialog(shippingDialog);
+            @endif
+        })();
+    </script>
+@endif
+
+@if($cartItems->isNotEmpty() && $addresses->isNotEmpty())
+    <script>
         document.addEventListener('DOMContentLoaded', () => {
             const shipping = document.getElementById('checkout-shipping-total');
             const protection = document.getElementById('checkout-protection-total');
@@ -638,29 +716,6 @@
                     placeOrderButton.textContent = checkoutBlocked ? 'Review checkout' : (availability.available ? 'Place Order' : 'Delivery unavailable');
                 }
             };
-            const voucherInput = document.getElementById('checkout-voucher-code');
-            const platformVoucherDialog = document.getElementById('checkout-platform-voucher-dialog');
-            const openPlatformVouchers = document.querySelector('[data-open-platform-vouchers]');
-            const closePlatformVouchers = platformVoucherDialog?.querySelector('[data-close-platform-vouchers]');
-            const shippingVoucherDialog = document.getElementById('checkout-shipping-voucher-dialog');
-            const openShippingVouchers = document.querySelector('[data-open-shipping-vouchers]');
-            const closeShippingVouchers = shippingVoucherDialog?.querySelector('[data-close-shipping-vouchers]');
-            openPlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.showModal());
-            closePlatformVouchers?.addEventListener('click', () => platformVoucherDialog?.close());
-            openShippingVouchers?.addEventListener('click', () => shippingVoucherDialog?.showModal());
-            closeShippingVouchers?.addEventListener('click', () => shippingVoucherDialog?.close());
-            platformVoucherDialog?.addEventListener('click', (event) => {
-                if (event.target === platformVoucherDialog) platformVoucherDialog.close();
-            });
-            shippingVoucherDialog?.addEventListener('click', (event) => {
-                if (event.target === shippingVoucherDialog) shippingVoucherDialog.close();
-            });
-            @if($errors->has('platform_voucher_code'))
-                platformVoucherDialog?.showModal();
-            @endif
-            @if($errors->has('shipping_voucher_code'))
-                shippingVoucherDialog?.showModal();
-            @endif
             updateDeliveryAvailability();
             checkoutForm?.addEventListener('submit', (event) => {
                 if (!event.submitter?.matches('[data-place-order-submit]')) return;

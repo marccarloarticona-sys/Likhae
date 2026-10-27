@@ -1,6 +1,6 @@
-@props(['status', 'next', 'actor', 'shipmentId' => null])
+@props(['status', 'next', 'actor', 'shipmentId' => null, 'returnedLabel' => null])
 
-<section class="lk-status-guidance" aria-label="Current status and next step" @if($shipmentId) data-shipment-guidance-id="{{ $shipmentId }}" @endif>
+<section class="lk-status-guidance" aria-label="Current status and next step" @if($shipmentId) data-shipment-guidance-id="{{ $shipmentId }}" @endif @if($returnedLabel) data-shipment-returned-label="{{ $returnedLabel }}" @endif>
     <div class="lk-status-guidance__item lk-status-guidance__current">
         <span>Current status</span>
         <strong data-guidance-status>{{ $status }}</strong>

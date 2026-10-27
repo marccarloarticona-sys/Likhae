@@ -10,7 +10,7 @@
         <div class="lk-wallet-header__copy">
         <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Logistics wallet</span>
         <h1 class="mt-2 font-display text-[32px] font-semibold text-ink">Wallet &amp; Payouts</h1>
-        <p class="mt-2 max-w-2xl text-[11px] leading-6 text-muted">Save where you want to receive your shipping share. Request each reconciled share from Admin; Admin transfers funds outside Likhae and records the reference and proof here.</p>
+        <p class="mt-2 max-w-2xl text-[11px] leading-6 text-muted">Only payouts recorded by Admin count toward your paid-out balance. Reconciled shares that are available or requested remain unpaid until Admin records the transfer.</p>
         </div>
         <div class="lk-wallet-actions lk-logistics-wallet__header-actions">
         <a href="{{ route('logistics.messages') }}" class="lk-logistics-wallet__header-link">Contact Support</a>
@@ -19,18 +19,21 @@
     </section>
 
     <section class="lk-wallet-metrics" aria-label="Payout balance summary">
-        @foreach([
-            ['Available to request', 'available', 'Reconciled shares ready to request'],
-            ['Requested from Admin', 'requested', 'Waiting for Admin review'],
-            ['Awaiting receipt confirmation', 'awaiting_ack', 'Transfer sent; confirmation pending'],
-            ['Paid', 'paid', 'Confirmed payouts'],
-        ] as [$label, $key, $detail])
-            <article class="lk-wallet-metric lk-logistics-wallet__metric {{ $key === 'available' ? 'lk-logistics-wallet__metric--available' : '' }}">
-                <span class="lk-wallet-metric__label">{{ $label }}</span>
-                <strong class="lk-wallet-metric__value">PHP {{ number_format((float) $payoutSummary[$key], 2) }}</strong>
-                <span class="lk-logistics-wallet__metric-detail">{{ $detail }}</span>
-            </article>
-        @endforeach
+        <article class="lk-wallet-metric lk-logistics-wallet__metric">
+            <span class="lk-wallet-metric__label">Paid-out balance</span>
+            <strong class="lk-wallet-metric__value">PHP {{ number_format((float) $payoutSummary['paid_out'], 2) }}</strong>
+            <span class="lk-logistics-wallet__metric-detail">PHP {{ number_format((float) $payoutSummary['awaiting_ack'], 2) }} awaiting receipt confirmation · PHP {{ number_format((float) $payoutSummary['paid'], 2) }} confirmed</span>
+        </article>
+        <article class="lk-wallet-metric lk-logistics-wallet__metric lk-logistics-wallet__metric--available">
+            <span class="lk-wallet-metric__label">Unpaid · available to request</span>
+            <strong class="lk-wallet-metric__value">PHP {{ number_format((float) $payoutSummary['available'], 2) }}</strong>
+            <span class="lk-logistics-wallet__metric-detail">Reconciled shares ready to request</span>
+        </article>
+        <article class="lk-wallet-metric lk-logistics-wallet__metric">
+            <span class="lk-wallet-metric__label">Unpaid · requested from Admin</span>
+            <strong class="lk-wallet-metric__value">PHP {{ number_format((float) $payoutSummary['requested'], 2) }}</strong>
+            <span class="lk-logistics-wallet__metric-detail">Waiting for Admin review</span>
+        </article>
     </section>
 
     <section class="payout-section rounded-xl border border-line bg-surface lk-logistics-wallet__destination">

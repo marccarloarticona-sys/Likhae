@@ -85,17 +85,9 @@ class RiderTransferController extends Controller
 
     public function start(Request $request, int $manifest): RedirectResponse
     {
-        $data = $request->validate([
-            'scanned_codes' => ['required', 'array', 'min:1', 'max:100'],
-            'scanned_codes.*' => ['required', 'string', 'max:150'],
-            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
-        ]);
-
         return $this->run($request, $manifest, fn (TransferManifest $model) => $this->manifests->driverStart(
             $request->user(),
             $model,
-            $data['scanned_codes'],
-            strtoupper((string) ($data['scan_method'] ?? 'MANUAL')),
         ), 'Inter-hub transport started.');
     }
 

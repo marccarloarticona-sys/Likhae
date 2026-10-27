@@ -167,6 +167,8 @@ final class EarningPayoutService
         string $method,
         ?string $externalReference = null,
         ?string $notes = null,
+        ?string $proofPath = null,
+        ?string $proofName = null,
     ): FinancialLedgerEntry {
         $this->assertActiveRole($actor, User::TYPE_LOGISTICS);
         $method = trim($method);
@@ -174,7 +176,7 @@ final class EarningPayoutService
             throw new \RuntimeException('Record whether the Rider payout was manual or online.');
         }
 
-        return DB::transaction(function () use ($actor, $entry, $amount, $method, $externalReference, $notes): FinancialLedgerEntry {
+        return DB::transaction(function () use ($actor, $entry, $amount, $method, $externalReference, $notes, $proofPath, $proofName): FinancialLedgerEntry {
             $locked = FinancialLedgerEntry::query()->whereKey($entry->id)->lockForUpdate()->firstOrFail();
             if ($locked->entry_type !== 'RIDER_PAYOUT') {
                 throw new \RuntimeException('This ledger entry is not a Rider payout request.');
@@ -206,6 +208,8 @@ final class EarningPayoutService
             $simulation = $this->simulatedPayouts->simulate($method);
             if ($simulation) {
                 $externalReference = $simulation['external_reference'];
+            } elseif ($method === 'Manual' && (! filled($externalReference) || ! filled($proofPath))) {
+                throw new \RuntimeException('Enter the transfer reference and upload proof before recording a real Rider payout.');
             }
 
             $now = now();
@@ -214,6 +218,8 @@ final class EarningPayoutService
                 'amount_paid' => FinancialRules::amount($amountCents),
                 'payout_method' => $method,
                 'payout_external_reference' => $externalReference,
+                'payout_proof_path' => $proofPath,
+                'payout_proof_name' => $proofName,
                 'is_simulated' => $simulation !== null,
                 'simulation_notice' => $simulation['notice'] ?? null,
                 'payout_receipt_reference' => 'RDP-'.Str::upper((string) Str::uuid()),

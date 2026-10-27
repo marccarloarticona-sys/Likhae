@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
 use App\Models\Rider\RiderLocalTrip;
+use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Maps\MapDataService;
@@ -15,11 +16,13 @@ use RuntimeException;
 
 class RiderPickupBatchController extends Controller
 {
-    public function index(Request $request): View
+    public function index(Request $request, RiderAssignmentOfferExpiryService $offers): View
     {
         abort_unless(app(LogisticsSchemaReadiness::class)->sellerPickupBatchesReady(), 503, 'Seller pickup batch workflow is unavailable until its additive schema migration is installed.');
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
+
+        $offers->expireDuePickupOffers((int) $rider->id);
 
         $batches = RiderLocalTrip::query()
             ->where('rider_profile_id', $rider->id)
@@ -38,10 +41,23 @@ class RiderPickupBatchController extends Controller
         return view('rider.pickups.index', compact('rider', 'batches'));
     }
 
-    public function show(Request $request, int $trip): View
+    public function show(Request $request, int $trip, RiderAssignmentOfferExpiryService $offers): View|RedirectResponse
     {
-        $pickup = $this->ownedBatch($request, $trip)
-            ->load(['seller.user', 'seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
+        $pickup = $this->ownedBatch($request, $trip);
+        $expired = $pickup->items()
+            ->with('riderAssignment')
+            ->get()
+            ->contains(function ($item) use ($offers): bool {
+                $assignment = $item->riderAssignment;
+                return $assignment && (
+                    ($offers->isExpired($assignment) && $offers->expireDue($assignment))
+                    || $offers->wasExpired($assignment)
+                );
+            });
+        if ($expired) {
+            return redirect()->route('rider.pickups')->with('status', 'This pickup offer expired and was returned to Logistics for reassignment. Refresh Pickups for current work.');
+        }
+        $pickup->load(['seller.user', 'seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
 
         $items = $pickup->items;
         $total = $items->count();

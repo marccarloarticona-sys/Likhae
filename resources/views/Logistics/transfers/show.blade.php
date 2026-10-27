@@ -4,7 +4,8 @@
 
 @section('content')
 @php($releasedParcelCount = $manifest->items->filter(fn ($item) => $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED)->count())
-<div class="flex w-full flex-col gap-6">
+@php($accountedParcelCount = $manifest->items->filter(fn ($item) => $item->status !== \App\Models\Logistics\TransferManifestItem::EXPECTED)->count())
+<div class="flex w-full flex-col gap-6" @if(! $isOriginCenter) data-transfer-scan-container="receive" @endif>
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
             <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Transfer preparation</span>
@@ -98,8 +99,34 @@
                 @else
                     <p class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] text-amber-900">Waiting for the assigned driver to accept this sealed manifest.</p>
                 @endif
-            @elseif(! $isOriginCenter && $manifest->status === 'IN_TRANSIT')
-                <p class="max-w-2xl rounded-lg border border-blue-200 bg-blue-50 p-3 text-[10px] leading-5 text-blue-900">Scan each parcel below at this destination hub. A successful scan records its arrival, transfers custody to this hub, and places it in sorting. Staff can then sort it for a local delivery trip when this is the final hub. No separate arrival step is needed.</p>
+            @elseif(! $isOriginCenter && in_array($manifest->status, ['IN_TRANSIT', 'ARRIVED', 'PARTIAL', 'EXCEPTION'], true))
+                @if($accountedParcelCount < $manifest->items->count())
+                    <section class="grid w-full gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4" data-parcel-scanner data-scanner-autosubmit="false" data-scanner-fill-matching="true">
+                        <div>
+                            <h2 class="text-sm font-semibold text-blue-950">Receive parcels at this hub</h2>
+                            <p class="mt-1 text-sm leading-5 text-blue-900">Scan each parcel as it arrives. A successful scan records destination custody and moves it into sorting. Choose Damaged before scanning a damaged parcel; record Missing manually.</p>
+                        </div>
+                        <label class="grid gap-1 text-sm font-semibold text-ink">Scan parcel barcode
+                            <input type="text" data-scanner-input autofocus autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Scan or enter a tracking number" class="min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink">
+                        </label>
+                        <div class="relative overflow-hidden rounded-lg border border-line bg-black">
+                            <video data-scanner-video class="hidden aspect-video w-full object-cover" playsinline muted></video>
+                            <div data-scanner-placeholder class="flex aspect-video items-center justify-center px-6 text-center text-sm text-white">Camera is off.</div>
+                            <div data-scanner-guide class="pointer-events-none absolute inset-x-6 top-1/2 z-10 hidden h-20 -translate-y-1/2 border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,.28)]" aria-hidden="true"></div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" data-scanner-start class="min-h-11 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white">Start Camera</button>
+                            <button type="button" data-scanner-stop class="hidden min-h-11 rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink">Stop Camera</button>
+                            <label class="hidden min-h-11 items-center gap-2 text-sm font-semibold text-ink" data-camera-select-wrap>Camera<select data-camera-select aria-label="Select camera" class="min-h-11 max-w-[14rem] rounded-lg border border-line bg-white px-2 py-2"></select></label>
+                            <button type="button" data-scanner-torch class="hidden min-h-11 rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink" aria-pressed="false">Turn Torch On</button>
+                        </div>
+                        <p data-scanner-message class="min-h-6 text-sm font-semibold text-blue-950" aria-live="polite"></p>
+                        <p class="text-xs text-blue-900"><span data-transfer-scan-progress>{{ $accountedParcelCount }} / {{ $manifest->items->count() }}</span> parcels accounted for</p>
+                        <input type="hidden" data-scanner-method value="MANUAL">
+                    </section>
+                @else
+                    <p class="max-w-2xl rounded-lg border border-green-200 bg-green-50 p-3 text-[10px] leading-5 text-green-900">All parcels have been accounted for at this destination hub.</p>
+                @endif
             @elseif($isOriginCenter && $manifest->status === 'RELEASED')
                 <p class="rounded-lg border border-line bg-white p-3 text-[10px] text-muted">Released. The assigned driver must start transport from their Rider workspace.</p>
             @elseif($isOriginCenter && $manifest->status === 'IN_TRANSIT')
@@ -249,12 +276,14 @@
                             </td>
                             <td class="px-2 py-3">
                                 @if(! $isOriginCenter && in_array($manifest->status, ['IN_TRANSIT', 'ARRIVED', 'PARTIAL', 'EXCEPTION'], true) && $item->status === 'EXPECTED')
-                                    <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" class="grid gap-2 sm:grid-cols-2">
+                                    <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" data-transfer-parcel-row data-released="false" class="grid gap-2 sm:grid-cols-2">
                                         @csrf
                                         <select name="outcome" class="rounded border border-line px-2 py-2"><option value="RECEIVED">Received</option><option value="DAMAGED">Damaged</option><option value="MISSING">Missing</option></select>
-                                        <input name="scanned_code" autocomplete="off" placeholder="Scan parcel barcode to receive" class="rounded border border-line px-2 py-2">
+                                        <input name="scanned_code" data-expected-tracking="{{ $item->transferLeg?->shipment?->tracking_number }}" autocomplete="off" placeholder="Scan parcel barcode to receive" class="rounded border border-line px-2 py-2">
+                                        <input type="hidden" name="scan_method" value="MANUAL">
                                         <input name="notes" placeholder="Notes / exception details" class="rounded border border-line px-2 py-2 sm:col-span-2">
-                                        <button class="rounded bg-primary px-3 py-2 font-semibold text-white sm:col-span-2">Scan and receive at destination</button>
+                                        <span data-scan-verification class="text-xs font-semibold text-muted">Awaiting receipt scan</span>
+                                        <button type="submit" class="rounded bg-primary px-3 py-2 font-semibold text-white sm:col-span-2">Scan / record parcel</button>
                                     </form>
                                 @elseif(in_array($manifest->status, ['IN_TRANSIT', 'ARRIVED', 'PARTIAL', 'EXCEPTION'], true) && $item->status === 'EXPECTED')
                                     <span class="text-[9px] text-muted">Scan this parcel at the destination hub.</span>

@@ -4,18 +4,10 @@
 <div class="space-y-6">
     <header>
         <h1 class="text-2xl font-bold text-ink">Inter-hub transfers</h1>
-        <p class="mt-2 text-sm text-muted">Only manifests assigned to your approved inter-logistics vehicle appear here. Destination custody stays with the receiving hub.</p>
+        <p class="mt-2 text-sm text-muted">Only manifests assigned to your approved inter-logistics vehicle appear here. The origin hub scans each parcel before release, and the destination hub scans each parcel on arrival.</p>
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>@endif
     @error('tracking')<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{{ $message }}</div>@enderror
-    <x-shared.parcel-scanner
-        :action="route('rider.scan', ['return_to' => 'transfers'])"
-        :tracking="old('tracking', request('tracking', ''))"
-        :method="request('scan_method', 'MANUAL')"
-        title="Scan Inter-Hub Parcel"
-        description="Find a parcel in a transfer manifest assigned to you. Scanning opens the manifest and does not change parcel custody."
-        button="Find Assigned Manifest"
-    />
     @if(!$ready)
         <div class="border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Inter-hub transport is not activated until Step 3/4 custody migrations are approved and installed.</div>
     @else

@@ -10,6 +10,8 @@
     'inputLabel' => 'Tracking number',
     'inputPlaceholder' => 'Enter tracking number',
     'scannerOnly' => false,
+    'appendTarget' => null,
+    'methodTarget' => null,
 ])
 
 @php
@@ -21,7 +23,7 @@
         : 'GET';
 @endphp
 
-<section class="border border-line bg-surface p-5" data-parcel-scanner @if($scannerOnly) data-scanner-autosubmit="false" data-scanner-fill-matching="true" @endif>
+<section class="border border-line bg-surface p-5" data-parcel-scanner @if($scannerOnly) data-scanner-autosubmit="false" data-scanner-fill-matching="true" @endif @if($appendTarget) data-scanner-append-target="{{ $appendTarget }}" @endif @if($methodTarget) data-scanner-method-target="{{ $methodTarget }}" @endif>
     <h2 class="text-base font-semibold text-ink">{{ $title }}</h2>
     <p class="mt-2 text-sm leading-6 text-muted">{{ $description }}</p>
 

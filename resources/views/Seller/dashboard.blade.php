@@ -194,17 +194,17 @@
 
         <section class="sl-card sl-dashboard-overview-card">
             <header class="sl-card-head">
-                <div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payable</h2></div>
+                <div><span class="sl-eyebrow">Settlement ledger</span><h2>Seller payout status</h2></div>
                 <a href="{{ route('seller.wallet') }}" class="sl-text-link">Wallet &amp; payouts</a>
             </header>
-            <p class="sl-dashboard-overview-card__note">Commission uses original product prices; discount-funded rows may be under review.</p>
+            <p class="sl-dashboard-overview-card__note">Only Admin-recorded payouts count toward wallet balance. Pending, requested, and authorized seller payables are unpaid.</p>
             @if ($settlementSummary['schema_ready'])
                 <div class="sl-dashboard-payable-grid" aria-label="Seller payable amounts">
-                    <div><span>Pending / requested / review</span><strong>{{ $peso }}{{ number_format($settlementSummary['pending'], 2) }}</strong></div>
-                    <div><span>Authorized</span><strong>{{ $peso }}{{ number_format($settlementSummary['authorized'], 2) }}</strong></div>
-                    <div><span>Awaiting your receipt</span><strong>{{ $peso }}{{ number_format($settlementSummary['awaiting_ack'], 2) }}</strong></div>
-                    <div><span>Paid</span><strong>{{ $peso }}{{ number_format($settlementSummary['paid'], 2) }}</strong></div>
-                    <div class="is-outstanding"><span>Outstanding</span><strong>{{ $peso }}{{ number_format($settlementSummary['outstanding'], 2) }}</strong></div>
+                <div><span>Unpaid · pending / requested / review</span><strong>{{ $peso }}{{ number_format($settlementSummary['pending'], 2) }}</strong></div>
+                <div><span>Authorized · unpaid</span><strong>{{ $peso }}{{ number_format($settlementSummary['authorized'], 2) }}</strong></div>
+                <div><span>Paid out · awaiting receipt confirmation</span><strong>{{ $peso }}{{ number_format($settlementSummary['awaiting_ack'], 2) }}</strong></div>
+                <div><span>Received and confirmed</span><strong>{{ $peso }}{{ number_format($settlementSummary['paid'], 2) }}</strong></div>
+                <div class="is-outstanding"><span>Outstanding unpaid settlement</span><strong>{{ $peso }}{{ number_format($settlementSummary['outstanding'], 2) }}</strong></div>
                 </div>
             @else
                 <p class="sl-empty-state">Settlement tables are prepared but not installed yet. Existing orders and reports remain available.</p>

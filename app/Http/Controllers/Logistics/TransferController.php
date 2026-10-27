@@ -284,18 +284,29 @@ class TransferController extends Controller
         return $this->runAction($request, $manifest, fn () => $this->manifests->cancel($request->user(), $manifest, $data['reason']), 'Manifest cancelled with an audit reason.');
     }
 
-    public function receiveItem(Request $request, int $item): RedirectResponse
+    public function receiveItem(Request $request, int $item): RedirectResponse|JsonResponse
     {
         abort_unless($this->schema->manifestReady(), 503, 'Transfer manifest and approved rider capacity schema is not installed.');
         $item = TransferManifestItem::query()->findOrFail($item);
         $data = $request->validate([
             'outcome' => ['required', 'in:RECEIVED,MISSING,DAMAGED'],
             'scanned_code' => ['required_if:outcome,RECEIVED,DAMAGED', 'nullable', 'string', 'max:120'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
             'notes' => ['nullable', 'string', 'max:2000'],
         ]);
         try {
-            $this->manifests->receiveItem($request->user(), $item, $data['outcome'], $data['scanned_code'] ?? null, $data['notes'] ?? null);
+            $updatedItem = $this->manifests->receiveItem(
+                $request->user(),
+                $item,
+                $data['outcome'],
+                $data['scanned_code'] ?? null,
+                $data['notes'] ?? null,
+                strtoupper((string) ($data['scan_method'] ?? 'MANUAL')),
+            );
         } catch (RuntimeException $exception) {
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+            }
             return back()->withErrors(['outcome' => $exception->getMessage()]);
         }
         $message = match ($data['outcome']) {
@@ -303,6 +314,24 @@ class TransferController extends Controller
             'DAMAGED' => 'Damaged parcel recorded at the destination hub. Review it before local dispatch.',
             default => 'Missing parcel exception recorded on the manifest.',
         };
+
+        if ($request->expectsJson()) {
+            $manifest = TransferManifest::query()->with('items')->findOrFail($updatedItem->manifest_id);
+            $pendingCount = $manifest->items->where('status', TransferManifestItem::EXPECTED)->count();
+            $completedCount = $manifest->items->count() - $pendingCount;
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'item_id' => $updatedItem->id,
+                'item_status' => $updatedItem->status,
+                'tracking_number' => $updatedItem->transferLeg?->shipment?->tracking_number,
+                'completed_count' => $completedCount,
+                'pending_count' => $pendingCount,
+                'total_count' => $manifest->items->count(),
+                'manifest_status' => $manifest->status,
+            ]);
+        }
 
         return back()->with('status', $message);
     }

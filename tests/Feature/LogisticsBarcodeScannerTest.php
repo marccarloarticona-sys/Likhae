@@ -40,7 +40,7 @@ class LogisticsBarcodeScannerTest extends TestCase
         $pages = [
             route('logistics.parcels.receive'),
             route('logistics.sorting'),
-            route('logistics.dispatch'),
+            route('logistics.assignments'),
             route('logistics.parcels.tracking'),
         ];
 

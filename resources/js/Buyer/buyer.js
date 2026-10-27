@@ -1500,7 +1500,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     CANCELLED: ['Cancelled', 'No further delivery action is required for this parcel.', 'No action pending'],
                 };
                 const [status, next, actor] = guidanceByStatus[shipment.status] || [headline(shipment.status), 'Follow the tracking timeline for the next scan.', 'Logistics'];
-                guidance.querySelector('[data-guidance-status]')?.replaceChildren(document.createTextNode(status));
+                const statusNode = guidance.querySelector('[data-guidance-status]');
+                const autoReceived = shipment.status === 'COMPLETED' && shipment.events?.some((event) => event.auto_received);
+                const cancelledOrderDisplay = statusNode?.textContent.trim() === 'Cancelled' && shipment.status !== 'CANCELLED';
+                const displayStatus = cancelledOrderDisplay
+                    ? 'Cancelled'
+                    : (shipment.status === 'CANCELLED'
+                        ? 'Cancelled'
+                        : (shipment.status === 'RETURNED'
+                            ? (guidance.dataset.shipmentReturnedLabel || 'Returned')
+                            : (autoReceived ? 'Auto Received' : status)));
+                statusNode?.replaceChildren(document.createTextNode(displayStatus));
                 guidance.querySelector('[data-guidance-next]')?.replaceChildren(document.createTextNode(next));
                 guidance.querySelector('[data-guidance-actor]')?.replaceChildren(document.createTextNode(actor));
             }
@@ -1555,14 +1565,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (updateRow) updateRow.hidden = !buyerUpdate;
                         });
 
-                        document.querySelectorAll(`[data-shipment-card-status-id="${shipment.id}"]`).forEach((element) => {
-                            const autoReceived = shipment.status === 'COMPLETED' && shipment.events?.some((event) => event.auto_received);
-                            element.textContent = shipment.status === 'CANCELLED'
-                                ? 'Cancelled'
-                                : (shipment.status === 'RETURNED'
-                                    ? element.dataset.shipmentReturnedLabel
-                                    : (autoReceived ? 'Auto Received' : headline(shipment.status)));
-                        });
                         renderShipmentTimeline(shipment);
                     });
 
@@ -1591,25 +1593,6 @@ document.addEventListener('DOMContentLoaded', () => {
                                     const next = guidance.querySelector('[data-guidance-next]');
                                     if (next) next.textContent = 'Check the parcel, then confirm receipt for the order.';
                                 }
-                            });
-                        }
-                        const progressSteps = Array.from(orderPage.querySelectorAll('[data-order-progress-step]'));
-                        const currentProgressLabel = order.actions.completed
-                            ? 'To Rate'
-                            : (displayStatus(order) === 'DELIVERED' ? 'To Receive' : null);
-                        const currentProgressIndex = currentProgressLabel
-                            ? progressSteps.findIndex((step) => step.dataset.orderProgressStep === currentProgressLabel)
-                            : -1;
-                        if (currentProgressIndex >= 0) {
-                            progressSteps.forEach((step, index) => {
-                                const current = index === currentProgressIndex;
-                                const complete = index <= currentProgressIndex;
-                                step.classList.toggle('is-current', current);
-                                step.classList.toggle('is-complete', complete && !current);
-                                if (current) step.setAttribute('aria-current', 'step');
-                                else step.removeAttribute('aria-current');
-                                const node = step.querySelector('.lk-order-progress__node');
-                                if (node) node.textContent = complete ? '✓' : String(index + 1);
                             });
                         }
                     }

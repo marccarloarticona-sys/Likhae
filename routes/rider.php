@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Rider\RiderController;
 use App\Http\Controllers\Rider\RiderFinanceController;
+use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Rider\RiderPickupBatchController;
 use App\Http\Controllers\Rider\RiderParcelScanController;
 use App\Http\Controllers\Rider\RiderRemittanceController;
@@ -54,6 +55,7 @@ Route::prefix('rider')
             Route::get('/trips', [RiderTripController::class, 'index'])->name('trips');
             Route::get('/trips/{trip}', [RiderTripController::class, 'show'])->name('trips.show');
             Route::post('/trips/{trip}/accept', [RiderTripController::class, 'accept'])->name('trips.accept');
+            Route::post('/trips/{trip}/reject', [RiderTripController::class, 'reject'])->name('trips.reject');
             Route::post('/trips/{trip}/load', [RiderTripController::class, 'load'])->name('trips.load');
             Route::post('/trips/{trip}/start', [RiderTripController::class, 'start'])->name('trips.start');
             Route::post('/assignments/{assignment}/location', [RiderShipmentController::class, 'updateLocation'])->name('assignments.location');
@@ -72,7 +74,6 @@ Route::prefix('rider')
             Route::post('/pickups/batches/{trip}/finish', [RiderPickupBatchController::class, 'finish'])->name('pickups.batches.finish');
             Route::get('/pickups/{assignment}', [RiderController::class, 'pickupShow'])->name('pickups.show');
             Route::get('/deliveries', [RiderController::class, 'deliveries'])->name('deliveries');
-            Route::get('/deliveries/{assignment}/scan', [RiderParcelScanController::class, 'verifyDelivery'])->name('deliveries.scan');
             Route::get('/deliveries/{assignment}', [RiderController::class, 'deliveryShow'])->name('deliveries.show');
             Route::get('/history', [RiderController::class, 'history'])->name('history');
         });
@@ -90,11 +91,13 @@ Route::prefix('rider')
         Route::put('/wallet/payout-destination', [RiderFinanceController::class, 'updatePayoutDestination'])->name('wallet.payout-destination.update');
         Route::post('/earnings/payout-requests', [RiderFinanceController::class, 'requestPayout'])->name('earnings.payout-requests.store');
         Route::post('/earnings/payouts/{entry}/acknowledge', [RiderFinanceController::class, 'acknowledgePayout'])->whereNumber('entry')->name('earnings.payouts.acknowledge');
+        Route::get('/earnings/payouts/{entry}/proof', [PayoutProofController::class, 'rider'])->whereNumber('entry')->name('earnings.payout-proof');
         Route::get('/remittances', [RiderRemittanceController::class, 'index'])->name('remittances');
         Route::post('/remittances', [RiderRemittanceController::class, 'store'])->name('remittances.store');
         Route::get('/profile', [RiderController::class, 'profile'])->name('profile');
         Route::get('/account', [RiderController::class, 'profile'])->name('account');
         Route::patch('/account/profile', [RiderController::class, 'updateAccount'])->name('account.profile.update');
+        Route::post('/account/profile/updates', [RiderController::class, 'submitProfileUpdate'])->name('account.profile.updates.store');
         Route::patch('/account/address', [RiderController::class, 'updateResidentialAddress'])->name('account.address.update');
         Route::patch('/account/password', [RiderController::class, 'updatePassword'])->name('account.password.update');
         Route::get('/messages', [RiderController::class, 'messages'])->name('messages');

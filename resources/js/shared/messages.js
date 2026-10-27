@@ -412,7 +412,9 @@ const appendRealtimeMessage = (thread, payload, { pending = false } = {}) => {
     meta.appendChild(time);
     wrapper.appendChild(meta);
     row.appendChild(wrapper);
-    thread.appendChild(row);
+    const smartHelp = thread.querySelector('[data-smart-help]');
+    if (smartHelp) thread.insertBefore(row, smartHelp);
+    else thread.appendChild(row);
     if (isMine) {
         updateMessageReceipts(thread);
         pollConversationReceipt(thread);
@@ -897,104 +899,196 @@ const initializeSmartMessaging = () => {
         if (panel.dataset.smartHelpBound === 'true') return;
         panel.dataset.smartHelpBound = 'true';
         const status = panel.querySelector('[data-smart-help-status]');
-        const answer = panel.querySelector('[data-smart-help-answer]');
-        const answerQuestion = panel.querySelector('[data-smart-help-question]');
-        const answerText = panel.querySelector('[data-smart-help-answer-text]');
-        const answerSource = panel.querySelector('[data-smart-help-source]');
         const feedback = panel.querySelector('[data-smart-help-feedback]');
+        const feedbackNote = panel.querySelector('[data-smart-help-feedback-note]');
         const handoffRow = panel.querySelector('[data-smart-help-handoff-row]');
+        const conversationInput = panel.closest('.lk-chat-area')?.querySelector('[data-chat-input]');
         const token = panel.querySelector('[data-smart-help-token]')?.value || '';
         let humanHandoff = panel.dataset.humanHandoff === 'true';
+        let hasAnswer = panel.dataset.hasAnswer === 'true';
+        let busy = false;
+        let retryUntil = 0;
+        let cooldownTimer = null;
+
+        const controls = () => panel.querySelectorAll('[data-smart-question], [data-smart-feedback], [data-smart-handoff]');
+        const coolingDown = () => Date.now() < retryUntil;
+        const unlockControls = () => {
+            if (busy || humanHandoff || coolingDown()) return;
+            panel.querySelectorAll('[data-smart-question]').forEach((button) => { button.disabled = false; });
+            panel.querySelectorAll('[data-smart-feedback]').forEach((button) => { button.disabled = !hasAnswer || Boolean(feedback?.hidden); });
+            const handoffButton = panel.querySelector('[data-smart-handoff]');
+            if (handoffButton) handoffButton.disabled = Boolean(handoffRow?.hidden);
+        };
+        const lockControls = () => controls().forEach((button) => { button.disabled = true; });
 
         const setStatus = (message, isError = false) => {
             if (!status) return;
             status.textContent = message;
             status.classList.toggle('lk-smart-help-error', isError);
         };
+        const startCooldown = (seconds) => {
+            retryUntil = Date.now() + seconds * 1000;
+            window.clearTimeout(cooldownTimer);
+            const updateCooldown = () => {
+                const remaining = Math.max(0, Math.ceil((retryUntil - Date.now()) / 1000));
+                if (remaining === 0) {
+                    unlockControls();
+                    setStatus('You can try the suggested questions again.');
+                    return;
+                }
+                lockControls();
+                setStatus(`Please wait ${remaining} seconds before trying again.`, true);
+                cooldownTimer = window.setTimeout(updateCooldown, 1000);
+            };
+            updateCooldown();
+        };
+        const showError = (error) => {
+            if (error.retryAfter) {
+                startCooldown(error.retryAfter);
+                return;
+            }
+            setStatus(error.name === 'AbortError'
+                ? 'That took too long. Check your connection and try again.'
+                : error.message, true);
+        };
         const post = async (url, payload = {}) => {
-            const response = await fetch(url, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': token,
-                    'X-Requested-With': 'XMLHttpRequest',
-                },
-                body: JSON.stringify(payload),
-            });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.message || 'That action could not be completed. Please try again.');
-            return result;
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), 20000);
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    signal: controller.signal,
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': token,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json().catch(() => ({}));
+                if (response.status === 429) {
+                    const requestedDelay = Number(response.headers.get('Retry-After'));
+                    const retryAfter = Number.isFinite(requestedDelay) && requestedDelay > 0 ? requestedDelay : 30;
+                    const error = new Error('Too many quick requests.');
+                    error.retryAfter = retryAfter;
+                    throw error;
+                }
+                if (!response.ok) throw new Error(result.message || 'That action could not be completed. Please try again.');
+                return result;
+            } finally {
+                window.clearTimeout(timeout);
+            }
         };
         const setHumanHandoff = (message) => {
             humanHandoff = true;
             panel.dataset.humanHandoff = 'true';
-            panel.querySelectorAll('[data-smart-question]').forEach((button) => { button.disabled = true; });
+            lockControls();
             if (feedback) feedback.hidden = true;
+            if (feedbackNote) feedbackNote.hidden = true;
             if (handoffRow) handoffRow.hidden = true;
             setStatus(message);
         };
+        const appendExchange = (result) => {
+            const stream = panel.closest('.lk-chat-stream');
+            if (!stream) return;
+            const exchange = document.createElement('article');
+            exchange.className = 'lk-smart-help-exchange';
+
+            const question = document.createElement('div');
+            question.className = 'lk-smart-help-question-bubble';
+            question.textContent = result.question || 'Suggested question';
+
+            const answerBubble = document.createElement('div');
+            answerBubble.className = 'lk-smart-help-answer-bubble';
+            const source = document.createElement('small');
+            source.textContent = result.answer_source || 'Automated answer';
+            const answerText = document.createElement('p');
+            answerText.textContent = result.answer || 'No answer is available right now.';
+            answerBubble.append(source, answerText);
+            exchange.append(question, answerBubble);
+            stream.insertBefore(exchange, panel);
+            hasAnswer = true;
+            panel.dataset.hasAnswer = 'true';
+            if (feedback) feedback.hidden = false;
+            if (feedbackNote) feedbackNote.hidden = true;
+            if (stream) stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' });
+        };
 
         panel.querySelectorAll('[data-smart-question]').forEach((button) => button.addEventListener('click', async () => {
-            if (humanHandoff) return;
+            if (humanHandoff || busy || coolingDown()) return;
             const questionKey = button.dataset.questionKey;
             if (!questionKey) return;
-            panel.querySelectorAll('[data-smart-question]').forEach((item) => { item.disabled = true; });
-            setStatus('Checking the approved answer and current conversation data…');
+            busy = true;
+            lockControls();
+            setStatus('Checking the approved answer...');
             try {
                 const result = await post(panel.dataset.answerUrl, {
                     question_key: questionKey,
                     product_id: panel.dataset.productId || null,
                     variant_id: panel.dataset.variantId || null,
                 });
-                if (answerQuestion) answerQuestion.textContent = result.question || '';
-                if (answerText) answerText.textContent = result.answer || '';
-                if (answerSource) answerSource.textContent = result.answer_source || 'Suggested answer';
-                if (answer) answer.hidden = false;
-                if (feedback) feedback.hidden = false;
-                setStatus('This is an automated answer. It has not been sent as a chat message.');
+                appendExchange(result);
+                setStatus('The verified answer has been added to this conversation.');
             } catch (error) {
-                setStatus(error.message, true);
+                showError(error);
             } finally {
-                if (!humanHandoff) panel.querySelectorAll('[data-smart-question]').forEach((item) => { item.disabled = false; });
+                busy = false;
+                unlockControls();
             }
         }));
 
         panel.querySelectorAll('[data-smart-feedback]').forEach((button) => button.addEventListener('click', async () => {
-            if (humanHandoff) return;
-            panel.querySelectorAll('[data-smart-feedback]').forEach((item) => { item.disabled = true; });
+            if (humanHandoff || busy || coolingDown() || !hasAnswer) return;
+            busy = true;
+            lockControls();
             try {
                 const result = await post(panel.dataset.feedbackUrl, { feedback: button.dataset.smartFeedback });
+                if (feedback) feedback.hidden = true;
+                if (feedbackNote) {
+                    feedbackNote.textContent = result.last_feedback === 'RESOLVED'
+                        ? 'Marked helpful. You can keep chatting or choose another question.'
+                        : 'Thanks for letting us know. You can request live help in this conversation.';
+                    feedbackNote.hidden = false;
+                }
                 if (result.last_feedback === 'RESOLVED') {
-                    setStatus('Glad that helped. You can choose another question or continue the conversation below.');
+                    setStatus('Glad that helped. You can choose another question or continue chatting.');
                 } else {
                     setStatus('Thanks for letting us know. You can request live help in this same conversation.');
                 }
             } catch (error) {
-                setStatus(error.message, true);
+                showError(error);
             } finally {
-                if (!humanHandoff) panel.querySelectorAll('[data-smart-feedback]').forEach((item) => { item.disabled = false; });
+                busy = false;
+                unlockControls();
             }
         }));
 
         panel.querySelector('[data-smart-handoff]')?.addEventListener('click', async (event) => {
-            if (humanHandoff) return;
+            if (humanHandoff || busy || coolingDown()) return;
             const button = event.currentTarget;
-            button.disabled = true;
-            setStatus('Requesting live help in this conversation…');
+            busy = true;
+            lockControls();
+            setStatus('Requesting live help in this conversation...');
             try {
                 const result = await post(panel.dataset.handoffUrl, {
                     product_id: panel.dataset.productId || null,
                     variant_id: panel.dataset.variantId || null,
-                    concern: panel.querySelector('[data-smart-concern]')?.value || null,
+                    concern: conversationInput?.value?.trim() || null,
                 });
                 setHumanHandoff(result.already_requested
-                    ? 'Live help has already been requested. Continue in this conversation.'
-                    : 'Live help requested. Your message and this context stay in the same conversation.');
+                    ? 'Live help is already requested. Continue in this conversation.'
+                    : 'Live help requested in this conversation. Send your message below to share the details.');
+                if (conversationInput) {
+                    conversationInput.focus({ preventScroll: true });
+                    conversationInput.closest('form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
             } catch (error) {
-                button.disabled = false;
-                setStatus(error.message, true);
+                showError(error);
+            } finally {
+                busy = false;
+                unlockControls();
             }
         });
     });

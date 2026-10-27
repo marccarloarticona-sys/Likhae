@@ -997,10 +997,17 @@
                     </div>
                 @endif
 
-                @if(!empty($smartHelpBootstrap))
-                    @include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap])
-                @endif
-
+                @php
+                    $conversationTimeline = collect($chatMessages ?? [])->map(fn ($message) => [
+                        'kind' => 'message',
+                        'sort_at' => ($message->sent_at ?? $message->created_at)?->getTimestamp() ?? 0,
+                        'message' => $message,
+                    ])->concat(collect(data_get($smartHelpBootstrap, 'history', []))->map(fn ($interaction) => [
+                        'kind' => 'automated_help',
+                        'sort_at' => \Illuminate\Support\Carbon::parse($interaction['created_at'] ?? now())->getTimestamp(),
+                        'interaction' => $interaction,
+                    ]))->sortBy('sort_at')->values();
+                @endphp
                 <div
                     id="chatMessages"
                     class="lk-chat-stream"
@@ -1023,8 +1030,10 @@
                     @if($messageAttachmentsReady ?? false) data-attachments-enabled="true" @endif
                 >
                     <div class="lk-chat-day"><span>Conversation</span></div>
-                    @forelse($chatMessages as $message)
+                    @forelse($conversationTimeline as $timelineItem)
+                        @if($timelineItem['kind'] === 'message')
                         @php
+                            $message = $timelineItem['message'];
                             $fromBuyer = (int) $message->sender_user_id === (int) auth()->id();
                             $messageSentAt = $message->sent_at ?? $message->created_at;
                             $wasSeen = $fromBuyer && $activeOtherReadAt && $messageSentAt && $messageSentAt->lte($activeOtherReadAt);
@@ -1052,9 +1061,24 @@
                                 </div>
                             </div>
                         </div>
+                        @else
+                            @php($interaction = $timelineItem['interaction'])
+                            <article class="lk-smart-help-exchange" aria-label="Automated help exchange">
+                                <div class="lk-smart-help-question-bubble">{{ $interaction['question'] }}</div>
+                                <div class="lk-smart-help-answer-bubble">
+                                    <small>{{ $interaction['source'] ?: 'Automated answer' }}</small>
+                                    <p>{{ $interaction['answer'] }}</p>
+                                    @if(($interaction['feedback'] ?? null) === 'RESOLVED')<small class="lk-smart-help-feedback-result">Marked helpful</small>@elseif(($interaction['feedback'] ?? null) === 'UNRESOLVED')<small class="lk-smart-help-feedback-result">Still needs help</small>@endif
+                                </div>
+                            </article>
+                        @endif
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message to {{ $activeSeller['name'] }}.</div>
                     @endforelse
+
+                    @if(!empty($smartHelpBootstrap))
+                        @include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap])
+                    @endif
                 </div>
 
                 <form

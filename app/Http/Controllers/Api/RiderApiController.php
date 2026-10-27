@@ -18,6 +18,7 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Support\RiderVehicleType;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -29,9 +30,10 @@ use RuntimeException;
 
 class RiderApiController extends Controller
 {
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
     {
         $rider = $this->localRider($request);
+        $offers->expireDuePickupOffers((int) $rider->id);
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $deliveries = (clone $assignments)->delivery();
         $pendingPickupCount = $schema->sellerPickupBatchesReady()
@@ -80,12 +82,14 @@ class RiderApiController extends Controller
         return $this->paginated($rows, fn (RiderAssignment $assignment): array => $this->assignmentPayload($assignment), ['stats' => $stats]);
     }
 
-    public function pickups(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
+    public function pickups(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
     {
         $rider = $this->localRider($request);
         if (! $schema->sellerPickupBatchesReady()) {
             return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
         }
+
+        $offers->expireDuePickupOffers((int) $rider->id);
 
         $query = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)

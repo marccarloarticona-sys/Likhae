@@ -122,6 +122,70 @@
     </section>
 
     <section class="rounded-xl border border-line bg-surface p-5">
+        <div>
+            <h2 class="text-[13px] font-semibold text-ink">Vehicle and Document Re-verification</h2>
+            <p class="mt-1 text-[10px] leading-5 text-muted">Review the rider’s submitted vehicle details and private supporting documents. Approving applies the new verified details; rejecting leaves the current profile in place.</p>
+        </div>
+        @if(! ($profileUpdateSchemaReady ?? false))
+            <p class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] text-amber-800">The profile update workflow is unavailable until its migration is installed.</p>
+        @elseif(($profileUpdateRequests ?? collect())->isEmpty())
+            <p class="mt-4 text-[10px] text-muted">No vehicle or document update requests have been submitted.</p>
+        @else
+            <div class="mt-4 space-y-4">
+                @foreach($profileUpdateRequests as $updateRequest)
+                    <article class="rounded-lg border border-line p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <strong class="text-[11px] text-ink">{{ str($updateRequest->status)->replace('_', ' ')->headline() }} · {{ $updateRequest->submitted_at?->format('M j, Y g:i A') }}</strong>
+                                <p class="mt-1 text-[9px] text-muted">Submitted by {{ $updateRequest->submitter?->name ?? 'Rider' }}</p>
+                            </div>
+                            @if($updateRequest->reviewed_at)
+                                <span class="text-[9px] text-muted">Reviewed {{ $updateRequest->reviewed_at->format('M j, Y g:i A') }}{{ $updateRequest->reviewer?->name ? ' by '.$updateRequest->reviewer->name : '' }}</span>
+                            @endif
+                        </div>
+                        <dl class="mt-4 grid gap-3 text-[10px] sm:grid-cols-3">
+                            <div><dt class="text-muted">Vehicle type</dt><dd class="mt-1 font-semibold text-ink">{{ str($rider->vehicle_type)->replace('_', ' ')->headline() }} → {{ str($updateRequest->vehicle_type)->replace('_', ' ')->headline() }}</dd></div>
+                            <div><dt class="text-muted">Plate number</dt><dd class="mt-1 font-semibold text-ink">{{ $rider->plate_number }} → {{ $updateRequest->plate_number }}</dd></div>
+                            <div><dt class="text-muted">Driver's license number</dt><dd class="mt-1 font-semibold text-ink">•••• {{ substr((string) $rider->drivers_license_number, -4) }} → •••• {{ substr((string) $updateRequest->drivers_license_number, -4) }}</dd></div>
+                        </dl>
+                        <div class="mt-4">
+                            <h3 class="text-[10px] font-semibold text-ink">Submitted documents</h3>
+                            @forelse($updateRequest->documents as $document)
+                                <div class="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-[9px]">
+                                    <span>{{ str($document->document_type)->replace('_', ' ')->headline() }} · {{ $document->original_name ?: 'Uploaded document' }} · {{ str($document->verification_status)->headline() }}</span>
+                                    <a class="font-semibold text-primary underline" target="_blank" rel="noopener" href="{{ route('logistics.riders.profile-updates.documents.show', [$rider, $updateRequest, $document]) }}">View private document</a>
+                                </div>
+                            @empty
+                                <p class="mt-1 text-[9px] text-muted">No replacement documents were attached.</p>
+                            @endforelse
+                        </div>
+                        @if($updateRequest->review_notes)
+                            <p class="mt-3 rounded-lg bg-page-secondary px-3 py-2 text-[9px] text-muted">Review note: {{ $updateRequest->review_notes }}</p>
+                        @endif
+                        @if($updateRequest->status === 'PENDING')
+                            <div class="mt-4 grid gap-3 border-t border-line pt-4 lg:grid-cols-2">
+                                <form method="POST" action="{{ route('logistics.riders.profile-updates.approve', [$rider, $updateRequest]) }}" class="grid gap-2">
+                                    @csrf
+                                    <label class="grid gap-1 text-[9px] font-semibold text-ink">Approval note (optional)<input name="review_notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2 font-normal"></label>
+                                    <button type="submit" class="justify-self-start rounded-lg bg-primary px-4 py-2 text-[9px] font-semibold text-white">Approve and verify profile</button>
+                                    @if((string) $rider->vehicle_type !== (string) $updateRequest->vehicle_type)
+                                        <span class="text-[9px] text-muted">A vehicle type change clears approved capacity and marks the rider offline until new limits are set.</span>
+                                    @endif
+                                </form>
+                                <form method="POST" action="{{ route('logistics.riders.profile-updates.reject', [$rider, $updateRequest]) }}" class="grid gap-2">
+                                    @csrf
+                                    <label class="grid gap-1 text-[9px] font-semibold text-ink">Rejection reason<textarea name="review_notes" rows="2" minlength="3" maxlength="1000" required class="rounded-lg border border-line px-3 py-2 font-normal"></textarea></label>
+                                    <button type="submit" class="justify-self-start rounded-lg border border-red-200 px-4 py-2 text-[9px] font-semibold text-red-700">Reject request</button>
+                                </form>
+                            </div>
+                        @endif
+                    </article>
+                @endforeach
+            </div>
+        @endif
+    </section>
+
+    <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="text-[13px] font-semibold text-ink">Rider Status and Discipline</h2>
         <p class="mt-1 text-[10px] leading-5 text-muted">Warned riders may continue working. Suspended and banned riders lose access and cannot receive new assignments. Add a reason for warnings and restrictions.</p>
         <form method="POST" action="{{ route('logistics.riders.moderation.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end" data-rider-moderation-form data-confirm-title="Change rider status?" data-confirm-message="Suspending or banning this rider blocks account access and new assignments. Warnings keep the rider active. Confirm the selected status and reason before saving." data-confirm-label="Save rider status">

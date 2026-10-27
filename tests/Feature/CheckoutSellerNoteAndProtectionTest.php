@@ -152,6 +152,47 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(100.00, $preview['shipping_total']);
     }
 
+    public function test_preview_charges_the_shipping_rate_for_each_parcel_in_a_seller_group(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $secondProduct = Product::create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['subcategory']->id,
+            'name' => 'Product A Second Parcel',
+            'slug' => 'product-a-second-parcel',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $secondVariant = ProductVariant::create([
+            'product_id' => $secondProduct->id,
+            'sku' => 'SKU-A-SECOND-PARCEL',
+            'price' => 250,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $secondItem = CartItem::create([
+            'cart_id' => $fixture['cart']->id,
+            'product_variant_id' => $secondVariant->id,
+            'quantity' => 1,
+        ]);
+
+        $preview = app(CheckoutService::class)->preview(
+            collect([$fixture['itemA'], $secondItem, $fixture['itemB']]),
+            [],
+            $fixture['buyer'],
+        );
+
+        $sellerAGroup = $preview['groups'][$fixture['sellerA']->id];
+        $sellerBGroup = $preview['groups'][$fixture['sellerB']->id];
+        $this->assertEquals(100.00, $sellerAGroup['shipping_fee']);
+        $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
+        $this->assertEquals(150.00, $preview['shipping_total']);
+        $this->assertSame('PER_PARCEL', $sellerAGroup['shipping_rate_snapshot']['pricing_basis']);
+        $this->assertSame('50.00', $sellerAGroup['shipping_rate_snapshot']['per_parcel_shipping_fee']);
+        $this->assertSame('100.00', $sellerAGroup['shipping_rate_snapshot']['total_shipping_fee']);
+    }
+
     public function test_seller_platform_and_shipping_vouchers_stack_with_separate_order_accounting(): void
     {
         $fixture = $this->checkoutFixture();
@@ -350,8 +391,8 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
         $this->assertEquals(35.00, $preview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
         $this->assertEquals(20.00, $preview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
-        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
-        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
+        $this->assertEquals(20.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
+        $this->assertEquals(10.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
         $this->assertEquals(135.00, $preview['total_discount']);
         $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
     }
@@ -726,11 +767,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->assertOk()
             ->assertSee('Two item bundle')
             ->assertSee('data-seller-promotion-discount="30.00"', false)
-            ->assertSee('170.00');
+            ->assertSee('220.00');
 
         $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
         $this->assertEquals(30.00, $preview['promotion_discount_total']);
-        $this->assertEquals(170.00, $preview['grand_total']);
+        $this->assertEquals(220.00, $preview['grand_total']);
 
         $order = app(CheckoutService::class)->placeOrder(
             $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
@@ -741,7 +782,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(30.00, (float) $sellerOrder->promotion_discount_total);
         $this->assertEquals(120.00, (float) $sellerOrder->items->sum('line_total'));
         $this->assertNotEmpty($orderedItems[$secondVariant->id]->promotion_snapshot);
-        $this->assertEquals(170.00, (float) $order->grand_total);
+        $this->assertEquals(220.00, (float) $order->grand_total);
         $this->assertEquals(30.00, (float) $order->discount_total);
         $this->assertSame(4, (int) $firstVariant->fresh()->stock);
         $this->assertSame(4, (int) $secondVariant->fresh()->stock);
@@ -809,7 +850,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
 
         $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
         $this->assertEquals(30.00, $preview['promotion_discount_total']);
-        $this->assertEquals(250.00, $preview['grand_total']);
+        $this->assertEquals(300.00, $preview['grand_total']);
 
         $order = app(CheckoutService::class)->placeOrder(
             $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
@@ -1664,7 +1705,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'is_default' => true,
         ]);
 
-        return compact('buyer', 'center', 'address', 'category', 'subcategory', 'sellerUserA', 'sellerA', 'productA', 'itemA', 'sellerUserB', 'sellerB', 'productB', 'itemB');
+        return compact('buyer', 'center', 'address', 'category', 'subcategory', 'cart', 'sellerUserA', 'sellerA', 'productA', 'itemA', 'sellerUserB', 'sellerB', 'productB', 'itemB');
     }
 
     /** @return array{User, SellerProfile, Product, CartItem} */

@@ -10,7 +10,7 @@
         <div class="lk-wallet-header__copy">
         <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Income Management</span>
         <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink">My Earnings</h1>
-        <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">{{ $earningsNotice }}</p>
+        <p class="mt-2 max-w-[680px] text-[11px] leading-6 text-muted">{{ $earningsNotice }} Only actual, non-simulated payouts recorded by Logistics count toward your paid-out balance. Allocated shares and payout requests remain unpaid.</p>
         </div>
     </section>
 
@@ -22,9 +22,11 @@
     </form>
 
     <section class="lk-wallet-metrics lk-wallet-metrics--three" aria-label="Payout balance summary">
-        @foreach([['Available to request', 'available'], ['Requested from Logistics', 'requested'], ['Awaiting receipt confirmation', 'awaiting_ack'], ['Paid', 'paid'], ['Unallocated pool', 'unallocated'], ['Allocated earnings in selected period', 'accrued']] as [$label, $key])
-            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">{{ $label }}</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary[$key] ?? 0), 2) }}</strong></article>
-        @endforeach
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Paid-out balance</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary['paid_out'] ?? 0), 2) }}</strong><small>PHP {{ number_format((float) ($poolSummary['awaiting_ack'] ?? 0), 2) }} awaiting receipt confirmation · PHP {{ number_format((float) ($poolSummary['paid'] ?? 0), 2) }} confirmed</small></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · available to request</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary['available'] ?? 0), 2) }}</strong></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · requested from Logistics</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary['requested'] ?? 0), 2) }}</strong></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unallocated pool · not payable yet</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary['unallocated'] ?? 0), 2) }}</strong></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Allocated earnings in selected period</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) ($poolSummary['accrued'] ?? 0), 2) }}</strong><small>Includes pending and paid shares; not the wallet balance</small></article>
     </section>
 
     <section class="lk-wallet-panel">
@@ -45,8 +47,8 @@
     </section>
 
     <section class="lk-wallet-metrics lk-wallet-metrics--two" aria-label="Recent earnings summary">
-        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Today's earnings</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) $dailyEarnings, 2) }}</strong></article>
-        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">This week's earnings</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) $weeklyEarnings, 2) }}</strong></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Today's allocated earnings</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) $dailyEarnings, 2) }}</strong><small>Allocation total; not necessarily paid</small></article>
+        <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">This week's allocated earnings</span><strong class="lk-wallet-metric__value">PHP {{ number_format((float) $weeklyEarnings, 2) }}</strong><small>Allocation total; not necessarily paid</small></article>
     </section>
 
     @php($financeSummary = $financeSummary ?? [])
@@ -85,6 +87,7 @@
                     <article class="lk-wallet-record">
                         <div class="flex flex-wrap justify-between gap-3"><strong>{{ $payout['payout_receipt_reference'] ?? $payout['payout_reference'] ?? 'Rider payout' }} · {{ $receipt->shipment?->tracking_number ?? 'Parcel' }}</strong><span>PHP {{ number_format((float) $receipt->amount, 2) }}</span></div>
                         <p class="mt-2 text-muted">{{ $payout['payout_method'] ?? 'Payment method unavailable' }} {{ $payout['payout_external_reference'] ?? '' }} · Sent {{ $payout['paid_at'] ?? '' }}</p>
+                        @if(!empty($payout['payout_proof_path']))<a href="{{ route('rider.earnings.payout-proof', $receipt) }}" class="mt-2 inline-block text-xs font-semibold underline">View transfer proof</a>@endif
                         @if($payout['is_simulated'] ?? false)<p class="mt-2 font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred.</p>@endif
                         <form method="POST" action="{{ route('rider.earnings.payouts.acknowledge', $receipt) }}" class="mt-3 flex flex-wrap items-end gap-2">
                             @csrf
@@ -99,7 +102,7 @@
     @endif
 
     <section class="lk-wallet-panel">
-        <header class="lk-wallet-panel__head"><h2>Earnings Records</h2><p class="lk-wallet-panel__description">Only approved rider pool shares become earnings. Cash remittance is never netted against this table.</p></header>
+        <header class="lk-wallet-panel__head"><h2>Earnings Records</h2><p class="lk-wallet-panel__description">These are allocated earnings, not wallet balance. A share is paid out only when Logistics records a real transfer. Cash remittance is never netted against this table.</p></header>
 
         <p class="lk-wallet-table-hint">Scroll horizontally to see all earnings details.</p>
         <div class="lk-wallet-table-clip" role="region" aria-label="Earnings records table" tabindex="0">

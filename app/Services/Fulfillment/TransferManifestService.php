@@ -320,7 +320,7 @@ final class TransferManifestService
     {
         // Kept as a compatibility entry point; departure belongs to the
         // assigned rider and is enforced by driverStart().
-        return $this->driverStart($actor, $manifest, $scannedCodes, $scanMethod);
+        return $this->driverStart($actor, $manifest);
     }
 
     public function driverAccept(User $actor, TransferManifest $manifest): TransferManifest
@@ -377,11 +377,11 @@ final class TransferManifestService
         });
     }
 
-    public function driverStart(User $actor, TransferManifest $manifest, array $scannedCodes, string $scanMethod = 'MANUAL'): TransferManifest
+    public function driverStart(User $actor, TransferManifest $manifest): TransferManifest
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $manifest, $scannedCodes, $scanMethod): TransferManifest {
+        return DB::transaction(function () use ($actor, $manifest): TransferManifest {
             $locked = TransferManifest::query()->whereKey($manifest->id)->with('assignedDriver.user', 'items.transferLeg.shipment')->lockForUpdate()->firstOrFail();
             $this->assertAssignedDriver($actor, $locked);
             if ($locked->status === TransferManifest::IN_TRANSIT) {
@@ -394,18 +394,15 @@ final class TransferManifestService
                 throw new RuntimeException('The assigned driver must accept the manifest before starting transport.');
             }
             $this->assertManifestCapacity($locked, $locked->assignedDriver);
-            $expectedItemIds = $locked->items->pluck('id')->map(fn ($id): string => (string) $id)->sort()->values()->all();
-            $scannedItemIds = collect(array_keys($scannedCodes))->map(fn ($id): string => (string) $id)->sort()->values()->all();
-            if ($expectedItemIds === [] || $scannedItemIds !== $expectedItemIds) {
-                throw new RuntimeException('Scan every parcel assigned to this manifest before starting transport.');
+            if ($locked->items->isEmpty() || $locked->items->contains(
+                fn (TransferManifestItem $item): bool => $item->status !== TransferManifestItem::EXPECTED
+                    || $item->transferLeg?->status !== ShipmentTransferLeg::RELEASED,
+            )) {
+                throw new RuntimeException('Every parcel must be scanned and released by the origin hub before transport starts.');
             }
 
             foreach ($locked->items as $item) {
-                $tracking = trim((string) ($scannedCodes[$item->id] ?? ''));
-                if ($tracking === '') {
-                    throw new RuntimeException('Scan every parcel assigned to this manifest before starting transport.');
-                }
-                $this->transfers->depart($item->transferLeg, $actor, $tracking, $scanMethod);
+                $this->transfers->depart($item->transferLeg, $actor);
             }
             $locked->update(['status' => TransferManifest::IN_TRANSIT, 'departed_at' => now()]);
 
