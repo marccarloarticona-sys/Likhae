@@ -48,6 +48,12 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI', '/auth/google/callback'),
     ],
 
+    // This browser-side key is visible in page source. Restrict it in Geoapify
+    // to the production site's HTTP referrers and any local development origin.
+    'geoapify' => [
+        'key' => env('GEOAPIFY_API_KEY'),
+    ],
+
     /* Server-only Workers AI credentials. Never expose these through Vite. */
     'cloudflare' => [
         'account_id' => env('CLOUDFLARE_ACCOUNT_ID'),

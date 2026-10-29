@@ -6,7 +6,7 @@ const normalize = (value) => String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/\b(city|municipality|municipalities|province|of)\b/g, ' ')
+    .replace(/\b(city|municipality|municipalities|municipal|province|barangay|brgy|bgy|of)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 
@@ -14,24 +14,277 @@ const regionCode = (value) => {
     const region = normalize(value);
     const aliases = {
         'national capital region': 'ncr',
+        'national capital region ncr': 'ncr',
+        'metro manila': 'ncr',
+        ncr: 'ncr',
         'cordillera administrative region': 'car',
+        'cordillera administrative region car': 'car',
+        car: 'car',
+        'mimaropa region': 'iv b',
+        mimaropa: 'iv b',
+        'region iv b': 'iv b',
+        'region 4 b': 'iv b',
+        'region iv b mimaropa region': 'iv b',
+        'negros island region': 'nir',
+        'negros island region nir': 'nir',
+        nir: 'nir',
+        'ilocos region': 'i',
+        'region i ilocos region': 'i',
+        'region 1 ilocos region': 'i',
+        'region i': 'i',
+        'region 1': 'i',
+        'cagayan valley': 'ii',
+        'region ii cagayan valley': 'ii',
+        'region 2 cagayan valley': 'ii',
+        'region ii': 'ii',
+        'region 2': 'ii',
         'central luzon': 'iii',
+        'region iii central luzon': 'iii',
+        'region 3 central luzon': 'iii',
+        'region iii': 'iii',
+        'region 3': 'iii',
         'calabarzon': 'iv a',
-        'mimaropa': 'iv b',
+        'iv a calabarzon': 'iv a',
+        'region iv a': 'iv a',
+        'region 4 a': 'iv a',
+        'region iv a calabarzon': 'iv a',
         'bicol region': 'v',
+        'region v': 'v',
+        'region 5': 'v',
+        'region v bicol region': 'v',
         'western visayas': 'vi',
+        'region vi': 'vi',
+        'region 6': 'vi',
+        'region vi western visayas': 'vi',
         'central visayas': 'vii',
+        'region vii': 'vii',
+        'region 7': 'vii',
+        'region vii central visayas': 'vii',
         'eastern visayas': 'viii',
+        'region viii': 'viii',
+        'region 8': 'viii',
+        'region viii eastern visayas': 'viii',
         'zamboanga peninsula': 'ix',
+        'region ix zamboanga peninsula': 'ix',
+        'region ix': 'ix',
+        'region 9': 'ix',
         'northern mindanao': 'x',
+        'region x northern mindanao': 'x',
+        'region x': 'x',
+        'region 10': 'x',
         'davao region': 'xi',
+        'region xi davao region': 'xi',
+        'region xi': 'xi',
+        'region 11': 'xi',
         'soccsksargen': 'xii',
+        'region xii soccsksargen': 'xii',
+        'region xii': 'xii',
+        'region 12': 'xii',
+        'caraga region': 'xiii',
         'caraga': 'xiii',
+        'region xiii caraga': 'xiii',
+        'region xiii': 'xiii',
+        'region 13': 'xiii',
         'bangsamoro autonomous region in muslim mindanao': 'barmm',
+        'bangsamoro autonomous region in muslim mindanao barmm': 'barmm',
+        'bangsamoro autonomous region': 'barmm',
+        'barmm': 'barmm',
     };
 
-    return aliases[region] ?? region;
+    if (aliases[region]) return aliases[region];
+
+    const withoutRegionNumber = region.replace(/^region\s+(?:iv\s+[ab]|[ivx]+|\d+)\s+/, '');
+    return aliases[withoutRegionNumber] ?? (withoutRegionNumber || region);
 };
+
+const recordsFrom = (payload) => Array.isArray(payload)
+    ? payload
+    : (payload?.data ?? payload?.regions ?? payload?.provinces ?? payload?.municipalities ?? payload?.barangays ?? []);
+
+function valuesFromProperties(properties, propertyNames, rawNames = []) {
+    const raw = properties?.datasource?.raw ?? properties?.raw ?? {};
+    return [...new Set([
+        ...propertyNames.map((name) => properties?.[name]),
+        ...rawNames.map((name) => raw?.[name]),
+    ].map((value) => String(value ?? '').trim()).filter(Boolean))];
+}
+
+function findRecord(records, candidates, normalizer = normalize) {
+    for (const candidate of candidates) {
+        const wanted = normalizer(candidate);
+        if (!wanted) continue;
+        const record = records.find((row) => normalizer(row.name ?? row.label ?? row.description) === wanted);
+        if (record) return record;
+    }
+    return null;
+}
+
+function setSelectRecords(select, records, placeholder) {
+    select.replaceChildren(new Option(placeholder, ''));
+    records.forEach((record) => {
+        const code = record.code ?? record.id ?? record.value ?? '';
+        const label = record.name ?? record.label ?? record.description ?? code;
+        const option = new Option(label, label);
+        option.dataset.code = code;
+        option.dataset.prv = record.prv ?? '';
+        option.dataset.mun = record.mun ?? '';
+        option.dataset.level = record.level ?? '';
+        select.add(option);
+    });
+    select.disabled = records.length === 0;
+}
+
+/** Fill the canonical address dropdowns from Geoapify reverse-geocode fields. */
+export async function fillAddressFromMapPin(form, properties, isCurrent = () => true) {
+    const address = form?.querySelector('[data-postal-address]');
+    const region = address?.querySelector('[data-postal-region]');
+    const province = address?.querySelector('[data-postal-province]');
+    const municipality = address?.querySelector('[data-postal-municipality]');
+    const barangay = address?.querySelector('[data-postal-barangay]');
+    if (!address || !region || !province || !municipality || !barangay) {
+        return { complete: false, missing: ['address fields'] };
+    }
+
+    const base = address.dataset.postalBase;
+    if (!base) return { complete: false, missing: ['address service'] };
+
+    const countryCode = String(properties?.country_code ?? properties?.countryCode ?? '').toLowerCase();
+    if (countryCode && countryCode !== 'ph' && countryCode !== 'philippines') {
+        return { complete: false, missing: ['Philippine address'] };
+    }
+
+    const regionCandidates = valuesFromProperties(properties,
+        ['region', 'region_name', 'state', 'state_district'],
+        ['addr:region', 'addr:state', 'addr:state_district']);
+    const provinceCandidates = valuesFromProperties(properties,
+        ['province', 'county', 'state', 'state_district', 'city', 'municipality'],
+        ['addr:province', 'addr:county', 'addr:state', 'addr:city', 'addr:municipality', 'is_in:province']);
+    const municipalityCandidates = valuesFromProperties(properties,
+        ['municipality', 'city', 'town', 'village', 'county', 'district', 'suburb', 'state_district'],
+        ['addr:municipality', 'addr:city', 'addr:town', 'addr:village', 'addr:county', 'addr:district']);
+    const barangayCandidates = valuesFromProperties(properties,
+        ['barangay', 'suburb', 'neighbourhood', 'neighborhood', 'quarter', 'district', 'village', 'locality'],
+        ['addr:barangay', 'addr:suburb', 'addr:neighbourhood', 'addr:neighborhood', 'addr:district', 'addr:village']);
+
+    const fetchRecords = async (path) => {
+        const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(`Address lookup failed (${response.status})`);
+        return recordsFrom(await response.json());
+    };
+
+    const regions = await fetchRecords('/regions');
+    if (!isCurrent()) return { cancelled: true };
+    let selectedRegion = findRecord(regions, regionCandidates, regionCode);
+    let provinceOptions = [];
+    let selectedProvince = null;
+
+    if (selectedRegion) {
+        provinceOptions = await fetchRecords(`/regions/${encodeURIComponent(selectedRegion.code)}/provinces`);
+    } else {
+        // Some geocoders report a province as "state" and omit the region.
+        // Resolve it against the official region/province lists before filling anything.
+        const lookups = await Promise.allSettled(regions.map(async (row) => ({
+            region: row,
+            provinces: await fetchRecords(`/regions/${encodeURIComponent(row.code)}/provinces`),
+        })));
+        if (!isCurrent()) return { cancelled: true };
+        const matches = [];
+        for (const lookup of lookups) {
+            if (lookup.status !== 'fulfilled') continue;
+            const match = findRecord(lookup.value.provinces.filter((row) => row.level !== 'Region'), provinceCandidates);
+            if (match) matches.push({ ...lookup.value, match });
+        }
+        if (matches.length === 1) {
+            selectedRegion = matches[0].region;
+            provinceOptions = matches[0].provinces;
+            selectedProvince = matches[0].match;
+        }
+    }
+
+    if (!selectedRegion) return { complete: false, missing: ['region'] };
+
+    const provinceRegionParent = provinceOptions.find((record) => record.level === 'Region'
+        && String(record.code) === String(selectedRegion.code));
+    if (provinceRegionParent) {
+        selectedProvince = provinceRegionParent;
+    } else {
+        selectedProvince ??= findRecord(provinceOptions, provinceCandidates);
+    }
+
+    let municipalityOptions = [];
+    let selectedMunicipality = null;
+    let barangayOptions = [];
+    let selectedBarangay = null;
+
+    if (selectedProvince) {
+        if (selectedProvince.level === 'Region') {
+            municipalityOptions = await fetchRecords(`/provinces/${encodeURIComponent(selectedProvince.code)}/municipalities`);
+        } else if (String(selectedProvince.level).toLowerCase() === 'city') {
+            municipalityOptions = [selectedProvince];
+        } else {
+            municipalityOptions = await fetchRecords(`/provinces/${encodeURIComponent(selectedProvince.code)}/municipalities?prv=${encodeURIComponent(selectedProvince.prv ?? selectedProvince.code)}`);
+        }
+        if (!isCurrent()) return { cancelled: true };
+
+        selectedMunicipality = String(selectedProvince.level).toLowerCase() === 'city'
+            ? selectedProvince
+            : findRecord(
+                municipalityOptions,
+                municipalityCandidates.filter((candidate) => normalize(candidate) !== normalize(selectedProvince.name)
+                    && regionCode(candidate) !== regionCode(selectedRegion.name)),
+            );
+    }
+
+    if (selectedMunicipality) {
+        barangayOptions = await fetchRecords(`/municipalities/${encodeURIComponent(selectedMunicipality.code)}/barangays?mun=${encodeURIComponent(selectedMunicipality.mun || selectedMunicipality.name)}&prv=${encodeURIComponent(selectedMunicipality.prv || selectedProvince.prv || '')}`);
+        if (!isCurrent()) return { cancelled: true };
+        selectedBarangay = findRecord(barangayOptions, barangayCandidates);
+    }
+
+    if (!isCurrent()) return { cancelled: true };
+
+    setSelectRecords(region, regions, 'Select region');
+    const regionOption = [...region.options].find((option) => option.dataset.code === String(selectedRegion.code));
+    region.value = regionOption?.value ?? '';
+    const regionCodeField = address.querySelector('[data-postal-region-code]');
+    if (regionCodeField) regionCodeField.value = regionOption?.dataset.code ?? '';
+
+    const provinceField = province.closest('label');
+    if (provinceField) provinceField.hidden = Boolean(provinceRegionParent);
+    setSelectRecords(province, provinceOptions, 'Select province');
+    const provinceOption = [...province.options].find((option) => option.dataset.code === String(selectedProvince?.code ?? ''));
+    province.value = provinceOption?.value ?? '';
+    const provinceCodeField = address.querySelector('[data-postal-province-code]');
+    if (provinceCodeField) provinceCodeField.value = provinceOption?.dataset.code ?? '';
+
+    setSelectRecords(municipality, municipalityOptions, 'Select municipality / city');
+    const municipalityOption = [...municipality.options].find((option) => option.dataset.code === String(selectedMunicipality?.code ?? ''));
+    municipality.value = municipalityOption?.value ?? '';
+    const municipalityCodeField = address.querySelector('[data-postal-municipality-code]');
+    if (municipalityCodeField) municipalityCodeField.value = municipalityOption?.dataset.code ?? '';
+
+    setSelectRecords(barangay, barangayOptions, 'Select barangay');
+    const barangayOption = [...barangay.options].find((option) => option.dataset.code === String(selectedBarangay?.code ?? ''));
+    barangay.value = barangayOption?.value ?? '';
+    const barangayCodeField = address.querySelector('[data-postal-barangay-code]');
+    if (barangayCodeField) barangayCodeField.value = barangayOption?.dataset.code ?? '';
+
+    barangay.dispatchEvent(new Event('change', { bubbles: true }));
+    const missing = [];
+    if (!provinceOption) missing.push('province');
+    if (!municipalityOption) missing.push('city / municipality');
+    if (!barangayOption) missing.push('barangay');
+    return {
+        complete: missing.length === 0,
+        missing,
+        address: {
+            region: region.value,
+            province: provinceField?.hidden ? '' : province.value,
+            municipality: municipality.value,
+            barangay: barangay.value,
+        },
+    };
+}
 
 /** Return a postal code only when use-postal-ph identifies one unambiguous place. */
 export function postalCodeFromAddress({ region, province, municipality, barangay }) {
