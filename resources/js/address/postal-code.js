@@ -610,7 +610,7 @@ function initPostalAddressDropdowns({
         });
         if (packageCode) {
             if (postal) postal.value = packageCode;
-            setStatus(`Postal code: ${packageCode}`);
+            setStatus('Postal code filled automatically.');
             return;
         }
 
@@ -632,7 +632,7 @@ function initPostalAddressDropdowns({
             if (currentRequest !== postalRequest) return;
             if (result?.postal_code) {
                 if (postal) postal.value = result.postal_code;
-                setStatus(`Postal code: ${result.postal_code}`);
+                setStatus('Postal code filled automatically.');
             } else {
                 setStatus('Postal code was not found for this city. Try selecting the address again.', true);
             }
