@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\Auth\PhilippineAddressController;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -202,5 +203,101 @@ class PhilippineAddressApiTest extends TestCase
             ->assertJson([
                 'postal_code' => '4000',
             ]);
+    }
+
+    public function test_ncr_region_parent_loads_cities_and_pateros_without_submunicipalities(): void
+    {
+        config(['services.psgc.local_first' => true]);
+        Http::preventStrayRequests();
+
+        $regionParent = $this->getJson('/address/philippines/regions/1300000000/provinces')
+            ->assertOk()
+            ->assertJsonCount(1)
+            ->json('0');
+
+        $this->assertSame('1300000000', $regionParent['code']);
+        $this->assertSame('Region', $regionParent['level']);
+
+        $municipalities = $this->getJson('/address/philippines/provinces/1300000000/municipalities')
+            ->assertOk()
+            ->json();
+
+        $this->assertCount(17, $municipalities);
+        $names = array_column($municipalities, 'name');
+        $this->assertContains('City of Manila', $names);
+        $this->assertContains('Pateros', $names);
+        $this->assertNotContains('Binondo', $names);
+        $this->assertEqualsCanonicalizing(['City', 'Mun'], array_values(array_unique(array_column($municipalities, 'level'))));
+
+        Http::assertNothingSent();
+    }
+
+    public function test_independent_cities_load_barangays_and_validate_as_their_own_municipality(): void
+    {
+        config(['services.psgc.local_first' => true]);
+        Http::preventStrayRequests();
+
+        $regions = $this->getJson('/address/philippines/regions')->assertOk()->json();
+        $cases = [
+            [
+                'region_code' => '1700000000',
+                'city_code' => '1731500000',
+                'city_name' => 'City of Puerto Princesa',
+                'barangay_code' => '1731500001',
+                'barangay_name' => 'Babuyan',
+                'barangay_count' => 66,
+            ],
+            [
+                'region_code' => '1800000000',
+                'city_code' => '1830200000',
+                'city_name' => 'City of Bacolod',
+                'barangay_code' => '1830200001',
+                'barangay_name' => 'Alangilan',
+                'barangay_count' => 61,
+            ],
+        ];
+
+        foreach ($cases as $case) {
+            $region = collect($regions)->firstWhere('code', $case['region_code']);
+            $this->assertNotNull($region);
+
+            $this->getJson('/address/philippines/regions/'.$case['region_code'].'/provinces')
+                ->assertOk()
+                ->assertJsonFragment([
+                    'code' => $case['city_code'],
+                    'name' => $case['city_name'],
+                    'level' => 'City',
+                ]);
+
+            $barangays = $this->getJson('/address/philippines/municipalities/'.$case['city_code'].'/barangays')
+                ->assertOk()
+                ->json();
+
+            $this->assertCount($case['barangay_count'], $barangays);
+            $this->assertContains($case['barangay_name'], array_column($barangays, 'name'));
+            $this->assertTrue(PhilippineAddressController::selectionIsValid(
+                $case['region_code'],
+                (string) $region['name'],
+                $case['city_code'],
+                $case['city_name'],
+                $case['city_code'],
+                $case['city_name'],
+                $case['barangay_code'],
+                $case['barangay_name'],
+            ));
+
+            $canonical = PhilippineAddressController::canonicalMunicipalityFor(
+                $case['city_code'],
+                $case['city_name'],
+                $case['city_code'],
+                $case['city_name'],
+            );
+
+            $this->assertSame($case['region_code'], $canonical['region_code'] ?? null);
+            $this->assertSame($case['city_code'], $canonical['province_code'] ?? null);
+            $this->assertSame($case['city_code'], $canonical['municipality_code'] ?? null);
+        }
+
+        Http::assertNothingSent();
     }
 }

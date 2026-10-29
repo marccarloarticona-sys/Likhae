@@ -36,12 +36,12 @@ class PhilippineAddressController extends Controller
                 ->values()
                 ->all();
 
-            if ($provinces !== []) {
+            if ($this->provinceLayerRecords($provinces) !== []) {
                 return $provinces;
             }
 
-            // Regions without a province layer (for example NCR) still need a
-            // selectable parent for the existing Province -> City -> Barangay UI.
+            // Keep a canonical region parent for validation while the browser
+            // loads its cities and municipalities directly under this region.
             $regionRecord = $this->record('/regions/'.rawurlencode($region));
 
             return [[
@@ -55,11 +55,18 @@ class PhilippineAddressController extends Controller
     public function municipalities(string $province): JsonResponse
     {
         return $this->respond(function () use ($province) {
+            // A province-level placeholder can actually be a region parent for
+            // areas without provinces. Build its direct city/municipality list
+            // from the region's city records and ordinary municipalities.
+            if ($this->record('/regions/'.rawurlencode($province)) !== []) {
+                return $this->municipalitiesForRegion($province);
+            }
+
             $municipalities = $this->list('/provinces/'.rawurlencode($province).'/cities-municipalities');
             if ($municipalities !== []) return $municipalities;
 
-            // The selected "province" may actually be a region-level parent
-            // for areas with no province layer (for example NCR).
+            // The selected parent may be a region-level record for areas with
+            // no province layer (for example NCR).
             return $this->list('/regions/'.rawurlencode($province).'/cities-municipalities');
         });
     }
@@ -103,13 +110,14 @@ class PhilippineAddressController extends Controller
                     continue;
                 }
 
-                $provinces = $service->list('/regions/'.rawurlencode($regionCode).'/provinces');
+                $provinceOptions = $service->list('/regions/'.rawurlencode($regionCode).'/provinces');
+                $provinces = $service->provinceLayerRecords($provinceOptions);
                 if ($provinces === []) {
                     if (strcasecmp(trim($provinceName), trim((string) ($region['name'] ?? ''))) !== 0) {
                         continue;
                     }
 
-                    $municipality = collect($service->list('/regions/'.rawurlencode($regionCode).'/cities-municipalities'))
+                    $municipality = collect($service->municipalitiesForRegion($regionCode))
                         ->first(fn (array $record): bool =>
                             (string) ($record['code'] ?? '') === $municipalityCode
                             || strcasecmp(trim((string) ($record['name'] ?? '')), trim($municipalityName)) === 0
@@ -128,7 +136,7 @@ class PhilippineAddressController extends Controller
                     continue;
                 }
 
-                $province = collect($provinces)->first(fn (array $record): bool =>
+                $province = collect($provinceOptions)->first(fn (array $record): bool =>
                     (string) ($record['code'] ?? '') === $provinceCode
                     || strcasecmp(trim((string) ($record['name'] ?? '')), trim($provinceName)) === 0
                 );
@@ -136,11 +144,22 @@ class PhilippineAddressController extends Controller
                     continue;
                 }
 
-                $municipality = collect($service->list('/provinces/'.rawurlencode((string) $province['code']).'/cities-municipalities'))
-                    ->first(fn (array $record): bool =>
-                        (string) ($record['code'] ?? '') === $municipalityCode
-                        || strcasecmp(trim((string) ($record['name'] ?? '')), trim($municipalityName)) === 0
-                    );
+                if (Str::lower(trim((string) ($province['level'] ?? ''))) === 'city') {
+                    $cityName = trim((string) ($province['name'] ?? ''));
+                    $sameCity = strcasecmp(trim($municipalityName), $cityName) === 0;
+
+                    if (! $sameCity) {
+                        continue;
+                    }
+
+                    $municipality = $province;
+                } else {
+                    $municipality = collect($service->list('/provinces/'.rawurlencode((string) $province['code']).'/cities-municipalities'))
+                        ->first(fn (array $record): bool =>
+                            (string) ($record['code'] ?? '') === $municipalityCode
+                            || strcasecmp(trim((string) ($record['name'] ?? '')), trim($municipalityName)) === 0
+                        );
+                }
 
                 if ($municipality) {
                     return [
@@ -217,23 +236,37 @@ class PhilippineAddressController extends Controller
             );
             if (! $region) return false;
 
-            $provinces = $service->list('/regions/'.rawurlencode($regionCode).'/provinces');
+            $provinceOptions = $service->list('/regions/'.rawurlencode($regionCode).'/provinces');
+            $provinces = $service->provinceLayerRecords($provinceOptions);
             if ($provinces === []) {
                 if ($provinceCode !== $regionCode || strcasecmp($provinceName, $regionName) !== 0) return false;
-                $municipalities = $service->list('/regions/'.rawurlencode($regionCode).'/cities-municipalities');
+                $municipality = collect($service->municipalitiesForRegion($regionCode))->first(
+                    fn (array $row) => (string) ($row['code'] ?? '') === $municipalityCode
+                        && strcasecmp((string) ($row['name'] ?? ''), $municipalityName) === 0
+                );
             } else {
-                $province = collect($provinces)->first(
+                $province = collect($provinceOptions)->first(
                     fn (array $row) => (string) $row['code'] === $provinceCode
                         && strcasecmp((string) $row['name'], $provinceName) === 0
                 );
                 if (! $province) return false;
-                $municipalities = $service->list('/provinces/'.rawurlencode($provinceCode).'/cities-municipalities');
+
+                if (Str::lower(trim((string) ($province['level'] ?? ''))) === 'city') {
+                    if ((string) ($province['code'] ?? '') !== $municipalityCode
+                        || strcasecmp(trim((string) ($province['name'] ?? '')), trim($municipalityName)) !== 0) {
+                        return false;
+                    }
+
+                    $municipality = $province;
+                } else {
+                    $municipality = collect($service->list('/provinces/'.rawurlencode($provinceCode).'/cities-municipalities'))
+                        ->first(
+                            fn (array $row) => (string) ($row['code'] ?? '') === $municipalityCode
+                                && strcasecmp((string) ($row['name'] ?? ''), $municipalityName) === 0
+                        );
+                }
             }
 
-            $municipality = collect($municipalities)->first(
-                fn (array $row) => (string) $row['code'] === $municipalityCode
-                    && strcasecmp((string) $row['name'], $municipalityName) === 0
-            );
             if (! $municipality) return false;
 
             $barangay = collect($service->list('/cities-municipalities/'.rawurlencode($municipalityCode).'/barangays'))->first(
@@ -275,7 +308,9 @@ class PhilippineAddressController extends Controller
     {
         [$level, $filters] = $this->requestDetails($path);
         $version = (string) config('services.psgc.version', 'Q2_2024');
-        $cacheKey = 'psgc.'.$version.'.'.$level.'.'.md5(json_encode($filters));
+        // Bump the cache namespace when location-response validation changes so
+        // malformed entries from an older response cannot remain visible for a week.
+        $cacheKey = 'psgc.validated-v2.'.$version.'.'.$level.'.'.md5(json_encode($filters));
 
         return Cache::remember($cacheKey, now()->addWeek(), function () use ($path, $level, $filters, $version) {
             $payload = config('services.psgc.local_first', true)
@@ -313,24 +348,67 @@ class PhilippineAddressController extends Controller
                 }
             }
 
-            $locations = collect(is_array($payload) ? $payload : [])
-                ->filter(fn ($row) => is_array($row))
-                ->map(fn (array $row) => $this->normalize($row))
-                ->filter(fn (array $row) => filled($row['code']) && filled($row['name']))
-                ->when($level === 'provinces' && ($filters['reg'] ?? null) === '13',
-                    fn ($rows) => $rows->filter(fn (array $row) => in_array($row['level'], ['Prov', 'City'], true)))
-                ->when($level === 'municipalities' && (string) ($filters['prv'] ?? '') === '56',
-                    fn ($rows) => $rows->push([
-                        'code' => '0405643000', 'name' => 'City of Lucena',
-                        'prv' => 56, 'mun' => 43, 'level' => 'City',
-                    ]))
-                ->unique('code')
-                ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
-                ->values()
-                ->all();
+            $locations = $this->normalizeLocations($payload, $level, $filters);
+
+            // A successful HTTP response can still contain a placeholder or
+            // malformed row instead of PSGC locations. In that case, serve the
+            // bundled canonical records rather than caching an empty dropdown.
+            if ($locations === []) {
+                $localPayload = $this->localList($level, $filters);
+                if ($localPayload !== []) {
+                    $locations = $this->normalizeLocations($localPayload, $level, $filters);
+                }
+            }
 
             return $locations;
         });
+    }
+
+    private function normalizeLocations(array $payload, string $level, array $filters): array
+    {
+        return collect($payload)
+            ->filter(fn ($row) => is_array($row))
+            ->map(fn (array $row) => $this->normalize($row))
+            ->filter(fn (array $row) => preg_match('/^\d{10}$/', trim((string) $row['code'])) === 1 && filled($row['name']))
+            ->when($level === 'provinces' && ($filters['reg'] ?? null) === '13',
+                fn ($rows) => $rows->filter(fn (array $row) => in_array($row['level'], ['Prov', 'City'], true)))
+            ->when($level === 'municipalities' && (string) ($filters['prv'] ?? '') === '56',
+                fn ($rows) => $rows->push([
+                    'code' => '0405643000', 'name' => 'City of Lucena',
+                    'prv' => 56, 'mun' => 43, 'level' => 'City',
+                ]))
+            ->unique('code')
+            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
+    }
+
+    /** @param list<array<string, mixed>> $records
+     *  @return list<array<string, mixed>>
+     */
+    private function provinceLayerRecords(array $records): array
+    {
+        return collect($records)
+            ->reject(fn (array $record): bool => Str::lower(trim((string) ($record['level'] ?? ''))) === 'city')
+            ->values()
+            ->all();
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function municipalitiesForRegion(string $regionCode): array
+    {
+        $regionPath = '/regions/'.rawurlencode($regionCode);
+        $cities = collect($this->list($regionPath.'/provinces'))
+            ->filter(fn (array $record): bool => ($record['level'] ?? null) === 'City');
+        $municipalities = collect($this->list($regionPath.'/cities-municipalities'))
+            ->filter(fn (array $record): bool => in_array($record['level'] ?? null, ['City', 'Mun'], true));
+
+        return $cities
+            ->merge($municipalities)
+            ->unique('code')
+            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
     }
 
     private function requestDetails(string $path): array
@@ -408,7 +486,9 @@ class PhilippineAddressController extends Controller
 
     private function municipalityCode(string $code): string
     {
-        return ltrim(substr($code, 5, 2), '0') ?: $code;
+        $municipality = substr($code, 5, 2);
+
+        return $municipality === '00' ? '0' : (ltrim($municipality, '0') ?: $code);
     }
 
     private function resolvePostalCode(string $municipalityCode, string $provinceName, string $municipalityName, string $provinceCode = ''): ?string

@@ -157,8 +157,13 @@ function initPostalAddressDropdowns({
     };
     const allowedProvinceCode = String(form.dataset.postalAllowedProvinceCode ?? '');
     const allowedMunicipalityCode = String(form.dataset.postalAllowedMunicipalityCode ?? '');
+    const provinceField = province.closest('label');
     const requests = new Map();
     let postalRequest = 0;
+
+    const setProvinceFieldVisible = (visible) => {
+        if (provinceField) provinceField.hidden = !visible;
+    };
 
     const setStatus = (message, error = false) => {
         if (!status) return;
@@ -192,7 +197,7 @@ function initPostalAddressDropdowns({
         });
         if (!response.ok) throw new Error(`Address lookup failed (${response.status})`);
         let records = recordsFrom(await response.json());
-        if (requests.get(key) !== controller) return;
+        if (requests.get(key) !== controller) return [];
 
         if (key === 'provinces' && allowedProvinceCode) {
             records = records.filter((record) => String(record.code ?? record.id ?? record.value ?? '') === allowedProvinceCode);
@@ -213,6 +218,7 @@ function initPostalAddressDropdowns({
             select.add(option);
         });
         select.disabled = select.options.length <= 1;
+        return records;
     };
 
     const pickOldValue = (select, key) => {
@@ -236,6 +242,7 @@ function initPostalAddressDropdowns({
         if (provinceCodeField) provinceCodeField.value = '';
         if (municipalityCodeField) municipalityCodeField.value = '';
         if (barangayCodeField) barangayCodeField.value = '';
+        setProvinceFieldVisible(true);
         resetSelect(province, 'Select province');
         resetSelect(municipality, 'Select municipality / city');
         resetSelect(barangay, 'Select barangay');
@@ -243,7 +250,20 @@ function initPostalAddressDropdowns({
         if (!selected?.value) return;
 
         try {
-            await fetchRecords('provinces', `${base}/regions/${encodeURIComponent(selected.dataset.code || selected.value)}/provinces`, province, 'Select province');
+            const regionCode = selected.dataset.code || selected.value;
+            const records = await fetchRecords('provinces', `${base}/regions/${encodeURIComponent(regionCode)}/provinces`, province, 'Select province');
+
+            const regionParent = records.find((record) =>
+                record.level === 'Region' && String(record.code ?? record.id ?? record.value ?? '') === String(regionCode)
+            );
+            if (regionParent) {
+                province.value = [...province.options].find((option) => option.dataset.code === String(regionCode))?.value ?? '';
+                old.province = ['', ''];
+                setProvinceFieldVisible(false);
+                if (province.value) province.dispatchEvent(new Event('change'));
+                return;
+            }
+
             const value = pickOldValue(province, 'province');
             if (value) {
                 province.value = value;
@@ -256,6 +276,7 @@ function initPostalAddressDropdowns({
 
     province.addEventListener('change', async () => {
         const selected = province.selectedOptions[0];
+        setProvinceFieldVisible(!selected?.value || selected.dataset.level !== 'Region');
         if (provinceCodeField) provinceCodeField.value = selected?.dataset.code ?? '';
         if (municipalityCodeField) municipalityCodeField.value = '';
         if (barangayCodeField) barangayCodeField.value = '';
@@ -272,6 +293,11 @@ function initPostalAddressDropdowns({
                 option.dataset.mun = selected.dataset.mun ?? '';
                 municipality.add(option);
                 municipality.disabled = false;
+                municipality.value = option.value;
+                old.municipality = ['', ''];
+                old.barangay = ['', ''];
+                municipality.dispatchEvent(new Event('change'));
+                return;
             } else {
                 await fetchRecords(
                     'municipalities',
