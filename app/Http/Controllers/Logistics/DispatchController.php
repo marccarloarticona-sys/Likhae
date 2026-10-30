@@ -64,7 +64,11 @@ class DispatchController extends Controller
         }
 
         $shipments = $query
-            ->with(['sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
+            ->with([
+                'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea',
+                'riderAssignments' => fn ($assignments) => $assignments->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id)),
+                'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address',
+            ])
             ->latest()
             ->paginate(15)
             ->withQueryString();
@@ -215,6 +219,7 @@ class DispatchController extends Controller
     public function receive(Request $request): View
     {
         $center = $this->center($request);
+        abort_unless($center, 403);
         $schema = app(LogisticsSchemaReadiness::class);
         $pickupBatchesReady = $schema->sellerPickupBatchesReady();
         $tracking = trim((string) $request->query('tracking', ''));
@@ -233,11 +238,11 @@ class DispatchController extends Controller
                 ->when($pickupBatchesReady, fn ($query) => $query->whereNotNull('seller_profile_id'))
                 ->where('status', RiderLocalTrip::EN_ROUTE_TO_HUB))
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
-            ->when($center, fn ($query) => $query->where(function ($q) use ($center) {
+            ->where(function ($q) use ($center) {
                 $q->where('logistics_center_id', $center->id)
                     ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
                         ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id)));
-            }))
+            })
             ->with(['sellerOrder.sellerProfile.user', 'sellerOrder.order.address'])
             ->latest()
             ->paginate(15)
@@ -269,13 +274,14 @@ class DispatchController extends Controller
     public function sorting(Request $request): View
     {
         $center = $this->center($request);
+        abort_unless($center, 403);
         $tracking = trim((string) $request->query('tracking', ''));
         $automaticRoutingReady = app(LogisticsSchemaReadiness::class)->automaticRoutingReady();
 
         $shipments = Shipment::query()
             ->whereIn('current_status', ['AT_SORTING_CENTER', 'SORTED'])
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
-            ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->where('logistics_center_id', $center->id)
             ->with([
                 'sellerOrder.order.address',
                 'serviceArea.locations',
@@ -287,7 +293,7 @@ class DispatchController extends Controller
             ->withQueryString();
 
         $areas = ServiceArea::query()
-            ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
+            ->where('logistics_center_id', $center->id)
             ->where('is_active', true)
             ->with('locations')
             ->orderBy('name')
@@ -374,9 +380,10 @@ class DispatchController extends Controller
     public function assignments(Request $request, ShipmentWorkflowService $workflow, LogisticsSchemaReadiness $schema): View
     {
         $center = $this->center($request);
+        abort_unless($center, 403);
         $tracking = trim((string) $request->query('tracking', ''));
 
-        $shipments = Shipment::query()
+        $shipments = app(LogisticsShipmentQuery::class)->operationalFor($center)
             ->whereIn('current_status', ['SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'])
             ->when($schema->automaticRoutingReady(), fn ($query) => $query->where(fn ($route) => $route
                 ->whereNull('origin_logistics_center_id')
@@ -384,8 +391,11 @@ class DispatchController extends Controller
                 ->orWhereColumn('origin_logistics_center_id', 'destination_logistics_center_id')
                 ->orWhereColumn('logistics_center_id', 'destination_logistics_center_id')))
             ->when($tracking !== '', fn ($query) => $query->where('tracking_number', $tracking))
-            ->when($center, fn ($query) => $query->where('logistics_center_id', $center->id))
-            ->with(['sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
+            ->with([
+                'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'serviceArea',
+                'riderAssignments' => fn ($assignments) => $assignments->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id)),
+                'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address',
+            ])
             ->latest()
             ->paginate(15)
             ->withQueryString();
@@ -436,7 +446,7 @@ class DispatchController extends Controller
         if ($tracking !== '') {
             $center = $this->center($request);
             abort_unless($center, 403);
-            $trackingResults = $shipmentQuery->visibleTo($center)
+            $trackingResults = $shipmentQuery->operationalFor($center)
                 ->where(function ($query) use ($tracking): void {
                     $query->where('shipments.tracking_number', $tracking)
                         ->orWhereHas('sellerOrder', fn ($sellerOrder) => $sellerOrder
@@ -449,7 +459,12 @@ class DispatchController extends Controller
                             ->orWhere('last_name', 'like', '%'.$tracking.'%')
                             ->orWhereRaw("CONCAT_WS(' ', first_name, last_name) LIKE ?", ['%'.$tracking.'%']));
                 })
-                ->with(['sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'events.actor', 'scans', 'deliveryAttempts', 'riderAssignments.liveLocation', 'logisticsCenter.address'])
+                ->with([
+                    'sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer',
+                    'events.actor', 'scans', 'deliveryAttempts',
+                    'riderAssignments' => fn ($assignments) => $assignments->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id)),
+                    'riderAssignments.liveLocation', 'logisticsCenter.address',
+                ])
                 ->orderByRaw('CASE WHEN shipments.tracking_number = ? THEN 0 ELSE 1 END', [$tracking])
                 ->limit(50)
                 ->get();
@@ -465,7 +480,7 @@ class DispatchController extends Controller
     {
         $center = $this->center($request);
         abort_unless($center, 403);
-        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
+        abort_unless($shipmentQuery->operationalFor($center)->whereKey($shipment->id)->exists(), 403);
 
         $data = $request->validate([
             'status' => ['required', 'string', Rule::in(self::MANUAL_OVERRIDE_STATUSES)],
@@ -474,8 +489,9 @@ class DispatchController extends Controller
         $reason = trim($data['reason']);
         abort_if($reason === '', 422, 'A reason is required for a shipment status override.');
 
-        DB::transaction(function () use ($request, $shipment, $center, $data, $reason): void {
+        DB::transaction(function () use ($request, $shipment, $center, $data, $reason, $shipmentQuery): void {
             $locked = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
+            abort_unless($shipmentQuery->operationalFor($center)->whereKey($locked->id)->exists(), 403);
             $oldStatus = $locked->current_status;
             $newStatus = strtoupper($data['status']);
             abort_if($newStatus === 'DELIVERED', 409, 'A manual status override cannot confirm delivery. Complete the assigned Rider delivery workflow with its scan, proof, and COD checks.');
@@ -513,7 +529,7 @@ class DispatchController extends Controller
     {
         $center = $this->center($request);
         abort_unless($center, 403);
-        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
+        abort_unless($shipmentQuery->operationalFor($center)->whereKey($shipment->id)->exists(), 403);
 
         $data = $request->validate([
             'exception_type' => ['required', Rule::in(['LOST', 'DAMAGED'])],
@@ -534,11 +550,12 @@ class DispatchController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($request, $shipment, $center, $type, $reason, $storedPhoto): void {
+            DB::transaction(function () use ($request, $shipment, $center, $type, $reason, $storedPhoto, $shipmentQuery): void {
                 $locked = Shipment::query()
                     ->with(['sellerOrder.order.buyer', 'sellerOrder.sellerProfile.user'])
                     ->lockForUpdate()
                     ->findOrFail($shipment->id);
+                abort_unless($shipmentQuery->operationalFor($center)->whereKey($locked->id)->exists(), 403);
                 abort_if(in_array($locked->current_status, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'This shipment is already delivered, closed, or has an exception recorded.');
 
                 $sellerOrder = $locked->sellerOrder;
@@ -621,8 +638,14 @@ class DispatchController extends Controller
     {
         $center = request()->user()?->logisticsCenter;
         abort_unless($center, 403);
-        abort_unless($shipmentQuery->visibleTo($center)->whereKey($shipment->id)->exists(), 403);
-        $shipment->load(['sellerOrder.items.product.images', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer', 'serviceArea', 'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address', 'events.actor', 'scans', 'deliveryAttempts']);
+        abort_unless($shipmentQuery->operationalFor($center)->whereKey($shipment->id)->exists(), 403);
+        $shipment->load([
+            'sellerOrder.items.product.images', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress',
+            'sellerOrder.order.address', 'sellerOrder.order.buyer', 'serviceArea',
+            'riderAssignments' => fn ($assignments) => $assignments->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id)),
+            'riderAssignments.riderProfile.user', 'riderAssignments.liveLocation', 'logisticsCenter.address',
+            'events.actor', 'scans', 'deliveryAttempts',
+        ]);
 
         $mapMarkers = app(MapDataService::class)->forShipment($shipment, true, true);
         return view('logistics.parcels.show', compact('shipment', 'mapMarkers'));

@@ -229,7 +229,8 @@ class MapDataService
         if ($viewer->isAccountType(User::TYPE_LOGISTICS)) {
             $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
 
-            return (int) $center?->owner_user_id === (int) $viewer->id;
+            return (int) $center?->owner_user_id === (int) $viewer->id
+                && (int) $assignment->riderProfile?->logistics_center_id === (int) $center?->id;
         }
 
         return false;
@@ -531,7 +532,8 @@ class MapDataService
 
         if ($viewer->isAccountType('LOGISTICS')) {
             $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
-            return (int) $center?->owner_user_id === (int) $viewer->id;
+            return (int) $center?->owner_user_id === (int) $viewer->id
+                && (int) $assignment->riderProfile?->logistics_center_id === (int) $center?->id;
         }
 
         return false;
