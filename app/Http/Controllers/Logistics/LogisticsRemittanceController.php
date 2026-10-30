@@ -184,9 +184,13 @@ class LogisticsRemittanceController extends Controller
             ? FinancialLedgerEntry::query()
                 ->where('entry_type', 'RIDER_PAYOUT')
                 ->where('status', 'PAYOUT_REQUESTED')
-                ->whereHas('shipment', fn ($query) => $query->where(function ($query) use ($center): void {
-                    $query->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id);
-                }))
+                ->whereExists(function ($query) use ($center): void {
+                    $query->selectRaw('1')
+                        ->from('rider_earning_pool_participants')
+                        ->join('rider_profiles', 'rider_profiles.id', '=', 'rider_earning_pool_participants.rider_profile_id')
+                        ->where('rider_profiles.logistics_center_id', $center->id)
+                        ->whereRaw("CAST(JSON_UNQUOTE(JSON_EXTRACT(financial_ledger_entries.metadata, '$.participant_id')) AS UNSIGNED) = rider_earning_pool_participants.id");
+                })
                 ->with(['shipment.sellerOrder.order', 'allocation', 'actor'])
                 ->latest()->paginate(20, ['*'], 'rider_payout_page')
             : new LengthAwarePaginator([], 0, 20, max(1, $request->integer('rider_payout_page', 1)), [

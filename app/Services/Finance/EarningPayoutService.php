@@ -517,12 +517,8 @@ final class EarningPayoutService
     private function assertCenterOwnsParticipant(User $actor, RiderEarningPoolParticipant $participant): void
     {
         $actor->loadMissing('logisticsCenter');
-        $centerId = (int) ($participant->pool?->shipment?->destination_logistics_center_id
-            ?: $participant->pool?->shipment?->logistics_center_id);
-        if (! $actor->logisticsCenter || $centerId !== (int) $actor->logisticsCenter->id) {
-            throw new \RuntimeException('Only the destination Logistics center can record this Rider payout.');
-        }
-        if ((int) $participant->riderProfile?->logistics_center_id !== (int) $actor->logisticsCenter->id) {
+        if (! $actor->logisticsCenter
+            || (int) $participant->riderProfile?->logistics_center_id !== (int) $actor->logisticsCenter->id) {
             throw new \RuntimeException('This Rider payout does not belong to your Logistics center.');
         }
     }
