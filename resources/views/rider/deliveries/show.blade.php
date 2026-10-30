@@ -241,24 +241,24 @@
         });
 
         const lookupPlace = async (latitude, longitude) => {
-            const token = document.querySelector('[data-likhae-map]')?.dataset.mapToken;
-            if (!token) return 'Address lookup unavailable';
+            const apiKey = document.querySelector('[data-likhae-map]')?.dataset.geoapifyKey;
+            if (!apiKey) return 'Address lookup unavailable';
 
             const controller = new AbortController();
             const timeout = window.setTimeout(() => controller.abort(), 7000);
             try {
-                const url = new URL('https://api.mapbox.com/search/geocode/v6/reverse');
-                url.searchParams.set('access_token', token);
-                url.searchParams.set('longitude', longitude);
-                url.searchParams.set('latitude', latitude);
-                url.searchParams.set('language', 'en');
+                const url = new URL('https://api.geoapify.com/v1/geocode/reverse');
+                url.searchParams.set('lon', longitude);
+                url.searchParams.set('lat', latitude);
+                url.searchParams.set('lang', 'en');
                 url.searchParams.set('limit', '1');
-                url.searchParams.set('permanent', 'true');
-                const response = await fetch(url, { signal: controller.signal });
+                url.searchParams.set('format', 'json');
+                url.searchParams.set('apiKey', apiKey);
+                const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
                 if (!response.ok) return 'Address lookup unavailable';
                 const result = await response.json();
-                const properties = result.features?.[0]?.properties;
-                return properties?.full_address || properties?.place_formatted || properties?.name || 'Address lookup unavailable';
+                const place = result.results?.[0] || result.features?.[0]?.properties;
+                return place?.formatted || place?.address_line1 || place?.full_address || place?.place_formatted || place?.name || 'Address lookup unavailable';
             } catch (error) {
                 return 'Address lookup unavailable';
             } finally {

@@ -46,6 +46,10 @@
             <p>Your store activity and the tasks that need attention are below.</p>
         </div>
         <div class="sl-welcome-actions">
+            <div class="sl-dashboard-followers" aria-label="{{ $stats['followers'] === null ? 'Store follower count unavailable' : number_format($stats['followers']).' store followers' }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM20 8v6m3-3h-6"/></svg>
+                <span><strong>{{ $stats['followers'] === null ? '—' : number_format($stats['followers']) }}</strong><small>Store followers</small></span>
+            </div>
             <a href="{{ route('seller.products', ['mode' => 'add']) }}" class="sl-btn sl-btn-white">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                 Add Product
@@ -134,7 +138,7 @@
         <section class="sl-card sl-dashboard-financials" aria-labelledby="seller-financials-title">
             <header class="sl-card-head">
                 <div><span class="sl-eyebrow">Recognized financials</span><h2 id="seller-financials-title">Sales after commission</h2></div>
-                <a href="{{ route('seller.reports', ['from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Report</a>
+                <a href="{{ route('seller.reports', ['tab' => 'reports', 'from' => $financialFrom->toDateString(), 'to' => $financialTo->toDateString()]) }}" class="sl-text-link">Report</a>
             </header>
             <p class="sl-dashboard-financials__note">Recognized merchandise sales from delivered orders. Shipping and Additional Care are excluded.</p>
             <div class="sl-dashboard-financials__period">{{ $financialFrom->format('M d') }} – {{ $financialTo->format('M d, Y') }}</div>

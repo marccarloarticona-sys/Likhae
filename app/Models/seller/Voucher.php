@@ -32,6 +32,8 @@ class Voucher extends Model
         'starts_at',
         'ends_at',
         'is_active',
+        'requires_review',
+        'review_reason',
     ];
 
     protected function casts(): array
@@ -45,8 +47,47 @@ class Voucher extends Model
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
             'is_active' => 'boolean',
+            'requires_review' => 'boolean',
             'visibility' => 'string',
         ];
+    }
+
+    public function hasValidDiscountDefinition(): bool
+    {
+        $type = strtoupper(trim((string) ($this->getRawOriginal('discount_type') ?? $this->discount_type)));
+        $rawValue = $this->getRawOriginal('discount_value') ?? $this->discount_value;
+        if (! in_array($type, ['PERCENT', 'FIXED'], true)
+            || ! is_numeric($rawValue)
+            || ! is_finite((float) $rawValue)
+            || (float) $rawValue <= 0) {
+            return false;
+        }
+
+        if ($type === 'PERCENT' && (float) $rawValue >= 100) {
+            return false;
+        }
+
+        $maximum = $this->getRawOriginal('maximum_discount_amount') ?? $this->maximum_discount_amount;
+        $minimum = $this->getRawOriginal('minimum_order_amount') ?? $this->minimum_order_amount;
+
+        return ($maximum === null || (is_numeric($maximum) && is_finite((float) $maximum) && (float) $maximum > 0))
+            && ($minimum === null || (is_numeric($minimum) && is_finite((float) $minimum) && (float) $minimum >= 0));
+    }
+
+    public function requiresReview(): bool
+    {
+        return (bool) ($this->attributes['requires_review'] ?? false) || ! $this->hasValidDiscountDefinition();
+    }
+
+    public function reviewReason(): ?string
+    {
+        if ((bool) ($this->attributes['requires_review'] ?? false)) {
+            return $this->attributes['review_reason'] ?? 'This legacy voucher needs review before it can be used.';
+        }
+
+        return $this->hasValidDiscountDefinition()
+            ? null
+            : 'Discount terms are invalid. Review the voucher before enabling it.';
     }
 
     public function getSafeThemeColorAttribute(): ?string

@@ -196,7 +196,7 @@ class User extends Authenticatable implements MustVerifyEmailContract
                 : 'Your account has been suspended. Please contact support for assistance.';
         }
 
-        $latestApplication = $this->registrationApplications()->latest('submitted_at')->first();
+        $latestApplication = $this->latestRegistrationApplication();
 
         if ($latestApplication?->status === RegistrationApplication::STATUS_REJECTED) {
             return 'Your registration application was rejected.'
@@ -204,7 +204,7 @@ class User extends Authenticatable implements MustVerifyEmailContract
         }
 
         return match (strtoupper((string) $this->status)) {
-            self::STATUS_PENDING => 'Your account is pending approval.',
+            self::STATUS_PENDING => 'Your account is pending approval. Sign in to check your application status.',
             self::STATUS_SUSPENDED => 'Your account has been suspended. Please contact support for assistance.',
             self::STATUS_DEACTIVATED => 'Your account has been deactivated. Please contact support for assistance.',
             default => 'Your account is not active. Please contact support for assistance.',
@@ -299,6 +299,61 @@ class User extends Authenticatable implements MustVerifyEmailContract
     public function registrationApplications(): HasMany
     {
         return $this->hasMany(RegistrationApplication::class);
+    }
+
+    public function latestRegistrationApplication(): ?RegistrationApplication
+    {
+        return $this->registrationApplications()
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    public function sellerVerificationApplication(): ?RegistrationApplication
+    {
+        return $this->registrationApplications()
+            ->where('status', RegistrationApplication::STATUS_APPROVED)
+            ->orderByDesc('reviewed_at')
+            ->orderByDesc('id')
+            ->first()
+            ?? $this->latestRegistrationApplication();
+    }
+
+    public function canResubmitRejectedRegistration(?string $accountType = null): bool
+    {
+        if ($this->isPermanentlyBanned()
+            || strtoupper((string) $this->status) !== self::STATUS_PENDING
+            || ($accountType !== null && strtoupper($this->account_type) !== strtoupper($accountType))) {
+            return false;
+        }
+
+        return $this->latestRegistrationApplication()?->status === RegistrationApplication::STATUS_REJECTED;
+    }
+
+    public static function rejectedRegistrationApplicant(string $email): ?self
+    {
+        $user = static::query()
+            ->whereRaw('LOWER(email) = ?', [mb_strtolower(trim($email))])
+            ->first();
+
+        return $user && $user->canResubmitRejectedRegistration() ? $user : null;
+    }
+
+    public function pendingRegistrationApplication(): ?RegistrationApplication
+    {
+        if ($this->isPermanentlyBanned() || strtoupper((string) $this->status) !== self::STATUS_PENDING) {
+            return null;
+        }
+
+        return $this->registrationApplications()
+            ->whereIn('status', [
+                RegistrationApplication::STATUS_PENDING,
+                RegistrationApplication::STATUS_UNDER_REVIEW,
+            ])
+            ->with('documents')
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('id')
+            ->first();
     }
 
     public function sellerProfile(): HasOne

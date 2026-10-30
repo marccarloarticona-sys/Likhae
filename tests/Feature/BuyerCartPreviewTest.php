@@ -35,7 +35,7 @@ class BuyerCartPreviewTest extends TestCase
         $otherProduct = Product::query()->findOrFail($otherVariant->product_id);
         app(CartService::class)->add($buyer, $otherProduct, (int) $otherVariant->id, 3);
 
-        Voucher::query()->create([
+        $platformVoucher = Voucher::query()->create([
             'seller_profile_id' => null,
             'platform_code_key' => 'CARTPREVIEW10',
             'code' => 'CARTPREVIEW10',
@@ -49,6 +49,7 @@ class BuyerCartPreviewTest extends TestCase
             'starts_at' => now()->subHour(),
             'ends_at' => now()->addDay(),
             'is_active' => true,
+            'campaign_budget_total' => 1000,
         ]);
 
         $expectedSubtotal = round((float) $variant->final_price * 2, 2);
@@ -215,7 +216,8 @@ class BuyerCartPreviewTest extends TestCase
             'voucher_code' => 'CARTLARGEFIXED',
         ])->assertOk()->assertJsonPath('success', true);
 
-        $this->assertSame((float) $variant->final_price, (float) $response->json('discount_total'));
+        $this->assertSame(max(0, round((float) $variant->final_price - 0.01, 2)), (float) $response->json('discount_total'));
+        $this->assertSame(0.01, round((float) $response->json('subtotal') - (float) $response->json('discount_total'), 2));
         $this->assertGreaterThanOrEqual(0, (float) $response->json('estimated_total'));
     }
 

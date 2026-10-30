@@ -7,6 +7,7 @@ use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\OrderItem;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
@@ -23,6 +24,7 @@ use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Support\OrderItemParcelAmount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -37,10 +39,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         config(['services.psgc.local_first' => false, 'services.psgc.token' => 'checkout-test-token']);
         Http::fake([
             'https://classification.psa.gov.ph/psgc/*' => Http::response([
-                ['code' => 'B-NOTE', 'name' => 'Note Barangay'],
+                ['code' => '0401010001', 'name' => 'Note Barangay'],
             ]),
             'https://psgc.cloud/api/v2/*' => Http::response([
-                ['code' => 'B-NOTE', 'name' => 'Note Barangay'],
+                ['code' => '0401010001', 'name' => 'Note Barangay'],
             ]),
         ]);
     }
@@ -152,7 +154,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(100.00, $preview['shipping_total']);
     }
 
-    public function test_preview_charges_the_shipping_rate_for_each_parcel_in_a_seller_group(): void
+    public function test_preview_charges_one_shipping_fee_per_seller_order(): void
     {
         $fixture = $this->checkoutFixture();
         $secondProduct = Product::create([
@@ -185,12 +187,10 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
 
         $sellerAGroup = $preview['groups'][$fixture['sellerA']->id];
         $sellerBGroup = $preview['groups'][$fixture['sellerB']->id];
-        $this->assertEquals(100.00, $sellerAGroup['shipping_fee']);
+        $this->assertEquals(50.00, $sellerAGroup['shipping_fee']);
         $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
-        $this->assertEquals(150.00, $preview['shipping_total']);
-        $this->assertSame('PER_PARCEL', $sellerAGroup['shipping_rate_snapshot']['pricing_basis']);
-        $this->assertSame('50.00', $sellerAGroup['shipping_rate_snapshot']['per_parcel_shipping_fee']);
-        $this->assertSame('100.00', $sellerAGroup['shipping_rate_snapshot']['total_shipping_fee']);
+        $this->assertEquals(100.00, $preview['shipping_total']);
+        $this->assertSame('50.00', $sellerAGroup['shipping_rate_snapshot']['shipping_fee']);
     }
 
     public function test_seller_platform_and_shipping_vouchers_stack_with_separate_order_accounting(): void
@@ -391,8 +391,8 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
         $this->assertEquals(35.00, $preview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
         $this->assertEquals(20.00, $preview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
-        $this->assertEquals(20.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
-        $this->assertEquals(10.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerA']->id]['shipping_voucher_discount']);
+        $this->assertEquals(15.00, $preview['groups'][$fixture['sellerB']->id]['shipping_voucher_discount']);
         $this->assertEquals(135.00, $preview['total_discount']);
         $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
     }
@@ -401,9 +401,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
     {
         $fixture = $this->checkoutFixture();
         $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $campaignKey = (string) str()->uuid();
         $fixture['productA']->update([
             'flash_sale_starts_at' => now()->subMinute(),
             'flash_sale_ends_at' => now()->addHour(),
+            'flash_sale_campaign_key' => $campaignKey,
         ]);
         $variant->update([
             'price' => 100,
@@ -445,6 +447,16 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(4, (int) $variant->fresh()->stock);
         $this->assertSame(1, (int) $variant->fresh()->flash_sale_sold);
         $this->assertSame(1, (int) $orderItem->flash_sale_quantity);
+        $this->assertSame($campaignKey, $orderItem->flash_sale_campaign_key);
+
+        $fixture['productA']->update([
+            'discounts_enabled' => true,
+            'discount_starts_at' => now()->subMinute(),
+            'discount_ends_at' => now()->addDay(),
+        ]);
+        $variant->update(['discount_type' => 'fixed', 'discount_value' => 25]);
+        $this->assertEquals(80.00, $orderItem->fresh()->unit_price, 'Later discount changes must not rewrite a flash sale order snapshot.');
+        $this->assertEquals(100.00, $orderItem->fresh()->original_unit_price);
 
         $this->actingAs($fixture['buyer'])
             ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
@@ -495,6 +507,156 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(3, (int) $variant->fresh()->stock);
     }
 
+    public function test_flash_sale_remaining_is_capped_by_live_variant_stock_including_zero_stock(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $fixture['productA']->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+        ]);
+        $variant->update([
+            'price' => 100,
+            'flash_sale_price' => 70,
+            'flash_sale_allocation' => 4,
+            'flash_sale_sold' => 0,
+            'stock' => 1,
+        ]);
+
+        $variant->refresh()->load('product');
+        $this->assertSame(1, (int) $variant->flash_sale_remaining);
+        $this->assertSame(70.0, (float) $variant->final_price);
+
+        $variant->update(['stock' => 0]);
+        $variant->refresh()->load('product');
+        $this->assertSame(0, (int) $variant->flash_sale_remaining);
+        $this->assertNull($variant->active_flash_sale_price);
+        $this->assertSame('SOLD_OUT', $variant->flash_sale_status);
+        $this->assertSame(100.0, (float) $variant->final_price);
+    }
+
+    public function test_seller_voucher_can_be_applied_to_a_flash_sale_at_checkout(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $campaignKey = (string) str()->uuid();
+        $fixture['productA']->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+            'flash_sale_campaign_key' => $campaignKey,
+        ]);
+        $variant->update([
+            'flash_sale_price' => 80,
+            'flash_sale_allocation' => 2,
+            'flash_sale_sold' => 0,
+        ]);
+        $this->assertSame('ACTIVE', $variant->fresh()->load('product')->flash_sale_status);
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'FLASHSELLER10',
+            'name' => 'Flash sale eligible seller voucher',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $voucher->id]);
+
+        $preview = app(CheckoutService::class)->preview(
+            collect([$fixture['itemA']]),
+            ['seller' => [$fixture['sellerA']->id => $voucher->code]],
+            $fixture['buyer'],
+        );
+
+        $this->assertEquals(80.00, $preview['subtotal']);
+        $this->assertGreaterThan(0, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
+    }
+
+    public function test_flash_sale_buyer_limit_is_shared_across_variants_and_enforced_at_checkout(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $campaignKey = (string) str()->uuid();
+        $fixture['productA']->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+            'flash_sale_limit_per_buyer' => 1,
+            'flash_sale_campaign_key' => $campaignKey,
+        ]);
+        $variantA = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $variantA->update(['flash_sale_price' => 80, 'flash_sale_allocation' => 3, 'flash_sale_sold' => 0]);
+        $variantB = ProductVariant::query()->create([
+            'product_id' => $fixture['productA']->id,
+            'sku' => 'SKU-A-FLASH-LIMIT-2',
+            'price' => 200,
+            'flash_sale_price' => 160,
+            'flash_sale_allocation' => 3,
+            'flash_sale_sold' => 0,
+            'stock' => 5,
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+
+        $checkout = app(CheckoutService::class);
+        $firstOrder = Order::query()->create([
+            'order_number' => 'FLASH-LIMIT-'.str()->upper(str()->random(10)),
+            'buyer_user_id' => $fixture['buyer']->id,
+            'status' => 'PLACED',
+            'currency' => 'PHP',
+            'subtotal' => 80,
+            'grand_total' => 130,
+            'payment_status' => 'PENDING',
+            'placed_at' => now(),
+        ]);
+        $firstSellerOrder = SellerOrder::query()->create([
+            'seller_order_number' => 'FLASH-LIMIT-'.str()->upper(str()->random(10)),
+            'order_id' => $firstOrder->id,
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'status' => 'PLACED',
+            'item_subtotal' => 80,
+            'shipping_fee' => 50,
+            'grand_total' => 130,
+        ]);
+        $firstItem = OrderItem::query()->create([
+            'seller_order_id' => $firstSellerOrder->id,
+            'product_id' => $fixture['productA']->id,
+            'product_variant_id' => $variantA->id,
+            'product_name' => $fixture['productA']->name,
+            'sku' => $variantA->sku,
+            'variant_description' => 'Standard',
+            'unit_price' => 80,
+            'quantity' => 1,
+            'flash_sale_quantity' => 1,
+            'flash_sale_campaign_key' => $campaignKey,
+            'discount_amount' => 20,
+            'line_total' => 80,
+        ]);
+        $this->assertSame($campaignKey, $firstItem->flash_sale_campaign_key);
+        $this->assertSame(1, (int) $firstItem->flash_sale_quantity);
+
+        $secondCart = Cart::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'status' => Cart::STATUS_ACTIVE]);
+        $secondItem = CartItem::query()->create([
+            'cart_id' => $secondCart->id,
+            'product_variant_id' => $variantB->id,
+            'quantity' => 1,
+        ]);
+        try {
+            $checkout->preview(collect([$secondItem->load('productVariant.product')]), [], $fixture['buyer']);
+            $this->fail('A Buyer must not exceed the campaign cap across variants.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('cart', $exception->errors());
+        }
+        try {
+            $checkout->placeOrder(
+                $fixture['buyer'], $fixture['address'], [$secondItem->id], 'COD', [], null, [], [], (string) str()->uuid(),
+            );
+            $this->fail('A Buyer must not exceed the campaign cap across variants.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('cart', $exception->errors());
+        }
+        $this->assertSame(1, Order::query()->where('buyer_user_id', $fixture['buyer']->id)->count());
+        $this->assertSame(0, (int) $variantB->fresh()->flash_sale_sold);
+    }
+
     public function test_scheduled_flash_price_activates_and_expiry_restores_regular_discount(): void
     {
         $fixture = $this->checkoutFixture();
@@ -516,7 +678,27 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(70.0, (float) $variant->fresh()->load('product')->final_price);
         $this->travelTo($endsAt);
         $this->assertSame(90.0, (float) $variant->fresh()->load('product')->final_price);
+        $this->assertSame('EXPIRED', $variant->fresh()->load('product')->flash_sale_status);
         $this->travelBack();
+    }
+
+    public function test_product_discount_checkout_preview_uses_scheduled_marketing_price(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $fixture['productA']->update([
+            'discounts_enabled' => true,
+            'discount_starts_at' => now()->subMinute(),
+            'discount_ends_at' => now()->addDay(),
+        ]);
+        $variant->update(['price' => 100, 'discount_type' => 'percentage', 'discount_value' => 10]);
+
+        $checkout = app(CheckoutService::class);
+        $preview = $checkout->preview(collect([$fixture['itemA']]), [], $fixture['buyer']);
+        $this->assertEquals(90.00, $preview['subtotal']);
+        $variant->update(['discount_type' => 'fixed', 'discount_value' => 25]);
+        $freshPreview = $checkout->preview(collect([$fixture['itemA']->fresh()]), [], $fixture['buyer']);
+        $this->assertEquals(75.00, $freshPreview['subtotal']);
     }
 
     public function test_voucher_scope_and_minimum_spend_are_validated_server_side(): void
@@ -596,9 +778,9 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'shipping' => 'SHIP999',
         ], $fixture['buyer']);
 
-        $this->assertEquals(300.00, $preview['platform_voucher_discount']);
+        $this->assertEquals(299.98, $preview['platform_voucher_discount']);
         $this->assertEquals(100.00, $preview['shipping_voucher_discount']);
-        $this->assertEquals(0.00, $preview['grand_total']);
+        $this->assertEquals(0.02, $preview['grand_total']);
         $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
     }
 
@@ -623,7 +805,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'seller' => [$fixture['sellerA']->id => 'PRIVATEA10'],
         ], $fixture['buyer']);
 
-        $this->assertSame(10.0, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
+        $this->assertEquals(10.0, $preview['groups'][$fixture['sellerA']->id]['seller_voucher_discount']);
     }
 
     public function test_private_voucher_still_rejects_wrong_expired_and_ineligible_codes(): void
@@ -723,6 +905,105 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertDatabaseMissing('seller_promotions', ['name' => 'Invalid Foreign Bundle']);
     }
 
+    public function test_seller_can_create_a_scheduled_buy_x_get_y_offer_with_buyer_selected_reward_variation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $buyVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $startsAt = now()->addHour()->startOfMinute();
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->post(route('seller.promotions.store'), [
+                'promotion_type' => SellerPromotion::TYPE_BUY_X_GET_Y,
+                'name' => 'Scheduled mix reward',
+                'buy_variant_id' => $buyVariant->id,
+                'buy_quantity' => 2,
+                'reward_product_id' => $fixture['productA']->id,
+                'reward_quantity' => 1,
+                'reward_discount_percent' => 100,
+                'starts_at' => $startsAt->format('Y-m-d\\TH:i'),
+                'ends_at' => now()->addDays(2)->format('Y-m-d\\TH:i'),
+                'max_redemptions' => 10,
+                'max_per_buyer' => 2,
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $promotion = SellerPromotion::query()->where('name', 'Scheduled mix reward')->sole();
+        $this->assertSame(SellerPromotion::TYPE_BUY_X_GET_Y, $promotion->promotion_type);
+        $this->assertNull($promotion->reward_variant_id);
+        $this->assertSame((int) $fixture['productA']->id, (int) $promotion->reward_product_id);
+        $this->assertTrue($promotion->starts_at->equalTo($startsAt));
+        $this->assertSame(10, (int) $promotion->max_redemptions);
+        $this->assertSame(2, (int) $promotion->max_per_buyer);
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->get(route('seller.marketing', ['section' => 'buy-x-get-y']))
+            ->assertOk()
+            ->assertSee('Create a Buy X Get Y Offer')
+            ->assertSee('Buyer chooses a variation');
+    }
+
+    public function test_bundle_claim_adds_selected_mix_and_match_variation_and_checkout_snapshots_it(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $choiceVariant = ProductVariant::query()->create([
+            'product_id' => $fixture['productA']->id,
+            'sku' => 'SKU-BUNDLE-CHOICE',
+            'description' => 'Blue variation',
+            'price' => 100,
+            'stock' => 5,
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+        $componentProduct = Product::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'category_id' => $fixture['productA']->category_id,
+            'name' => 'Bundle component',
+            'slug' => 'bundle-component',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $componentVariant = ProductVariant::query()->create([
+            'product_id' => $componentProduct->id,
+            'sku' => 'SKU-BUNDLE-FIXED',
+            'price' => 50,
+            'stock' => 5,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $promotion = SellerPromotion::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'name' => 'Mix shirt and bag deal',
+            'promotion_type' => SellerPromotion::TYPE_BUNDLE,
+            'bundle_price' => 120,
+            'is_active' => true,
+        ]);
+        $promotion->components()->createMany([
+            ['product_variant_id' => $fixture['itemA']->product_variant_id, 'quantity' => 1, 'choice_group' => 'shirt'],
+            ['product_variant_id' => $choiceVariant->id, 'quantity' => 1, 'choice_group' => 'shirt'],
+            ['product_variant_id' => $componentVariant->id, 'quantity' => 1],
+        ]);
+
+        $this->actingAs($fixture['buyer'])
+            ->post(route('buyer.cart.bundle-add', $promotion), [
+                'sets' => 1,
+                'choices' => ['shirt' => $choiceVariant->id],
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('buyer_notice');
+
+        $cartItems = CartItem::query()->where('cart_id', $fixture['cart']->id)->get()->keyBy('product_variant_id');
+        $this->assertSame(1, (int) $cartItems[$choiceVariant->id]->quantity);
+        $this->assertSame(1, (int) $cartItems[$componentVariant->id]->quantity);
+        $preview = app(CheckoutService::class)->preview(
+            collect([$cartItems[$choiceVariant->id], $cartItems[$componentVariant->id]]),
+            [],
+            $fixture['buyer'],
+        );
+        $this->assertEquals(30.00, $preview['promotion_discount_total']);
+        $this->assertSame((int) $choiceVariant->id, (int) $preview['groups'][$fixture['sellerA']->id]['items']->firstWhere('product_variant_id', $choiceVariant->id)->getAttribute('checkout_promotion_snapshot')[0]['components'][0]['product_variant_id']);
+    }
+
     public function test_bundle_discount_is_snapshotted_charged_and_cancelled_without_duplicate_stock_restore(): void
     {
         $fixture = $this->checkoutFixture();
@@ -761,17 +1042,17 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         ]);
 
         $items = collect([$fixture['itemA']->fresh(), $secondItem->fresh()]);
+        $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
         $this->actingAs($fixture['buyer'])
             ->withSession(['checkout_cart_item_ids' => $items->pluck('id')->all()])
             ->get(route('buyer.checkout'))
             ->assertOk()
             ->assertSee('Two item bundle')
             ->assertSee('data-seller-promotion-discount="30.00"', false)
-            ->assertSee('220.00');
+            ->assertSee('170.00');
 
-        $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
         $this->assertEquals(30.00, $preview['promotion_discount_total']);
-        $this->assertEquals(220.00, $preview['grand_total']);
+        $this->assertEquals(170.00, $preview['grand_total']);
 
         $order = app(CheckoutService::class)->placeOrder(
             $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
@@ -782,7 +1063,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(30.00, (float) $sellerOrder->promotion_discount_total);
         $this->assertEquals(120.00, (float) $sellerOrder->items->sum('line_total'));
         $this->assertNotEmpty($orderedItems[$secondVariant->id]->promotion_snapshot);
-        $this->assertEquals(220.00, (float) $order->grand_total);
+        $this->assertEquals(170.00, (float) $order->grand_total);
         $this->assertEquals(30.00, (float) $order->discount_total);
         $this->assertSame(4, (int) $firstVariant->fresh()->stock);
         $this->assertSame(4, (int) $secondVariant->fresh()->stock);
@@ -807,7 +1088,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(5, (int) $secondVariant->fresh()->stock);
     }
 
-    public function test_buy_x_get_y_requires_reward_in_cart_and_restores_regular_reward_line(): void
+    public function test_buy_x_get_y_requires_reward_in_cart_prices_the_reward_free_and_releases_limits_on_cancellation(): void
     {
         $fixture = $this->checkoutFixture();
         $buyVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
@@ -833,14 +1114,18 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'quantity' => 1,
         ]);
         $fixture['itemA']->update(['quantity' => 2]);
-        SellerPromotion::query()->create([
+        $promotion = SellerPromotion::query()->create([
             'seller_profile_id' => $fixture['sellerA']->id,
             'name' => 'Buy two get one reward',
             'promotion_type' => SellerPromotion::TYPE_BUY_X_GET_Y,
             'buy_variant_id' => $buyVariant->id,
             'buy_quantity' => 2,
             'reward_variant_id' => $rewardVariant->id,
+            'reward_product_id' => $rewardProduct->id,
             'reward_quantity' => 1,
+            'reward_discount_percent' => 100,
+            'max_redemptions' => 1,
+            'max_per_buyer' => 1,
             'is_active' => true,
         ]);
 
@@ -850,7 +1135,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
 
         $preview = app(CheckoutService::class)->preview($items, [], $fixture['buyer']);
         $this->assertEquals(30.00, $preview['promotion_discount_total']);
-        $this->assertEquals(300.00, $preview['grand_total']);
+        $this->assertEquals(250.00, $preview['grand_total']);
 
         $order = app(CheckoutService::class)->placeOrder(
             $fixture['buyer'], $fixture['address'], $items->pluck('id')->all(), 'COD', [], null, [], [],
@@ -862,6 +1147,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(0.0, (float) $rewardOrderItem->line_total);
         $this->assertEquals(30.00, (float) $rewardOrderItem->promotion_discount_amount);
         $this->assertSame('Campaign Reward Product', $rewardOrderItem->promotion_snapshot[0]['reward_product_name']);
+        $this->assertSame(1, (int) $promotion->fresh()->redemptions_used);
         $this->assertSame(3, (int) $buyVariant->fresh()->stock);
         $this->assertSame(4, (int) $rewardVariant->fresh()->stock);
 
@@ -870,6 +1156,82 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->assertOk();
         $this->assertSame(5, (int) $buyVariant->fresh()->stock);
         $this->assertSame(5, (int) $rewardVariant->fresh()->stock);
+        $this->assertSame(0, (int) $promotion->fresh()->redemptions_used);
+    }
+
+    public function test_same_variant_buy_x_get_y_splits_free_units_for_partial_refunds_and_cancellation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $buyVariant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $promotion = SellerPromotion::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'name' => 'Buy one get same item free',
+            'promotion_type' => SellerPromotion::TYPE_BUY_X_GET_Y,
+            'buy_variant_id' => $buyVariant->id,
+            'buy_quantity' => 1,
+            'reward_variant_id' => $buyVariant->id,
+            'reward_product_id' => $fixture['productA']->id,
+            'reward_quantity' => 1,
+            'reward_discount_percent' => 100,
+            'max_redemptions' => 1,
+            'max_per_buyer' => 1,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.product-details', ['slug' => $fixture['productA']->slug]))
+            ->assertOk()
+            ->assertSee('Buy one get same item free')
+            ->assertSee('Add Items');
+
+        $this->actingAs($fixture['buyer'])
+            ->post(route('buyer.cart.offer-claim', $promotion), [
+                'sets' => 1,
+                'reward_variant_id' => $buyVariant->id,
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('buyer_notice');
+        $cartItem = CartItem::query()->where('cart_id', $fixture['cart']->id)
+            ->where('product_variant_id', $buyVariant->id)->sole();
+        $this->assertSame(3, (int) $cartItem->quantity);
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.cart'))
+            ->assertOk()
+            ->assertSee('Buy one get same item free')
+            ->assertSee('Add Items');
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'], $fixture['address'], [$cartItem->id], 'COD', [], null, [], [],
+            '00000000-0000-4000-8000-000000000083',
+        );
+        $sellerOrder = $order->sellerOrders()->with('items')->sole();
+        $freeReward = $sellerOrder->items->firstWhere('line_total', 0);
+        $paidItems = $sellerOrder->items->where('line_total', '>', 0)->values();
+        $this->assertNotNull($freeReward);
+        $this->assertSame(1, (int) $freeReward->quantity);
+        $this->assertSame(100.0, (float) $freeReward->unit_price);
+        $this->assertSame(0.0, (float) $freeReward->line_total);
+        $this->assertSame(1, (int) $freeReward->promotion_snapshot[0]['free_reward_quantity']);
+        $this->assertCount(1, $paidItems);
+        $this->assertSame(2, (int) $paidItems->first()->quantity);
+        $this->assertEquals(10000, OrderItemParcelAmount::buyerProductRefundSliceCents($sellerOrder, $paidItems->first(), 0, 1));
+        $this->assertSame(0, OrderItemParcelAmount::buyerProductRefundSliceCents($sellerOrder, $freeReward, 0, 1));
+        $this->assertSame(1, (int) $promotion->fresh()->redemptions_used);
+        $this->assertSame(2, (int) $buyVariant->fresh()->stock);
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee('Buy one get same item free');
+        $this->actingAs($fixture['sellerUserA'])
+            ->get(route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number]))
+            ->assertOk()
+            ->assertSee('promotional free reward item(s)');
+
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
+        $this->assertSame(5, (int) $buyVariant->fresh()->stock);
+        $this->assertSame(0, (int) $promotion->fresh()->redemptions_used);
     }
 
     public function test_reward_points_require_100_minimum_and_each_100_points_discount_one_peso(): void
@@ -1266,11 +1628,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         ]);
         ServiceAreaLocation::create([
             'service_area_id' => $secondArea->id,
-            'province_code' => 'P-NOTE',
+            'province_code' => '0401',
             'province_name' => 'Note Province',
-            'municipality_code' => 'M-NOTE',
+            'municipality_code' => '0401010000',
             'municipality_name' => 'Note Municipality',
-            'barangay_code' => 'B-NOTE',
+            'barangay_code' => '0401010001',
             'barangay_name' => 'Note Barangay',
         ]);
         $itemIds = [$fixture['itemA']->id];
@@ -1637,12 +1999,12 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'label' => 'Center',
             'recipient_name' => 'Note Center',
             'contact_number' => '09170000000',
-            'province_code' => 'P-NOTE',
+            'province_code' => '0401',
             'province_name' => 'Note Province',
             'region_name' => 'NCR',
-            'municipality_code' => 'M-NOTE',
+            'municipality_code' => '0401010000',
             'municipality_name' => 'Note Municipality',
-            'barangay_code' => 'B-NOTE',
+            'barangay_code' => '0401010001',
             'barangay_name' => 'Note Barangay',
             'street_address' => '2 Test Street',
             'latitude' => '14.5995000',
@@ -1667,11 +2029,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         ]);
         ServiceAreaLocation::create([
             'service_area_id' => $area->id,
-            'province_code' => 'P-NOTE',
+            'province_code' => '0401',
             'province_name' => 'Note Province',
-            'municipality_code' => 'M-NOTE',
+            'municipality_code' => '0401010000',
             'municipality_name' => 'Note Municipality',
-            'barangay_code' => 'B-NOTE',
+            'barangay_code' => '0401010001',
             'barangay_name' => 'Note Barangay',
         ]);
 
@@ -1692,12 +2054,12 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'label' => 'Home',
             'recipient_name' => $buyer->name,
             'contact_number' => $buyer->contact_number,
-            'province_code' => 'P-NOTE',
+            'province_code' => '0401',
             'province_name' => 'Note Province',
             'region_name' => 'NCR',
-            'municipality_code' => 'M-NOTE',
+            'municipality_code' => '0401010000',
             'municipality_name' => 'Note Municipality',
-            'barangay_code' => 'B-NOTE',
+            'barangay_code' => '0401010001',
             'barangay_name' => 'Note Barangay',
             'street_address' => '1 Test Street',
             'latitude' => '14.5995000',
@@ -1721,12 +2083,12 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'label' => 'Business',
             'recipient_name' => 'Seller '.$suffix,
             'contact_number' => '09170000000',
-            'province_code' => 'P-NOTE',
+            'province_code' => '0401',
             'province_name' => 'Note Province',
             'region_name' => 'NCR',
-            'municipality_code' => 'M-NOTE',
+            'municipality_code' => '0401010000',
             'municipality_name' => 'Note Municipality',
-            'barangay_code' => 'B-NOTE',
+            'barangay_code' => '0401010001',
             'barangay_name' => 'Note Barangay',
             'street_address' => '3 Test Street',
             'latitude' => '14.5995000',

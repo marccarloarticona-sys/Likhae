@@ -205,7 +205,7 @@ class SellerReturnRefundController extends Controller
             return back()->withErrors(['return' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Return inspection saved. Inventory was not automatically restocked.');
+        return back()->with('status', 'Return inspection saved. Restockable items were returned to inventory; other dispositions remain out of saleable stock.');
     }
 
     public function payoutProof(Request $request, RefundPayout $payout, RefundProofStorageService $proofs)

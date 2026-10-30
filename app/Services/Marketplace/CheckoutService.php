@@ -8,6 +8,7 @@ use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -19,9 +20,7 @@ use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
-use App\Models\Admin\PlatformSetting;
 use App\Services\Finance\CodCollectionService;
-use App\Services\Finance\PlatformCampaignBudgetService;
 use App\Services\Finance\RegionShippingRateService;
 use App\Services\Finance\ShippingRatePolicyService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
@@ -50,7 +49,6 @@ class CheckoutService
         private readonly BuyerProductAvailabilityService $productAvailability,
         private readonly RewardPointsService $rewardPoints,
         private readonly VoucherDiscountCalculator $voucherDiscounts,
-        private readonly PlatformCampaignBudgetService $campaignBudgets,
     ) {}
 
     public function automaticRoutingReady(): bool
@@ -126,7 +124,6 @@ class CheckoutService
             $platformVouchers = $platformVouchers->filter(fn (Voucher $voucher): bool =>
                 ($voucher->usage_limit === null || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
                 && (! $buyer || $voucher->per_user_limit === null || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
-                && $this->campaignBudgets->selectable($voucher)
             )->values();
 
             $productVouchers = $platformVouchers->filter(fn (Voucher $voucher): bool => ! Schema::hasColumn('vouchers', 'benefit_scope')
@@ -295,9 +292,9 @@ class CheckoutService
         $shippingVoucherDiscountTotal = 0.0;
         $protectionTotal = 0.0;
         $selectedProtectionIds = collect($protectionItemIds)->map(fn ($id): int => (int) $id)->unique()->values();
-        // Step 7: one fixed charge per parcel (one shipment per order item),
-        // never per item unit. The provider is selected separately from the
-        // charge; API checkout may resolve it from the destination service area.
+        // Step 7: one fixed charge per seller-order/shipment, never per item unit.
+        // The provider is selected separately from the charge; API checkout may
+        // resolve the provider from the destination service area.
         $ratePolicy = $this->shippingRates->currentPolicy(lockForUpdate: $lockVoucherUsage);
         $shippingFee = (float) $ratePolicy['shipping_fee'];
         $destinationForPricing = $automaticDestination;
@@ -409,17 +406,12 @@ class CheckoutService
                 'voucher' => null,
                 'seller_voucher' => null,
                 'seller_voucher_discount' => 0.0,
-                'seller_voucher_item_discounts' => [],
                 'platform_voucher_discount' => 0.0,
-                'platform_voucher_item_discounts' => [],
                 'shipping_voucher_discount' => 0.0,
-                'shipping_voucher_item_discounts' => [],
                 'voucher_discount' => 0.0,
                 'reward_points_redeemed' => 0,
                 'reward_points_discount' => 0.0,
-                'reward_points_item_discounts' => [],
-                'shipping_fee' => 0.0,
-                'per_parcel_shipping_fee' => $groupShippingFee,
+                'shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'shipping_rate_snapshot' => $shippingSnapshot,
                 'routing_review_required' => $groupNeedsRoutingReview,
@@ -437,22 +429,6 @@ class CheckoutService
             $groups[$sellerId]['item_subtotal'] += $lineTotal;
             $groups[$sellerId]['protection_total'] += $itemProtectionFee;
         }
-
-        foreach ($groups as &$group) {
-            $parcelCount = $group['items']->count();
-            $perParcelShippingCents = FinancialRules::cents($group['per_parcel_shipping_fee']);
-            $totalShippingCents = $perParcelShippingCents * $parcelCount;
-            $group['shipping_fee'] = (float) FinancialRules::amount($totalShippingCents);
-            $group['shipping_rate_snapshot'] = [
-                ...$group['shipping_rate_snapshot'],
-                'pricing_basis' => 'PER_PARCEL',
-                'parcel_count' => $parcelCount,
-                'per_parcel_shipping_fee' => FinancialRules::amount($perParcelShippingCents),
-                'total_shipping_fee' => FinancialRules::amount($totalShippingCents),
-            ];
-            unset($group['per_parcel_shipping_fee']);
-        }
-        unset($group);
 
         $unknownProtectionIds = $selectedProtectionIds->diff($items->pluck('id')->map(fn ($id): int => (int) $id));
         if ($unknownProtectionIds->isNotEmpty()) {
@@ -499,19 +475,8 @@ class CheckoutService
                     ]);
                 }
                 $discount = $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items']));
-                app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
-                    $voucher,
-                    $discount,
-                    lockLedgerRows: $lockVoucherUsage,
-                    errorKey: 'seller_voucher_codes.'.$sellerId,
-                );
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
-                $group['seller_voucher_item_discounts'] = $this->allocateItemDiscount(
-                    $group['items'],
-                    FinancialRules::cents($discount),
-                    fn (CartItem $item): int => $this->voucherEligibleItemCents($voucher, $item),
-                );
                 $group['voucher'] = $voucher;
                 $group['voucher_discount'] = $discount;
             }
@@ -525,7 +490,6 @@ class CheckoutService
             if ($platformCode !== '') {
                 $platformVoucher = $this->usablePlatformVoucher($platformCode, 'PRODUCT', $eligibleProductTotal, $buyer, $lockVoucherUsage);
                 $platformDiscount = $this->discountAmount($platformVoucher, $eligibleProductTotal);
-                $this->campaignBudgets->assertAvailable($platformVoucher, $platformDiscount);
                 $this->allocatePlatformDiscount($groups, $platformVoucher, $platformDiscount, $eligibleProductTotal);
             }
 
@@ -538,7 +502,6 @@ class CheckoutService
                 ));
                 $shippingVoucher = $this->usablePlatformVoucher($shippingCode, 'SHIPPING', $shippingSpendBase, $buyer, $lockVoucherUsage);
                 $shippingDiscount = $this->discountAmount($shippingVoucher, $eligibleShippingTotal);
-                $this->campaignBudgets->assertAvailable($shippingVoucher, $shippingDiscount);
                 $this->allocateShippingDiscount($groups, $shippingDiscount, $eligibleShippingTotal);
             }
         } else {
@@ -560,25 +523,10 @@ class CheckoutService
                     ]);
                 }
                 $discount = $voucher ? $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items'])) : 0.0;
-                if ($voucher) {
-                    app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
-                        $voucher,
-                        $discount,
-                        lockLedgerRows: $lockVoucherUsage,
-                        errorKey: 'voucher_codes.'.$sellerId,
-                    );
-                }
 
                 $group['voucher'] = $voucher;
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
-                $group['seller_voucher_item_discounts'] = $voucher
-                    ? $this->allocateItemDiscount(
-                        $group['items'],
-                        FinancialRules::cents($discount),
-                        fn (CartItem $item): int => $this->voucherEligibleItemCents($voucher, $item),
-                    )
-                    : [];
                 $group['voucher_discount'] = $discount;
                 $group['grand_total'] = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - $discount + (float) $group['shipping_fee'] + (float) $group['protection_total']);
             }
@@ -1004,15 +952,6 @@ class CheckoutService
                 if (Schema::hasColumn('seller_orders', 'promotion_discount_total')) {
                     $sellerOrderAttributes['promotion_discount_total'] = $group['promotion_discount_total'];
                 }
-                if (Schema::hasColumn('seller_orders', 'seller_voucher_discount')) {
-                    $sellerOrderAttributes['seller_voucher_discount'] = $group['seller_voucher_discount'];
-                    $sellerOrderAttributes['platform_voucher_discount'] = $group['platform_voucher_discount'];
-                    $sellerOrderAttributes['platform_shipping_voucher_discount'] = $group['shipping_voucher_discount'];
-                    $sellerOrderAttributes['funding_snapshot_version'] = 1;
-                }
-                if (Schema::hasColumn('seller_orders', 'commission_rate_snapshot')) {
-                    $sellerOrderAttributes['commission_rate_snapshot'] = number_format(PlatformSetting::commissionRate(), 4, '.', '');
-                }
                 if (Schema::hasColumn('seller_orders', 'shipping_voucher_discount')) {
                     $sellerOrderAttributes['shipping_voucher_discount'] = $group['shipping_voucher_discount'];
                 }
@@ -1061,15 +1000,6 @@ class CheckoutService
                     if (Schema::hasColumn('order_items', 'promotion_discount_amount')) {
                         $itemAttributes['promotion_discount_amount'] = $promotionDiscount;
                     }
-                    if (Schema::hasColumn('order_items', 'seller_voucher_discount')) {
-                        $itemAttributes += [
-                            'seller_voucher_discount' => FinancialRules::amount((int) ($group['seller_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            'platform_voucher_discount' => FinancialRules::amount((int) ($group['platform_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            'platform_shipping_voucher_discount' => FinancialRules::amount((int) ($group['shipping_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            'reward_points_discount' => FinancialRules::amount((int) ($group['reward_points_item_discounts'][(int) $item->id] ?? 0)),
-                            'funding_snapshot_version' => 1,
-                        ];
-                    }
                     if (Schema::hasColumn('order_items', 'promotion_snapshot')) {
                         $snapshots = (array) $item->getAttribute('checkout_promotion_snapshot');
                         $itemAttributes['promotion_snapshot'] = $snapshots !== [] ? $snapshots : null;
@@ -1086,34 +1016,6 @@ class CheckoutService
                         ];
                     }
                     $orderItem = $sellerOrder->items()->create($itemAttributes);
-                    $orderItem->setRelation('sellerOrder', $sellerOrder);
-
-                    if ($preview['platform_voucher']) {
-                        $this->campaignBudgets->reserve(
-                            $preview['platform_voucher'],
-                            $orderItem,
-                            FinancialRules::amount((int) ($group['platform_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            $buyer,
-                            'PRODUCT_VOUCHER',
-                        );
-                    }
-                    if ($group['seller_voucher']) {
-                        app(\App\Services\Finance\SellerVoucherBudgetService::class)->reserve(
-                            $group['seller_voucher'],
-                            $orderItem,
-                            FinancialRules::amount((int) ($group['seller_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            $buyer,
-                        );
-                    }
-                    if ($preview['shipping_voucher']) {
-                        $this->campaignBudgets->reserve(
-                            $preview['shipping_voucher'],
-                            $orderItem,
-                            FinancialRules::amount((int) ($group['shipping_voucher_item_discounts'][(int) $item->id] ?? 0)),
-                            $buyer,
-                            'SHIPPING_VOUCHER',
-                        );
-                    }
 
                     $shipment = $this->createShipmentForOrderItem($sellerOrder, $orderItem, $address, $logisticsProvider);
                     app(CodCollectionService::class)->initializeForShipment($shipment);
@@ -1258,18 +1160,6 @@ class CheckoutService
             $groups[$sellerId]['reward_points_redeemed'] = $share;
             // At the 100:1 rate, one point represents one centavo.
             $groups[$sellerId]['reward_points_discount'] = round($share / 100, 2);
-            $items = $groups[$sellerId]['items']->values();
-            $weights = $items->map(function (CartItem $item) use ($groups, $sellerId): int {
-                $available = FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item))
-                    - (int) ($groups[$sellerId]['seller_voucher_item_discounts'][(int) $item->id] ?? 0)
-                    - (int) ($groups[$sellerId]['platform_voucher_item_discounts'][(int) $item->id] ?? 0);
-
-                return max(0, $available);
-            })->all();
-            $groups[$sellerId]['reward_points_item_discounts'] = $this->sharesByItemId(
-                $items,
-                FinancialRules::allocateCents($share, $weights),
-            );
         }
     }
 
@@ -1832,6 +1722,27 @@ class CheckoutService
             return null;
         }
 
+        if ($voucher->requiresReview()) {
+            throw ValidationException::withMessages([
+                $errorKey => 'This voucher is under review and cannot be used.',
+            ]);
+        }
+
+        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS') {
+            $isFollowing = $buyer !== null
+                && Schema::hasTable('seller_followers')
+                && SellerFollower::query()
+                    ->where('buyer_user_id', $buyer->id)
+                    ->where('seller_profile_id', $sellerId)
+                    ->exists();
+
+            if (! $isFollowing) {
+                throw ValidationException::withMessages([
+                    $errorKey => 'Follow this store to use its follower reward.',
+                ]);
+            }
+        }
+
         $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $items);
         if ($eligibleSubtotal <= 0) {
             throw ValidationException::withMessages([
@@ -1850,21 +1761,6 @@ class CheckoutService
     private function voucherEligibleSubtotal(Voucher $voucher, Collection $items): float
     {
         if ($voucher->applies_to !== 'PRODUCTS') {
-            if ($voucher->applies_to === 'VARIANTS') {
-                $variantIds = $voucher->relationLoaded('eligibleVariants')
-                    ? $voucher->eligibleVariants->modelKeys()
-                    : $voucher->eligibleVariants()->pluck('product_variants.id')->all();
-                $eligibleIds = array_fill_keys(array_map('intval', $variantIds), true);
-
-                return round((float) $items->sum(function (CartItem $item) use ($eligibleIds): float {
-                    $item->loadMissing('productVariant');
-
-                    return isset($eligibleIds[(int) $item->product_variant_id])
-                        ? $this->checkoutItemSubtotalAfterPromotions($item)
-                        : 0.0;
-                }), 2);
-            }
-
             return round((float) $items->sum(fn (CartItem $item): float => $this->checkoutItemSubtotalAfterPromotions($item)), 2);
         }
 
@@ -1882,54 +1778,6 @@ class CheckoutService
 
             return $this->checkoutItemSubtotalAfterPromotions($item);
         }), 2);
-    }
-
-    private function voucherEligibleItemCents(Voucher $voucher, CartItem $item): int
-    {
-        if ($voucher->applies_to === 'VARIANTS') {
-            $item->loadMissing('productVariant');
-            $variantIds = $voucher->relationLoaded('eligibleVariants')
-                ? $voucher->eligibleVariants->modelKeys()
-                : $voucher->eligibleVariants()->pluck('product_variants.id')->all();
-
-            return in_array((int) $item->product_variant_id, array_map('intval', $variantIds), true)
-                ? FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item))
-                : 0;
-        }
-        if ($voucher->applies_to !== 'PRODUCTS') {
-            return FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item));
-        }
-        $item->loadMissing('productVariant');
-        $productIds = $voucher->relationLoaded('eligibleProducts')
-            ? $voucher->eligibleProducts->modelKeys()
-            : $voucher->eligibleProducts()->pluck('products.id')->all();
-
-        return in_array((int) $item->productVariant?->product_id, array_map('intval', $productIds), true)
-            ? FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item))
-            : 0;
-    }
-
-    /** @param array<int, int> $shares @return array<int, int> */
-    private function sharesByItemId(Collection $items, array $shares): array
-    {
-        $result = [];
-        foreach ($items->values() as $index => $item) {
-            $result[(int) $item->id] = (int) ($shares[$index] ?? 0);
-        }
-
-        return $result;
-    }
-
-    /** @return array<int, int> */
-    private function allocateItemDiscount(Collection $items, int $amountCents, callable $weight): array
-    {
-        $rows = $items->values();
-        $shares = FinancialRules::allocateCents(
-            $amountCents,
-            $rows->map(fn (CartItem $item): int => max(0, (int) $weight($item)))->all(),
-        );
-
-        return $this->sharesByItemId($rows, $shares);
     }
 
     private function checkoutItemSubtotalAfterPromotions(CartItem $item): float
@@ -2105,7 +1953,6 @@ class CheckoutService
             }
 
             $discount = $this->discountAmount($voucher, $subtotal);
-            $this->campaignBudgets->assertAvailable($voucher, $discount);
             $this->allocatePlatformDiscount($groups, $voucher, $discount, $subtotal);
 
             return $voucher;
@@ -2184,19 +2031,8 @@ class CheckoutService
         }
 
         $discount = $this->discountAmount($voucher, $eligibleSubtotal);
-        app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
-            $voucher,
-            $discount,
-            lockLedgerRows: $lockVoucherUsage,
-            errorKey: 'voucher_code',
-        );
         $group['seller_voucher'] = $voucher;
         $group['seller_voucher_discount'] = $discount;
-        $group['seller_voucher_item_discounts'] = $this->allocateItemDiscount(
-            $group['items'],
-            FinancialRules::cents($discount),
-            fn (CartItem $item): int => $this->voucherEligibleItemCents($voucher, $item),
-        );
         $group['voucher'] = $voucher;
         $group['voucher_discount'] = $discount;
 
@@ -2206,52 +2042,38 @@ class CheckoutService
     /** @param array<int, array<string, mixed>> $groups */
     private function allocatePlatformDiscount(array &$groups, Voucher $voucher, float $discount, float $subtotal): void
     {
-        $sellerIds = array_keys($groups);
-        $groupWeights = array_map(fn ($sellerId): int => max(
-            0,
-            FinancialRules::cents($groups[$sellerId]['item_subtotal'])
-                - FinancialRules::cents($groups[$sellerId]['promotion_discount_total'])
-                - FinancialRules::cents($groups[$sellerId]['seller_voucher_discount']),
-        ), $sellerIds);
-        $groupShares = FinancialRules::allocateCents(FinancialRules::cents($discount), $groupWeights);
+        $allocated = 0.0;
+        $lastSellerId = array_key_last($groups);
 
-        foreach ($sellerIds as $index => $sellerId) {
-            $group = &$groups[$sellerId];
-            $shareCents = $groupShares[$index] ?? 0;
-            $itemWeights = $group['items']->values()->map(function (CartItem $item) use ($group): int {
-                $afterPromotion = FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item));
-
-                return max(0, $afterPromotion - (int) ($group['seller_voucher_item_discounts'][(int) $item->id] ?? 0));
-            })->all();
-            $itemShares = FinancialRules::allocateCents($shareCents, $itemWeights);
-            $group['platform_voucher_item_discounts'] = $this->sharesByItemId($group['items'], $itemShares);
-            $group['platform_voucher_discount'] = FinancialRules::amount($shareCents);
-            $group['voucher_discount'] = FinancialRules::amount(
-                FinancialRules::cents($group['seller_voucher_discount']) + $shareCents,
-            );
+        foreach ($groups as $sellerId => &$group) {
+            $eligibleGroupSubtotal = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['seller_voucher_discount']);
+            $share = (int) $sellerId === (int) $lastSellerId
+                ? round($discount - $allocated, 2)
+                : round($subtotal > 0 ? $discount * ($eligibleGroupSubtotal / $subtotal) : 0.0, 2);
+            $share = min($eligibleGroupSubtotal, max(0.0, $share));
+            $group['platform_voucher_discount'] = $share;
+            $group['voucher_discount'] = (float) $group['seller_voucher_discount'] + $share;
             $group['voucher'] = $group['seller_voucher'] ?? $voucher;
-            unset($group);
+            $allocated += $share;
         }
+        unset($group);
     }
 
     /** @param array<int, array<string, mixed>> $groups */
     private function allocateShippingDiscount(array &$groups, float $discount, float $shippingSubtotal): void
     {
-        $sellerIds = array_keys($groups);
-        $weights = array_map(fn ($sellerId): int => FinancialRules::cents($groups[$sellerId]['shipping_fee']), $sellerIds);
-        $shares = FinancialRules::allocateCents(FinancialRules::cents($discount), $weights);
-        foreach ($sellerIds as $index => $sellerId) {
-            $group = &$groups[$sellerId];
-            $shareCents = $shares[$index] ?? 0;
-            $itemWeights = $group['items']->values()->map(fn (CartItem $item): int => FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item)))->all();
-            if (array_sum($itemWeights) === 0) {
-                $itemWeights = array_fill(0, count($itemWeights), 1);
-            }
-            $itemShares = FinancialRules::allocateCents($shareCents, $itemWeights);
-            $group['shipping_voucher_item_discounts'] = $this->sharesByItemId($group['items'], $itemShares);
-            $group['shipping_voucher_discount'] = FinancialRules::amount($shareCents);
-            unset($group);
+        $allocated = 0.0;
+        $lastSellerId = array_key_last($groups);
+        foreach ($groups as $sellerId => &$group) {
+            $fee = max(0.0, (float) $group['shipping_fee']);
+            $share = (int) $sellerId === (int) $lastSellerId
+                ? round($discount - $allocated, 2)
+                : round($shippingSubtotal > 0 ? $discount * ($fee / $shippingSubtotal) : 0.0, 2);
+            $share = min($fee, max(0.0, $share));
+            $group['shipping_voucher_discount'] = $share;
+            $allocated += $share;
         }
+        unset($group);
     }
 
     private function lockVoucherRows(array|string $voucherCodes): void

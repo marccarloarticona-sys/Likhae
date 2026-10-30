@@ -11,6 +11,9 @@
     $logistics = $application->logisticsData;
     $rider = $application->riderData;
     $canAdminReview = in_array($user?->account_type, ['BUYER', 'SELLER', 'LOGISTICS'], true);
+    $latestDocumentIds = $application->documents
+        ->groupBy(fn ($document) => strtoupper((string) $document->document_type))
+        ->map(fn ($versions) => (int) $versions->sortByDesc('id')->first()->id);
     $applicationPhotos = [];
     $profilePhotoPath = $user?->profile_photo_path;
     if (filled($profilePhotoPath)) {
@@ -136,12 +139,14 @@
                     $documentUrl = route('admin.registrations.documents.show', [$application, $document]);
                     $previewUrl = $documentUrl.'?preview=1';
                     $mime = strtolower((string) $document->mime_type);
+                    $isCurrentSubmission = $latestDocumentIds->get(strtoupper((string) $document->document_type)) === (int) $document->id;
                 @endphp
                 <article style="width:min(100%,560px);padding:14px;border:1px solid var(--ad-border);border-radius:14px;background:var(--ad-surface,#fff);">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;">
                         <div>
                             <strong>{{ str($document->document_type)->replace('_', ' ')->headline() }}</strong>
                             <small style="display:block;margin-top:4px;">{{ $document->original_name ?: 'Submitted document' }}</small>
+                            @unless($isCurrentSubmission)<small style="display:block;margin-top:4px;">Previous submission</small>@endunless
                         </div>
                         <div class="ad-inline-actions">
                             <span class="ad-status is-{{ \Illuminate\Support\Str::slug($document->verification_status) }}">
@@ -171,7 +176,7 @@
                             @endif
                         </small>
                     </div>
-                    @if($canAdminReview && $documentReviewRoutesAvailable && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+                    @if($isCurrentSubmission && $canAdminReview && $documentReviewRoutesAvailable && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
                         <div style="display:grid;gap:10px;margin-top:12px;">
                             <form method="POST" action="{{ route('admin.registrations.documents.verify', [$application, $document]) }}">
                                 @csrf

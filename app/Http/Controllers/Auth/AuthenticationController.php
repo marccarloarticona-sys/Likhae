@@ -41,7 +41,12 @@ class AuthenticationController extends Controller
                 'password' => $credentials['password'],
             ],
             function (User $user) use ($isLogisticsPortal): bool {
-                if (! $user->isActive()) {
+                $isActive = $user->isActive();
+                $pendingApplication = ! $isActive
+                    ? $user->pendingRegistrationApplication()
+                    : null;
+
+                if (! $isActive && ! $pendingApplication) {
                     throw ValidationException::withMessages(['email' => $user->inactiveMessage()]);
                 }
 
@@ -72,13 +77,21 @@ class AuthenticationController extends Controller
 
         /** @var User $user */
         $user = $request->user();
-        $redirect = redirect()->route($user->workspaceRoute());
+        $pendingApplication = $user->pendingRegistrationApplication();
+        $redirect = redirect()->route(
+            $pendingApplication ? 'registration.status' : $user->workspaceRoute(),
+        );
 
         $savedAccounts = $this->rememberAccount($request, $user);
 
         $redirect
             ->withCookie($this->savedAccountsCookie($request, $savedAccounts))
-            ->with('status', 'Your account is available for quick sign-in on this browser.');
+            ->with(
+                'status',
+                $pendingApplication
+                    ? 'You are signed in. Review your application status below.'
+                    : 'Your account is available for quick sign-in on this browser.',
+            );
 
         return $redirect;
     }

@@ -3,6 +3,7 @@
 namespace App\Services\Marketplace;
 
 use App\Models\Buyer\BuyerVoucherClaim;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use Illuminate\Database\QueryException;
@@ -26,7 +27,7 @@ class BuyerVoucherClaimService
         }
 
         $vouchers = $this->sellerVoucherQuery()
-            ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->where('visibility', 'PUBLIC'))
+            ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->whereIn('visibility', ['PUBLIC', 'FOLLOWERS']))
             ->where('is_active', true)
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
@@ -36,6 +37,8 @@ class BuyerVoucherClaimService
                     ->where('account_type', User::TYPE_SELLER)
                     ->where('status', User::STATUS_ACTIVE)))
             ->with('sellerProfile')
+            ->when(Schema::hasTable('voucher_products'), fn ($query) => $query->with('eligibleProducts:id'))
+            ->when(Schema::hasTable('voucher_variants'), fn ($query) => $query->with('eligibleVariants:id,product_id'))
             ->orderBy('name')
             ->get();
 
@@ -51,8 +54,14 @@ class BuyerVoucherClaimService
             ->all();
         $globalUses = VoucherRedemptionCounter::countsFor($vouchers);
         $buyerUses = VoucherRedemptionCounter::countsFor($vouchers, (int) $buyer->id);
+        $followingSellerIds = Schema::hasTable('seller_followers')
+            ? SellerFollower::query()->where('buyer_user_id', $buyer->id)->pluck('seller_profile_id')->map(fn ($id): int => (int) $id)->all()
+            : [];
 
-        return $vouchers->reject(fn (Voucher $voucher): bool => in_array((int) $voucher->id, $claimedIds, true)
+        return $vouchers->reject(fn (Voucher $voucher): bool => $voucher->requiresReview()
+            || (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS'
+                && ! in_array((int) $voucher->seller_profile_id, $followingSellerIds, true))
+            || in_array((int) $voucher->id, $claimedIds, true)
             || ($voucher->usage_limit !== null && $globalUses->get($voucher->id, 0) >= $voucher->usage_limit)
             || ($voucher->per_user_limit !== null && $buyerUses->get($voucher->id, 0) >= $voucher->per_user_limit)
         )->values();
@@ -61,7 +70,7 @@ class BuyerVoucherClaimService
     /** @return Collection<int, BuyerVoucherClaim> */
     public function collectedSellerClaims(User $buyer): Collection
     {
-        return BuyerVoucherClaim::query()
+        $query = BuyerVoucherClaim::query()
             ->where('buyer_user_id', $buyer->id)
             ->whereHas('voucher', fn ($query) => $query
                 ->whereNotNull('seller_profile_id')
@@ -69,9 +78,15 @@ class BuyerVoucherClaimService
                     Schema::hasColumn('vouchers', 'platform_code_key'),
                     fn ($voucherQuery) => $voucherQuery->whereNull('platform_code_key'),
                 ))
-            ->with('voucher.sellerProfile.user')
-            ->latest('created_at')
-            ->get();
+            ->with('voucher.sellerProfile.user');
+        if (Schema::hasTable('voucher_products')) {
+            $query->with('voucher.eligibleProducts:id');
+        }
+        if (Schema::hasTable('voucher_variants')) {
+            $query->with('voucher.eligibleVariants:id,product_id');
+        }
+
+        return $query->latest('created_at')->get();
     }
 
     public function claim(User $buyer, int $voucherId): BuyerVoucherClaim
@@ -127,6 +142,10 @@ class BuyerVoucherClaimService
             return 'This is a platform campaign, not a Seller voucher.';
         }
 
+        if ($voucher->requiresReview()) {
+            return 'This voucher is under review and cannot be used.';
+        }
+
         if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'CODE_ONLY') {
             return 'This voucher is available by code only.';
         }
@@ -150,6 +169,17 @@ class BuyerVoucherClaimService
 
         if ($voucher->ends_at && $voucher->ends_at->lt(now())) {
             return 'This voucher has expired.';
+        }
+
+        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS') {
+            $isFollowing = Schema::hasTable('seller_followers')
+                && SellerFollower::query()
+                    ->where('buyer_user_id', $buyer->id)
+                    ->where('seller_profile_id', $voucher->seller_profile_id)
+                    ->exists();
+            if (! $isFollowing) {
+                return 'Follow this store to collect and use its follower reward.';
+            }
         }
 
         if ($voucher->usage_limit !== null && $globalUses >= $voucher->usage_limit) {

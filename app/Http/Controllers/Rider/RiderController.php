@@ -667,6 +667,11 @@ class RiderController extends Controller
             ->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']);
         $contacts = app(\App\Services\Communication\ConversationStartAuthorizationService::class)
             ->filterRecipients($request->user(), $contacts);
+        $activeConversation = $conversations->firstWhere('id', $request->integer('conversation'));
+        $activeRecipient = $activeConversation?->participants?->first(fn ($participant) => (int) $participant->id !== (int) $request->user()->id);
+        $smartHelpBootstrap = $activeConversation && $activeRecipient?->isAccountType(User::TYPE_ADMIN)
+            ? app(\App\Services\Communication\SmartMessagingService::class)->bootstrapForRequester($request->user(), $activeConversation)
+            : null;
 
         return view('rider.messages', [
             'conversations' => $conversations,
@@ -676,6 +681,7 @@ class RiderController extends Controller
                 $request->user(),
                 $conversations->firstWhere('id', $request->integer('conversation')),
             ),
+            'smartHelpBootstrap' => $smartHelpBootstrap,
         ]);
     }
 

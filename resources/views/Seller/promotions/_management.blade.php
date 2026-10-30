@@ -2,9 +2,13 @@
     <div class="sl-compliance-feedback is-warning" role="status">Product promotions are temporarily unavailable while the product promotions database migration is pending.</div>
 @else
     <section class="sl-card">
-        <div class="sl-table-toolbar"><div><h3>Your Promotions</h3><p>Discounts are recalculated against current stock and prices at checkout.</p></div></div>
+        <div class="sl-table-toolbar"><div><h3>{{ $section === 'buy-x-get-y' ? 'Buy X Get Y history' : 'Your Bundle Deals' }}</h3><p>{{ $section === 'buy-x-get-y' ? 'Existing offers are retained for records and do not apply to new checkouts.' : 'Bundle prices use the current product and variant prices at checkout.' }}</p></div></div>
+        @if($section === 'buy-x-get-y')<div class="sl-compliance-feedback is-warning" role="note">Buy X Get Y creation is disabled because it makes the reward item free. Existing offers remain available here for history and can be paused.</div>@endif
         <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Promotion</th><th>Offer</th><th>Products</th><th>Schedule</th><th>Status</th><th>Action</th></tr></thead><tbody>
-            @forelse($promotions as $promotion)
+            @if($promotions->isEmpty())
+                <tr><td colspan="6">No promotions yet. Create a bundle deal below.</td></tr>
+            @else
+            @foreach($promotions as $promotion)
                 <tr>
                     <td><strong>{{ $promotion->name }}</strong><small>{{ $promotion->promotion_type === \App\Models\Seller\SellerPromotion::TYPE_BUNDLE ? 'Bundle deal' : 'Buy X Get Y' }}</small></td>
                     <td>
@@ -25,17 +29,19 @@
                         @endif
                     </td>
                     <td>{{ $promotion->starts_at?->format('M d, Y H:i') ?? 'Now' }} &ndash; {{ $promotion->ends_at?->format('M d, Y H:i') ?? 'No end' }}</td>
-                    <td><span class="sl-status {{ $promotion->is_active ? 'is-success' : 'is-neutral' }}">{{ $promotion->is_active ? 'Active' : 'Paused' }}</span></td>
+                    <td><span class="sl-status {{ $promotion->promotion_type === \App\Models\Seller\SellerPromotion::TYPE_BUY_X_GET_Y ? 'is-warning' : ($promotion->is_active ? 'is-success' : 'is-neutral') }}">{{ $promotion->promotion_type === \App\Models\Seller\SellerPromotion::TYPE_BUY_X_GET_Y ? 'Disabled · free item rule' : ($promotion->is_active ? 'Active' : 'Paused') }}</span></td>
                     <td><form method="POST" action="{{ route('seller.promotions.toggle', $promotion) }}" data-confirm-title="{{ $promotion->is_active ? 'Pause promotion?' : 'Activate promotion?' }}" data-confirm-message="{{ $promotion->is_active ? 'This promotion will stop applying to new checkouts.' : 'This promotion will apply to qualifying new checkouts during its schedule.' }}" data-confirm-label="{{ $promotion->is_active ? 'Pause promotion' : 'Activate promotion' }}">@csrf @method('PATCH')<button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">{{ $promotion->is_active ? 'Pause' : 'Activate' }}</button></form></td>
                 </tr>
-            @empty<tr><td colspan="6">No promotions yet. Create a bundle or Buy X Get Y offer below.</td></tr>@endforelse
+            @endforeach
+            @endif
         </tbody></table></div>
         {{ $promotions->links() }}
     </section>
 
+    @if($section === 'bundle-deals')
     <div class="sl-form-grid">
         <section class="sl-card">
-            <div class="sl-table-toolbar"><div><h3>Create a Bundle Deal</h3><p>Buyers must add every listed variant and quantity. Each bundle set receives the bundle price.</p></div></div>
+            <div class="sl-table-toolbar"><div><h3>Create a Bundle Deal</h3><p>Choose the items and quantities, then set one price for the complete bundle. Buyers must purchase every listed component.</p></div></div>
             <form method="POST" action="{{ route('seller.promotions.store') }}" class="sl-form-section">@csrf
                 <input type="hidden" name="promotion_type" value="BUNDLE">
                 <label class="sl-field"><span>Promotion name</span><input name="name" maxlength="150" required value="{{ old('name') }}"></label>
@@ -44,7 +50,14 @@
                     <div data-bundle-components data-next-index="2">
                         @for($index = 0; $index < 2; $index++)
                             <div class="sl-form-grid" data-bundle-component>
-                                <label class="sl-field"><span>Product variant</span><select name="components[{{ $index }}][product_variant_id]" required><option value="">Choose a variant</option>@foreach($variants as $variant)<option value="{{ $variant->id }}" @selected(old("components.$index.product_variant_id") == $variant->id)>{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }})</option>@endforeach</select></label>
+                                <label class="sl-field"><span>Product variant</span><small>Variants with ⚠ already have an active or scheduled offer.</small><select name="components[{{ $index }}][product_variant_id]" required><option value="">Choose a variant</option>
+                                    @foreach($variants as $variant)
+                                        @php
+                                            $variantConflicts = collect($promotionConflicts['variants'][$variant->id] ?? []);
+                                        @endphp
+                                        <option value="{{ $variant->id }}" title="{{ $variantConflicts->pluck('label')->implode('; ') }}" @selected(old("components.$index.product_variant_id") == $variant->id)>{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }}){{ $variantConflicts->isNotEmpty() ? ' · ⚠ '.$variantConflicts->count().' existing offer(s)' : '' }}</option>
+                                    @endforeach
+                                </select></label>
                                 <label class="sl-field"><span>Quantity</span><input name="components[{{ $index }}][quantity]" type="number" min="1" max="99" value="{{ old("components.$index.quantity", 1) }}" required></label>
                             </div>
                         @endfor
@@ -59,30 +72,24 @@
             </form>
         </section>
 
-        <section class="sl-card">
-            <div class="sl-table-toolbar"><div><h3>Create a Buy X Get Y Offer</h3><p>The buyer adds the reward variant to the cart. Its qualifying quantity is free at checkout.</p></div></div>
-            <form method="POST" action="{{ route('seller.promotions.store') }}" class="sl-form-section">@csrf
-                <input type="hidden" name="promotion_type" value="BUY_X_GET_Y">
-                <label class="sl-field"><span>Promotion name</span><input name="name" maxlength="150" required value="{{ old('name') }}"></label>
-                <div class="sl-form-grid">
-                    <label class="sl-field"><span>Buy variant</span><select name="buy_variant_id" required><option value="">Choose a variant</option>@foreach($variants as $variant)<option value="{{ $variant->id }}">{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }})</option>@endforeach</select></label>
-                    <label class="sl-field"><span>Buy quantity</span><input name="buy_quantity" type="number" min="1" max="99" value="1" required></label>
-                    <label class="sl-field"><span>Reward variant</span><select name="reward_variant_id" required><option value="">Choose a variant</option>@foreach($variants as $variant)<option value="{{ $variant->id }}">{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }})</option>@endforeach</select></label>
-                    <label class="sl-field"><span>Reward quantity</span><input name="reward_quantity" type="number" min="1" max="99" value="1" required></label>
-                </div>
-                <div class="sl-form-grid">
-                    <label class="sl-field"><span>Starts at</span><input name="starts_at" type="datetime-local"></label>
-                    <label class="sl-field"><span>Ends at</span><input name="ends_at" type="datetime-local"></label>
-                </div>
-                <button class="sl-btn sl-btn-primary" type="submit">Save Buy X Get Y Offer</button>
-            </form>
+        <section class="sl-card sl-compliance-feedback is-warning" role="note">
+            <h3>Buy X Get Y offers are unavailable</h3>
+            <p>They make the reward item free. Use a bundle deal and set a price that leaves every item at least PHP 0.01.</p>
         </section>
     </div>
+    @endif
 @endunless
 
 <template data-bundle-component-template>
     <div class="sl-form-grid" data-bundle-component>
-        <label class="sl-field"><span>Product variant</span><select name="components[__INDEX__][product_variant_id]" required><option value="">Choose a variant</option>@foreach($variants as $variant)<option value="{{ $variant->id }}">{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }})</option>@endforeach</select></label>
+        <label class="sl-field"><span>Product variant</span><small>Variants with ⚠ already have an active or scheduled offer.</small><select name="components[__INDEX__][product_variant_id]" required><option value="">Choose a variant</option>
+            @foreach($variants as $variant)
+                @php
+                    $variantConflicts = collect($promotionConflicts['variants'][$variant->id] ?? []);
+                @endphp
+                <option value="{{ $variant->id }}" title="{{ $variantConflicts->pluck('label')->implode('; ') }}">{{ $variant->product->name }} &mdash; {{ $variant->description ?: $variant->sku }} (PHP {{ number_format((float) $variant->final_price, 2) }}){{ $variantConflicts->isNotEmpty() ? ' · ⚠ '.$variantConflicts->count().' existing offer(s)' : '' }}</option>
+            @endforeach
+        </select></label>
         <label class="sl-field"><span>Quantity</span><input name="components[__INDEX__][quantity]" type="number" min="1" max="99" value="1" required></label>
     </div>
 </template>

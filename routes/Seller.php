@@ -104,10 +104,15 @@ Route::prefix('seller')
         Route::post('/logistics/{sellerOrder}/pickup', [SellerOrderController::class, 'handover'])->name('logistics.pickup');
 
         Route::get('/messages', [SellerEngagementController::class, 'messages'])->name('messages');
+        Route::get('/messages/preview', [SellerEngagementController::class, 'messagePreview'])
+            ->middleware('throttle:120,1')->name('messages.preview');
         Route::get('/messages/faqs', [MessagingFaqController::class, 'sellerIndex'])->name('messages.faqs');
         Route::post('/messages/faqs', [MessagingFaqController::class, 'storeSeller'])->middleware('throttle:30,1')->name('messages.faqs.store');
         Route::patch('/messages/faqs/{faq}', [MessagingFaqController::class, 'updateSeller'])->whereNumber('faq')->middleware('throttle:30,1')->name('messages.faqs.update');
         Route::patch('/messages/faqs/{faq}/archive', [MessagingFaqController::class, 'archiveSeller'])->whereNumber('faq')->name('messages.faqs.archive');
+        Route::post('/messages/{conversation}/smart-help/answer', [SmartMessagingController::class, 'answer'])->whereNumber('conversation')->middleware('throttle:120,1')->name('messages.smart-help.answer');
+        Route::post('/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])->whereNumber('conversation')->middleware('throttle:60,1')->name('messages.smart-help.feedback');
+        Route::post('/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])->whereNumber('conversation')->middleware('throttle:20,1')->name('messages.smart-help.handoff');
         Route::post('/messages/{conversation}/smart-help/resolve', [SmartMessagingController::class, 'resolve'])
             ->whereNumber('conversation')->middleware('throttle:30,1')->name('messages.smart-help.resolve');
         Route::post('/messages/support-requests/{supportRequest}/acknowledge', [SupportRequestController::class, 'acknowledge'])->whereNumber('supportRequest')->name('messages.support-requests.acknowledge');
@@ -127,24 +132,31 @@ Route::prefix('seller')
         Route::get('/reviews-export', [SellerEngagementController::class, 'exportReviews'])->name('reviews.export');
 
         Route::get('/marketing', [SellerEngagementController::class, 'marketing'])->name('marketing');
+        Route::patch('/marketing/product-discounts/{product}', [SellerEngagementController::class, 'updateProductDiscounts'])->name('marketing.product-discounts.update');
+        Route::patch('/marketing/product-discounts/{product}/toggle', [SellerEngagementController::class, 'toggleProductDiscounts'])->name('marketing.product-discounts.toggle');
         Route::post('/marketing/campaigns', [SellerEngagementController::class, 'storeCampaign'])->name('marketing.campaigns.store');
         Route::patch('/marketing/campaigns/{voucher}', [SellerEngagementController::class, 'updateCampaign'])->name('marketing.campaigns.update');
         Route::patch('/marketing/campaigns/{voucher}/toggle', [SellerEngagementController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
         Route::patch('/marketing/flash-sales/{product}', [SellerEngagementController::class, 'updateFlashSales'])->name('marketing.flash-sales.update');
+        Route::patch('/marketing/flash-sales/{product}/toggle', [SellerEngagementController::class, 'toggleFlashSales'])->name('marketing.flash-sales.toggle');
         Route::patch('/marketing/flash-sales/{product}/end', [SellerEngagementController::class, 'endFlashSales'])->name('marketing.flash-sales.end');
         Route::get('/promotions', [SellerPromotionController::class, 'index'])->name('promotions');
         Route::post('/promotions', [SellerPromotionController::class, 'store'])->name('promotions.store');
         Route::patch('/promotions/{promotion}/toggle', [SellerPromotionController::class, 'toggle'])->name('promotions.toggle');
 
         Route::get('/reports', [SellerOperationsController::class, 'reports'])->name('reports');
+        Route::get('/reports/preview', [SellerOperationsController::class, 'previewReport'])->name('reports.preview');
         Route::get('/reports/download', [SellerOperationsController::class, 'downloadReport'])->name('reports.download');
 
         Route::get('/store', [SellerAccountController::class, 'store'])->name('store');
         Route::put('/store', [SellerAccountController::class, 'updateStore'])->name('store.update');
 
         Route::get('/account', [SellerAccountController::class, 'account'])->name('account');
-        Route::put('/account/profile', [SellerAccountController::class, 'updateProfile'])->name('account.profile');
+        Route::put('/account/profile', [SellerAccountController::class, 'updateProfile'])
+            ->middleware('throttle:10,1')->name('account.profile');
         Route::put('/account/business', [SellerAccountController::class, 'updateBusiness'])->name('account.business');
+        Route::post('/account/verification-documents', [SellerAccountController::class, 'requestDocumentUpdate'])
+            ->middleware('throttle:5,1')->name('account.verification-documents.store');
         Route::put('/account/password', [SellerAccountController::class, 'updatePassword'])->name('account.password');
         Route::put('/account/notifications', [SellerAccountController::class, 'updateNotifications'])->name('account.notifications');
 

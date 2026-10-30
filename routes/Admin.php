@@ -33,7 +33,8 @@ Route::prefix('admin')
         | Registration Applications
         |--------------------------------------------------------------------------
         |
-        | Buyer, Seller, and Logistics registrations are reviewed by Admin.
+        | Buyer registrations are activated at submission. Seller and Logistics
+        | registrations are reviewed by Admin.
         | Rider registrations are reviewed by the rider's selected logistics center.
         |
         */
@@ -55,6 +56,9 @@ Route::prefix('admin')
         Route::get('/users', [AdminUserController::class, 'index'])->name('users');
         Route::post('/users/sessions/revoke', [AdminUserController::class, 'revokeSessions'])->name('users.sessions.revoke');
         Route::get('/users/{user}', [AdminUserController::class, 'show'])->name('users.show');
+        Route::post('/users/{user}/seller-documents/{document}/review', [AdminUserController::class, 'reviewSellerDocument'])
+            ->name('users.seller-documents.review');
+        Route::post('/users/{user}/risk-signals/{signal}/review', [AdminUserController::class, 'reviewRiskSignal'])->name('users.risk-signals.review');
         Route::post('/users/{user}/warnings', [AdminUserController::class, 'issueWarning'])->name('users.warnings.store');
         Route::post('/users/{user}/warnings/{warning}/review', [AdminUserController::class, 'reviewWarning'])->name('users.warnings.review');
         Route::post('/users/{user}/suspend', [AdminUserController::class, 'suspend'])->name('users.suspend');
@@ -106,6 +110,7 @@ Route::prefix('admin')
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
         Route::get('/support-faqs', [MessagingFaqController::class, 'adminIndex'])->name('support-faqs');
         Route::post('/support-faqs', [MessagingFaqController::class, 'storeAdmin'])->middleware('throttle:30,1')->name('support-faqs.store');
+        Route::post('/support-faqs/settings', [MessagingFaqController::class, 'saveAdminSettings'])->middleware('throttle:20,1')->name('support-faqs.settings');
         Route::patch('/support-faqs/{faq}', [MessagingFaqController::class, 'updateAdmin'])->whereNumber('faq')->middleware('throttle:30,1')->name('support-faqs.update');
         Route::patch('/support-faqs/{faq}/archive', [MessagingFaqController::class, 'archiveAdmin'])->whereNumber('faq')->name('support-faqs.archive');
         Route::post('/messages/{conversation}/smart-help/resolve', [SmartMessagingController::class, 'resolve'])
@@ -116,6 +121,12 @@ Route::prefix('admin')
             ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.accept');
         Route::post('/messages/support-requests/{supportRequest}/resolve', [SupportRequestController::class, 'resolve'])
             ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.resolve');
+        Route::post('/messages/support-requests/{supportRequest}/notes', [SupportRequestController::class, 'addInternalNote'])
+            ->whereNumber('supportRequest')->middleware('throttle:30,1')->name('messages.support-requests.notes');
+        Route::patch('/messages/support-requests/{supportRequest}/assignment', [SupportRequestController::class, 'reassign'])
+            ->whereNumber('supportRequest')->middleware('throttle:20,1')->name('messages.support-requests.assignment');
+        Route::post('/messages/support-requests/{supportRequest}/reopen', [SupportRequestController::class, 'reopen'])
+            ->whereNumber('supportRequest')->middleware('throttle:20,1')->name('messages.support-requests.reopen');
         Route::get('/messages/stream', [AdminOperationsController::class, 'messageStream'])->name('messages.stream');
         Route::get('/settings', [AdminOperationsController::class, 'settings'])->name('settings');
         Route::get('/system-settings', [SystemSettingsMonitoringController::class, 'show'])

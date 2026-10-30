@@ -59,14 +59,25 @@ class SellerProductCatalogUpgradeTest extends TestCase
             'listing_status' => 'active',
             'options' => [['name' => 'Color', 'values' => 'Red, Blue']],
             'variants' => [
-                ['values' => 'Red', 'price' => 500, 'stock' => 7, 'discount_type' => 'percentage', 'discount_value' => 10, 'payment_method' => 'online', 'is_active' => 1, 'product_image_ref' => 'upload:primary'],
-                ['values' => 'Blue', 'price' => 400, 'stock' => 3, 'discount_type' => 'fixed', 'discount_value' => 25, 'payment_method' => 'cod', 'is_active' => 1, 'product_image_ref' => 'upload:additional:0'],
+                ['values' => 'Red', 'price' => 500, 'stock' => 7, 'payment_method' => 'online', 'is_active' => 1, 'product_image_ref' => 'upload:primary'],
+                ['values' => 'Blue', 'price' => 400, 'stock' => 3, 'payment_method' => 'cod', 'is_active' => 1, 'product_image_ref' => 'upload:additional:0'],
             ],
             'image' => UploadedFile::fake()->image('copy-source-red.jpg'),
             'images' => [UploadedFile::fake()->image('copy-source-blue.jpg')],
         ])->assertRedirect()->assertSessionHas('product_saved.status', 'ACTIVE');
 
         $source = Product::query()->where('name', 'Safe Copy Source')->with(['images', 'options.values', 'variants.optionValues'])->sole();
+        $sourceVariants = $source->variants->keyBy(fn (ProductVariant $variant): int => (int) $variant->price);
+        $this->actingAs($seller)->patch(route('seller.marketing.product-discounts.update', [
+            'product' => $source,
+            'section' => 'product-discounts',
+        ]), [
+            'discounts_enabled' => 1,
+            'variants' => [
+                ['id' => $sourceVariants[500]->id, 'discount_type' => 'percentage', 'discount_value' => 10],
+                ['id' => $sourceVariants[400]->id, 'discount_type' => 'fixed', 'discount_value' => 25],
+            ],
+        ])->assertRedirect();
         $sourceVariantIds = $source->variants->modelKeys();
         $sourceOptionValueIds = $source->options->flatMap(fn ($option) => $option->values)->pluck('id')->map(fn ($id): int => (int) $id)->all();
         $sourceFiles = Storage::disk('public')->allFiles('sellers/'.$seller->sellerProfile->id.'/products/'.$source->id);
@@ -176,16 +187,29 @@ class SellerProductCatalogUpgradeTest extends TestCase
             'listing_status' => 'draft',
             'options' => [['name' => 'Color', 'values' => 'Red, Blue']],
             'variants' => [
-                ['values' => 'Red', 'price' => 500, 'stock' => 7, 'discount_type' => 'percentage', 'discount_value' => 10, 'payment_method' => 'online', 'is_active' => 1, 'product_image_ref' => 'upload:primary'],
-                ['values' => 'Blue', 'price' => 400, 'stock' => 3, 'discount_type' => 'fixed', 'discount_value' => 25, 'payment_method' => 'cod', 'is_active' => 1, 'product_image_ref' => 'upload:additional:0'],
+                ['values' => 'Red', 'price' => 500, 'stock' => 7, 'payment_method' => 'online', 'is_active' => 1, 'product_image_ref' => 'upload:primary'],
+                ['values' => 'Blue', 'price' => 400, 'stock' => 3, 'payment_method' => 'cod', 'is_active' => 1, 'product_image_ref' => 'upload:additional:0'],
             ],
             'image' => UploadedFile::fake()->image('red-product.jpg'),
             'images' => [UploadedFile::fake()->image('blue-product.jpg')],
         ])->assertRedirect();
 
         $product = Product::query()->where('name', 'Discounted Image Product')->sole();
-        $red = $product->variants()->where('discount_type', 'percentage')->sole();
-        $blue = $product->variants()->where('discount_type', 'fixed')->sole();
+        $product->update(['status' => 'ACTIVE', 'published_at' => now()]);
+        $red = $product->variants()->where('price', 500)->sole();
+        $blue = $product->variants()->where('price', 400)->sole();
+        $this->actingAs($seller)->patch(route('seller.marketing.product-discounts.update', [
+            'product' => $product,
+            'section' => 'product-discounts',
+        ]), [
+            'discounts_enabled' => 1,
+            'variants' => [
+                ['id' => $red->id, 'discount_type' => 'percentage', 'discount_value' => 10],
+                ['id' => $blue->id, 'discount_type' => 'fixed', 'discount_value' => 25],
+            ],
+        ])->assertRedirect();
+        $red = $red->fresh();
+        $blue = $blue->fresh();
 
         $this->assertSame('online', $red->payment_method);
         $this->assertSame('percentage', $red->resolved_discount_type);
@@ -202,56 +226,69 @@ class SellerProductCatalogUpgradeTest extends TestCase
         $this->assertCount(2, Storage::disk('public')->allFiles('sellers/'.$product->seller_profile_id.'/products/'.$product->id));
     }
 
-    public function test_discount_mode_limits_are_validated_server_side(): void
+    public function test_product_discount_percentage_and_fixed_values_are_validated_in_marketing(): void
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
         $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
-
-        $this->actingAs($seller)->post(route('seller.products.store'), [
-            'product_type' => 'single',
-            'name' => 'Invalid Percentage Discount',
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
             'category_id' => $category->id,
+            'name' => 'Validated Marketing Discount',
+            'slug' => 'validated-marketing-discount',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $variant = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'VALIDATED-MARKETING-DISCOUNT',
             'price' => 100,
             'stock' => 1,
-            'discount_type' => 'percentage',
-            'discount_value' => 101,
-            'listing_status' => 'draft',
-        ])->assertSessionHasErrors('discount_value');
+            'is_default' => true,
+            'is_active' => true,
+        ]);
 
-        $this->actingAs($seller)->post(route('seller.products.store'), [
-            'product_type' => 'single',
-            'name' => 'Invalid Fixed Discount',
-            'category_id' => $category->id,
-            'price' => 100,
-            'stock' => 1,
-            'discount_type' => 'fixed',
-            'discount_value' => 101,
-            'listing_status' => 'draft',
-        ])->assertSessionHasErrors('discount_value');
+        $this->actingAs($seller)->patch(route('seller.marketing.product-discounts.update', ['product' => $product]), [
+            'discounts_enabled' => 1,
+            'variants' => [['id' => $variant->id, 'discount_type' => 'percentage', 'discount_value' => 101]],
+        ])->assertSessionHasErrors('variants.0.discount_value');
 
-        $this->assertDatabaseMissing('products', ['name' => 'Invalid Percentage Discount']);
-        $this->assertDatabaseMissing('products', ['name' => 'Invalid Fixed Discount']);
+        $this->patch(route('seller.marketing.product-discounts.update', ['product' => $product]), [
+            'discounts_enabled' => 1,
+            'variants' => [['id' => $variant->id, 'discount_type' => 'fixed', 'discount_value' => 100]],
+        ])->assertSessionHasErrors('variants.0.discount_value');
+
+        $this->assertSame('none', $variant->fresh()->resolved_discount_type);
     }
 
-    public function test_unknown_product_discount_type_is_rejected(): void
+    public function test_unknown_product_discount_type_is_rejected_by_marketing(): void
     {
         $this->seed(DatabaseSeeder::class);
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
         $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
-
-        $this->actingAs($seller)->post(route('seller.products.store'), [
-            'product_type' => 'single',
-            'name' => 'Tampered Discount Type',
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
             'category_id' => $category->id,
+            'name' => 'Unknown Marketing Discount Type',
+            'slug' => 'unknown-marketing-discount-type',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $variant = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'UNKNOWN-MARKETING-DISCOUNT',
             'price' => 100,
             'stock' => 1,
-            'discount_type' => 'arbitrary',
-            'discount_value' => 10,
-            'listing_status' => 'draft',
-        ])->assertSessionHasErrors('discount_type');
+            'is_default' => true,
+            'is_active' => true,
+        ]);
 
-        $this->assertDatabaseMissing('products', ['name' => 'Tampered Discount Type']);
+        $this->actingAs($seller)->patch(route('seller.marketing.product-discounts.update', ['product' => $product]), [
+            'discounts_enabled' => 1,
+            'variants' => [['id' => $variant->id, 'discount_type' => 'arbitrary', 'discount_value' => 10]],
+        ])->assertSessionHasErrors('variants.0.discount_type');
+
+        $this->assertSame('none', $variant->fresh()->resolved_discount_type);
     }
 
     public function test_failed_product_update_does_not_delete_existing_image_files(): void

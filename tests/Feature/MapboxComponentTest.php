@@ -21,7 +21,7 @@ class MapboxComponentTest extends TestCase
 {
     public function test_shared_map_component_renders_safe_controls_and_marker_data(): void
     {
-        config(['mapbox.public_token' => 'pk.test-token']);
+        config(['services.geoapify.key' => 'geoapify-test-key']);
 
         $html = Blade::render('<x-shared.mapbox :markers="$markers" />', [
             'markers' => [[
@@ -37,14 +37,14 @@ class MapboxComponentTest extends TestCase
         $this->assertStringContainsString('data-likhae-map', $html);
         $this->assertStringContainsString('Use my location', $html);
         $this->assertStringContainsString('Open full map', $html);
-        $this->assertStringContainsString('pk.test-token', $html);
+        $this->assertStringContainsString('geoapify-test-key', $html);
         $this->assertStringContainsString('destination-1', $html);
         $this->assertStringNotContainsString('data-map-navigation-panel', $html);
     }
 
     public function test_rider_navigation_map_renders_eta_distance_and_destination_panel(): void
     {
-        config(['mapbox.public_token' => 'pk.test-token']);
+        config(['services.geoapify.key' => 'geoapify-test-key']);
 
         $html = Blade::render('<x-shared.mapbox :markers="$markers" navigation />', [
             'markers' => [],
@@ -62,7 +62,7 @@ class MapboxComponentTest extends TestCase
 
     public function test_address_pin_component_exposes_explicit_coordinate_confirmation_fields(): void
     {
-        config(['mapbox.public_token' => 'pk.test-token']);
+        config(['services.geoapify.key' => 'geoapify-test-key']);
 
         $html = Blade::render('<form><x-shared.address-pin /></form>');
 
@@ -70,7 +70,7 @@ class MapboxComponentTest extends TestCase
         $this->assertStringContainsString('data-address-confirm', $html);
         $this->assertStringContainsString('name="latitude"', $html);
         $this->assertStringContainsString('name="longitude"', $html);
-        $this->assertStringContainsString('pk.test-token', $html);
+        $this->assertStringContainsString('geoapify-test-key', $html);
     }
 
     public function test_map_data_service_uses_order_destination_coordinates_without_customer_details(): void

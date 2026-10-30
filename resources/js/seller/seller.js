@@ -36,6 +36,211 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     window.slShowToast = showToast;
 
+    const messagePreviewToggle = select('[data-message-preview-toggle]');
+    const messagePreviewPopover = select('[data-message-header-popover]');
+    const messagePreviewList = select('[data-message-preview-list]', messagePreviewPopover || document);
+    const messagePreviewSummary = select('[data-message-preview-summary]', messagePreviewPopover || document);
+    const messagePreviewBadges = selectAll('[data-seller-message-count]');
+    let messagePreviewRequest = null;
+    let messagePreviewRefreshTimer = null;
+    let messagePreviewRefreshQueued = false;
+
+    const setMessageUnreadCount = (count) => {
+        const unreadCount = Math.max(0, Number.parseInt(count, 10) || 0);
+        const unreadLabel = unreadCount === 1 ? '1 unread message' : `${unreadCount} unread messages`;
+        messagePreviewBadges.forEach((badge) => {
+            badge.textContent = String(unreadCount > 99 ? '99+' : unreadCount);
+            badge.style.display = unreadCount > 0 ? '' : 'none';
+            badge.setAttribute('aria-label', unreadLabel);
+        });
+        messagePreviewToggle?.setAttribute('aria-label', unreadCount > 0 ? `Messages, ${unreadLabel}` : 'Messages');
+        if (messagePreviewSummary) {
+            messagePreviewSummary.textContent = unreadCount > 0
+                ? `${unreadCount} unread`
+                : 'You are all caught up';
+        }
+    };
+
+    const renderMessagePreview = (payload) => {
+        if (!messagePreviewList || !messagePreviewPopover) return;
+        const items = Array.isArray(payload?.items) ? payload.items.slice(0, 6) : [];
+        const urlTemplate = messagePreviewPopover.dataset.messageUrlTemplate || '';
+        const rows = items.map((item) => {
+            const conversationId = String(item?.id || '');
+            if (!/^\d+$/.test(conversationId)) return null;
+
+            const row = document.createElement('a');
+            row.className = 'sl-message-preview';
+            row.classList.toggle('is-unread', Number(item.unread_count) > 0);
+            row.dataset.messagePreviewItem = '';
+            row.dataset.conversationId = conversationId;
+            row.href = urlTemplate.replace('__conversation__', encodeURIComponent(conversationId));
+
+            const avatar = document.createElement('span');
+            avatar.className = 'sl-message-preview__avatar';
+            avatar.setAttribute('aria-hidden', 'true');
+            avatar.textContent = String(item.initial || item.name || '?').slice(0, 1);
+
+            const copy = document.createElement('span');
+            copy.className = 'sl-message-preview__copy';
+            const name = document.createElement('strong');
+            name.dataset.messagePreviewName = '';
+            name.textContent = String(item.name || 'Conversation');
+            const preview = document.createElement('span');
+            preview.dataset.messagePreviewText = '';
+            preview.textContent = String(item.preview || 'Start a conversation.');
+            const time = document.createElement('small');
+            time.dataset.messagePreviewTime = '';
+            time.textContent = String(item.time || 'Just now');
+            copy.append(name, preview, time);
+
+            const unread = document.createElement('span');
+            unread.className = 'sl-message-preview__unread';
+            unread.dataset.messagePreviewUnread = '';
+            const unreadCount = Math.max(0, Number.parseInt(item.unread_count, 10) || 0);
+            unread.textContent = String(unreadCount);
+            unread.style.display = unreadCount > 0 ? '' : 'none';
+            row.append(avatar, copy, unread);
+            return row;
+        }).filter(Boolean);
+
+        if (rows.length) {
+            messagePreviewList.replaceChildren(...rows);
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'sl-message-popover__empty';
+            const title = document.createElement('strong');
+            title.textContent = 'No messages yet';
+            const copy = document.createElement('span');
+            copy.textContent = 'New conversations will show up here.';
+            empty.append(title, copy);
+            messagePreviewList.replaceChildren(empty);
+        }
+
+        setMessageUnreadCount(payload?.unread_count);
+    };
+
+    const refreshMessagePreview = async () => {
+        if (!messagePreviewPopover?.dataset.previewUrl) return null;
+        if (messagePreviewRequest) {
+            messagePreviewRefreshQueued = true;
+            return messagePreviewRequest;
+        }
+        messagePreviewRequest = fetch(messagePreviewPopover.dataset.previewUrl, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+        }).then((response) => {
+            if (!response.ok) throw new Error('Message preview is unavailable.');
+            return response.json();
+        }).then(renderMessagePreview).catch(() => {
+            if (messagePreviewSummary && !messagePreviewList?.querySelector('[data-message-preview-item]')) {
+                messagePreviewSummary.textContent = 'Unable to load messages';
+            }
+        }).finally(() => {
+            messagePreviewRequest = null;
+            if (messagePreviewRefreshQueued) {
+                messagePreviewRefreshQueued = false;
+                window.setTimeout(refreshMessagePreview, 0);
+            }
+        });
+        return messagePreviewRequest;
+    };
+
+    const closeMessagePreview = () => {
+        if (!messagePreviewPopover || messagePreviewPopover.hidden) return;
+        messagePreviewPopover.hidden = true;
+        messagePreviewToggle?.setAttribute('aria-expanded', 'false');
+    };
+
+    messagePreviewToggle?.addEventListener('click', () => {
+        if (!messagePreviewPopover) return;
+        const opening = messagePreviewPopover.hidden;
+        messagePreviewPopover.hidden = !opening;
+        messagePreviewToggle.setAttribute('aria-expanded', String(opening));
+        if (opening) refreshMessagePreview();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!messagePreviewPopover || messagePreviewPopover.hidden
+            || messagePreviewPopover.contains(event.target)
+            || event.target.closest('[data-message-preview-toggle]')) return;
+        closeMessagePreview();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && messagePreviewPopover && !messagePreviewPopover.hidden) {
+            closeMessagePreview();
+            messagePreviewToggle?.focus();
+        }
+    });
+
+    document.addEventListener('likhae:seller-message-received', () => {
+        window.clearTimeout(messagePreviewRefreshTimer);
+        messagePreviewRefreshTimer = window.setTimeout(refreshMessagePreview, 250);
+    });
+
+    const passwordChangeToggle = select('[data-password-change-toggle]');
+    const passwordChangePanel = select('[data-password-change-panel]');
+    const passwordChangeForm = select('[data-password-change-form]');
+    const passwordConfirmation = select('[data-password-confirmation]');
+    const passwordMatchMessage = select('[data-password-match-message]');
+    const newPassword = select('#sellerNewPassword');
+
+    const updatePasswordMatch = () => {
+        if (!passwordConfirmation || !passwordMatchMessage || !newPassword) return;
+        const hasConfirmation = passwordConfirmation.value.length > 0;
+        const matches = hasConfirmation && passwordConfirmation.value === newPassword.value;
+        passwordConfirmation.setCustomValidity(hasConfirmation && !matches ? 'Passwords do not match.' : '');
+        passwordConfirmation.setAttribute('aria-invalid', String(hasConfirmation && !matches));
+        passwordMatchMessage.classList.toggle('is-match', matches);
+        passwordMatchMessage.classList.toggle('is-mismatch', hasConfirmation && !matches);
+        passwordMatchMessage.textContent = !hasConfirmation
+            ? ''
+            : matches
+                ? 'Passwords match.'
+                : 'Passwords do not match.';
+    };
+
+    passwordChangeToggle?.addEventListener('click', () => {
+        if (!passwordChangePanel) return;
+        const open = passwordChangePanel.hidden;
+        passwordChangePanel.hidden = !open;
+        passwordChangeToggle.setAttribute('aria-expanded', String(open));
+        passwordChangeToggle.textContent = open ? 'Close form' : 'Change';
+        if (open) select('[name="current_password"]', passwordChangePanel)?.focus();
+        else {
+            passwordChangeForm?.reset();
+            updatePasswordMatch();
+        }
+    });
+
+    select('[data-password-change-cancel]')?.addEventListener('click', () => {
+        if (!passwordChangePanel) return;
+        passwordChangePanel.hidden = true;
+        passwordChangeToggle?.setAttribute('aria-expanded', 'false');
+        if (passwordChangeToggle) passwordChangeToggle.textContent = 'Change';
+        passwordChangeForm?.reset();
+        updatePasswordMatch();
+    });
+
+    passwordChangeForm?.addEventListener('input', (event) => {
+        if (event.target.matches('[data-password-confirmation], #sellerNewPassword')) updatePasswordMatch();
+    });
+    passwordChangeForm?.addEventListener('submit', updatePasswordMatch);
+
+    selectAll('[data-password-peek]').forEach((button) => {
+        const input = document.getElementById(button.dataset.passwordPeek);
+        if (!input) return;
+        const label = (button.getAttribute('aria-label') || 'password').replace(/^show\s+/i, '');
+        button.addEventListener('click', () => {
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            button.setAttribute('aria-pressed', String(reveal));
+            button.setAttribute('aria-label', `${reveal ? 'Hide' : 'Show'} ${label}`);
+        });
+    });
+
     const notificationBadges = selectAll('[data-seller-notification-count]');
     const sellerUserId = window.LIKHAE_NOTIFICATION_SOUND_CONFIG?.userId;
     if (notificationBadges.length && sellerUserId && window.Echo
@@ -95,10 +300,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const setMobileSidebar = (open) => {
         if (!sidebar) return;
-        sidebar.classList.toggle('is-open', open);
-        overlay?.classList.toggle('is-open', open);
-        document.body.classList.toggle('sl-mobile-open', open && !desktop.matches);
-        mobileButton?.setAttribute('aria-expanded', String(open));
+        const isOpen = open && !desktop.matches;
+        sidebar.classList.toggle('is-open', isOpen);
+        overlay?.classList.toggle('is-open', isOpen);
+        document.body.classList.toggle('sl-mobile-open', isOpen);
+        mobileButton?.setAttribute('aria-expanded', String(isOpen));
+        mobileButton?.setAttribute('aria-label', isOpen
+            ? (mobileButton.dataset.closeLabel || 'Close navigation')
+            : (mobileButton.dataset.openLabel || 'Open navigation'));
+        collapseButton?.setAttribute('aria-expanded', String(isOpen));
+        if (!desktop.matches) {
+            collapseButton?.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+        }
     };
 
     const setCollapsed = (collapsed, persist = true) => {
@@ -106,12 +319,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!desktop.matches) collapsed = false;
         document.body.classList.toggle('sl-sidebar-collapsed', collapsed);
         if (dashboardAutoCollapse) document.body.classList.toggle('sl-dashboard-sidebar-expanded', !collapsed);
-        collapseButton?.setAttribute('aria-expanded', String(!collapsed));
-        collapseButton?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+        const mobileOpen = !desktop.matches && sidebar.classList.contains('is-open');
+        collapseButton?.setAttribute('aria-expanded', String(desktop.matches ? !collapsed : mobileOpen));
+        collapseButton?.setAttribute('aria-label', desktop.matches
+            ? (collapsed ? 'Expand sidebar' : 'Collapse sidebar')
+            : (mobileOpen ? 'Close navigation' : 'Open navigation'));
         if (persist) writeStorage(storageKey, String(collapsed));
     };
 
     if (desktop.matches) setCollapsed(dashboardAutoCollapse || readStorage(storageKey) === 'true', false);
+    else setMobileSidebar(false);
     if (dashboardAutoCollapse && sidebar) {
         sidebar.addEventListener('pointerenter', () => setCollapsed(false, false));
         sidebar.addEventListener('pointerleave', () => {
@@ -124,10 +341,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     mobileButton?.addEventListener('click', () => setMobileSidebar(!sidebar?.classList.contains('is-open')));
     overlay?.addEventListener('click', () => setMobileSidebar(false));
-    collapseButton?.addEventListener('click', () => setCollapsed(
-        !document.body.classList.contains('sl-sidebar-collapsed'),
-        !dashboardAutoCollapse,
-    ));
+    collapseButton?.addEventListener('click', () => {
+        if (!desktop.matches) {
+            setMobileSidebar(!sidebar?.classList.contains('is-open'));
+            return;
+        }
+        setCollapsed(
+            !document.body.classList.contains('sl-sidebar-collapsed'),
+            !dashboardAutoCollapse,
+        );
+    });
 
     desktop.addEventListener('change', (event) => {
         setMobileSidebar(false);
@@ -193,12 +416,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (modal && button.dataset.modalOpen === 'campaignModal') {
             const form = select('[data-voucher-form]', modal);
             form?.reset();
-            if (form) syncVoucherTargetForm(form);
+            if (form) {
+                delete form.dataset.editingVoucherId;
+                syncVoucherConflictWarnings(form);
+                syncVoucherTargetForm(form);
+            }
         }
         if (modal && editPayload) {
             const form = select('[data-voucher-edit-form]', modal);
             if (!form || !button.dataset.updateUrl) return;
             form.action = button.dataset.updateUrl;
+            form.dataset.editingVoucherId = button.dataset.voucherId || '';
             const values = {
                 edit_voucher_id: button.dataset.voucherId,
                 name: button.dataset.voucherName,
@@ -227,6 +455,7 @@ document.addEventListener('DOMContentLoaded', () => {
             selectAll('[data-voucher-variant-checkbox]', form).forEach((checkbox) => {
                 checkbox.checked = selectedVariantIds.has(checkbox.value);
             });
+            syncVoucherConflictWarnings(form);
             syncVoucherTargetForm(form);
         }
         openModal(modal);
@@ -244,6 +473,26 @@ document.addEventListener('DOMContentLoaded', () => {
         selectAll('[data-voucher-variant-checkbox]', form).forEach((field) => { field.disabled = !selectingVariants; });
         updateVoucherPickerCounts(form);
         updateVoucherPricePreview(form);
+    }
+
+    function syncVoucherConflictWarnings(form) {
+        const editingVoucherId = form.dataset.editingVoucherId || '';
+        selectAll('[data-voucher-conflict-id]', form).forEach((warning) => {
+            const belongsToEditingVoucher = editingVoucherId
+                && warning.dataset.voucherConflictKind === 'voucher'
+                && warning.dataset.voucherConflictId === editingVoucherId;
+            warning.hidden = Boolean(belongsToEditingVoucher);
+        });
+        const affectedProducts = selectAll('[data-voucher-conflict-product]', form).filter((product) => {
+            const hasOtherOffer = selectAll('[data-voucher-conflict-entry]', product).some((entry) => !entry.hidden);
+            product.hidden = !hasOtherOffer;
+            return hasOtherOffer;
+        });
+        const conflictDetails = select('[data-voucher-conflict-details]', form);
+        if (conflictDetails) {
+            conflictDetails.hidden = affectedProducts.length === 0;
+            select('[data-voucher-conflict-count]', conflictDetails)?.replaceChildren(String(affectedProducts.length));
+        }
     }
 
     function updateVoucherPickerCounts(form) {
@@ -327,17 +576,30 @@ document.addEventListener('DOMContentLoaded', () => {
         updateVoucherPickerCounts(form);
         updateVoucherPricePreview(form);
     }));
+    const syncBundleRemoveButtons = (container) => {
+        const canRemove = container.querySelectorAll('[data-bundle-component]').length > 1;
+        selectAll('[data-remove-bundle-component]', container).forEach((button) => { button.disabled = !canRemove; });
+    };
     selectAll('[data-add-bundle-component]').forEach((button) => button.addEventListener('click', (event) => {
         const form = event.currentTarget.closest('form');
         const container = select('[data-bundle-components]', form);
         const template = select('[data-bundle-component-template]');
         if (!container || !template || container.querySelectorAll('[data-bundle-component]').length >= 10) return;
-        const index = Number(container.dataset.nextIndex || 2);
+        const index = Number(container.dataset.nextIndex || 1);
         const fragment = template.content.cloneNode(true);
         fragment.querySelectorAll('[name]').forEach((field) => { field.name = field.name.replaceAll('__INDEX__', String(index)); });
         container.appendChild(fragment);
         container.dataset.nextIndex = String(index + 1);
+        syncBundleRemoveButtons(container);
     }));
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-remove-bundle-component]');
+        if (!button) return;
+        const container = button.closest('[data-bundle-components]');
+        if (!container || container.querySelectorAll('[data-bundle-component]').length <= 1) return;
+        button.closest('[data-bundle-component]')?.remove();
+        syncBundleRemoveButtons(container);
+    });
     selectAll('[data-flash-search]').forEach((field) => field.addEventListener('input', () => {
         const query = field.value.trim().toLocaleLowerCase();
         selectAll('[data-flash-product]').forEach((product) => { product.hidden = !product.dataset.search.includes(query); });
@@ -353,16 +615,283 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target === modal) closeModal(modal);
     }));
 
-    const characterField = select('[data-character-count]');
-    if (characterField) {
-        const textarea = characterField.closest('.sl-field')?.querySelector('textarea');
-        const updateCount = () => { characterField.textContent = String(textarea?.value.length || 0); };
-        textarea?.addEventListener('input', updateCount);
-        updateCount();
-    }
-
     const filesFrom = (selector) => Array.from(select(selector)?.files || []);
     const imageLibraryItems = () => selectAll('[data-library-image]:not(.is-removing), [data-new-library-image]');
+    const descriptionVisual = select('[data-description-visual]');
+    const descriptionContent = select('[data-description-content]');
+    const descriptionField = select('[data-description-value]');
+    const descriptionCharacterCount = select('[data-character-count]');
+    const descriptionImagePicker = select('[data-description-image-picker]');
+    const descriptionImagesInput = select('[data-description-images-input]');
+    const descriptionImageLibrary = select('[data-description-image-library]');
+    const descriptionUploadFiles = [];
+    const descriptionUploadUrls = [];
+    let descriptionSelection = null;
+    const descriptionTokenPattern = /\[\[image:(image:\d+|upload:primary|upload:additional:\d+)\]\]|\[\[description-image:(stored:[A-Za-z0-9._-]+|upload:\d+)\]\]/g;
+
+    const rememberDescriptionSelection = () => {
+        const selection = window.getSelection();
+        if (!selection?.rangeCount || !descriptionContent?.contains(selection.anchorNode)) return;
+        descriptionSelection = selection.getRangeAt(0).cloneRange();
+    };
+
+    const appendDescriptionText = (text) => {
+        if (!descriptionContent || !text) return;
+        String(text).split('\n').forEach((line, index) => {
+            if (index > 0) descriptionContent.appendChild(document.createElement('br'));
+            if (line) descriptionContent.appendChild(document.createTextNode(line));
+        });
+    };
+
+    const descriptionImageSource = (reference, legacy = false) => {
+        if (legacy) return imageLibraryItems().find((candidate) => candidate.dataset.imageRef === reference) || null;
+        if (reference.startsWith('stored:')) {
+            return selectAll('[data-description-image-item]', descriptionImageLibrary)
+                .find((candidate) => candidate.dataset.descriptionImageRef === reference) || null;
+        }
+        if (reference.startsWith('upload:')) {
+            const index = Number(reference.split(':').pop());
+            const file = descriptionUploadFiles[index];
+            return file ? {
+                dataset: { imageUrl: descriptionUploadUrls[index] || '', imageLabel: file.name },
+                querySelector: () => null,
+            } : null;
+        }
+
+        return null;
+    };
+
+    const createDescriptionImage = (reference, legacy = false) => {
+        const figure = document.createElement('figure');
+        figure.contentEditable = 'false';
+        figure.dataset.descriptionImageRef = reference;
+        figure.dataset.descriptionImageLegacy = String(legacy);
+
+        const image = document.createElement('img');
+        const item = descriptionImageSource(reference, legacy);
+        if (item) {
+            image.src = item.dataset.imageUrl || '';
+            image.alt = item.querySelector('img')?.alt || item.dataset.imageLabel || 'Product description image';
+        } else {
+            image.hidden = true;
+        }
+        figure.appendChild(image);
+
+        const note = document.createElement('span');
+        note.dataset.descriptionImageNote = 'true';
+        note.textContent = item ? '' : 'This description picture is unavailable. Remove it and upload it again.';
+        note.hidden = Boolean(item);
+        figure.appendChild(note);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.dataset.descriptionImageRemove = 'true';
+        remove.setAttribute('aria-label', 'Remove picture from description');
+        remove.textContent = 'Remove picture';
+        figure.appendChild(remove);
+
+        return figure;
+    };
+
+    const renderDescriptionEditor = () => {
+        if (!descriptionContent || !descriptionField || !descriptionVisual) return;
+        descriptionContent.replaceChildren();
+        const description = descriptionField.value || '';
+        let offset = 0;
+        for (const match of description.matchAll(descriptionTokenPattern)) {
+            const tokenOffset = match.index ?? 0;
+            appendDescriptionText(description.slice(offset, tokenOffset));
+            const legacy = Boolean(match[1]);
+            descriptionContent.appendChild(createDescriptionImage(legacy ? match[1] : match[2], legacy));
+            offset = tokenOffset + match[0].length;
+        }
+        appendDescriptionText(description.slice(offset));
+        descriptionContent.dataset.ready = 'true';
+        descriptionContent.contentEditable = 'true';
+        const descriptionImageButton = select('[data-description-insert-image]');
+        if (descriptionImageButton) descriptionImageButton.disabled = false;
+        descriptionVisual.hidden = false;
+        descriptionField.hidden = true;
+    };
+
+    const serializeDescriptionNode = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.matches('[data-description-image-ref]')) {
+            return node.dataset.descriptionImageLegacy === 'true'
+                ? `[[image:${node.dataset.descriptionImageRef}]]`
+                : `[[description-image:${node.dataset.descriptionImageRef}]]`;
+        }
+        if (node.tagName === 'BR') return '\n';
+        const content = Array.from(node.childNodes).map(serializeDescriptionNode).join('');
+        return ['DIV', 'P'].includes(node.tagName) ? `${content}\n` : content;
+    };
+
+    const syncDescriptionValue = () => {
+        if (!descriptionContent?.dataset.ready || !descriptionField) return '';
+        const value = Array.from(descriptionContent.childNodes)
+            .map(serializeDescriptionNode)
+            .join('')
+            .replace(/\n+$/, '');
+        descriptionField.value = value;
+        const readableValue = value.replace(/\[\[(?:image|description-image):[^\]]+\]\]/g, '');
+        if (descriptionCharacterCount) descriptionCharacterCount.textContent = String(readableValue.length);
+        return value;
+    };
+
+    const syncDescriptionImagePreviews = () => {
+        if (!descriptionContent?.dataset.ready) return;
+        selectAll('[data-description-image-ref]', descriptionContent).forEach((figure) => {
+            const item = descriptionImageSource(figure.dataset.descriptionImageRef || '', figure.dataset.descriptionImageLegacy === 'true');
+            const image = select('img', figure);
+            const note = select('[data-description-image-note]', figure);
+            if (item && image) {
+                image.src = item.dataset.imageUrl || '';
+                image.alt = item.querySelector('img')?.alt || item.dataset.imageLabel || 'Product description image';
+                image.hidden = false;
+                if (note) note.hidden = true;
+            } else {
+                if (image) image.hidden = true;
+                if (note) {
+                    note.hidden = false;
+                    note.textContent = 'This description picture is unavailable. Remove it and upload it again.';
+                }
+            }
+        });
+        syncDescriptionValue();
+    };
+
+    const removeDescriptionImageReference = (reference) => {
+        if (!descriptionContent) return;
+        selectAll('[data-description-image-ref]', descriptionContent)
+            .filter((figure) => figure.dataset.descriptionImageRef === reference)
+            .forEach((figure) => figure.remove());
+        syncDescriptionValue();
+    };
+
+    const remapDescriptionUploadAfterRemoval = (kind, index) => {
+        if (!descriptionContent) return;
+        selectAll('[data-description-image-ref]', descriptionContent).forEach((figure) => {
+            const reference = figure.dataset.descriptionImageRef || '';
+            if (kind === 'primary' && reference === 'upload:primary') {
+                figure.remove();
+                return;
+            }
+            if (kind !== 'additional' || !reference.startsWith('upload:additional:')) return;
+            const currentIndex = Number(reference.split(':').pop());
+            if (currentIndex === index) figure.remove();
+            else if (currentIndex > index) figure.dataset.descriptionImageRef = `upload:additional:${currentIndex - 1}`;
+        });
+        syncDescriptionValue();
+    };
+
+    const syncDescriptionUploadInput = () => {
+        if (!descriptionImagesInput || !window.DataTransfer) return false;
+        const transfer = new DataTransfer();
+        descriptionUploadFiles.forEach((file) => transfer.items.add(file));
+        descriptionImagesInput.files = transfer.files;
+        return true;
+    };
+
+    const removeDescriptionUpload = (index) => {
+        if (index < 0 || index >= descriptionUploadFiles.length) return;
+        const oldUrl = descriptionUploadUrls[index];
+        if (oldUrl) URL.revokeObjectURL(oldUrl);
+        descriptionUploadFiles.splice(index, 1);
+        descriptionUploadUrls.splice(index, 1);
+        selectAll('[data-description-image-ref]', descriptionContent).forEach((figure) => {
+            if (figure.dataset.descriptionImageLegacy === 'true') return;
+            const reference = figure.dataset.descriptionImageRef || '';
+            if (!reference.startsWith('upload:')) return;
+            const currentIndex = Number(reference.split(':').pop());
+            if (currentIndex === index) figure.remove();
+            else if (currentIndex > index) figure.dataset.descriptionImageRef = `upload:${currentIndex - 1}`;
+        });
+        syncDescriptionUploadInput();
+        syncDescriptionImagePreviews();
+    };
+
+    const insertDescriptionImage = (reference, legacy = false) => {
+        if (!descriptionContent || !reference) return;
+        if (selectAll('[data-description-image-ref]', descriptionContent).length >= 10) {
+            showToast('A product description can include up to 10 pictures.');
+            return;
+        }
+        const item = descriptionImageSource(reference, legacy);
+        if (!item) {
+            showToast('Choose or upload an available description picture first.');
+            return;
+        }
+
+        const figure = createDescriptionImage(reference, legacy);
+        descriptionContent.focus();
+        const selection = window.getSelection();
+        let range = descriptionSelection?.commonAncestorContainer
+            && descriptionContent.contains(descriptionSelection.commonAncestorContainer)
+            ? descriptionSelection.cloneRange()
+            : null;
+        if (!range) {
+            range = document.createRange();
+            range.selectNodeContents(descriptionContent);
+            range.collapse(false);
+        }
+        range.collapse(false);
+        range.insertNode(figure);
+        const breakAfterImage = document.createElement('br');
+        figure.after(breakAfterImage);
+        range = document.createRange();
+        range.setStartAfter(breakAfterImage);
+        range.collapse(true);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        descriptionSelection = range.cloneRange();
+        syncDescriptionValue();
+        descriptionContent.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    descriptionContent?.addEventListener('input', () => {
+        rememberDescriptionSelection();
+        syncDescriptionValue();
+    });
+    descriptionContent?.addEventListener('keyup', rememberDescriptionSelection);
+    descriptionContent?.addEventListener('mouseup', rememberDescriptionSelection);
+    descriptionContent?.addEventListener('click', (event) => {
+        const removeButton = event.target.closest('[data-description-image-remove]');
+        if (!removeButton) return;
+        const figure = removeButton.closest('[data-description-image-ref]');
+        if (!figure) return;
+        const reference = figure.dataset.descriptionImageRef || '';
+        if (figure.dataset.descriptionImageLegacy !== 'true' && reference.startsWith('upload:')) {
+            removeDescriptionUpload(Number(reference.split(':').pop()));
+            return;
+        }
+        figure.remove();
+        syncDescriptionValue();
+    });
+
+    descriptionImagePicker?.addEventListener('change', () => {
+        const selectedFiles = Array.from(descriptionImagePicker.files || []);
+        const currentPictures = selectAll('[data-description-image-ref]', descriptionContent).length;
+        if (currentPictures + selectedFiles.length > 10 || descriptionUploadFiles.length + selectedFiles.length > 10) {
+            showToast('A product description can include up to 10 pictures.');
+            descriptionImagePicker.value = '';
+            return;
+        }
+        const startIndex = descriptionUploadFiles.length;
+        selectedFiles.forEach((file) => {
+            descriptionUploadFiles.push(file);
+            descriptionUploadUrls.push(URL.createObjectURL(file));
+        });
+        if (!syncDescriptionUploadInput()) {
+            descriptionUploadFiles.splice(startIndex, selectedFiles.length);
+            descriptionUploadUrls.splice(startIndex, selectedFiles.length).forEach((url) => URL.revokeObjectURL(url));
+            showToast('Your browser could not prepare description picture uploads. Please use a current browser.');
+            descriptionImagePicker.value = '';
+            return;
+        }
+        selectedFiles.forEach((file, index) => insertDescriptionImage(`upload:${startIndex + index}`));
+        descriptionImagePicker.value = '';
+    });
 
     const clearVariantImageAssignments = (imageRef) => {
         if (!imageRef) return;
@@ -430,6 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
         additionalFiles.forEach((file, index) => renderNewImage(file, `upload:additional:${index}`, existingCount + (primaryFiles[0] ? 2 : 1) + index, false, index));
         syncAllVariantImageButtons();
         syncBulkImageButton();
+        syncDescriptionImagePreviews();
     };
 
     const removeFileFromInput = (selector, index) => {
@@ -462,39 +992,6 @@ document.addEventListener('DOMContentLoaded', () => {
         syncProductType();
     }
 
-    const normalizeDiscountType = (value, fallback = 'none') => {
-        const type = String(value || '').toLowerCase();
-        return ['none', 'percentage', 'fixed'].includes(type) ? type : fallback;
-    };
-
-    const discountAmountFor = (price, type, value) => {
-        const basePrice = Math.max(0, Number(price) || 0);
-        const discountValue = Math.max(0, Number(value) || 0);
-        const normalizedType = normalizeDiscountType(type);
-        if (normalizedType === 'fixed') return Math.min(basePrice, discountValue);
-        if (normalizedType === 'percentage') return Math.min(basePrice, basePrice * Math.min(100, discountValue) / 100);
-        return 0;
-    };
-
-    const discountLabelFor = (type, value, money) => normalizeDiscountType(type) === 'fixed'
-        ? `${money(value)} OFF`
-        : `${Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}% OFF`;
-
-    const syncDiscountControl = (typeField, valueField, label = null, prefix = null) => {
-        if (!typeField || !valueField) return 'none';
-        const type = normalizeDiscountType(typeField.value);
-        const fixed = type === 'fixed';
-        const percentage = type === 'percentage';
-        valueField.max = percentage ? '100' : '999999.99';
-        valueField.placeholder = fixed ? '0.00' : '0';
-        valueField.disabled = type === 'none';
-        if (type === 'none') valueField.value = '0';
-        valueField.setAttribute('aria-label', fixed ? 'Fixed discount amount' : percentage ? 'Discount percentage' : 'Discount value');
-        if (label) label.textContent = fixed ? 'Discount amount (₱)' : percentage ? 'Discount (%)' : 'Discount value';
-        if (prefix) prefix.hidden = !fixed;
-        return type;
-    };
-
     const productForm = select('.sl-editor-layout');
     if (productForm) {
         const money = (value) => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -502,46 +999,41 @@ document.addEventListener('DOMContentLoaded', () => {
             const variations = select('[name="product_type"]:checked', productForm)?.value === 'variations';
             const name = select('[name="name"]', productForm)?.value.trim() || 'Your product name';
             const category = select('[name="category_id"] option:checked', productForm)?.textContent.trim() || 'Subcategory';
-            const singleDiscountTypeField = select('[data-single-discount-type]', productForm);
-            const singleDiscountValueField = select('[data-single-discount-value]', productForm);
-            const singleDiscountType = syncDiscountControl(
-                singleDiscountTypeField,
-                singleDiscountValueField,
-                select('[data-single-discount-label]', productForm),
-                select('[data-single-discount-prefix]', productForm),
-            );
-            const bulkDiscountTypeField = select('[data-bulk-discount-type]', productForm);
-            const bulkDiscountValueField = select('[data-bulk-discount-value]', productForm);
-            syncDiscountControl(
-                bulkDiscountTypeField,
-                bulkDiscountValueField,
-                select('[data-bulk-discount-label]', productForm),
-            );
-
-            const variantPricing = selectAll('[name^="variants"][name$="[price]"]:not(:disabled)', productForm).map((field) => {
-                const price = Number(field.value || 0);
-                const row = field.closest('.sl-variation-row');
-                const typeField = row?.querySelector('[name$="[discount_type]"]');
-                const valueField = row?.querySelector('[name$="[discount_value]"]');
-                const type = syncDiscountControl(typeField, valueField);
-                const value = Number(valueField?.value || 0);
-                const discountAmount = discountAmountFor(price, type, value);
-                return {
-                    price,
-                    type,
-                    value,
-                    discountAmount,
-                    finalPrice: Math.max(0, price - discountAmount),
-                };
-            }).filter((value) => Number.isFinite(value.price) && value.price >= 0);
-            const variantPrices = variantPricing.map((item) => item.finalPrice);
+            const variantPriceFields = selectAll('[name^="variants"][name$="[price]"]:not(:disabled)', productForm);
+            const variantPrices = variantPriceFields
+                .map((field) => Number(field.value || 0)).filter((price) => Number.isFinite(price) && price >= 0);
             const variantStocks = selectAll('[name^="variants"][name$="[stock]"]:not(:disabled)', productForm).map((field) => Number(field.value || 0));
-            const singleBasePrice = Number(select('[name="price"]:not(:disabled)', productForm)?.value || 0);
-            const singleDiscountValue = Number(singleDiscountValueField?.value || 0);
-            const singleDiscountAmount = discountAmountFor(singleBasePrice, singleDiscountType, singleDiscountValue);
-            const singlePrice = Math.max(0, singleBasePrice - singleDiscountAmount);
+            const singlePriceField = select('[name="price"]:not(:disabled)', productForm);
+            const singleBasePrice = Number(singlePriceField?.value || 0);
             const singleStock = Number(select('[name="stock"]:not(:disabled)', productForm)?.value || 0);
-            const prices = variations ? variantPrices : [singlePrice];
+            const previewPrice = (field, basePrice, stock) => {
+                const base = Math.round(Math.max(0, basePrice) * 100) / 100;
+                const flashPrice = Number(field?.dataset.marketingFlashPrice);
+                const flashActive = field?.dataset.marketingFlashActive === 'true'
+                    && stock > 0
+                    && Number(field?.dataset.marketingFlashRemaining || 0) > 0
+                    && Number.isFinite(flashPrice)
+                    && flashPrice > 0;
+                if (flashActive) return { price: Math.max(0.01, Math.min(base, flashPrice)), source: 'flash_sale', base };
+
+                if (field?.dataset.marketingDiscountActive === 'true') {
+                    const value = Math.max(0, Number(field.dataset.marketingDiscountValue || 0));
+                    const amount = field.dataset.marketingDiscountType === 'fixed'
+                        ? value
+                        : field.dataset.marketingDiscountType === 'percentage'
+                            ? base * Math.min(100, value) / 100
+                            : 0;
+                    if (amount > 0 && base > 0) {
+                        return { price: Math.max(0.01, Math.round((base - amount) * 100) / 100), source: 'product_discount', base };
+                    }
+                }
+
+                return { price: base, source: 'regular', base };
+            };
+            const priceResults = variations
+                ? variantPriceFields.map((field, index) => previewPrice(field, variantPrices[index] || 0, variantStocks[index] || 0))
+                : [previewPrice(singlePriceField, singleBasePrice, singleStock)];
+            const prices = priceResults.map((row) => row.price);
             const stock = variations ? variantStocks.reduce((sum, value) => sum + value, 0) : singleStock;
             const priceText = prices.length && Math.min(...prices) !== Math.max(...prices) ? `${money(Math.min(...prices))} - ${money(Math.max(...prices))}` : money(prices[0] || 0);
 
@@ -550,15 +1042,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (select('[data-preview-price]')) select('[data-preview-price]').textContent = priceText;
             if (select('[data-preview-stock]')) select('[data-preview-stock]').textContent = `${stock} available`;
             const previewDiscount = select('[data-preview-discount]', productForm);
-            const previewDiscounts = variations
-                ? variantPricing.filter((item) => item.discountAmount > 0)
-                : (singleDiscountAmount > 0 ? [{ type: singleDiscountType, value: singleDiscountValue, discountAmount: singleDiscountAmount }] : []);
             if (previewDiscount) {
-                const sameDiscount = previewDiscounts.length > 0 && previewDiscounts.every((item) => item.type === previewDiscounts[0].type && item.value === previewDiscounts[0].value);
-                previewDiscount.hidden = previewDiscounts.length === 0;
-                previewDiscount.textContent = sameDiscount
-                    ? discountLabelFor(previewDiscounts[0].type, previewDiscounts[0].value, money)
-                    : 'Discount varies by variation';
+                const discounted = priceResults.filter((row) => row.price < row.base);
+                previewDiscount.hidden = discounted.length === 0;
+                previewDiscount.textContent = discounted.some((row) => row.source === 'flash_sale')
+                    ? 'Flash Sale price managed in Marketing'
+                    : 'Product discount managed in Marketing';
             }
 
             const previewImage = select('[data-preview-image]', productForm);
@@ -630,13 +1119,42 @@ document.addEventListener('DOMContentLoaded', () => {
                 previewOptions.hidden = !variations || !previewOptions.children.length;
             }
 
+            const pricingFields = variations
+                ? selectAll('[name^="variants"][name$="[price]"]:not(:disabled)', productForm)
+                : [select('[name="price"]:not(:disabled)', productForm)].filter(Boolean);
+            const priceReductions = pricingFields.filter((field) => {
+                const savedPrice = Number(field.dataset.savedPrice);
+                const currentPrice = Number(field.value);
+                return Number.isFinite(savedPrice) && savedPrice > 0
+                    && Number.isFinite(currentPrice) && currentPrice < savedPrice - 0.009;
+            });
+            const reductionWarning = select('[data-price-reduction-warning]', productForm);
+            if (reductionWarning) {
+                reductionWarning.hidden = priceReductions.length === 0;
+                const message = select('[data-price-reduction-message]', reductionWarning);
+                if (message) {
+                    message.textContent = variations
+                        ? `${priceReductions.length} variant price${priceReductions.length === 1 ? ' is' : 's are'} below its saved catalog price. This reduction is Seller-funded.`
+                        : `The price is ₱${(Number(priceReductions[0]?.dataset.savedPrice || 0) - Number(priceReductions[0]?.value || 0)).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} below its previously saved catalog price. This reduction is Seller-funded.`;
+                }
+            }
+            const inventoryFields = variations
+                ? selectAll('[name^="variants"][name$="[stock]"]:not(:disabled)', productForm)
+                : [select('[name="stock"]:not(:disabled)', productForm)].filter(Boolean);
+            const hasValidValue = (field, max, integer = false) => {
+                const raw = field.value.trim();
+                const value = Number(raw);
+                return raw !== '' && Number.isFinite(value) && value >= 0 && value <= max
+                    && (!integer || Number.isInteger(value));
+            };
+
             const checks = {
                 name: name !== 'Your product name',
                 description: Boolean(select('[name="description"]', productForm)?.value.trim()),
                 category: Boolean(select('[name="category_id"]', productForm)?.value),
                 image: Boolean(select('[name="image"]', productForm)?.files?.length || selectAll('[data-library-image]:not(.is-removing)', productForm).length),
-                pricing: prices.length > 0 && prices.every((value) => value >= 0),
-                inventory: variations ? variantStocks.length > 0 && variantStocks.every((value) => value >= 0) : singleStock >= 0,
+                pricing: pricingFields.length > 0 && pricingFields.every((field) => hasValidValue(field, 999999.99)),
+                inventory: inventoryFields.length > 0 && inventoryFields.every((field) => hasValidValue(field, 999999, true)),
                 variations: !variations || (variantPrices.length > 0 && selectAll('[name^="variants"][name$="[values]"]:not(:disabled)', productForm).every((field) => field.value.trim())),
             };
             Object.entries(checks).forEach(([key, complete]) => {
@@ -663,15 +1181,35 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         productForm.addEventListener('submit', (event) => {
+            const descriptionValue = syncDescriptionValue();
+            if (descriptionValue.replace(/\[\[(?:image|description-image):[^\]]+\]\]/g, '').length > 10000) {
+                event.preventDefault();
+                descriptionContent?.focus();
+                showToast('Product description must be 10,000 characters or fewer.');
+                return;
+            }
             const button = event.submitter;
             const submittedStatus = select('[data-listing-status-field]', productForm);
             if (submittedStatus && button?.dataset.listingStatus) {
                 submittedStatus.value = button.dataset.listingStatus;
             }
-            if (!button) return;
-            button.disabled = true;
-            button.dataset.originalText = button.textContent;
-            button.textContent = button.dataset.listingStatus === 'draft' ? 'Saving Draft...' : 'Publishing...';
+            const listingStatus = button?.dataset.listingStatus || submittedStatus?.value || 'draft';
+            const isDraft = listingStatus === 'draft';
+            const progress = select('[data-product-save-progress]', productForm);
+            if (progress) {
+                progress.textContent = isDraft
+                    ? 'Saving your draft. Please keep this page open.'
+                    : 'Publishing your product. Please keep this page open.';
+                progress.hidden = false;
+            }
+            productForm.setAttribute('aria-busy', 'true');
+            selectAll('button[type="submit"][data-listing-status]', productForm).forEach((submitButton) => {
+                submitButton.disabled = true;
+                if (submitButton === button) {
+                    submitButton.dataset.originalText = submitButton.textContent;
+                    submitButton.textContent = isDraft ? 'Saving Draft...' : 'Publishing...';
+                }
+            });
         });
         updateEditorPreview();
     }
@@ -772,7 +1310,7 @@ document.addEventListener('DOMContentLoaded', () => {
         options.innerHTML = '';
         const items = imageLibraryItems();
         if (!items.length) {
-            options.innerHTML = '<p class="sl-image-picker-empty">Upload a primary or additional product image above first.</p>';
+            options.innerHTML = '<p class="sl-image-picker-empty">Upload a primary or additional product image first.</p>';
         }
         items.forEach((item) => {
             const button = document.createElement('button');
@@ -812,6 +1350,19 @@ document.addEventListener('DOMContentLoaded', () => {
         closeImagePicker();
     };
 
+    const descriptionImageButton = select('[data-description-insert-image]');
+    descriptionImageButton?.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        rememberDescriptionSelection();
+    });
+    descriptionImageButton?.addEventListener('click', () => {
+        if (selectAll('[data-description-image-ref]', descriptionContent).length >= 10
+            || descriptionUploadFiles.length >= 10) {
+            showToast('A product description can include up to 10 pictures.');
+            return;
+        }
+        descriptionImagePicker?.click();
+    });
     select('[data-bulk-image-trigger]')?.addEventListener('click', () => openImagePicker('bulk'));
     select('[data-image-picker-close]')?.addEventListener('click', closeImagePicker);
     select('[data-image-picker-clear]')?.addEventListener('click', () => applyImageReference(''));
@@ -820,6 +1371,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (option) applyImageReference(option.dataset.imagePickerRef || '');
     });
     syncProductImageLibrary();
+    renderDescriptionEditor();
+    syncDescriptionValue();
     syncAllVariantImageButtons();
     syncBulkImageButton();
 
@@ -834,6 +1387,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const combinations = sets.reduce((rows, set) => rows.flatMap((row) => set.map((value) => [...row, value])), [[]]);
         const list = select('[data-variation-list]');
         if (!list) return;
+        let savedVariantPrices = {};
+        try { savedVariantPrices = JSON.parse(productForm?.dataset.savedVariantPrices || '{}'); } catch {}
         const labels = select('.sl-variation-labels', list);
         const previous = new Map(variationRows().map((row) => [rowValuesKey(rowField(row, 'values')?.value), row]));
         list.replaceChildren();
@@ -841,11 +1396,18 @@ document.addEventListener('DOMContentLoaded', () => {
         combinations.forEach((values, index) => {
             const previousRow = previous.get(rowValuesKey(values.join(', ')));
             const previousValue = (suffix, fallback = '') => rowField(previousRow, suffix)?.value || fallback;
+            const previousVariantId = previousValue('id');
             const isActive = previousRow ? previousValue('is_active', '1') : '1';
-            const previousDiscountType = normalizeDiscountType(previousValue('discount_type', 'none'), previousValue('discount_value') ? 'percentage' : 'none');
             const row = document.createElement('div');
             row.className = 'sl-variation-row';
-            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" ${previousDiscountType === 'none' ? 'selected' : ''}>None</option><option value="percentage" ${previousDiscountType === 'percentage' ? 'selected' : ''}>Percentage</option><option value="fixed" ${previousDiscountType === 'fixed' ? 'selected' : ''}>Fixed</option></select><input name="variants[${index}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="${escapeHtml(previousValue('discount_value', '0'))}" placeholder="0" aria-label="Discount value"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
+            row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
+            const generatedPriceField = select('[name$="[price]"]', row);
+            if (generatedPriceField) generatedPriceField.dataset.savedPrice = String(savedVariantPrices[previousVariantId] ?? '');
+            const previousPriceField = rowField(previousRow, 'price');
+            if (generatedPriceField && previousPriceField) {
+                ['marketingDiscountType', 'marketingDiscountValue', 'marketingDiscountActive', 'marketingFlashPrice', 'marketingFlashActive', 'marketingFlashRemaining']
+                    .forEach((key) => { generatedPriceField.dataset[key] = previousPriceField.dataset[key] || ''; });
+            }
             list.appendChild(row);
         });
         syncAllVariantImageButtons();
@@ -855,19 +1417,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const applyBulkChanges = () => {
         const scope = select('[data-bulk-scope]')?.value || 'all';
         const rows = variationRows().filter((row) => scope === 'all' || select('[data-variant-select]', row)?.checked);
-        const discountType = normalizeDiscountType(select('[data-bulk-discount-type]')?.value || 'none');
-        const discountValue = select('[data-bulk-discount-value]')?.value || '0';
         const payment = select('[data-bulk-payment]')?.value || 'cod_online';
         const active = select('[data-bulk-active]')?.value || '1';
         const imageRef = select('[data-bulk-image-ref]')?.value || '';
         rows.forEach((row) => {
-            const value = rowField(row, 'discount_value');
-            const type = rowField(row, 'discount_type');
             const method = rowField(row, 'payment_method');
             const availability = rowField(row, 'is_active');
             const image = rowField(row, 'product_image_ref');
-            if (value) value.value = discountValue;
-            if (type) type.value = discountType;
             if (method) method.value = payment;
             if (availability) availability.value = active;
             if (image && imageRef) image.value = imageRef;
@@ -878,14 +1434,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     select('[data-apply-bulk]')?.addEventListener('click', applyBulkChanges);
-    select('[data-clear-bulk-discount]')?.addEventListener('click', () => {
-        const type = select('[data-bulk-discount-type]');
-        const field = select('[data-bulk-discount-value]');
-        if (type) type.value = 'none';
-        if (field) field.value = '0';
-        applyBulkChanges();
-    });
-
     select('[data-add-variation]')?.addEventListener('click', () => {
         const list = select('[data-variation-list]');
         if (!list) return;
@@ -898,6 +1446,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('click', (event) => {
+        const removeDescriptionImage = event.target.closest('[data-description-image-remove]');
+        if (removeDescriptionImage) {
+            removeDescriptionImage.closest('[data-description-image-ref]')?.remove();
+            syncDescriptionValue();
+            descriptionContent?.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         const variantImageTrigger = event.target.closest('[data-variant-image-trigger]');
         if (variantImageTrigger) {
             openImagePicker(variantImageTrigger.closest('.sl-variation-row'));
@@ -931,6 +1485,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 image.classList.add('is-removing');
                 removeSavedImage.textContent = 'Keep';
                 clearVariantImageAssignments(`image:${imageId}`);
+                removeDescriptionImageReference(`image:${imageId}`);
                 showToast('Assignments using this image were cleared. Choose another image if needed.');
             }
             syncProductImageLibrary();
@@ -941,6 +1496,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const kind = removeNewImage.dataset.uploadKind;
             const index = Number(removeNewImage.dataset.uploadIndex || 0);
             const ref = kind === 'primary' ? 'upload:primary' : `upload:additional:${index}`;
+            remapDescriptionUploadAfterRemoval(kind, index);
             if (kind === 'additional') {
                 variationRows().forEach((row) => {
                     const field = rowField(row, 'product_image_ref');

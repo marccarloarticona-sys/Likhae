@@ -27,13 +27,21 @@
         <button type="button" class="lk-icon-btn lk-guest-theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>
         </button>
-        <a class="lk-guest-signin" href="{{ Route::has('login') ? route('login') : url('/login') }}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>
-            Sign In
-        </a>
-        <a class="lk-btn lk-btn-red lk-guest-shopnow" href="{{ Route::has('register') ? route('register') : url('/register') }}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l1 13H5z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg>
-            Shop Now
-        </a>
+        @if(auth()->user()?->pendingRegistrationApplication())
+            <a class="lk-guest-signin" href="{{ route('registration.status') }}">Application Status</a>
+            <form method="POST" action="{{ route('logout') }}">
+                @csrf
+                <button class="lk-btn lk-btn-red lk-guest-shopnow" type="submit">Sign Out</button>
+            </form>
+        @else
+            <a class="lk-guest-signin" href="{{ Route::has('login') ? route('login') : url('/login') }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>
+                Sign In
+            </a>
+            <a class="lk-btn lk-btn-red lk-guest-shopnow" href="{{ Route::has('register') ? route('register') : url('/register') }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l1 13H5z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg>
+                Shop Now
+            </a>
+        @endif
     </nav>
 </header>

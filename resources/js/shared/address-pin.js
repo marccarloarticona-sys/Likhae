@@ -299,8 +299,16 @@ function initialize(shell, maplibregl) {
     form.addEventListener('submit', (event) => {
         if (!pinRequired || (confirmed && validCoordinates(latitudeField.value, longitudeField.value))) return;
         event.preventDefault();
-        updateStatus(shell, 'Confirm the exact address pin before saving.', true);
-        confirmButton?.focus();
+        const hasPendingPin = Boolean(pending && validCoordinates(pending.latitude, pending.longitude));
+        updateStatus(shell, hasPendingPin
+            ? 'Finish pinning your location: confirm the pin below. If the result is approximate, drag the marker to your exact location first.'
+            : 'Set and confirm your delivery pin before saving. Search for the address, use device location, or click the exact spot on the map.', true);
+        shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (hasPendingPin && confirmButton && !confirmButton.hidden) {
+            confirmButton.focus({ preventScroll: true });
+        } else {
+            searchInput?.focus({ preventScroll: true });
+        }
     });
 
     async function searchAddress() {

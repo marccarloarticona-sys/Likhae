@@ -1,11 +1,12 @@
-@props(['workspace' => 'app'])
+@props(['workspace' => 'app', 'suppressValidationErrors' => false])
 
 @php
     $errorBag = $errors ?? null;
     $validationMessage = $errorBag?->first();
     $hasValidationErrors = $errorBag?->any() ?? false;
-    $flashMessage = session('success') ?: session('status') ?: (($workspace === 'buyer' || $workspace === 'guest') ? null : (session('error') ?: $validationMessage));
-    $flashType = (session('error') || $hasValidationErrors) ? 'error' : 'success';
+    $validationFlashMessage = $suppressValidationErrors && $hasValidationErrors ? null : $validationMessage;
+    $flashMessage = session('success') ?: session('status') ?: (($workspace === 'buyer' || $workspace === 'guest') ? null : (session('error') ?: $validationFlashMessage));
+    $flashType = (session('error') || ($hasValidationErrors && !$suppressValidationErrors)) ? 'error' : 'success';
 @endphp
 
 <div

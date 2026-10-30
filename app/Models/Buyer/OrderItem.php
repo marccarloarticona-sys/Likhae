@@ -9,6 +9,7 @@ use App\Models\Logistics\Shipment;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class OrderItem extends Model
@@ -25,6 +26,7 @@ class OrderItem extends Model
         'unit_price',
         'original_unit_price',
         'flash_sale_quantity',
+        'flash_sale_campaign_key',
         'quantity',
         'discount_amount',
         'promotion_discount_amount',
@@ -73,6 +75,11 @@ class OrderItem extends Model
     public function shipment(): HasOne
     {
         return $this->hasOne(Shipment::class);
+    }
+
+    public function returnRefundRequestItems(): HasMany
+    {
+        return $this->hasMany(ReturnRefundRequestItem::class);
     }
 
     public function product(): BelongsTo

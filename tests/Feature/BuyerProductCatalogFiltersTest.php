@@ -77,6 +77,15 @@ class BuyerProductCatalogFiltersTest extends TestCase
             'category' => $product->category->slug,
             'min_price' => '250.01',
         ]))->assertOk()->assertDontSee($product->name);
+
+        $this->get(route('buyer.products', ['category' => $product->category->slug]))
+            ->assertOk()
+            ->assertSee('Flash Sale')
+            ->assertSee('promotional units left');
+        $this->get(route('buyer.product-details', ['slug' => $product->slug]))
+            ->assertOk()
+            ->assertSee('data-variation-flash-sales', false)
+            ->assertSee('Flash Sale');
     }
 
     public function test_search_trims_and_matches_case_insensitively_and_escapes_like_wildcards(): void

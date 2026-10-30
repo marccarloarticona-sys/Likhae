@@ -24,7 +24,8 @@
     $returnRefundReady = $returnRefundReady ?? false;
     $orderActionStates = $orderActionStates ?? collect();
     $orderTabKeys = $orderTabKeys ?? collect();
-    $sellerOrderTabKeys = $sellerOrderTabKeys ?? collect();
+    $sellerOrderDisplayStatuses = $sellerOrderDisplayStatuses ?? collect();
+    $shipmentTabKeys = $shipmentTabKeys ?? collect();
     $selectedOrderActionState = $selectedOrderActionState ?? [];
     $visibleOrders = $orderCollection;
     $liveOrders = $mode === 'show' && isset($selectedOrder) ? collect([$selectedOrder]) : $orderCollection;
@@ -43,7 +44,7 @@
     ])->values()->toJson());
 @endphp
 
-<div class="lk-page-narrow lk-order-page" data-buyer-order-live data-order-stream-url="{{ route('buyer.orders.stream') }}" data-order-ids="{{ $liveOrderIds->toJson() }}" data-shipment-ids="{{ $liveShipmentIds->toJson() }}" data-order-version="{{ $liveOrderVersion }}" data-order-detail-id="{{ $mode === 'show' ? (int) ($selectedOrder?->id ?? 0) : '' }}">
+<div class="lk-page-narrow lk-order-page" data-buyer-order-live data-order-stream-url="{{ route('buyer.orders.stream') }}" data-order-ids="{{ $liveOrderIds->toJson() }}" data-shipment-ids="{{ $liveShipmentIds->toJson() }}" data-order-version="{{ $liveOrderVersion }}" data-order-detail-id="{{ $mode === 'show' ? (int) ($selectedOrder?->id ?? 0) : '' }}" data-order-tab-key="{{ $mode === 'index' ? strtolower(str_replace('_', '-', $filter)) : 'all' }}">
     @if(session('buyer_notice'))<div class="mb-4 rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('buyer_notice') }}</div>@endif
 
     @if($mode === 'success')
@@ -53,6 +54,24 @@
             $allShipments = $selectedOrder->sellerOrders->flatMap->shipments;
             $isCancelledOrder = $selectedOrder->status === 'CANCELLED';
             $hasReturnRefundRequest = $selectedOrder->relationLoaded('returnRefundRequests') && $selectedOrder->returnRefundRequests->isNotEmpty();
+            $hasSellerReturnInProgress = $allShipments->contains(function ($shipment): bool {
+                if (! $shipment->relationLoaded('returnWorkflow')) {
+                    return false;
+                }
+
+                $workflow = $shipment->getRelation('returnWorkflow');
+
+                return $workflow
+                    && $workflow->return_disposition === \App\Models\Logistics\ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN
+                    && (in_array($workflow->status, \App\Models\Logistics\ShipmentReturnWorkflow::OPEN_STATUSES, true)
+                        || $workflow->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED);
+            });
+            $allShipmentsReturnedOrCancelled = $allShipments->isNotEmpty()
+                && $allShipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['RETURNED', 'CANCELLED'], true));
+            $hideTrackingMap = in_array($selectedOrder->status, ['COMPLETED', 'RETURNED', 'CANCELLED'], true)
+                || $hasReturnRefundRequest
+                || $hasSellerReturnInProgress
+                || $allShipmentsReturnedOrCancelled;
             $isTerminalOrder = $isCancelledOrder || in_array($selectedOrder->status, ['RETURNED', 'COMPLETED'], true)
                 || ($allShipments->isNotEmpty() && $allShipments->every(fn ($shipment) => in_array($shipment->current_status, ['RETURNED', 'CANCELLED', 'DELIVERED', 'COMPLETED'], true)));
             $detailDelivered = $selectedOrder->sellerOrders->isNotEmpty() && $selectedOrder->sellerOrders->every(fn ($sellerOrder) => $sellerOrder->shipments->isNotEmpty() && $sellerOrder->shipments->every(fn ($shipment) => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true)));
@@ -91,8 +110,8 @@
         <div class="lk-page-title"><div><span class="lk-kicker">Order details</span><h1>{{ $selectedOrder->order_number }}</h1>@if($isCancelledOrder && $allShipments->isEmpty())<p>Cancelled · Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@elseif($isCancelledOrder)<p>Placed {{ $selectedOrder->placed_at?->timezone('Asia/Manila')->format('M j, Y · g:i A') ?? 'Date unavailable' }}</p>@endif</div><div class="flex flex-wrap gap-2"><a class="lk-btn lk-btn-light" href="{{ route('buyer.orders') }}">Back to My Orders</a></div></div>
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             @if(($selectedOrderActionState['can_confirm_received'] ?? false) || ($selectedOrderActionState['can_request_return'] ?? false) || $selectedOrder->sellerOrders->isNotEmpty())
-                <div class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-stone-200 bg-stone-50/70 p-4">
-                    <p class="min-w-0 flex-1 text-xs leading-5 text-stone-600" data-order-detail-message>{{ ($selectedOrderActionState['can_confirm_received'] ?? false) ? 'Check the delivered items before confirming receipt.' : ($selectedOrder->status === 'COMPLETED' ? 'Your order is complete. You can rate the products below.' : 'Review your delivery and order details.') }}</p>
+                <div data-order-detail-actions class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-stone-200 bg-stone-50/70 p-4" @if(!($selectedOrderActionState['can_confirm_received'] ?? false) && !($selectedOrderActionState['can_request_return'] ?? false) && $selectedOrder->status !== 'COMPLETED') hidden @endif>
+                    <p class="min-w-0 flex-1 text-xs leading-5 text-stone-600" data-order-detail-message @if(!($selectedOrderActionState['can_confirm_received'] ?? false) && $selectedOrder->status !== 'COMPLETED') hidden @endif>{{ ($selectedOrderActionState['can_confirm_received'] ?? false) ? 'Check the delivered items before confirming receipt.' : ($selectedOrder->status === 'COMPLETED' ? 'Your order is complete. You can rate the products below.' : '') }}</p>
                     <div class="flex flex-wrap items-center gap-2">
                         <div data-order-received-action @if(!($selectedOrderActionState['can_confirm_received'] ?? false)) hidden @endif><form method="POST" action="{{ route('buyer.orders.received', $selectedOrder) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form><p class="mt-1 text-xs text-stone-500" data-auto-receipt-deadline @if(!($selectedOrderActionState['auto_confirm_at'] ?? null)) hidden @endif>@if($selectedOrderActionState['auto_confirm_at'] ?? null)Automatic receipt on {{ $selectedOrderActionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}@endif</p></div>
                         <a class="lk-btn lk-btn-light" data-order-return-action href="{{ route('buyer.orders.return-refund.form', $selectedOrder) }}" @if(!($selectedOrderActionState['can_request_return'] ?? false)) hidden @endif>Request Return / Refund</a>
@@ -107,7 +126,7 @@
                 </div>
             @endif
         </section>
-        @if($deliveryPinRequired && !$isTerminalOrder)
+        @if($deliveryPinRequired && !$isTerminalOrder && !$hideTrackingMap)
             <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 shadow-sm" aria-labelledby="delivery-pin-required-heading">
                 <h2 id="delivery-pin-required-heading" class="text-lg font-bold text-amber-950">Delivery pin required</h2>
                 <p class="mt-2 text-sm text-amber-950">Confirm the exact delivery location for this existing order so the assigned rider can navigate to you. The address text below stays unchanged; only this order's missing map pin will be saved.</p>
@@ -123,7 +142,7 @@
                     <button type="submit" class="lk-btn lk-btn-red justify-self-start disabled:cursor-not-allowed disabled:opacity-50" data-delivery-pin-save disabled>Confirm Delivery Pin</button>
                 </form>
             </section>
-        @else
+        @elseif(!$hideTrackingMap)
             <section class="lk-order-map-panel" aria-labelledby="buyer-live-map-heading">
                 <header class="lk-order-map-panel__header">
                     <div>
@@ -331,6 +350,11 @@
                     @unless($isTerminalOrder)<div class="mt-3 text-xs text-stone-500">Tracking: <strong class="text-stone-700">{{ $shipment->tracking_number }}</strong></div>@endunless
                     @if($shipmentCardMessage)<p class="mt-3 text-sm text-stone-700">{{ $shipmentCardMessage }}</p>@endif
                     <x-shared.status-guidance :status="$shipmentCardStatusLabel" :next="$shipmentNextStep" :actor="$shipmentNextActor" :shipment-id="$shipment->id" :returned-label="$hasReturnRefundRequest ? 'Parcel returned to seller' : 'Returned'" />
+                    <form method="POST" action="{{ route('buyer.orders.shipments.received', [$selectedOrder, $shipment]) }}" class="mt-3" data-confirm-shipment-action="{{ $shipment->id }}" @if(! in_array((int) $shipment->id, (array) ($selectedOrderActionState['confirmable_shipment_ids'] ?? []), true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for this parcel? Only this parcel will move to Completed.');">
+                        @csrf
+                        <input type="hidden" name="confirm_receipt" value="1">
+                        <button class="lk-btn lk-btn-red" type="submit">Confirm this parcel received</button>
+                    </form>
                     <details class="mt-4 rounded-xl border border-stone-100 px-4 py-3"><summary class="cursor-pointer text-sm font-bold text-stone-900">{{ $isTerminalOrder ? 'Status history' : 'Tracking Timeline' }}</summary><ol class="lk-shipment-timeline mt-4" aria-label="Tracking timeline for {{ $shipment->tracking_number }}" data-shipment-timeline="{{ $shipment->id }}" data-shipment-current-status="{{ $shipmentStatus }}" data-shipment-cancelled="{{ $isCancelledShipment ? 'true' : 'false' }}">
                         @foreach($timelineRows as $timelineIndex => $timelineRow)
                             @php
@@ -359,10 +383,10 @@
                             <a class="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto" href="{{ $proofUrl }}" target="_blank" rel="noopener noreferrer">View Full Photo</a>
                         </section>
                     @endif
-                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_bundle'))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
+                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@if((float) $item->discount_amount > 0)<span class="mt-1 block text-xs font-semibold text-rose-700">{{ (int) $item->flash_sale_quantity > 0 ? 'Flash Sale' : 'Product Discount' }} · @if($item->original_unit_price !== null)Original &#8369;{{ number_format((float) $item->original_unit_price, 2) }} / unit · @endif saved &#8369;{{ number_format((float) $item->discount_amount, 2) }}</span>@endif @if((float) $item->seller_voucher_discount > 0)<span class="block text-xs text-emerald-700">Seller voucher · −&#8369;{{ number_format((float) $item->seller_voucher_discount, 2) }}</span>@endif @if((float) $item->platform_voucher_discount > 0)<span class="block text-xs text-blue-700">Platform voucher · −&#8369;{{ number_format((float) $item->platform_voucher_discount, 2) }}</span>@endif @foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_set', data_get($component, 'quantity')))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
             </section>
           @empty
-            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_bundle'))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
+            <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@if((float) $item->discount_amount > 0)<span class="mt-1 block text-xs font-semibold text-rose-700">{{ (int) $item->flash_sale_quantity > 0 ? 'Flash Sale' : 'Product Discount' }} · @if($item->original_unit_price !== null)Original &#8369;{{ number_format((float) $item->original_unit_price, 2) }} / unit · @endif saved &#8369;{{ number_format((float) $item->discount_amount, 2) }}</span>@endif @if((float) $item->seller_voucher_discount > 0)<span class="block text-xs text-emerald-700">Seller voucher · −&#8369;{{ number_format((float) $item->seller_voucher_discount, 2) }}</span>@endif @if((float) $item->platform_voucher_discount > 0)<span class="block text-xs text-blue-700">Platform voucher · −&#8369;{{ number_format((float) $item->platform_voucher_discount, 2) }}</span>@endif @foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_set', data_get($component, 'quantity')))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
           @endforelse
             @if($selectedOrder->sellerOrders->count() > 1)
                 <dl class="mx-3 mt-2 divide-y divide-stone-100 rounded-xl border border-stone-100 bg-stone-50/60 px-4 text-sm sm:mx-5">
@@ -386,12 +410,13 @@
                 ->filter(fn ($sellerOrder) => $sellerOrder->voucher_id && $sellerOrder->voucher)
                 ->groupBy('voucher_id');
             $selectedItemCount = $selectedOrder->sellerOrders->flatMap->items->sum('quantity');
+            $selectedFlashSaleUnits = $selectedOrder->sellerOrders->flatMap->items->sum('flash_sale_quantity');
             $actionState = $selectedOrderActionState;
             $returnRequest = $actionState['latest_request'] ?? null;
         @endphp
         <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
             <div class="flex flex-wrap items-end justify-between gap-2 border-b border-stone-100 pb-4">
-                <div><h2 class="text-lg font-bold text-stone-900">Order Summary</h2><p class="mt-1 text-sm text-stone-500">{{ $selectedItemCount }} {{ $selectedItemCount === 1 ? 'item' : 'items' }} in this order</p></div>
+                <div><h2 class="text-lg font-bold text-stone-900">Order Summary</h2><p class="mt-1 text-sm text-stone-500">{{ $selectedItemCount }} {{ $selectedItemCount === 1 ? 'item' : 'items' }} in this order</p>@if($selectedFlashSaleUnits > 0)<p class="mt-1 text-xs font-semibold text-rose-800">Flash Sale pricing is included for {{ number_format((int) $selectedFlashSaleUnits) }} unit(s).</p>@endif</div>
             </div>
             <dl class="mt-1 divide-y divide-stone-100 text-sm">
                 <div class="flex flex-wrap justify-between gap-3 py-3"><dt class="text-stone-600">Merchandise subtotal</dt><dd class="font-semibold text-stone-900">&#8369;{{ number_format((float) $selectedOrder->subtotal, 2) }}</dd></div>
@@ -569,14 +594,74 @@
         <div class="mt-5 space-y-4">
             @forelse($visibleOrders as $order)
                 @php
-                    $displayTab = $orderTabKeys->get($order->id, $order->status);
-                    $unitCount = $order->sellerOrders->sum(fn ($sellerOrder) => $sellerOrder->items->sum('quantity'));
+                    $displayTab = $activeTabKey === 'all'
+                        ? $orderTabKeys->get($order->id, $order->status)
+                        : strtoupper(str_replace('-', '_', $activeTabKey));
+                    $sellerFulfillmentStatuses = $order->sellerOrders
+                        ->map(fn ($sellerOrder) => $sellerOrderDisplayStatuses->get((int) $sellerOrder->id))
+                        ->filter()
+                        ->unique();
+                    $hasMixedSellerFulfillment = $sellerFulfillmentStatuses->count() > 1;
+                    $parcelTabKey = $hasMixedSellerFulfillment ? null : match ($activeTabKey) {
+                        'to-receive' => 'TO_RECEIVE',
+                        'completed' => 'COMPLETED',
+                        'returns' => 'RETURNS',
+                        default => null,
+                    };
+                    $sellerItemsByTab = $order->sellerOrders->mapWithKeys(function ($sellerOrder) use ($parcelTabKey, $shipmentTabKeys, $activeTabKey, $order) {
+                        $sellerItems = $sellerOrder->items;
+                        $itemsForTab = $sellerItems->filter(function ($item) use ($sellerOrder, $parcelTabKey, $shipmentTabKeys, $activeTabKey, $order) {
+                            if (! $parcelTabKey) {
+                                return true;
+                            }
+                            $shipment = $sellerOrder->shipments->first(fn ($candidate) => (int) $candidate->order_item_id === (int) $item->id);
+                            if (! $shipment) {
+                                return $activeTabKey === 'completed' && $order->status === 'COMPLETED';
+                            }
+
+                            return $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey;
+                        })->values();
+
+                        $hasShipmentForTab = $parcelTabKey && $sellerOrder->shipments->contains(
+                            fn ($shipment) => $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey,
+                        );
+                        $sellerStatusImpliesToReceive = $parcelTabKey === 'TO_RECEIVE'
+                            && in_array($sellerOrder->status, ['PICKED_UP', 'COMPLETED'], true);
+                        $showSellerItemsAsFallback = $parcelTabKey === 'TO_RECEIVE'
+                            && $itemsForTab->isEmpty()
+                            && $sellerItems->isNotEmpty()
+                            && ($hasShipmentForTab || $sellerStatusImpliesToReceive);
+
+                        if ($showSellerItemsAsFallback) {
+                            $itemsForTab = $sellerItems->values();
+                        }
+
+                        return [(int) $sellerOrder->id => [
+                            'items' => $itemsForTab,
+                            'uses_order_fallback' => $showSellerItemsAsFallback,
+                        ]];
+                    });
+                    $orderItemsForTab = $sellerItemsByTab->flatMap(fn (array $sellerData) => $sellerData['items']);
+                    $orderUsesItemFallback = $sellerItemsByTab->contains(fn (array $sellerData) => $sellerData['uses_order_fallback']);
+                    $unitCount = $orderItemsForTab->sum('quantity');
+                    $orderDisplayTotal = $orderItemsForTab->sum(fn ($item) => (float) $item->line_total);
                     $returnRequests = $returnRefundReady ? $order->returnRefundRequests->sortByDesc('submitted_at') : collect();
                     $returnRequest = $returnRequests->first();
                     $returnSellerRequests = $returnRequests->flatMap(fn ($requestRecord) => $requestRecord->sellerRequests);
+                    $formalReturnItemIds = $returnRequests->flatMap(function ($requestRecord) {
+                        $itemIds = $requestRecord->items->pluck('order_item_id');
+                        $sellerRequestItems = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->items);
+                        $itemIds = $itemIds->merge($sellerRequestItems->pluck('order_item_id'));
+                        if ($itemIds->isEmpty()) {
+                            $itemIds = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->sellerOrder?->items->pluck('id') ?? collect());
+                        }
+
+                        return $itemIds->filter()->map(fn ($id): int => (int) $id)->all();
+                    })->unique()->values();
                     $actionState = $orderActionStates->get($order->id, []);
+                    $confirmableShipmentIds = collect($actionState['confirmable_shipment_ids'] ?? [])->map(fn ($id): int => (int) $id)->all();
                 @endphp
-                @if($displayTab === 'RETURNS' && $returnSellerRequests->isNotEmpty())
+                @if($activeTabKey === 'returns' && $returnSellerRequests->isNotEmpty())
                     <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
                         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
                             <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
@@ -635,9 +720,62 @@
                             </section>
                         @endif
                     @endforeach
+                    @foreach($order->sellerOrders as $sellerOrder)
+                        @php
+                            $returnWorkflowItems = $sellerOrder->items->filter(function ($item) use ($sellerOrder, $shipmentTabKeys, $formalReturnItemIds) {
+                                $shipment = $sellerOrder->shipments->first(fn ($candidate) => (int) $candidate->order_item_id === (int) $item->id);
+
+                                return $shipment
+                                    && $shipmentTabKeys->get((int) $shipment->id) === 'RETURNS'
+                                    && ! $formalReturnItemIds->contains((int) $item->id);
+                            });
+                            $returnWorkflowUnmapped = $sellerOrder->shipments->filter(fn ($shipment) =>
+                                (! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id))
+                                && $shipmentTabKeys->get((int) $shipment->id) === 'RETURNS'
+                            );
+                        @endphp
+                        @if($returnWorkflowItems->isNotEmpty())
+                            <section class="border-t border-stone-100 px-5 py-4">
+                                <h3 class="font-semibold text-stone-900">Return parcels · {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h3>
+                                <ul class="mt-2 divide-y divide-stone-100">
+                                    @foreach($returnWorkflowItems as $item)
+                                        @php
+                                            $returnShipment = $sellerOrder->shipments->first(fn ($candidate) => (int) $candidate->order_item_id === (int) $item->id);
+                                            $returnParcelNumber = $sellerOrder->shipments->search(fn ($candidate) => (int) $candidate->id === (int) $returnShipment->id) + 1;
+                                        @endphp
+                                        <li class="py-3" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
+                                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
+                                                <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} · Tracking {{ $returnShipment->tracking_number }}</span>
+                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                            </div>
+                                            <div class="mt-3 flex items-start gap-3">
+                                                <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
+                                                <div class="min-w-0 flex-1"><p class="font-medium text-stone-900">{{ $item->product_name }}</p><p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} · Qty {{ $item->quantity }}</p></div>
+                                                <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
+                                            </div>
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            </section>
+                        @endif
+                        @if($returnWorkflowUnmapped->isNotEmpty())
+                            <section class="border-t border-stone-100 px-5 py-4">
+                                <h3 class="font-semibold text-stone-900">Other return parcels · {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h3>
+                                <div class="mt-2 grid gap-2">
+                                    @foreach($returnWorkflowUnmapped as $returnShipment)
+                                        @php $returnParcelNumber = $sellerOrder->shipments->search(fn ($candidate) => (int) $candidate->id === (int) $returnShipment->id) + 1; @endphp
+                                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
+                                            <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} · Tracking {{ $returnShipment->tracking_number }}</span>
+                                            @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </section>
+                        @endif
+                    @endforeach
                         </div>
                     </article>
-                @elseif(in_array($displayTab, ['COMPLETED', 'CANCELLED'], true))
+                @elseif(in_array($activeTabKey, ['completed', 'cancelled'], true))
                     <article class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-order-id="{{ $order->id }}" data-order-number="{{ $order->order_number }}">
                         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
                             <div><h2 class="font-semibold text-stone-900">Order {{ $order->order_number }}</h2><p class="mt-1 text-xs text-stone-500">{{ optional($order->placed_at)->format('M j, Y') }}</p></div>
@@ -646,10 +784,24 @@
                     @foreach($order->sellerOrders as $sellerOrder)
                         @php
                             $sellerShipments = $sellerOrder->shipments;
-                            $sellerDisplayStatusKey = $sellerOrderTabKeys->get($sellerOrder->id, $sellerOrder->status);
-                            $sellerDisplayStatus = \App\Services\Marketplace\BuyerOrderTabService::LABELS[$sellerDisplayStatusKey] ?? str($sellerDisplayStatusKey)->replace('_', ' ')->title();
-                            $sellerUnitCount = $sellerOrder->items->sum('quantity');
+                            $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false]);
+                            $sellerItemsForTab = $sellerTabData['items'];
+                            $sellerItemsNeedFallback = $sellerTabData['uses_order_fallback'];
+                            $unmappedShipmentsForTab = $sellerShipments->filter(fn ($shipment) =>
+                                (! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id))
+                                && (! $parcelTabKey || $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey)
+                            );
+                            $sellerDisplayStatus = $parcelTabKey
+                                ? match ($parcelTabKey) {
+                                    'TO_RECEIVE' => 'To Receive',
+                                    'COMPLETED' => 'Completed',
+                                    'RETURNS' => 'Return / Refund',
+                                }
+                                : $sellerOrderDisplayStatuses->get($sellerOrder->id, str($sellerOrder->status)->replace('_', ' ')->title()->toString());
+                            $sellerUnitCount = $sellerItemsForTab->sum('quantity');
+                            $sellerDisplayTotal = $sellerItemsForTab->sum(fn ($item) => (float) $item->line_total);
                         @endphp
+                        @if($sellerItemsForTab->isNotEmpty() || $unmappedShipmentsForTab->isNotEmpty())
                         <section class="px-5 py-4">
                             <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-4">
                                 <div class="min-w-0">
@@ -660,27 +812,30 @@
                                     </div>
                                     <p class="mt-1 text-xs text-stone-500">Order {{ $order->order_number }} &#183; {{ optional($order->placed_at)->format('M j, Y') }}</p>
                                 </div>
-                                <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
+                                <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" @if(! $parcelTabKey) data-seller-order-status-id="{{ $sellerOrder->id }}" @endif>{{ $sellerDisplayStatus }}</span>
                             </header>
-                            @if($sellerShipments->contains(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)))
+                            @if($unmappedShipmentsForTab->isNotEmpty())
                                 <div class="my-3 grid gap-2">
-                                    @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
-                                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
+                                    @foreach($unmappedShipmentsForTab as $shipment)
+                                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
                                             <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
                                             @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
                                 </div>
                             @endif
+                            @if($sellerItemsNeedFallback)
+                                <p class="mb-3 text-xs text-stone-500">Parcel item links are unavailable, so all products from this seller order are shown.</p>
+                            @endif
                             <ul class="divide-y divide-stone-100 px-5">
-                                @foreach($sellerOrder->items as $item)
+                                @foreach($sellerItemsForTab as $item)
                                     @php
                                         $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
                                         $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
                                     @endphp
                                     <li class="flex flex-col gap-3 py-4">
                                         @if($shipmentForItem)
-                                            <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
                                                 <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
                                                 @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
@@ -690,9 +845,11 @@
                                             <div class="min-w-0 flex-1">
                                                 <p class="font-medium text-stone-900">{{ $item->product_name }}</p>
                                                 <p class="mt-1 text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }}</p>
-                                                @if($displayTab === 'COMPLETED')
+                                                @if($displayTab === 'COMPLETED' && $order->status === 'COMPLETED')
                                                     @if($item->review)<p class="mt-1 text-xs font-semibold text-stone-600">Quick review submitted @if($item->review->rating)<span class="ml-1 tracking-wide text-amber-500">{{ str_repeat('★', (int) $item->review->rating) }}{{ str_repeat('☆', 5 - (int) $item->review->rating) }}</span>@endif</p>
                                                     @else<form method="POST" action="{{ route('buyer.orders.review.store', $item) }}" class="mt-1 flex flex-wrap items-center gap-1" aria-label="Quick review for {{ $item->product_name }}">@csrf<span class="mr-1 text-[11px] font-semibold text-stone-600">Quick review</span>@foreach(range(1, 5) as $rating)<button type="submit" name="rating" value="{{ $rating }}" title="Rate {{ $rating }} out of 5 stars" aria-label="Rate {{ $item->product_name }} {{ $rating }} out of 5 stars" class="inline-flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-amber-500 transition hover:bg-amber-100 hover:text-amber-700">&#9733;</button>@endforeach</form>@endif
+                                                @elseif($displayTab === 'COMPLETED')
+                                                    <p class="mt-1 text-xs text-emerald-800">This parcel is complete. Other parcels remain in their own status tabs.</p>
                                                 @endif
                                             </div>
                                             <strong class="shrink-0 pt-1 text-sm font-semibold text-stone-900">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong>
@@ -701,9 +858,11 @@
                                 @endforeach
                             </ul>
                             <footer class="flex flex-wrap items-center justify-between gap-4 border-t border-stone-100 bg-stone-50/60 px-5 py-4">
-                                <div><span class="block text-xs text-stone-500">{{ $sellerUnitCount }} {{ \Illuminate\Support\Str::plural('item', $sellerUnitCount) }} &#183; Order Total</span><strong class="text-lg font-bold text-stone-900">&#8369;{{ number_format((float) $sellerOrder->grand_total, 2) }}</strong></div>
+                                <div><span class="block text-xs text-stone-500">{{ $sellerUnitCount }} {{ \Illuminate\Support\Str::plural('item', $sellerUnitCount) }} &#183; {{ $sellerItemsNeedFallback ? 'Items shown total' : ($parcelTabKey ? 'Parcel Total' : 'Order Total') }}</span><strong class="text-lg font-bold text-stone-900">&#8369;{{ number_format($parcelTabKey ? $sellerDisplayTotal : (float) $sellerOrder->grand_total, 2) }}</strong></div>
                                 <div class="lk-order-card-actions">
-                                    @if($displayTab === 'COMPLETED')
+                                    @if($activeTabKey === 'completed' && $order->status !== 'COMPLETED')
+                                        <a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
+                                    @elseif($displayTab === 'COMPLETED')
                                         <a class="lk-btn lk-btn-red" href="{{ route('buyer.orders.show', $order) }}#reviews">Rate</a>
                                         @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Request For Return/Refund</a>@endif
                                         <details class="rounded-xl border border-stone-200 bg-white p-3"><summary class="cursor-pointer text-sm font-semibold text-stone-800">More</summary><div class="mt-3 grid gap-2"><form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light w-full justify-center">Contact Seller</button></form><form method="POST" action="{{ route('buyer.orders.seller-orders.buy-again', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light w-full justify-center">Buy Again</button></form><a class="lk-btn lk-btn-light w-full justify-center" href="{{ route('buyer.orders.show', $order) }}">View Details</a></div></details>
@@ -715,6 +874,7 @@
                                 </div>
                             </footer>
                         </section>
+                        @endif
                     @endforeach
                         </div>
                     </article>
@@ -728,41 +888,65 @@
                     </header>
                     <div class="divide-y divide-stone-100">
                         @foreach($order->sellerOrders as $sellerOrder)
-                            <section class="px-5 py-4" aria-label="Items from {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}">
                                 @php
                                     $sellerShipments = $sellerOrder->shipments;
-                                    $sellerDisplayStatusKey = $sellerOrderTabKeys->get($sellerOrder->id, $sellerOrder->status);
-                                    $sellerDisplayStatus = \App\Services\Marketplace\BuyerOrderTabService::LABELS[$sellerDisplayStatusKey] ?? str($sellerDisplayStatusKey)->replace('_', ' ')->title();
+                                    $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false]);
+                                    $sellerItemsForTab = $sellerTabData['items'];
+                                    $sellerItemsNeedFallback = $sellerTabData['uses_order_fallback'];
+                                    $unmappedShipmentsForTab = $sellerShipments->filter(fn ($shipment) =>
+                                        (! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id))
+                                        && (! $parcelTabKey || $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey)
+                                    );
+                                    $sellerDisplayStatus = $parcelTabKey
+                                        ? match ($parcelTabKey) {
+                                            'TO_RECEIVE' => 'To Receive',
+                                            'COMPLETED' => 'Completed',
+                                            'RETURNS' => 'Return / Refund',
+                                        }
+                                        : $sellerOrderDisplayStatuses->get($sellerOrder->id, str($sellerOrder->status)->replace('_', ' ')->title()->toString());
                                 @endphp
+                                @if($sellerItemsForTab->isNotEmpty() || $unmappedShipmentsForTab->isNotEmpty())
+                            <section class="px-5 py-4" aria-label="Items from {{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}">
                                 <header class="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 pb-3">
                                     <div class="flex min-w-0 flex-wrap items-center gap-2">
                                         <h3 class="text-sm font-bold text-stone-900">{{ $sellerOrder->sellerProfile?->business_name ?: 'Seller' }}</h3>
                                         <form method="POST" action="{{ route('buyer.orders.seller-conversation', [$order, $sellerOrder]) }}">@csrf<button type="submit" class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs">Chat</button></form>
                                         @if($sellerOrder->sellerProfile?->id && \Illuminate\Support\Facades\Route::has('buyer.shop'))<a class="lk-btn lk-btn-light lk-order-contact-link px-3 py-1.5 text-xs" href="{{ route('buyer.shop', ['seller' => $sellerOrder->sellerProfile->id]) }}">View Shop</a>@endif
                                     </div>
-                                    <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" data-seller-order-status-id="{{ $sellerOrder->id }}">{{ $sellerDisplayStatus }}</span>
+                                    <span class="shrink-0 font-semibold uppercase tracking-wide text-[#7a2a22]" @if(! $parcelTabKey) data-seller-order-status-id="{{ $sellerOrder->id }}" @endif>{{ $sellerDisplayStatus }}</span>
                                 </header>
-                                @if($sellerShipments->contains(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)))
+                                @if($unmappedShipmentsForTab->isNotEmpty())
                                     <div class="mb-3 grid gap-2">
-                                        @foreach($sellerShipments->filter(fn ($shipment) => ! $shipment->order_item_id || ! $sellerOrder->items->contains('id', (int) $shipment->order_item_id)) as $shipment)
-                                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
+                                        @foreach($unmappedShipmentsForTab as $shipment)
+                                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
                                                 <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
                                                 @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
                                     </div>
                                 @endif
+                                @if($sellerItemsNeedFallback)
+                                    <p class="mb-3 text-xs text-stone-500">Parcel item links are unavailable, so all products from this seller order are shown.</p>
+                                @endif
                                 <ul class="divide-y divide-stone-100">
-                                    @foreach($sellerOrder->items as $item)
+                                    @foreach($sellerItemsForTab as $item)
                                         @php
                                             $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
                                             $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
                                         @endphp
                                         <li class="flex flex-col gap-3 py-3 first:pt-0 last:pb-0">
                                             @if($shipmentForItem)
-                                                <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                                <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
                                                     <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
-                                                    @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                    <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
+                                                        @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                        @if(in_array($activeTabKey, ['all', 'to-receive'], true))
+                                                            <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $shipmentForItem]) }}" data-confirm-shipment-action="{{ $shipmentForItem->id }}" @if(! in_array((int) $shipmentForItem->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $shipmentParcelNumber }}? Only this parcel will move to Completed.');">
+                                                                @csrf<input type="hidden" name="confirm_receipt" value="1">
+                                                                <button class="lk-btn lk-btn-red px-3 py-1.5 text-xs" type="submit">Confirm received</button>
+                                                            </form>
+                                                        @endif
+                                                    </div>
                                                 </div>
                                             @endif
                                             <div class="flex items-start gap-3">
@@ -792,10 +976,11 @@
                                     @endforeach
                                 </ul>
                             </section>
+                                @endif
                         @endforeach
                     </div>
                     <footer class="flex flex-wrap items-center justify-between gap-4 border-t border-stone-100 bg-stone-50/60 px-5 py-4">
-                        <div><span class="block text-xs text-stone-500">{{ $unitCount }} {{ \Illuminate\Support\Str::plural('item', $unitCount) }} · Total</span><strong class="text-lg font-bold text-stone-900">&#8369;{{ number_format((float) $order->grand_total, 2) }}</strong></div>
+                        <div><span class="block text-xs text-stone-500">{{ $unitCount }} {{ \Illuminate\Support\Str::plural('item', $unitCount) }} · {{ $orderUsesItemFallback ? 'Items shown total' : ($parcelTabKey ? 'Parcel total' : 'Total') }}</span><strong class="text-lg font-bold text-stone-900">&#8369;{{ number_format($parcelTabKey ? $orderDisplayTotal : (float) $order->grand_total, 2) }}</strong></div>
                         <div class="lk-order-card-actions">
                             @if($order->status === 'COMPLETED')<a class="lk-btn lk-btn-red" href="{{ route('buyer.orders.show', $order) }}#reviews">Rate</a>@endif
                             @if($actionState['can_cancel'] ?? false)
@@ -821,7 +1006,19 @@
                             @endif
                             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Return / Refund</a>@endif
                             @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request &#183; {{ str($returnRequest->status)->headline() }}</a>@endif
-                            @if($actionState['can_confirm_received'])<div><form method="POST" action="{{ route('buyer.orders.received', $order) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">@csrf<input type="hidden" name="confirm_receipt" value="0"><button class="lk-btn lk-btn-red" type="submit">Order Received</button></form>@if($actionState['auto_confirm_at'] ?? null)<p class="mt-2 max-w-xs text-xs text-stone-600">Automatic receipt on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</p>@endif</div>@endif
+                            @if($actionState['can_confirm_received'])
+                                <div>
+                                    @if(count($confirmableShipmentIds) > 1)
+                                        <form method="POST" action="{{ route('buyer.orders.received', $order) }}" onsubmit="if (!window.confirm('Confirm that you received every parcel in this order? This will complete the order and enable product reviews.')) return false; this.elements.confirm_receipt.value = '1'; return true;">
+                                            @csrf<input type="hidden" name="confirm_receipt" value="0">
+                                            <button class="lk-btn lk-btn-red" type="submit">Order Received</button>
+                                        </form>
+                                    @endif
+                                    @if($actionState['auto_confirm_at'] ?? null)
+                                        <p class="mt-2 max-w-xs text-xs text-stone-600">Automatic receipt on {{ $actionState['auto_confirm_at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</p>
+                                    @endif
+                                </div>
+                            @endif
                             <a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.show', $order) }}">View Details</a>
                         </div>
                     </footer>

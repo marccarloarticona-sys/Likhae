@@ -876,6 +876,8 @@ class AdminOperationsController extends Controller
             'section' => $section,
             'supportOverview' => $overview,
             'supportOverviewReady' => $supportOverviewReady,
+            'supportAdmins' => User::query()->where('account_type', User::TYPE_ADMIN)->where('status', User::STATUS_ACTIVE)
+                ->orderBy('first_name')->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension']),
             'conversations' => $conversations,
             'contacts' => $section === 'chats' ? User::query()->where('status', 'ACTIVE')->whereKeyNot($request->user()->id)->orderBy('first_name')->limit(100)->get(['id', 'first_name', 'middle_initial', 'last_name', 'name_extension', 'account_type']) : collect(),
             'messageAttachmentsReady' => app(MessageAttachmentService::class)->available(),

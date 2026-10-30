@@ -11,6 +11,7 @@ class SellerPromotionComponent extends Model
         'seller_promotion_id',
         'product_variant_id',
         'quantity',
+        'choice_group',
     ];
 
     protected function casts(): array

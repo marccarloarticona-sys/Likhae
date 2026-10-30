@@ -2,6 +2,7 @@
 
 namespace App\Models\Seller;
 
+use App\Services\Marketplace\ProductPriceResolver;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\OrderItem;
 use Illuminate\Database\Eloquent\Builder;
@@ -74,35 +75,12 @@ class ProductVariant extends Model
 
     public function getDiscountAmountAttribute(): float
     {
-        $flashSalePrice = $this->active_flash_sale_price;
-        if ($flashSalePrice !== null) {
-            return round(max(0, (float) $this->price - $flashSalePrice), 2);
-        }
-
-        $product = $this->relationLoaded('product') ? $this->getRelation('product') : $this->product;
-        $startsAt = $product?->flash_sale_starts_at;
-        $endsAt = $product?->flash_sale_ends_at;
-        // Keep the legacy scheduled Seller discount behavior for existing
-        // products. When a dedicated flash price is configured, the regular
-        // Seller discount remains available before and after that campaign.
-        if ($this->flash_sale_price === null
-            && (($startsAt && $startsAt->isFuture()) || ($endsAt && $endsAt->isPast()))) {
-            return 0.0;
-        }
-
-        $price = (float) $this->price;
-        $value = max(0, (float) ($this->discount_value ?? 0));
-
-        return match ($this->resolved_discount_type) {
-            'fixed' => round(min($price, $value), 2),
-            'percentage' => round(min($price, $price * min(100, $value) / 100), 2),
-            default => 0.0,
-        };
+        return app(ProductPriceResolver::class)->resolve($this)['discount_amount'];
     }
 
     public function getResolvedDiscountTypeAttribute(): string
     {
-        $type = strtolower(trim((string) ($this->getRawOriginal('discount_type') ?? '')));
+        $type = strtolower(trim((string) ($this->getAttribute('discount_type') ?? '')));
 
         if (in_array($type, ['none', 'percentage', 'fixed'], true)) {
             return $type;
@@ -120,22 +98,40 @@ class ProductVariant extends Model
 
     public function getFinalPriceAttribute(): float
     {
-        return round(max(0, (float) $this->price - $this->discount_amount), 2);
+        return app(ProductPriceResolver::class)->resolve($this)['price'];
     }
 
     public function getFlashSaleRemainingAttribute(): int
     {
-        return max(0, (int) ($this->flash_sale_allocation ?? 0) - (int) ($this->flash_sale_sold ?? 0));
+        return app(ProductPriceResolver::class)->remainingFlashSaleUnits($this);
     }
 
     public function getActiveFlashSalePriceAttribute(): ?float
     {
-        if ($this->flash_sale_price === null || (float) $this->flash_sale_price <= 0
-            || $this->flash_sale_remaining <= 0 || ! $this->flashSaleWindowIsActive()) {
-            return null;
+        return app(ProductPriceResolver::class)->activeFlashSalePrice($this);
+    }
+
+    public function getFlashSaleStatusAttribute(): string
+    {
+        if ($this->flash_sale_price === null || $this->flash_sale_allocation === null) {
+            return 'NOT_CONFIGURED';
         }
 
-        return round((float) $this->flash_sale_price, 2);
+        $product = $this->relationLoaded('product') ? $this->getRelation('product') : $this->product;
+        if ($product?->flash_sale_ends_at?->lessThanOrEqualTo(now())) {
+            return 'EXPIRED';
+        }
+        if ((bool) ($product?->flash_sale_is_paused ?? false)) {
+            return 'PAUSED';
+        }
+        if ($this->flash_sale_remaining <= 0 || (int) $this->stock <= 0) {
+            return 'SOLD_OUT';
+        }
+        if ($product?->flash_sale_starts_at?->isFuture()) {
+            return 'SCHEDULED';
+        }
+
+        return 'ACTIVE';
     }
 
     private function flashSaleWindowIsActive(): bool

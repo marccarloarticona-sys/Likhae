@@ -134,7 +134,14 @@ class FlashSaleReminderFeatureTest extends TestCase
             ->assertOk()
             ->assertSee('Upcoming flash sales')
             ->assertSee($product->name)
+            ->assertSee('Upcoming Flash Sale')
+            ->assertSee('data-flash-sale-start-countdown', false)
             ->assertSee('Remind Me');
+
+        $this->get(route('buyer.product-details', ['slug' => $product->slug]))
+            ->assertOk()
+            ->assertSee('Flash Sale starts at')
+            ->assertSee('data-flash-sale-start-countdown', false);
     }
 
     public function test_upcoming_dedicated_flash_price_appears_in_flash_deals_and_supports_existing_reminders(): void
@@ -217,6 +224,9 @@ class FlashSaleReminderFeatureTest extends TestCase
             'price' => 100,
             'discount_type' => 'percentage',
             'discount_value' => 20,
+            'flash_sale_price' => 70,
+            'flash_sale_allocation' => 4,
+            'flash_sale_sold' => 0,
             'stock' => 10,
             'weight_kg' => 1,
             'is_default' => true,

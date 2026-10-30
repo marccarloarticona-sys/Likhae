@@ -31,6 +31,12 @@ class Product extends Model
         'archived_at',
         'flash_sale_starts_at',
         'flash_sale_ends_at',
+        'flash_sale_is_paused',
+        'flash_sale_limit_per_buyer',
+        'flash_sale_campaign_key',
+        'discounts_enabled',
+        'discount_starts_at',
+        'discount_ends_at',
         'submission_token',
         'submission_fingerprint',
     ];
@@ -42,6 +48,11 @@ class Product extends Model
             'archived_at' => 'datetime',
             'flash_sale_starts_at' => 'datetime',
             'flash_sale_ends_at' => 'datetime',
+            'flash_sale_is_paused' => 'boolean',
+            'flash_sale_limit_per_buyer' => 'integer',
+            'discounts_enabled' => 'boolean',
+            'discount_starts_at' => 'datetime',
+            'discount_ends_at' => 'datetime',
             'purchase_limit_per_buyer' => 'integer',
         ];
     }

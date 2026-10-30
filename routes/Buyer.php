@@ -3,6 +3,7 @@
 use App\Http\Controllers\Buyer\BuyerController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
+use App\Http\Controllers\Buyer\BuyerPromotionController;
 use App\Http\Controllers\Buyer\BuyerPlatformEventController;
 use App\Http\Controllers\Buyer\BuyerReturnRefundController;
 use App\Http\Controllers\Buyer\BuyerVoucherClaimController;
@@ -26,6 +27,8 @@ Route::prefix('buyer')
         Route::get('/home', [BuyerController::class, 'home'])->name('home');
         Route::get('/platform-events', [BuyerPlatformEventController::class, 'index'])->name('platform-events.index');
         Route::get('/platform-events/{voucher}', [BuyerPlatformEventController::class, 'show'])->name('platform-events.show');
+        Route::get('/discounts', [BuyerController::class, 'discounts'])->name('discounts');
+        Route::get('/free-gifts', [BuyerController::class, 'freeGifts'])->name('free-gifts');
         Route::get('/products', [BuyerController::class, 'products'])->name('products');
         Route::get('/products/{slug}', [BuyerController::class, 'product'])->name('product-details');
         Route::get('/wishlist', [BuyerController::class, 'wishlist'])->name('wishlist');
@@ -50,14 +53,16 @@ Route::prefix('buyer')
         Route::get('/cart', [BuyerController::class, 'cart'])->name('cart');
         Route::post('/cart/preview', [BuyerController::class, 'cartPreview'])->middleware('throttle:60,1')->name('cart.preview');
         Route::post('/cart/{product}', [BuyerController::class, 'addCart'])->name('cart.add');
+        Route::post('/cart/bundles/{promotion}', [BuyerPromotionController::class, 'addBundle'])->whereNumber('promotion')->name('cart.bundle-add');
+        Route::post('/cart/offers/{promotion}/claim', [BuyerPromotionController::class, 'claimBuyXGetY'])->whereNumber('promotion')->name('cart.offer-claim');
         Route::patch('/cart/items/{item}', [BuyerController::class, 'updateCart'])->name('cart.update');
         Route::delete('/cart/items/{item}', [BuyerController::class, 'removeCart'])->name('cart.remove');
         Route::post('/buy-now/{product}', [BuyerController::class, 'buyNow'])->name('buy-now');
 
         Route::get('/checkout', [CheckoutController::class, 'show'])->name('checkout');
         Route::post('/checkout', [CheckoutController::class, 'select'])->name('checkout.post');
-        Route::post('/checkout/voucher', [CheckoutController::class, 'applyVoucher'])->name('checkout.voucher');
-        Route::post('/order', [CheckoutController::class, 'store'])->name('order.store');
+        Route::post('/checkout/voucher', [CheckoutController::class, 'applyVoucher'])->middleware('throttle:20,1')->name('checkout.voucher');
+        Route::post('/order', [CheckoutController::class, 'store'])->middleware('throttle:10,1')->name('order.store');
 
         Route::get('/orders/success', [BuyerOrderController::class, 'success'])->name('orders.success');
         Route::get('/orders', [BuyerOrderController::class, 'index'])->name('orders');
@@ -75,7 +80,8 @@ Route::prefix('buyer')
         Route::post('/orders/{order}/delivery-pin', [BuyerOrderController::class, 'confirmDeliveryPin'])->name('orders.delivery-pin');
         Route::post('/orders/{order}/seller-orders/{sellerOrder}/conversation', [BuyerOrderController::class, 'sellerConversation'])->name('orders.seller-conversation');
         Route::post('/orders/{order}/support/conversation', [BuyerOrderController::class, 'supportConversation'])->name('orders.support-conversation');
-        Route::post('/orders/{order}/cancel', [BuyerOrderController::class, 'cancel'])->name('orders.cancel');
+        Route::post('/orders/{order}/cancel', [BuyerOrderController::class, 'cancel'])->middleware('throttle:10,1')->name('orders.cancel');
+        Route::post('/orders/{order}/shipments/{shipment}/received', [BuyerOrderController::class, 'receivedShipment'])->name('orders.shipments.received');
         Route::post('/orders/{order}/received', [BuyerOrderController::class, 'received'])->name('orders.received');
         Route::get('/orders/{order}/return-refund', [BuyerOrderController::class, 'returnRefundForm'])->name('orders.return-refund.form');
         Route::post('/orders/{order}/return-refund', [BuyerOrderController::class, 'returnRefund'])->name('orders.return-refund');

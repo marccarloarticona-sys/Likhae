@@ -259,7 +259,7 @@ class MobileAuthController extends Controller
         if ($mobileRoles === []) {
             return response()->json([
                 'success' => false,
-                'message' => 'This account does not have Buyer or Rider mobile access.',
+                'message' => 'This account does not have Buyer, Rider, or Logistics mobile access.',
             ], 403);
         }
 
@@ -353,8 +353,8 @@ class MobileAuthController extends Controller
         if ($mobileRoles === []) {
             return response()->json([
                 'success' => false,
-                'message' => 'This account does not have Buyer or Rider mobile access.',
-                'errors' => ['email' => ['This account does not have Buyer or Rider mobile access.']],
+                'message' => 'This account does not have Buyer, Rider, or Logistics mobile access.',
+                'errors' => ['email' => ['This account does not have Buyer, Rider, or Logistics mobile access.']],
             ], 403);
         }
 
@@ -397,7 +397,7 @@ class MobileAuthController extends Controller
         if ($mobileRoles === []) {
             return response()->json([
                 'success' => false,
-                'message' => 'This account no longer has Buyer or Rider mobile access.',
+                'message' => 'This account no longer has Buyer, Rider, or Logistics mobile access.',
             ], 403);
         }
 
@@ -431,9 +431,10 @@ class MobileAuthController extends Controller
     /** @return array<int, string> */
     private function mobileRoles(User $user): array
     {
-        return match (strtoupper((string) $user->account_type)) {
+        return match (strtoupper(trim((string) $user->account_type))) {
             User::TYPE_BUYER => ['buyer'],
             User::TYPE_RIDER => ['rider'],
+            User::TYPE_LOGISTICS => ['logistics'],
             default => [],
         };
     }

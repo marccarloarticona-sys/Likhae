@@ -2,6 +2,8 @@
     'product',
     'products' => collect(),
     'guest' => false,
+    'productVouchers' => collect(),
+    'sellerPromotions' => collect(),
 ])
 
 @php
@@ -139,9 +141,28 @@
     $discountBadgeValue = $discountType === 'fixed'
         ? $discountAmount
         : (float) data_get($defaultVariant, 'discount_percentage', $discountValue);
+    $flashSaleActive = (bool) data_get($defaultVariant, 'flash_sale_active', false);
+    $flashSaleStatus = (string) data_get($defaultVariant, 'flash_sale_status', 'NOT_CONFIGURED');
+    $flashSaleScheduled = $flashSaleStatus === 'SCHEDULED';
+    $flashSalePrice = data_get($defaultVariant, 'flash_sale_price');
+    $flashSaleRemaining = max(0, (int) data_get($defaultVariant, 'flash_sale_remaining', 0));
+    $flashSaleEndsAt = data_get($defaultVariant, 'flash_sale_ends_at');
+    $flashSaleStartsAt = data_get($defaultVariant, 'flash_sale_starts_at');
+    $flashSaleLimit = data_get($defaultVariant, 'flash_sale_limit_per_buyer');
 
     $variantStock = $variants
         ->mapWithKeys(fn ($variant) => [(string) data_get($variant, 'id') => (int) data_get($variant, 'stock', 0)])
+        ->all();
+    $variationFlashSales = $variants
+        ->mapWithKeys(fn ($variant) => [(string) data_get($variant, 'id') => [
+            'status' => data_get($variant, 'flash_sale_status'),
+            'active' => (bool) data_get($variant, 'flash_sale_active'),
+            'price' => data_get($variant, 'flash_sale_price'),
+            'remaining' => (int) data_get($variant, 'flash_sale_remaining', 0),
+            'starts_at' => data_get($variant, 'flash_sale_starts_at'),
+            'ends_at' => data_get($variant, 'flash_sale_ends_at'),
+            'limit' => data_get($variant, 'flash_sale_limit_per_buyer'),
+        ]])
         ->all();
 
     $sellerStoreId = (int) data_get($product, 'seller.id', 0);
@@ -887,6 +908,20 @@
         white-space: pre-line;
     }
 
+    .lk-detail-description figure {
+        margin: 18px 0;
+    }
+
+    .lk-detail-description figure img {
+        display: block;
+        width: min(100%, 680px);
+        max-height: 640px;
+        border: 1px solid #EFE1D5;
+        border-radius: 16px;
+        object-fit: contain;
+        background: #fff;
+    }
+
     .lk-detail-spec-list {
         margin-top: 12px;
     }
@@ -1377,6 +1412,7 @@
             @if($variantStock)
                 data-variant-stock-product
                 data-variant-stocks='@json($variantStock)'
+                data-variation-flash-sales='@json($variationFlashSales)'
             @endif
         >
             <div class="lk-detail-badges">
@@ -1387,6 +1423,7 @@
                 <span class="lk-detail-badge lk-detail-badge-tan" data-variation-discount-badge-wrapper @if($discountAmount <= 0) hidden @endif>
                     <span data-variation-discount-badge>{{ $discountType === 'fixed' ? '₱'.number_format($discountAmount, 2).' OFF' : number_format($discountBadgeValue, 2).'% OFF' }}</span>
                 </span>
+                <span class="lk-detail-badge lk-detail-badge-maroon" data-variation-flash-sale-badge @unless($flashSaleActive) hidden @endunless>FLASH SALE</span>
             </div>
 
             <h1 class="lk-detail-title">
@@ -1426,8 +1463,46 @@
                 <p class="lk-detail-price-note">
                     VAT included · Secure LIKHAE checkout · Protected payment
                 </p>
+                <div class="lk-detail-price-note text-rose-800" data-variation-flash-sale-stock @unless($flashSaleActive && $flashSaleRemaining > 0) hidden @endunless>
+                    <span>Only <strong data-flash-sale-remaining>{{ number_format($flashSaleRemaining) }}</strong> promotional unit(s) left</span>
+                    @if($flashSaleLimit)<span class="block" data-flash-sale-limit>Limit {{ number_format((int) $flashSaleLimit) }} per Buyer</span>@else<span class="block" data-flash-sale-limit hidden></span>@endif
+                    @if($flashSaleEndsAt)<time class="block" data-flash-sale-countdown datetime="{{ $flashSaleEndsAt }}">Sale ends {{ \Illuminate\Support\Carbon::parse($flashSaleEndsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@else<time class="block" data-flash-sale-countdown hidden></time>@endif
+                </div>
+                <div class="lk-detail-price-note text-amber-900" data-variation-flash-sale-upcoming @unless($flashSaleScheduled && $flashSaleRemaining > 0) hidden @endunless>
+                    <span>Flash Sale starts at <strong data-flash-sale-upcoming-price>₱{{ number_format((float) $flashSalePrice, 2) }}</strong></span>
+                    <span class="block" data-flash-sale-upcoming-stock>{{ number_format($flashSaleRemaining) }} promotional units allocated</span>
+                    <time class="block" data-flash-sale-start-countdown datetime="{{ $flashSaleStartsAt }}">Starts {{ \Illuminate\Support\Carbon::parse($flashSaleStartsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>
+                </div>
                 @if(!$guest && \Illuminate\Support\Facades\Route::has('buyer.rewards'))
                     <a class="lk-detail-price-note" href="{{ route('buyer.rewards') }}">View voucher codes in Rewards</a>
+                @endif
+                @if(!$guest && $productVouchers->isNotEmpty())
+                    <section class="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4" aria-label="Vouchers for this product">
+                        <h3 class="text-sm font-bold text-red-950">Store vouchers for this product</h3>
+                        <p class="mt-1 text-xs text-red-900/80">Collect an offer here, then select it in your cart or at checkout. Final eligibility uses the discounted item subtotal.</p>
+                        <div class="mt-3 grid gap-2">
+                            @foreach($productVouchers as $productVoucher)
+                                <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-200 bg-white p-3 text-xs">
+                                    <div>
+                                        <strong class="text-red-950">{{ $productVoucher->name }}</strong>
+                                        <span class="block text-red-900">
+                                            {{ $productVoucher->discount_type === 'PERCENT' ? rtrim(rtrim(number_format((float) $productVoucher->discount_value, 2, '.', ''), '0'), '.').'%' : '₱'.number_format((float) $productVoucher->discount_value, 2) }} off
+                                            @if((float) $productVoucher->minimum_order_amount > 0) · Min. ₱{{ number_format((float) $productVoucher->minimum_order_amount, 2) }} @endif
+                                            @if($productVoucher->maximum_discount_amount !== null) · Max ₱{{ number_format((float) $productVoucher->maximum_discount_amount, 2) }} @endif
+                                        </span>
+                                    </div>
+                                    @if($productVoucher->buyer_has_claim)
+                                        <span class="rounded-full bg-green-100 px-3 py-1.5 font-bold text-green-800">Collected · {{ $productVoucher->code }}</span>
+                                    @else
+                                        <form method="POST" action="{{ route('buyer.vouchers.claim', ['voucher' => $productVoucher]) }}">
+                                            @csrf
+                                            <button type="submit" class="rounded-full bg-red-900 px-3 py-1.5 font-bold text-white hover:bg-red-800">Collect voucher</button>
+                                        </form>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </section>
                 @endif
                 @if($sellerOnVacation)
                     <p class="lk-detail-price-note" role="status">This seller is currently on vacation and is not accepting purchases.</p>
@@ -1466,12 +1541,12 @@
                                         ->mapWithKeys(fn ($option) => [strtolower((string) data_get($option, 'option')) => (string) data_get($option, 'value')])
                                         ->all();
                                 @endphp
-                                <button type="button" class="lk-detail-option-btn {{ $selected ? 'is-selected' : '' }}" data-variation-option data-variation-id="{{ data_get($variant, 'id') }}" data-variation-value="{{ data_get($variant, 'description', data_get($variant, 'sku')) }}" data-variation-stock="{{ data_get($variant, 'stock', 0) }}" data-variation-price="{{ data_get($variant, 'price', 0) }}" data-variation-original-price="{{ data_get($variant, 'original_price', data_get($variant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($variant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($variant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($variant, "image_urls", []))' data-option-values='@json($variantOptionValues)' aria-pressed="{{ $selected ? 'true' : 'false' }}">{{ data_get($variant, 'description', data_get($variant, 'sku')) }}</button>
+                                <button type="button" class="lk-detail-option-btn {{ $selected ? 'is-selected' : '' }}" data-variation-option data-variation-id="{{ data_get($variant, 'id') }}" data-variation-value="{{ data_get($variant, 'description', data_get($variant, 'sku')) }}" data-variation-stock="{{ data_get($variant, 'stock', 0) }}" data-variation-price="{{ data_get($variant, 'price', 0) }}" data-variation-original-price="{{ data_get($variant, 'original_price', data_get($variant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($variant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($variant, 'discount_type') === 'percentage' ? data_get($variant, 'discount_percentage', data_get($variant, 'discount_value', 0)) : data_get($variant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($variant, 'discount_amount', 0) }}" data-variation-flash-sale-active="{{ data_get($variant, 'flash_sale_active') ? '1' : '0' }}" data-variation-flash-sale-remaining="{{ data_get($variant, 'flash_sale_remaining', 0) }}" data-variation-flash-sale-ends-at="{{ data_get($variant, 'flash_sale_ends_at') }}" data-variation-flash-sale-limit="{{ data_get($variant, 'flash_sale_limit_per_buyer') }}" data-variation-images='@json(data_get($variant, "image_urls", []))' data-option-values='@json($variantOptionValues)' aria-pressed="{{ $selected ? 'true' : 'false' }}">{{ data_get($variant, 'description', data_get($variant, 'sku')) }}</button>
                             @endforeach
                         </div>
                     </div>
                 @elseif($defaultVariant)
-                    <button type="button" hidden data-variation-option data-variation-id="{{ data_get($defaultVariant, 'id') }}" data-variation-value="{{ data_get($defaultVariant, 'description', 'Default') }}" data-variation-stock="{{ data_get($defaultVariant, 'stock', 0) }}" data-variation-price="{{ data_get($defaultVariant, 'price', 0) }}" data-variation-original-price="{{ data_get($defaultVariant, 'original_price', data_get($defaultVariant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($defaultVariant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($defaultVariant, 'discount_amount', 0) }}" data-variation-images='@json(data_get($defaultVariant, "image_urls", []))' aria-pressed="true">Default</button>
+                    <button type="button" hidden data-variation-option data-variation-id="{{ data_get($defaultVariant, 'id') }}" data-variation-value="{{ data_get($defaultVariant, 'description', 'Default') }}" data-variation-stock="{{ data_get($defaultVariant, 'stock', 0) }}" data-variation-price="{{ data_get($defaultVariant, 'price', 0) }}" data-variation-original-price="{{ data_get($defaultVariant, 'original_price', data_get($defaultVariant, 'price', 0)) }}" data-variation-discount-type="{{ data_get($defaultVariant, 'discount_type', 'none') }}" data-variation-discount-value="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount="{{ data_get($defaultVariant, 'discount_type') === 'percentage' ? data_get($defaultVariant, 'discount_percentage', data_get($defaultVariant, 'discount_value', 0)) : data_get($defaultVariant, 'discount_value', 0) }}" data-variation-discount-amount="{{ data_get($defaultVariant, 'discount_amount', 0) }}" data-variation-flash-sale-active="{{ data_get($defaultVariant, 'flash_sale_active') ? '1' : '0' }}" data-variation-flash-sale-remaining="{{ data_get($defaultVariant, 'flash_sale_remaining', 0) }}" data-variation-flash-sale-ends-at="{{ data_get($defaultVariant, 'flash_sale_ends_at') }}" data-variation-flash-sale-limit="{{ data_get($defaultVariant, 'flash_sale_limit_per_buyer') }}" data-variation-images='@json(data_get($defaultVariant, "image_urls", []))' aria-pressed="true">Default</button>
                 @endif
 
                 <div class="lk-detail-qty-row">
@@ -1694,7 +1769,19 @@
             <h2>Description</h2>
 
             <div class="lk-detail-description">
-                {{ data_get($product, 'description', 'A carefully selected product from a trusted LIKHAE seller. Built for everyday use and covered by marketplace buyer protection.') }}
+                @if(data_get($product, 'description_blocks') !== null)
+                    @forelse(data_get($product, 'description_blocks') as $descriptionBlock)
+                        @if(data_get($descriptionBlock, 'type') === 'image')
+                            <figure><img src="{{ data_get($descriptionBlock, 'url') }}" alt="{{ data_get($descriptionBlock, 'alt', 'Product description image') }}" loading="lazy"></figure>
+                        @else
+                            <p>{{ data_get($descriptionBlock, 'text') }}</p>
+                        @endif
+                    @empty
+                        <p>A carefully selected product from a trusted LIKHAE seller. Built for everyday use and covered by marketplace buyer protection.</p>
+                    @endforelse
+                @else
+                    {{ data_get($product, 'description', 'A carefully selected product from a trusted LIKHAE seller. Built for everyday use and covered by marketplace buyer protection.') }}
+                @endif
             </div>
         </section>
 
@@ -1921,6 +2008,8 @@
             applyFilters();
         })();
     </script>
+
+    <x-buyer.seller-promotions :promotions="$sellerPromotions" :guest="$guest" />
 
     @if($related->isNotEmpty())
         <section class="lk-section lk-detail-related">

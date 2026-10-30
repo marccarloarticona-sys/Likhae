@@ -1248,12 +1248,10 @@
 
                             <div>
                                 <strong>
-                                    Administrator approval required
+                                    Application review required
                                 </strong>
                                 <p>
-                                    After submitting your registration,
-                                    please wait for the administrator's
-                                    approval. Sign in after approval to access your account.
+                                    Your application will be reviewed before account access is enabled. Sign in to check its status and replace any document that needs correction.
                                 </p>
                             </div>
 

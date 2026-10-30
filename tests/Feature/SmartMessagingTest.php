@@ -13,6 +13,8 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
+use App\Models\Logistics\LogisticsCenter;
+use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -174,6 +176,9 @@ class SmartMessagingTest extends TestCase
         ])->assertNotFound();
         $this->actingAs($seller[0])->get(route('admin.support-faqs'))->assertForbidden();
         $this->actingAs($seller[0])->get(route('seller.messages.faqs'))->assertOk()->assertSee('Suggested answers');
+        $this->actingAs($this->user(User::TYPE_ADMIN))->get(route('admin.support-faqs'))
+            ->assertOk()->assertSee('Welcome and fallback messages')->assertSee('Frequently unanswered questions')
+            ->assertSee('Alternative question phrases, one per line');
 
         $this->assertDatabaseHas('messaging_faqs', ['id' => $faq->id, 'seller_profile_id' => $seller[1]->id, 'is_active' => 1]);
     }
@@ -228,6 +233,123 @@ class SmartMessagingTest extends TestCase
         $otherBootstrap = app(\App\Services\Communication\SmartMessagingService::class)
             ->bootstrapForBuyer($otherBuyer, $otherThread);
         $this->assertContains($faq->question, array_column($otherBootstrap['suggestions'], 'question'));
+    }
+
+    public function test_admin_support_suggestions_are_role_specific_and_typed_questions_match_saved_faqs(): void
+    {
+        Event::fake();
+        $admin = $this->user(User::TYPE_ADMIN);
+        $categoriesByRole = [
+            User::TYPE_BUYER => ['Orders and Deliveries', 'Returns and Refunds', 'COD and Payments', 'Vouchers and Promotions', 'Account Issues', 'Report a Seller or Rider'],
+            User::TYPE_SELLER => ['Product and Listing Issues', 'Orders and Shipping', 'Seller Wallet and Payouts', 'Returns and Refund Disputes', 'Account Verification', 'Product Moderation'],
+            User::TYPE_LOGISTICS => ['Parcel Management', 'Rider Assignment', 'COD Remittance', 'Wallet and Settlement', 'Inter-Hub Transfers', 'Technical Issues'],
+            User::TYPE_RIDER => ['Delivery Issues', 'COD Collection and Remittance', 'Payout Requests', 'Account Verification', 'Parcel Scanning'],
+        ];
+        $users = [];
+        foreach ($categoriesByRole as $role => $expectedQuestions) {
+            $requester = $this->user($role);
+            $users[$role] = $requester;
+            $conversation = app(ConversationService::class)->start($requester, $admin->id, ['type' => 'SUPPORT']);
+            $bootstrap = app(\App\Services\Communication\SmartMessagingService::class)->bootstrapForRequester($requester, $conversation);
+            $this->assertSame($expectedQuestions, array_column($bootstrap['suggestions'], 'question'));
+            $this->assertStringContainsString('choose a topic', mb_strtolower($bootstrap['welcome_message']));
+        }
+        $center = LogisticsCenter::query()->create([
+            'owner_user_id' => $users[User::TYPE_LOGISTICS]->id,
+            'code' => 'SMART-HELP-TEST',
+            'business_name' => 'Smart Help Test Center',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
+        ]);
+        RiderProfile::query()->create([
+            'user_id' => $users[User::TYPE_RIDER]->id,
+            'logistics_center_id' => $center->id,
+            'vehicle_type' => 'Motorcycle',
+            'plate_number' => 'SMART-HELP-RIDER',
+            'drivers_license_number' => 'SMART-HELP-LICENSE',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
+        ]);
+
+        $faq = MessagingFaq::query()->create([
+            'owner_type' => MessagingFaq::OWNER_ADMIN,
+            'created_by_user_id' => $admin->id,
+            'target_role' => User::TYPE_LOGISTICS,
+            'entry_type' => 'FAQ',
+            'category' => 'COD Remittance',
+            'question' => 'How can I reconcile a COD remittance?',
+            'alternate_questions' => ['Where do I check a COD settlement?'],
+            'keywords' => ['remittance', 'settlement'],
+            'answer' => 'Review the recorded remittance details and ask Admin to investigate a mismatch.',
+            'is_active' => true,
+            'is_automatic' => true,
+        ]);
+        $logisticsConversation = Conversation::query()->whereHas('participantRecords', fn ($query) => $query->where('user_id', $users[User::TYPE_LOGISTICS]->id))
+            ->whereHas('participantRecords', fn ($query) => $query->where('user_id', $admin->id))->firstOrFail();
+        $typedAnswer = $this->actingAs($users[User::TYPE_LOGISTICS])->postJson(route('logistics.messages.smart-help.answer', $logisticsConversation), [
+            'question_text' => 'Where do I check a COD settlement?',
+        ]);
+        $this->assertSame(200, $typedAnswer->getStatusCode(), $typedAnswer->getContent());
+        $typedAnswer->assertJsonPath('answer', $faq->answer);
+
+        $this->actingAs($users[User::TYPE_RIDER])->postJson(route('rider.messages.smart-help.handoff',
+            Conversation::query()->whereHas('participantRecords', fn ($query) => $query->where('user_id', $users[User::TYPE_RIDER]->id))->firstOrFail()))
+            ->assertOk()->assertJsonPath('already_requested', false);
+    }
+
+    public function test_admin_can_claim_reassign_reopen_and_note_support_without_exposing_notes(): void
+    {
+        Event::fake();
+        $buyer = $this->user(User::TYPE_BUYER);
+        $originalAdmin = $this->user(User::TYPE_ADMIN);
+        $claimingAdmin = $this->user(User::TYPE_ADMIN);
+        $newAdmin = $this->user(User::TYPE_ADMIN);
+        $faq = MessagingFaq::query()->create([
+            'owner_type' => MessagingFaq::OWNER_ADMIN,
+            'created_by_user_id' => $originalAdmin->id,
+            'category' => 'Account Issues',
+            'question' => 'How can I update my account contact details?',
+            'answer' => 'Open Account Settings to review the available update steps.',
+            'is_active' => true,
+        ]);
+        $conversation = app(ConversationService::class)->start($buyer, $originalAdmin->id, ['type' => 'SUPPORT']);
+        $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.answer', $conversation), ['question_key' => (string) $faq->id])->assertOk();
+        $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.handoff', $conversation), ['concern' => 'Please review my account update.'])->assertOk();
+        $supportRequest = ConversationSupportRequest::query()->where('conversation_id', $conversation->id)->firstOrFail();
+
+        $this->actingAs($claimingAdmin)->get(route('admin.messages'))
+            ->assertOk()->assertSee('How can I update my account contact details?')->assertSee($buyer->name);
+        $this->actingAs($claimingAdmin)->post(route('admin.messages.support-requests.accept', $supportRequest))
+            ->assertRedirect(route('admin.messages', ['section' => 'chats', 'conversation' => $conversation->id]));
+        $this->assertDatabaseHas('conversation_support_requests', [
+            'id' => $supportRequest->id,
+            'recipient_user_id' => $claimingAdmin->id,
+            'accepted_by_user_id' => $claimingAdmin->id,
+            'status' => ConversationSupportRequest::IN_PROGRESS,
+        ]);
+        $this->assertDatabaseHas('conversation_participants', ['conversation_id' => $conversation->id, 'user_id' => $originalAdmin->id]);
+        $this->assertNotNull(ConversationParticipant::query()->where('conversation_id', $conversation->id)->where('user_id', $originalAdmin->id)->value('left_at'));
+        $this->assertNotNull(ConversationParticipant::query()->where('conversation_id', $conversation->id)->where('user_id', $claimingAdmin->id)->whereNull('left_at')->first());
+        $this->actingAs($originalAdmin)->post(route('admin.messages.support-requests.accept', $supportRequest))->assertStatus(409);
+
+        $this->actingAs($claimingAdmin)->post(route('admin.messages.support-requests.notes', $supportRequest), ['note' => 'Internal routing check only.'])->assertRedirect();
+        $this->actingAs($claimingAdmin)->get(route('admin.messages', ['section' => 'overview', 'request' => $supportRequest->id]))
+            ->assertOk()->assertSee('Internal routing check only.')->assertSee('Automated assistance history');
+        $this->actingAs($buyer)->get(route('admin.messages', ['section' => 'overview', 'request' => $supportRequest->id]))->assertForbidden();
+        $this->assertDatabaseMissing('messages', ['body' => 'Internal routing check only.']);
+
+        $this->actingAs($claimingAdmin)->patch(route('admin.messages.support-requests.assignment', $supportRequest), ['admin_user_id' => $newAdmin->id])
+            ->assertRedirect(route('admin.messages', ['section' => 'chats', 'conversation' => $conversation->id]));
+        $this->assertDatabaseHas('conversation_support_requests', ['id' => $supportRequest->id, 'accepted_by_user_id' => $newAdmin->id]);
+        $this->assertNotNull(ConversationParticipant::query()->where('conversation_id', $conversation->id)->where('user_id', $claimingAdmin->id)->value('left_at'));
+
+        $this->actingAs($newAdmin)->post(route('admin.messages.support-requests.resolve', $supportRequest))->assertRedirect();
+        $this->actingAs($newAdmin)->post(route('admin.messages.support-requests.reopen', $supportRequest))->assertRedirect();
+        $this->assertDatabaseHas('conversation_support_requests', ['id' => $supportRequest->id, 'status' => ConversationSupportRequest::AWAITING_RESPONSE]);
+        $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.answer', $conversation), ['question_key' => (string) $faq->id])->assertStatus(409);
+        $this->assertDatabaseHas('notifications', ['user_id' => $buyer->id, 'type' => 'CONVERSATION_SUPPORT_REOPENED']);
     }
 
     public function test_admin_overview_is_the_default_and_tracks_filtered_requests_without_marking_messages_read(): void

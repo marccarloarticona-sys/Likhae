@@ -33,6 +33,31 @@ class SupportRequestController extends Controller
         return redirect()->route(
             $request->user()->isAccountType(User::TYPE_ADMIN) ? 'admin.messages' : 'seller.messages',
             ['section' => 'overview', 'request' => $supportRequest->id],
-        )->with('status', 'Buyer concern marked as resolved.');
+        )->with('status', 'Support concern marked as resolved.');
+    }
+
+    public function addInternalNote(Request $request, ConversationSupportRequest $supportRequest, SmartMessagingService $smartMessaging): RedirectResponse
+    {
+        $data = $request->validate(['note' => ['required', 'string', 'max:1500']]);
+        $smartMessaging->addInternalNote($request->user(), $supportRequest, $data['note']);
+
+        return back()->with('status', 'Internal note saved.');
+    }
+
+    public function reassign(Request $request, ConversationSupportRequest $supportRequest, SmartMessagingService $smartMessaging): RedirectResponse
+    {
+        $data = $request->validate(['admin_user_id' => ['required', 'integer', 'min:1']]);
+        $result = $smartMessaging->reassignRequest($request->user(), $supportRequest, (int) $data['admin_user_id']);
+
+        return redirect()->route('admin.messages', ['section' => 'chats', 'conversation' => $result['conversation_id']])
+            ->with('status', 'Support conversation reassigned.');
+    }
+
+    public function reopen(Request $request, ConversationSupportRequest $supportRequest, SmartMessagingService $smartMessaging): RedirectResponse
+    {
+        $result = $smartMessaging->reopenRequest($request->user(), $supportRequest);
+
+        return redirect()->route('admin.messages', ['section' => 'overview', 'request' => $supportRequest->id])
+            ->with('status', 'Support request reopened and returned to the Admin queue.');
     }
 }

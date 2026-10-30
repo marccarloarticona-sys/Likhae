@@ -2453,6 +2453,15 @@ html.dark .lk-card-actions--home .lk-catalog-add-cart {
     gap: 4px;
 }
 
+.lk-category-list {
+    max-height: min(64vh, 560px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding-right: 5px;
+    scrollbar-color: var(--lk-border-strong) transparent;
+    scrollbar-width: thin;
+}
+
 .lk-category-group {
     display: grid;
     gap: 5px;
@@ -2501,6 +2510,11 @@ html.dark .lk-card-actions--home .lk-catalog-add-cart {
     font-weight: 700;
     text-align: left;
     transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.lk-category-item {
+    background: #F4EBE1;
+    border-color: #E9DCCC;
 }
 
 .lk-category-item:hover,
@@ -5198,6 +5212,11 @@ html.dark .lk-sort-btn.is-active {
     color: #EBA99D !important;
 }
 
+html.dark .lk-category-item:not(:hover):not(.active):not(.is-active) {
+    background: #181311 !important;
+    border-color: #352923 !important;
+}
+
 html.dark .lk-category-sublist {
     border-color: #3B2E27 !important;
 }
@@ -6182,6 +6201,7 @@ dialog,
 
     .lk-category-list {
         display: flex;
+        max-height: none;
         overflow-x: auto;
         overscroll-behavior-inline: contain;
         scroll-snap-type: x proximity;

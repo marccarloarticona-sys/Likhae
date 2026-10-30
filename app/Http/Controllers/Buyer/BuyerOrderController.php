@@ -25,6 +25,7 @@ use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\Communication\ConversationService;
 use App\Services\AccountNotificationService;
+use App\Services\Buyer\BuyerRiskMonitor;
 use App\Services\RiderRatingService;
 use App\Services\ReviewImageService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
@@ -77,8 +78,16 @@ class BuyerOrderController extends Controller
     {
         $filter = $tabs->normalize($request->query('status', 'ALL'));
         $returnRefundReady = $this->returnRefundStorageReady();
+        $logisticsReadiness = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
+        $shipmentReturnsReady = $logisticsReadiness->shipmentReturnsReady();
+        $returnEnhancementsReady = $logisticsReadiness->shipmentReturnEnhancementsReady();
         $buyerOrders = $request->user()->orders();
-        $orderStatusCounts = collect($tabs->counts(clone $buyerOrders->getQuery(), $returnRefundReady));
+        $orderStatusCounts = collect($tabs->counts(
+            clone $buyerOrders->getQuery(),
+            $returnRefundReady,
+            $shipmentReturnsReady,
+            $returnEnhancementsReady,
+        ));
 
         $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
         $orderQuery = $request->user()
@@ -98,8 +107,7 @@ class BuyerOrderController extends Controller
                 'disputes',
             ]);
 
-        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
-        if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
+        if ($shipmentReturnsReady) {
             $orderQuery->with('sellerOrders.shipments.returnWorkflow');
         }
 
@@ -109,11 +117,12 @@ class BuyerOrderController extends Controller
                 'returnRefundRequests.sellerRequests.sellerOrder.sellerProfile',
                 'returnRefundRequests.sellerRequests.sellerOrder.items.product.images',
                 'returnRefundRequests.sellerRequests.items.orderItem.product.images',
+                'returnRefundRequests.items.orderItem',
                 'returnRefundRequests.sellerRequests.payouts',
             ]);
         }
 
-        $orderQuery = $tabs->apply($orderQuery, $filter, $returnRefundReady);
+        $orderQuery = $tabs->apply($orderQuery, $filter, $returnRefundReady, $shipmentReturnsReady, $returnEnhancementsReady);
 
         $orders = $orderQuery
             ->latest()
@@ -127,10 +136,22 @@ class BuyerOrderController extends Controller
         $orderTabKeys = $orders->getCollection()->mapWithKeys(
             fn (Order $order): array => [$order->id => $tabs->forOrder($order, $returnRefundReady)]
         );
-        $sellerOrderTabKeys = $orders->getCollection()->flatMap(function (Order $order) use ($tabs): array {
-            return $order->sellerOrders->mapWithKeys(fn (SellerOrder $sellerOrder): array => [
-                (int) $sellerOrder->id => $tabs->forSellerOrder($order, $sellerOrder),
-            ])->all();
+        $sellerOrderDisplayStatuses = collect();
+        $shipmentTabKeys = collect();
+        $orders->getCollection()->each(function (Order $order) use ($tabs, $returnRefundReady, $sellerOrderDisplayStatuses, $shipmentTabKeys): void {
+            foreach ($order->sellerOrders as $sellerOrder) {
+                $sellerOrderDisplayStatuses->put(
+                    (int) $sellerOrder->id,
+                    $tabs->sellerOrderDisplayStatus($order, $sellerOrder),
+                );
+
+                foreach ($sellerOrder->shipments as $shipment) {
+                    $shipmentTabKeys->put(
+                        (int) $shipment->id,
+                        $tabs->forShipment($order, $sellerOrder, $shipment, $returnRefundReady),
+                    );
+                }
+            }
         });
 
         return view('buyer.orders', [
@@ -143,11 +164,12 @@ class BuyerOrderController extends Controller
             'orderStatusCounts' => $orderStatusCounts,
             'orderActionStates' => $orderActionStates,
             'orderTabKeys' => $orderTabKeys,
-            'sellerOrderTabKeys' => $sellerOrderTabKeys,
+            'sellerOrderDisplayStatuses' => $sellerOrderDisplayStatuses,
+            'shipmentTabKeys' => $shipmentTabKeys,
         ]);
     }
 
-    public function stream(Request $request, BuyerOrderActionService $actions): JsonResponse
+    public function stream(Request $request, BuyerOrderActionService $actions, BuyerOrderTabService $tabs): JsonResponse
     {
         $ids = collect($request->query('ids', []))
             ->map(fn ($id): int => (int) $id)
@@ -158,23 +180,46 @@ class BuyerOrderController extends Controller
             $detailOrderId = 0;
         }
 
-        $orders = $request->user()->orders()
+        $returnRefundReady = $actions->returnRefundStorageReady();
+        $logisticsReadiness = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
+        $shipmentReturnsReady = $logisticsReadiness->shipmentReturnsReady();
+
+        $orderQuery = $request->user()->orders()
             ->select(['id', 'status', 'updated_at'])
             ->when($ids->isNotEmpty(), fn ($query) => $query->whereIn('id', $ids))
             ->with([
                 'sellerOrders' => fn ($query) => $query->select(['id', 'order_id', 'status']),
-                'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'current_status', 'updated_at', 'logistics_center_id']),
+                'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'order_item_id', 'current_status', 'updated_at', 'logistics_center_id']),
                 'sellerOrders.shipments.logisticsCenter:id,business_name',
+                'disputes',
                 'sellerOrders.shipments.transferLegs' => function ($query): void {
                     $query->select(['id', 'shipment_id', 'origin_logistics_center_id', 'destination_logistics_center_id', 'status', 'updated_at']);
                     $this->withTransferArrivalScan($query);
                 },
                 ...($detailOrderId > 0 ? ['sellerOrders.shipments.events'] : []),
-            ])
+            ]);
+
+        if ($shipmentReturnsReady) {
+            $orderQuery->with('sellerOrders.shipments.returnWorkflow');
+        }
+        if ($returnRefundReady) {
+            $orderQuery->with([
+                'sellerOrders.shipments.orderItem.returnRefundRequestItems',
+                'returnRefundRequests.items',
+                'returnRefundRequests.sellerRequests.items',
+            ]);
+        }
+
+        $orders = $orderQuery
             ->get()
             ->sortBy('id')
             ->values();
-        $snapshot = $this->realtimeOrderSnapshot($orders);
+        $snapshot = $this->realtimeOrderSnapshot(
+            $orders,
+            $tabs,
+            $actions,
+            $returnRefundReady,
+        );
         $detailOrder = $detailOrderId > 0 ? $orders->firstWhere('id', $detailOrderId) : null;
         $detailState = $detailOrder
             ? $actions->state($detailOrder, $actions->returnRefundStorageReady())
@@ -182,6 +227,7 @@ class BuyerOrderController extends Controller
         $detailActions = $detailState ? [
             'can_confirm_received' => (bool) $detailState['can_confirm_received'],
             'can_request_return' => (bool) $detailState['can_request_return'],
+            'confirmable_shipment_ids' => $detailState['confirmable_shipment_ids'],
             'auto_confirm_at' => $detailState['auto_confirm_at']?->toIso8601String(),
             'auto_confirm_label' => $detailState['auto_confirm_at']?->timezone('Asia/Manila')->format('M j, Y g:i A'),
             'completed' => $detailOrder->status === 'COMPLETED',
@@ -192,6 +238,7 @@ class BuyerOrderController extends Controller
             'orders' => $snapshot->map(fn (array $order): array => [
                 'id' => $order['id'],
                 'status' => $order['status'],
+                'seller_orders' => $order['seller_orders'],
                 'shipments' => $order['shipments'],
                 'actions' => (int) $order['id'] === $detailOrderId ? $detailActions : null,
             ])->values(),
@@ -415,7 +462,7 @@ class BuyerOrderController extends Controller
         return redirect()->route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]);
     }
 
-    public function cancel(Request $request, Order $order): RedirectResponse|JsonResponse
+    public function cancel(Request $request, Order $order, BuyerRiskMonitor $riskMonitor): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $order->loadMissing('sellerOrders.shipments', 'payments');
@@ -520,6 +567,8 @@ class BuyerOrderController extends Controller
 
             $cancelledAt = now();
             foreach ($activeSellerOrders as $sellerOrder) {
+                app(\App\Services\Marketplace\SellerPromotionUsageService::class)
+                    ->releaseForSellerOrder($sellerOrder, $items->where('seller_order_id', (int) $sellerOrder->id));
                 $sellerOrder->update(['status' => 'CANCELLED']);
                 app(\App\Services\Finance\PlatformCampaignBudgetService::class)
                     ->releaseForSellerOrder($sellerOrder, $request->user());
@@ -548,6 +597,9 @@ class BuyerOrderController extends Controller
         }, attempts: 3);
 
         $order->refresh();
+        if (! $alreadyCancelled) {
+            $riskMonitor->recordBuyerRiskSignals($request->user());
+        }
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -581,6 +633,37 @@ class BuyerOrderController extends Controller
 
         return redirect(route('buyer.orders.show', $order).'#reviews')
             ->with('buyer_notice', 'Order received. You can now rate the products and write a review.');
+    }
+
+    public function receivedShipment(
+        Request $request,
+        Order $order,
+        Shipment $shipment,
+        BuyerOrderActionService $actions,
+    ): RedirectResponse|JsonResponse {
+        abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
+        $request->validate([
+            'confirm_receipt' => ['required', 'accepted'],
+        ]);
+
+        $completed = $actions->confirmShipmentReceipt($order, $shipment, $request->user(), $actions->returnRefundStorageReady());
+        abort_unless($completed, 409, 'Only a delivered parcel without an active return/refund case can be confirmed.');
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'order_number' => $order->order_number,
+                'tracking_number' => $shipment->tracking_number,
+                'status' => 'COMPLETED',
+            ]);
+        }
+
+        $order->refresh();
+        $notice = $order->status === 'COMPLETED'
+            ? 'All parcels are received. Your order is complete and ready for review.'
+            : 'Parcel received. It is now listed under Completed.';
+
+        return back()->with('buyer_notice', $notice);
     }
 
     public function returnRefundForm(Request $request, Order $order): View|RedirectResponse
@@ -1278,44 +1361,62 @@ class BuyerOrderController extends Controller
         return back()->with('buyer_notice', 'Your ratings were saved.');
     }
 
-    private function realtimeOrderSnapshot(iterable $orders)
+    private function realtimeOrderSnapshot(
+        iterable $orders,
+        BuyerOrderTabService $tabs,
+        BuyerOrderActionService $actions,
+        bool $returnRefundReady,
+    )
     {
         return collect($orders)
             ->sortBy('id')
-            ->map(fn (Order $order): array => [
-                'id' => (int) $order->id,
-                'status' => (string) $order->status,
-                'updated_at' => $order->updated_at?->toIso8601String(),
-                'shipments' => $order->sellerOrders
-                    ->flatMap(fn (SellerOrder $sellerOrder) => $sellerOrder->shipments->map(fn ($shipment): array => [
-                        'id' => (int) $shipment->id,
-                        'status' => (string) $shipment->current_status,
-                        'updated_at' => $shipment->updated_at?->toIso8601String(),
-                        'current_center_name' => $shipment->logisticsCenter?->business_name,
-                        'events' => $shipment->relationLoaded('events')
-                            ? $shipment->events->sortBy('occurred_at')->values()->map(fn ($event): array => [
-                                'id' => (int) $event->id,
-                                'status' => (string) $event->status,
-                                'cancelled' => str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
-                                    || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:'),
-                                'auto_received' => str_starts_with((string) $event->notes, BuyerOrderActionService::AUTOMATIC_RECEIPT_NOTE),
-                                'occurred_at' => $event->occurred_at?->toIso8601String(),
-                                'display_time' => $event->occurred_at?->timezone('Asia/Manila')->format('M j, Y g:i A'),
-                            ])->all()
-                            : null,
-                        'transfer_legs' => $shipment->transferLegs->map(fn ($leg): array => [
-                            'id' => (int) $leg->id,
-                            'status' => (string) $leg->status,
-                            'updated_at' => $leg->updated_at?->toIso8601String(),
-                            'origin_center_name' => $leg->originLogisticsCenter?->business_name,
-                            'destination_center_name' => $leg->destinationLogisticsCenter?->business_name,
-                            'arrival_scanned_at' => $leg->arrival_scanned_at,
-                        ])->values()->all(),
-                    ]))
-                    ->sortBy('id')
-                    ->values()
-                    ->all(),
-            ])
+            ->map(function (Order $order) use ($tabs, $actions, $returnRefundReady): array {
+                return [
+                    'id' => (int) $order->id,
+                    'status' => (string) $order->status,
+                    'updated_at' => $order->updated_at?->toIso8601String(),
+                    'confirmable_shipment_ids' => $actions->confirmableShipmentIds($order, $returnRefundReady),
+                    'seller_orders' => $order->sellerOrders->map(fn (SellerOrder $sellerOrder): array => [
+                        'id' => (int) $sellerOrder->id,
+                        'display_status' => $tabs->sellerOrderDisplayStatus($order, $sellerOrder),
+                    ])->values()->all(),
+                    'shipments' => $order->sellerOrders
+                        ->flatMap(fn (SellerOrder $sellerOrder) => $sellerOrder->shipments->map(fn (Shipment $shipment): array => [
+                            'id' => (int) $shipment->id,
+                            'status' => (string) $shipment->current_status,
+                            'tab_key' => $tabs->forShipment($order, $sellerOrder, $shipment, $returnRefundReady),
+                            'return_workflow_open' => $shipment->relationLoaded('returnWorkflow')
+                                && $shipment->returnWorkflow
+                                && in_array($shipment->returnWorkflow->status, \App\Models\Logistics\ShipmentReturnWorkflow::OPEN_STATUSES, true),
+                            'return_workflow_status' => $shipment->relationLoaded('returnWorkflow') ? $shipment->returnWorkflow?->status : null,
+                            'return_disposition' => $shipment->relationLoaded('returnWorkflow') ? $shipment->returnWorkflow?->return_disposition : null,
+                            'updated_at' => $shipment->updated_at?->toIso8601String(),
+                            'current_center_name' => $shipment->logisticsCenter?->business_name,
+                            'events' => $shipment->relationLoaded('events')
+                                ? $shipment->events->sortBy('occurred_at')->values()->map(fn ($event): array => [
+                                    'id' => (int) $event->id,
+                                    'status' => (string) $event->status,
+                                    'cancelled' => str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
+                                        || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:'),
+                                    'auto_received' => str_starts_with((string) $event->notes, BuyerOrderActionService::AUTOMATIC_RECEIPT_NOTE),
+                                    'occurred_at' => $event->occurred_at?->toIso8601String(),
+                                    'display_time' => $event->occurred_at?->timezone('Asia/Manila')->format('M j, Y g:i A'),
+                                ])->all()
+                                : null,
+                            'transfer_legs' => $shipment->transferLegs->map(fn ($leg): array => [
+                                'id' => (int) $leg->id,
+                                'status' => (string) $leg->status,
+                                'updated_at' => $leg->updated_at?->toIso8601String(),
+                                'origin_center_name' => $leg->originLogisticsCenter?->business_name,
+                                'destination_center_name' => $leg->destinationLogisticsCenter?->business_name,
+                                'arrival_scanned_at' => $leg->arrival_scanned_at,
+                            ])->values()->all(),
+                        ]))
+                        ->sortBy('id')
+                        ->values()
+                        ->all(),
+                ];
+            })
             ->values();
     }
 

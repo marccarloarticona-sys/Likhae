@@ -55,13 +55,76 @@
         </div>
     </section>
 
+    @if($user->isAccountType(\App\Models\User::TYPE_SELLER))
+        @php
+            $sellerDocumentTypes = array_values(\App\Models\Auth\ApplicationDocument::SELLER_UPLOAD_FIELDS);
+        @endphp
+        <section class="ad-card ad-user-verification-card" id="seller-verification">
+            <header class="ad-card-head"><div><h2>Seller verification documents</h2><p>Current files and document update requests from this seller.</p></div>@if($sellerApplication)<span class="ad-status is-{{ \Illuminate\Support\Str::slug($sellerApplication->status) }}">Verification record {{ str($sellerApplication->status)->replace('_', ' ')->headline() }}</span>@endif</header>
+            <div class="ad-table-wrap ad-user-history-table">
+                <table class="ad-table ad-user-verification-table">
+                    <thead><tr><th>Document</th><th>Latest upload</th><th>Status</th><th>Admin review</th></tr></thead>
+                    <tbody>
+                        @foreach($sellerDocumentTypes as $documentType)
+                            @php
+                                $document = $sellerDocuments->get($documentType);
+                                $documentStatus = strtoupper((string) $document?->verification_status);
+                                $adminRequestedUpdate = $document && isset($sellerUpdateRequestDocumentIds[$document->id]);
+                                $documentLabel = \App\Models\Auth\ApplicationDocument::DOCUMENT_LABELS[$documentType];
+                            @endphp
+                            <tr>
+                                <td><strong>{{ $documentLabel }}</strong></td>
+                                <td>
+                                    @if($document)
+                                        <span>{{ $document->original_name ?: 'Submitted document' }}</span>
+                                        <small>Uploaded {{ $document->created_at?->format('M d, Y H:i') ?? 'date unavailable' }}</small>
+                                        <div class="ad-user-document-links"><a href="{{ route('admin.registrations.documents.show', [$sellerApplication, $document, 'preview' => 1]) }}" target="_blank" rel="noopener">Preview</a><a href="{{ route('admin.registrations.documents.show', [$sellerApplication, $document]) }}">Download</a></div>
+                                        @if($document->rejection_reason)<small class="ad-user-document-reason">Reason: {{ $document->rejection_reason }}</small>@endif
+                                    @else
+                                        <span>Not submitted</span>
+                                    @endif
+                                </td>
+                                <td><span class="ad-status {{ $document ? 'is-'.\Illuminate\Support\Str::slug($documentStatus) : 'is-review' }}">{{ $adminRequestedUpdate && $documentStatus === 'REJECTED' ? 'Update requested' : ($document ? str($documentStatus)->replace('_', ' ')->headline() : 'Missing') }}</span></td>
+                                <td>
+                                    @if($document && $documentStatus === 'PENDING')
+                                        <div class="ad-user-verification-actions">
+                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}">
+                                                @csrf<input type="hidden" name="decision" value="verify"><button class="ad-btn ad-btn-secondary ad-btn-sm" type="submit">Verify update</button>
+                                            </form>
+                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Reject this document update?" data-confirm-message="The seller will be asked to upload another replacement." data-confirm-label="Reject update" data-confirm-tone="danger">
+                                                @csrf<input type="hidden" name="decision" value="reject"><input type="text" name="reason" required minlength="3" maxlength="1000" placeholder="Reason for rejection"><button class="ad-btn ad-btn-danger-soft ad-btn-sm" type="submit">Reject update</button>
+                                            </form>
+                                        </div>
+                                    @elseif($documentStatus === 'VERIFIED')
+                                        <div class="ad-user-verification-actions">
+                                            <small>Verified{{ $document->verified_at ? ' on '.$document->verified_at->format('M d, Y') : '' }}.</small>
+                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Request a document update?" data-confirm-message="The seller will be notified and can upload a replacement for Admin review." data-confirm-label="Request update" data-confirm-tone="danger">
+                                                @csrf<input type="hidden" name="decision" value="request_update"><input type="text" name="reason" required minlength="3" maxlength="1000" placeholder="What needs to be updated?"><button class="ad-btn ad-btn-danger-soft ad-btn-sm" type="submit">Request update</button>
+                                            </form>
+                                        </div>
+                                    @elseif($documentStatus === 'REJECTED')
+                                        <small>{{ $adminRequestedUpdate ? 'Admin requested an update; waiting for the seller to upload a replacement.' : 'Waiting for the seller to upload a replacement.' }}</small>
+                                    @else
+                                        <small>No review is needed yet.</small>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    @endif
+
     <section class="ad-card ad-user-access-card" id="account-access">
         <header class="ad-card-head"><div><h2>Account access</h2><p>Apply a temporary suspension or permanently remove platform access</p></div></header>
         <div class="ad-card-body">
             @unless($accountEnforcementReady)
                 <div class="ad-note is-warning" role="status"><span>Account enforcement controls are unavailable until the account enforcement migration is applied to this database.</span></div>
             @elseif($managedAccount && in_array($status, ['active', 'suspended'], true))
-                @php($suspended = $user->isSuspended())
+                @php
+                    $suspended = $user->isSuspended();
+                @endphp
                 <p>
                     @if($suspended)
                         This account is suspended{{ $user->suspended_until ? ' until '.$user->suspended_until->format('M d, Y h:i A') : ' with no expiry recorded' }}. You can reactivate it early.
@@ -122,6 +185,59 @@
         </div>
     </section>
 
+    @if($user->isAccountType(\App\Models\User::TYPE_BUYER))
+    <section class="ad-card" id="buyer-risk-signals">
+        <header class="ad-card-head"><div><h2>Automated buyer safety signals</h2><p>Patterns flagged for human review; a signal alone does not establish misconduct.</p></div><a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">Review queue</a></header>
+        <div class="ad-table-wrap ad-user-history-table">
+            <table class="ad-table">
+                <thead><tr><th>Detected</th><th>Signal</th><th>Observed pattern</th><th>Status and review</th></tr></thead>
+                <tbody>
+                    @forelse($riskSignals as $signal)
+                        @php
+                            $signalValues = $signal->new_values ?? [];
+                            $signalStatus = strtoupper((string) data_get($signalValues, 'status', 'OPEN'));
+                            $signalType = data_get($signalValues, 'signal_type');
+                        @endphp
+                        <tr>
+                            <td>{{ $signal->created_at?->format('M d, Y H:i') ?? 'Not provided' }}<small>{{ data_get($signalValues, 'reference') }}</small></td>
+                            <td>{{ $signalType === 'REPEATED_BUYER_CANCELLATIONS' ? 'Repeated buyer cancellations' : ($signalType === 'RAPID_ORDERING' ? 'Rapid order placement' : 'Buyer activity pattern') }}</td>
+                            <td>
+                                @if($signalType === 'REPEATED_BUYER_CANCELLATIONS')
+                                    {{ data_get($signalValues, 'buyer_cancelled_orders', 0) }} of {{ data_get($signalValues, 'orders_in_window', 0) }} orders were cancelled by the buyer in {{ data_get($signalValues, 'window_days', 30) }} days ({{ data_get($signalValues, 'cancellation_rate_percent', 0) }}%).
+                                @elseif($signalType === 'RAPID_ORDERING')
+                                    {{ data_get($signalValues, 'orders_in_window', 0) }} orders in {{ data_get($signalValues, 'window_minutes', 10) }} minutes.
+                                @else
+                                    Review the stored signal details before taking action.
+                                @endif
+                                <small>{{ data_get($signalValues, 'review_guidance') }}</small>
+                                @if(data_get($signalValues, 'resolution_note'))<small>Review note: {{ data_get($signalValues, 'resolution_note') }}</small>@endif
+                            </td>
+                            <td>
+                                <span class="ad-status {{ in_array($signalStatus, ['OPEN', 'UNDER_REVIEW'], true) ? 'is-warning' : 'is-active' }}">{{ str($signalStatus)->replace('_', ' ')->headline() }}</span>
+                                @if(! in_array($signalStatus, ['RESOLVED', 'CLOSED'], true))
+                                    <form method="POST" action="{{ route('admin.users.risk-signals.review', ['user' => $user, 'signal' => $signal]) }}" style="display:grid;gap:6px;margin-top:8px;">
+                                        @csrf
+                                        <select name="status" aria-label="Review status for safety signal {{ $signal->id }}">
+                                            @foreach(['OPEN', 'UNDER_REVIEW', 'RESOLVED', 'CLOSED'] as $reviewStatus)
+                                                <option value="{{ $reviewStatus }}" @selected($signalStatus === $reviewStatus)>{{ str($reviewStatus)->replace('_', ' ')->headline() }}</option>
+                                            @endforeach
+                                        </select>
+                                        <input name="note" maxlength="5000" placeholder="Review note (optional)">
+                                        <button class="ad-btn ad-btn-secondary ad-btn-sm" type="submit">Save review</button>
+                                    </form>
+                                @endif
+                            </td>
+                        </tr>
+                    @empty
+                        <tr><td colspan="4">No automated safety signals recorded.</td></tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+        @if($riskSignals->hasPages())<div class="ad-card-body">{{ $riskSignals->links() }}</div>@endif
+    </section>
+    @endif
+
     <section class="ad-card" id="account-warnings">
         <header class="ad-card-head"><div><h2>Account warnings</h2><p>The three-warning limit includes resolved and closed warnings.</p></div><span class="ad-user-warning-count">{{ $warningCount }} / {{ \App\Models\User::MAX_ACCOUNT_WARNINGS }} used</span></header>
         <div class="ad-card-body">
@@ -177,7 +293,9 @@
                 <thead><tr><th>Date issued</th><th>Category</th><th>Reason / corrective action</th><th>Admin</th><th>Status</th></tr></thead>
                 <tbody>
                     @forelse($warnings as $warning)
-                        @php($warningValues = $warning->new_values ?? [])
+                        @php
+                            $warningValues = $warning->new_values ?? [];
+                        @endphp
                         <tr>
                             <td>{{ $warning->created_at?->format('M d, Y H:i') ?? 'Not provided' }}</td>
                             <td>{{ data_get($warningValues, 'category_label', data_get($warningValues, 'category', 'Warning')) }}</td>

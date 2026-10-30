@@ -1175,18 +1175,6 @@ html.dark .likhae-logo .likhae-logo__image--dark { display: block; }
     line-height: 1.4;
 }
 
-.register-field .register-inline-error {
-    display: block;
-    margin-top: 3px;
-    color: #b42318;
-    font-size: 10px;
-    font-weight: 600;
-}
-
-.register-field [aria-invalid="true"] {
-    border-color: #b42318;
-}
-
 .register-email-verification {
     display: grid;
     gap: 8px;
@@ -1317,18 +1305,6 @@ select.is-invalid {
 
 .upload-box {
     position: relative;
-}
-
-.upload-box .register-inline-error {
-    display: block;
-    margin-top: 6px;
-    color: #b42318;
-    font-size: 10px;
-    font-weight: 600;
-}
-
-.upload-box input[aria-invalid="true"] + .upload-box__label {
-    border-color: #b42318;
 }
 
 
@@ -2024,3 +2000,9 @@ select.is-invalid {
         height: 100px;
     }
 }
+
+
+.register-field .register-inline-error { display: block; margin-top: 3px; color: #b42318; font-size: 10px; font-weight: 600; }
+.register-field [aria-invalid="true"] { border-color: #b42318; }
+.upload-box .register-inline-error { display: block; margin-top: 6px; color: #b42318; font-size: 10px; font-weight: 600; }
+.upload-box input[aria-invalid="true"] + .upload-box__label { border-color: #b42318; }

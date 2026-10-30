@@ -186,8 +186,13 @@ class AdminMarketingController extends Controller
             throw ValidationException::withMessages(['ends_at' => 'The campaign end time must be after its start time.']);
         }
 
-        if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 100) {
-            throw ValidationException::withMessages(['discount_value' => 'Percentage discounts cannot exceed 100%.']);
+        if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 99.99) {
+            throw ValidationException::withMessages(['discount_value' => 'Percentage discounts must be 99.99% or less so item prices remain positive.']);
+        }
+
+        if (Schema::hasColumn('vouchers', 'requires_review')) {
+            $data['requires_review'] = false;
+            $data['review_reason'] = null;
         }
 
         return $data;
@@ -199,6 +204,7 @@ class AdminMarketingController extends Controller
         abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
 
         if (! $voucher->is_active) {
+            abort_unless(! $voucher->requiresReview(), 409, 'This campaign needs review. Correct or replace its discount terms before reactivation.');
             abort_unless($this->campaignBudgetSchemaReady(), 409, 'Campaign budget finance fields are not installed.');
             abort_unless(app(PlatformCampaignBudgetService::class)->selectable($voucher), 409, 'Allocate additional budget before resuming this campaign.');
         }

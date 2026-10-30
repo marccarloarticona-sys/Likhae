@@ -10,7 +10,10 @@ use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
 use App\Models\Returns\CashRefundObligation;
+use App\Models\Returns\ReturnInspection;
 use App\Models\Seller\Category;
+use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\SellerReturnRefundRequest;
@@ -25,6 +28,64 @@ use Tests\TestCase;
 class SellerFirstRefundWorkflowTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_restocks_only_restorable_returns_and_releases_the_matching_flash_sale_unit_once(): void
+    {
+        [$buyer, $sellerUser, $order, $item] = $this->createDeliveredOrder();
+        $seller = $sellerUser->sellerProfile;
+        $category = Category::query()->whereKey($seller->primary_category_id)->firstOrFail();
+        $campaignKey = (string) str()->uuid();
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->id,
+            'category_id' => $category->id,
+            'name' => 'Restockable Flash Item',
+            'slug' => 'restockable-flash-item',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+            'flash_sale_starts_at' => now()->subHour(),
+            'flash_sale_ends_at' => now()->addHour(),
+            'flash_sale_campaign_key' => $campaignKey,
+        ]);
+        $variant = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'RESTOCKABLE-FLASH-ITEM',
+            'price' => 100,
+            'flash_sale_price' => 80,
+            'flash_sale_allocation' => 5,
+            'flash_sale_sold' => 1,
+            'stock' => 0,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $item->update([
+            'product_id' => $product->id,
+            'product_variant_id' => $variant->id,
+            'flash_sale_quantity' => 1,
+            'flash_sale_campaign_key' => $campaignKey,
+        ]);
+
+        $this->actingAs($buyer)->post(route('buyer.orders.return-refund', $order), $this->requestPayload($item))->assertOk();
+        $sellerRequest = SellerReturnRefundRequest::query()->sole();
+        $this->actingAs($sellerUser)->post(route('seller.orders.refunds.approve', $sellerRequest), ['confirm_approval' => 1])->assertRedirect();
+
+        $custody = app(\App\Services\Returns\ReturnCustodyService::class);
+        $custody->recordCustodyEvent($sellerRequest, $sellerUser, 'LOGISTICS_RECEIVED');
+        $custody->recordCustodyEvent($sellerRequest, $sellerUser, 'SELLER_RECEIVED');
+        $returnItem = $sellerRequest->items()->sole();
+        $inspection = $custody->recordInspection($sellerRequest, $returnItem, $sellerUser, [
+            'inventory_disposition' => ReturnInspection::RESTOCKABLE,
+        ]);
+
+        $this->assertNotNull($inspection->restocked_at);
+        $this->assertSame($sellerUser->id, (int) $inspection->restocked_by_user_id);
+        $this->assertSame(1, (int) $variant->fresh()->stock);
+        $this->assertSame(0, (int) $variant->fresh()->flash_sale_sold);
+
+        $custody->recordInspection($sellerRequest, $returnItem, $sellerUser, [
+            'inventory_disposition' => ReturnInspection::RESTOCKABLE,
+        ]);
+        $this->assertSame(1, (int) $variant->fresh()->stock, 'Repeated inspection must not restock the same returned units twice.');
+    }
 
     public function test_buyer_request_uses_cash_seller_scope_and_does_not_create_an_admin_dispute(): void
     {

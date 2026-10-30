@@ -14,6 +14,7 @@
         :store-categories="$storeCategories"
         :store-subcategories="$storeSubcategories"
         :store-vouchers="$storeVouchers"
+        :seller-promotions="$sellerPromotions"
         :guest="true"
     />
 @endsection

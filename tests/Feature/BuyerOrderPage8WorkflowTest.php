@@ -116,6 +116,31 @@ class BuyerOrderPage8WorkflowTest extends TestCase
         $this->assertSame([$readyForPickup->order_number], $this->orderNumbersOnCards($response));
     }
 
+    public function test_order_details_itemize_historical_product_flash_and_voucher_discounts(): void
+    {
+        [$buyer, $variant] = $this->buyerAndVariant();
+        [$order, , , $item] = $this->makeOrder($buyer, $variant, 'PROCESSING', 'PREPARING', 'PREPARING', 'COD');
+        $item->update([
+            'unit_price' => 15,
+            'original_unit_price' => 20,
+            'flash_sale_quantity' => 2,
+            'discount_amount' => 10,
+            'seller_voucher_discount' => 2,
+            'platform_voucher_discount' => 1,
+            'line_total' => 30,
+        ]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee('Flash Sale')
+            ->assertSee('Original', false)
+            ->assertSee('20.00 / unit')
+            ->assertSee('saved &#8369;10.00', false)
+            ->assertSee('Seller voucher')
+            ->assertSee('Platform voucher');
+    }
+
     public function test_mixed_seller_statuses_and_multiple_parcels_render_once_per_parent_order(): void
     {
         [$buyer, $variant] = $this->buyerAndVariant();

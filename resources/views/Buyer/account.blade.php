@@ -19,11 +19,6 @@
     $buyerPhoneDisplay = filled($buyerPhone)
         ? \App\Support\PhilippineMobileNumber::format((string) $buyerPhone)
         : '';
-    $savedAddresses = collect($addresses ?? []);
-    $defaultAddressId = old(
-        'address_id',
-        $savedAddresses->firstWhere('is_default', true)?->id ?? $savedAddresses->first()?->id
-    );
     $buyerBirthday = data_get($user, 'birthday', '');
     $buyerGender = data_get($user, 'sex', '');
 
@@ -404,30 +399,17 @@
                     <div class="border-b border-stone-100 px-5 py-4 sm:px-6">
                         <h2 id="addresses-heading" class="text-base font-semibold text-stone-900">Delivery Addresses</h2>
                         <p class="mt-1 text-xs text-stone-500">Manage delivery destinations. Changes apply to future orders; existing orders keep their original address.</p>
-                        <p class="mt-2 text-xs font-medium text-stone-600">{{ $addressCount ?? collect($addresses ?? [])->count() }} of {{ $addressLimit ?? 10 }} saved addresses</p>
+                        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                            <p class="font-medium text-stone-600">{{ $addressCount ?? collect($addresses ?? [])->count() }} of {{ $addressLimit ?? 5 }} saved addresses</p>
+                            <p class="text-stone-500">Click Set as default on an address to use it at checkout.</p>
+                        </div>
                     </div>
                     <div class="space-y-4 p-5 sm:p-6">
-                        @if($savedAddresses->isNotEmpty())
-                            <div class="grid gap-4 rounded-2xl border border-red-100 bg-red-50/60 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(300px,1.2fr)] sm:items-center sm:p-5">
-                                <div>
-                                    <h3 class="text-sm font-semibold text-stone-900">Default delivery address</h3>
-                                    <p class="mt-1 text-xs leading-5 text-stone-600">Choose the address to preselect at checkout. You can still choose a different address for each order.</p>
-                                </div>
-                                <form method="POST" action="{{ route('buyer.account.addresses.default') }}" class="flex flex-col gap-2 sm:flex-row sm:items-end">
-                                    @csrf @method('PATCH')
-                                    <label class="grid min-w-0 flex-1 gap-1.5 text-xs font-semibold text-stone-700">
-                                        Choose a saved address
-                                        <select name="address_id" required class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm font-normal text-stone-800 outline-none focus:border-red-800 focus:ring-4 focus:ring-red-100">
-                                            @foreach($savedAddresses as $address)
-                                                <option value="{{ $address->id }}" @selected((string) $defaultAddressId === (string) $address->id)>{{ $address->label ?: 'Address' }} — {{ $address->recipient_name }} — {{ \Illuminate\Support\Str::limit($address->formatted(), 58) }}</option>
-                                            @endforeach
-                                        </select>
-                                    </label>
-                                    <button type="submit" class="shrink-0 rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save default</button>
-                                </form>
+                        @if(session('address_notice'))
+                            <div role="status" aria-live="polite" class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
+                                {{ session('address_notice') }}
                             </div>
                         @endif
-
                         @forelse(collect($addresses ?? []) as $address)
                             <article class="rounded-2xl border {{ $address->is_default ? 'border-red-300 bg-red-50/40' : 'border-stone-200 bg-white' }} p-4 sm:p-5">
                                 <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -445,6 +427,13 @@
                                         @endif
                                     </div>
                                     <div class="flex shrink-0 items-center gap-3">
+                                        @unless($address->is_default)
+                                            <form method="POST" action="{{ route('buyer.account.addresses.default') }}">
+                                                @csrf @method('PATCH')
+                                                <input type="hidden" name="address_id" value="{{ $address->id }}">
+                                                <button type="submit" class="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-900 transition hover:border-red-400 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100">Set as default</button>
+                                            </form>
+                                        @endunless
                                         <details class="group">
                                             <summary class="cursor-pointer list-none rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-stone-700 hover:border-red-300 hover:text-red-900 focus:outline-none focus:ring-4 focus:ring-red-100">Edit address</summary>
                                             <form method="POST" action="{{ route('buyer.account.addresses.update', ['address' => $address->id]) }}" class="mt-3 grid gap-4 rounded-xl border border-stone-200 bg-white p-4 shadow-sm sm:grid-cols-2">
@@ -463,7 +452,6 @@
                                                 </label>
                                                 <x-shared.philippine-address-fields :address="$address" wrapper-class="contents" />
                                                 <x-shared.address-pin :address="$address" class="sm:col-span-2" />
-                                                <label class="flex items-center gap-2 text-xs font-semibold text-stone-700 sm:col-span-2"><input type="checkbox" name="is_default" value="1" @checked($address->is_default)> Use as my default address</label>
                                                 <div class="flex justify-end sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                                             </form>
                                         </details>
@@ -484,8 +472,8 @@
                             </div>
                         @endforelse
 
-                        @if(($addressCount ?? collect($addresses ?? [])->count()) >= ($addressLimit ?? 10))
-                            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">You can save up to 10 delivery addresses.</div>
+                        @if(($addressCount ?? collect($addresses ?? [])->count()) >= ($addressLimit ?? 5))
+                            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">You can save up to 5 delivery addresses.</div>
                         @else
                         <form method="POST" action="{{ route('buyer.account.addresses.store') }}" class="grid gap-4 rounded-2xl border border-stone-200 bg-stone-50 p-4 sm:p-5 sm:grid-cols-2">
                             @csrf
@@ -495,7 +483,6 @@
                             <label class="grid gap-1 text-xs font-semibold text-stone-700">Recipient contact number<input required name="contact_number" value="{{ old('contact_number',$buyerPhoneDisplay) }}" maxlength="30" inputmode="tel" placeholder="09XX XXX XXXX" class="rounded-xl border border-stone-300 px-3 py-2.5 text-sm font-normal"></label>
                             <x-shared.philippine-address-fields wrapper-class="contents" />
                             <x-shared.address-pin class="sm:col-span-2" />
-                            <label class="flex items-center gap-2 text-xs font-semibold text-stone-700 sm:col-span-2"><input type="checkbox" name="is_default" value="1" @checked(old('is_default', collect($addresses ?? [])->isEmpty()))> Use as my default address</label>
                             <div class="sm:col-span-2"><button type="submit" class="rounded-xl bg-red-900 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Save address</button></div>
                         </form>
                         @endif

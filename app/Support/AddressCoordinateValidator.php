@@ -31,15 +31,22 @@ final class AddressCoordinateValidator
         $latitude = $data['latitude'] ?? null;
         $longitude = $data['longitude'] ?? null;
 
-        if (! filled($latitude) || ! filled($longitude)) {
-            if ($required) {
-                throw ValidationException::withMessages([
-                    'latitude' => 'Confirm the exact address pin before saving.',
-                    'longitude' => 'Confirm the exact address pin before saving.',
-                ]);
+        if (! filled($latitude) && ! filled($longitude)) {
+            if (! $required) {
+                return;
             }
 
-            return;
+            throw ValidationException::withMessages([
+                'latitude' => 'Confirm the exact address pin before saving.',
+                'longitude' => 'Confirm the exact address pin before saving.',
+            ]);
+        }
+
+        if (! filled($latitude) || ! filled($longitude)) {
+            throw ValidationException::withMessages([
+                'latitude' => 'Provide both coordinates for an exact pin, or leave both blank.',
+                'longitude' => 'Provide both coordinates for an exact pin, or leave both blank.',
+            ]);
         }
 
         $latitude = filter_var($latitude, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE);

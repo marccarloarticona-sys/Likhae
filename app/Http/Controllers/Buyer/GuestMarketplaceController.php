@@ -7,13 +7,17 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerProfile;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\SellerPromotionBuyerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 class GuestMarketplaceController extends Controller
 {
-    public function __construct(private readonly ProductCatalogService $catalog) {}
+    public function __construct(
+        private readonly ProductCatalogService $catalog,
+        private readonly SellerPromotionBuyerService $sellerPromotions,
+    ) {}
 
     public function home(Request $request): View
     {
@@ -134,6 +138,7 @@ class GuestMarketplaceController extends Controller
         return view('guest.product-details', [
             'productModel' => $product,
             'product' => $productPayload,
+            'sellerPromotions' => $this->sellerPromotions->forProduct($product),
             'relatedProducts' => $this->catalog->visibleQuery()
                 ->whereKeyNot($product->id)
                 ->where('category_id', $product->category_id)

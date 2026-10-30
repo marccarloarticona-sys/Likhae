@@ -16,8 +16,6 @@
         <input name="tracking" value="{{ $tracking }}" class="h-10 min-w-0 flex-1 border border-line bg-white px-3 text-sm text-ink" placeholder="Filter by tracking number" aria-label="Filter pickup queue by tracking number">
         <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Find Parcel</button>
     </form>
-    <x-shared.mapbox :markers="$mapMarkers" title="Seller pickup operations map" height="220px" user-location-target="seller" />
-
     @if(!$pickupSchemaReady)
         <section class="border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">Seller pickup batch assignment is unavailable until the additive local trip migrations are installed.</section>
     @endif

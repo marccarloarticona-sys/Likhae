@@ -48,11 +48,11 @@
                                 @php
                                     $budgetSummary = $campaignBudgetSummaries[$campaign->id] ?? ['allocated_cents' => null, 'reserved_cents' => 0, 'spent_cents' => 0, 'available_cents' => null, 'usage_percent' => 0, 'status' => 'Pending Budget Setup', 'reconciliation_mismatch' => false];
                                     $budgetHistory = $campaignBudgetHistory[$campaign->id] ?? collect();
-                                    $campaignStatus = ! $campaign->is_active
+                                    $campaignStatus = $campaign->requiresReview() ? 'Review required' : (! $campaign->is_active
                                         ? 'Paused'
                                         : ($campaign->starts_at?->isFuture()
                                             ? 'Scheduled'
-                                            : ($campaign->ends_at?->isPast() ? 'Expired' : 'Active'));
+                                            : ($campaign->ends_at?->isPast() ? 'Expired' : 'Active')));
                                     $campaignStatusClass = match ($campaignStatus) {
                                         'Active' => 'is-active',
                                         'Scheduled' => 'is-pending',
@@ -72,7 +72,7 @@
                                                 <span><strong>{{ $campaign->name }}</strong><small>{{ $campaign->code }} · {{ $campaign->benefit_scope === 'SHIPPING' ? 'Shipping voucher' : 'Product voucher' }}</small></span>
                                         </div>
                                     </td>
-                                    <td>{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 2).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off<small>Max discount: {{ $campaign->maximum_discount_amount === null ? 'No cap' : '₱'.number_format((float) $campaign->maximum_discount_amount, 2) }}</small></td>
+                                    <td>@if($campaign->requiresReview()) Terms need review<small>{{ $campaign->reviewReason() }}</small>@else{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 2).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off<small>Max discount: {{ $campaign->maximum_discount_amount === null ? 'No cap' : '₱'.number_format((float) $campaign->maximum_discount_amount, 2) }}</small>@endif</td>
                                     <td>₱{{ number_format((float) $campaign->minimum_order_amount, 2) }}</td>
                                     <td>{{ number_format((int) $campaign->redemption_count) }} / {{ $campaign->usage_limit ?: 'Unlimited' }}<small>Per buyer: {{ $campaign->per_user_limit ?: 'Unlimited' }}</small></td>
                                     <td class="ad-campaign-budget-cell">
@@ -103,7 +103,7 @@
                                                 data-image-url="{{ $campaignImageUrl }}" data-image-alt="{{ $campaign->image_alt }}" data-theme-color="{{ $campaign->theme_color }}">Edit</button>
                                             <form method="POST" action="{{ route('admin.marketing.campaigns.toggle', $campaign) }}">
                                                 @csrf @method('PATCH')
-                                                <button class="ad-btn {{ $campaign->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" type="submit">{{ $campaign->is_active ? 'Pause' : 'Resume' }}</button>
+                                                <button class="ad-btn {{ $campaign->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" type="submit" @disabled(!$campaign->is_active && $campaign->requiresReview())>{{ $campaign->is_active ? 'Pause' : ($campaign->requiresReview() ? 'Review required' : 'Resume') }}</button>
                                             </form>
                                         </div>
                                     </td>
@@ -134,7 +134,7 @@
                             <label class="ad-field"><span>Voucher code</span><input id="campaign-code" name="code" value="{{ old('code') }}" maxlength="80" required></label>
                             <label class="ad-field"><span>Applies to</span><select id="campaign-benefit-scope" name="benefit_scope" required><option value="PRODUCT" @selected(old('benefit_scope', 'PRODUCT') === 'PRODUCT')>Eligible product amounts</option><option value="SHIPPING" @selected(old('benefit_scope') === 'SHIPPING')>Shipping fees</option></select></label>
                             <label class="ad-field"><span>Discount type</span><select id="campaign-discount-type" name="discount_type" required><option value="PERCENT" @selected(old('discount_type', 'PERCENT') === 'PERCENT')>Percent</option><option value="FIXED" @selected(old('discount_type') === 'FIXED')>Fixed amount</option></select></label>
-                            <label class="ad-field"><span>Discount value</span><input id="campaign-discount-value" name="discount_value" type="number" min="0.01" step="0.01" value="{{ old('discount_value', '10') }}" required></label>
+                            <label class="ad-field"><span>Discount value</span><input id="campaign-discount-value" name="discount_value" type="number" min="0.01" step="0.01" value="{{ old('discount_value', '10') }}" required><small>Percentage vouchers are limited to 99.99%.</small></label>
                             <label class="ad-field"><span>Minimum spend</span><input id="campaign-minimum" name="minimum_order_amount" type="number" min="0" step="0.01" value="{{ old('minimum_order_amount', '0') }}"></label>
                             <label class="ad-field"><span>Maximum discount</span><input id="campaign-maximum" name="maximum_discount_amount" type="number" min="0.01" step="0.01" value="{{ old('maximum_discount_amount') }}"></label>
                             <label class="ad-field"><span>Total redemptions</span><input id="campaign-usage-limit" name="usage_limit" type="number" min="1" value="{{ old('usage_limit') }}"></label>

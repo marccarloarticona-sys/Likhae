@@ -85,7 +85,12 @@ class GoogleAuthenticationController extends Controller
             return redirect()->route('register', ['role' => 'buyer']);
         }
 
-        if (! $user->isActive()) {
+        $isActive = $user->isActive();
+        $pendingApplication = ! $isActive
+            ? $user->pendingRegistrationApplication()
+            : null;
+
+        if (! $isActive && ! $pendingApplication) {
             return redirect()->route('login')->withErrors(['email' => $user->inactiveMessage()]);
         }
 
@@ -97,7 +102,7 @@ class GoogleAuthenticationController extends Controller
         $request->session()->regenerate();
         $request->session()->forget('demo_user');
 
-        return redirect()->route($user->workspaceRoute());
+        return redirect()->route($pendingApplication ? 'registration.status' : $user->workspaceRoute());
     }
 
     private function isConfigured(): bool

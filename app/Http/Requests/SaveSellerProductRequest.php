@@ -18,18 +18,12 @@ class SaveSellerProductRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        $discountValue = $this->input('discount_value', $this->input('discount', $this->input('discount_percentage')));
-        $discountType = strtolower((string) ($this->input('discount_type') ?? 'none'));
         $idempotencyKey = $this->header('Idempotency-Key', $this->input('idempotency_key'));
 
         $this->merge([
             'product_type' => strtolower((string) $this->input('product_type', 'single')),
             'status' => strtoupper((string) $this->input('status', $this->input('listing_status', 'DRAFT'))),
             'idempotency_key' => is_string($idempotencyKey) ? strtolower(trim($idempotencyKey)) : null,
-            // Keep unknown values intact so the Rule::in validation below
-            // rejects tampered input instead of silently treating it as none.
-            'discount_type' => $discountType,
-            'discount_value' => $discountValue,
         ]);
     }
 
@@ -44,28 +38,23 @@ class SaveSellerProductRequest extends FormRequest
             'product_type' => ['required', Rule::in(['single', 'variations'])],
             'name' => ['required', 'string', 'max:200'],
             'category_id' => ['required', 'integer', $categoryRule],
-            'description' => [Rule::requiredIf(fn (): bool => $this->isPublishing()), 'nullable', 'string', 'max:10000'],
+            'description' => [Rule::requiredIf(fn (): bool => $this->isPublishing()), 'nullable', 'string', 'max:11000'],
             'purchase_limit_per_buyer' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'ARCHIVED'])],
             'idempotency_key' => ['nullable', 'uuid'],
-            'flash_sale_starts_at' => ['nullable', 'date'],
-            'flash_sale_ends_at' => ['nullable', 'date'],
-            'flash_sale_price' => ['nullable', 'numeric', 'min:0.01', 'max:999999.99'],
-            'flash_sale_allocation' => ['nullable', 'integer', 'min:1', 'max:999999'],
-
             'price' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'numeric', 'min:0', 'max:999999.99'],
             'stock' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'integer', 'min:0', 'max:999999'],
             'weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
             'sku' => ['nullable', 'string', 'max:100'],
             'single_variant_id' => ['nullable', 'integer'],
-            'discount_type' => ['nullable', Rule::in(['none', 'percentage', 'fixed'])],
-            'discount_value' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],
             'payment_method' => ['nullable', Rule::in(['cod', 'online', 'cod_online'])],
             'is_active' => ['nullable', 'boolean'],
 
             'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'images' => ['nullable', 'array'],
             'images.*' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'description_images' => ['nullable', 'array', 'max:10'],
+            'description_images.*' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'delete_image_ids' => ['nullable', 'array', 'max:10'],
             'delete_image_ids.*' => ['integer', Rule::exists('product_images', 'id')],
 
@@ -80,13 +69,24 @@ class SaveSellerProductRequest extends FormRequest
             'variants.*.stock' => ['nullable', 'integer', 'min:0', 'max:999999'],
             'variants.*.weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
             'variants.*.values' => ['nullable', 'string', 'max:500'],
-            'variants.*.discount_type' => ['nullable', Rule::in(['none', 'percentage', 'fixed'])],
-            'variants.*.discount_value' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],
-            'variants.*.flash_sale_price' => ['nullable', 'numeric', 'min:0.01', 'max:999999.99'],
-            'variants.*.flash_sale_allocation' => ['nullable', 'integer', 'min:1', 'max:999999'],
             'variants.*.payment_method' => ['nullable', Rule::in(['cod', 'online', 'cod_online'])],
             'variants.*.is_active' => ['nullable', 'boolean'],
             'variants.*.product_image_ref' => ['nullable', 'string', 'max:100'],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'image.image' => 'Choose a valid primary product image. Description pictures cannot be used as the product image.',
+            'image.mimes' => 'Primary product image must be a JPG, PNG, or WebP file.',
+            'image.max' => 'Primary product image must be 5 MB or smaller.',
+            'images.*.image' => 'Choose valid product images in JPG, PNG, or WebP format.',
+            'images.*.mimes' => 'Product images must be JPG, PNG, or WebP files.',
+            'images.*.max' => 'Each product image must be 5 MB or smaller.',
+            'description_images.*.image' => 'Choose a valid description picture in JPG, PNG, or WebP format.',
+            'description_images.*.mimes' => 'Description pictures must be JPG, PNG, or WebP files.',
+            'description_images.*.max' => 'Each description picture must be 5 MB or smaller.',
         ];
     }
 
@@ -120,146 +120,12 @@ class SaveSellerProductRequest extends FormRequest
             }
 
             $this->validateImageCount($validator);
+            $this->validateDescriptionImages($validator);
             if ($this->isPublishing()) {
                 $this->validatePublicationRequirements($validator);
             }
 
-            $variantRows = collect((array) $this->input('variants', []))->filter(fn ($row): bool => is_array($row))->all();
-            $this->validateDiscount($validator, $variantRows, 'variants', $this->input('price'));
-            $this->validateDiscount($validator, [[
-                'discount_type' => $this->input('discount_type'),
-                'discount_value' => $this->input('discount_value'),
-                'price' => $this->input('price'),
-            ]], '', $this->input('price'));
-
-            $this->validateFlashSaleConfiguration($validator);
-
-            $startsAt = $this->input('flash_sale_starts_at');
-            $endsAt = $this->input('flash_sale_ends_at');
-            if ($startsAt && $endsAt && strtotime((string) $endsAt) <= strtotime((string) $startsAt)) {
-                $validator->errors()->add('flash_sale_ends_at', 'The sale end time must be after its start time.');
-            }
-            if ($startsAt || $endsAt) {
-                $rows = $this->input('product_type') === 'variations'
-                    ? (array) $this->input('variants', [])
-                    : [[
-                        'discount_value' => $this->input('discount_value'),
-                        'discount_type' => $this->input('discount_type'),
-                        'flash_sale_price' => $this->input('flash_sale_price'),
-                    ]];
-                $hasPromotion = collect($rows)->filter(fn ($row): bool => is_array($row))->contains(fn ($row): bool => (
-                    (float) ($row['discount_value'] ?? 0) > 0
-                    && strtolower((string) ($row['discount_type'] ?? 'none')) !== 'none'
-                ) || filled($row['flash_sale_price'] ?? null));
-                if (! $hasPromotion) {
-                    $validator->errors()->add('flash_sale_starts_at', 'Set a Seller discount or flash-sale price before scheduling a sale.');
-                }
-            }
         });
-    }
-
-    private function validateFlashSaleConfiguration($validator): void
-    {
-        $isSingle = $this->input('product_type') === 'single';
-        $rows = $isSingle
-            ? [[
-                'id' => $this->input('single_variant_id'),
-                'price' => $this->input('price'),
-                'stock' => $this->input('stock'),
-                'discount_type' => $this->input('discount_type'),
-                'discount_value' => $this->input('discount_value'),
-                'flash_sale_price' => $this->input('flash_sale_price'),
-                'flash_sale_allocation' => $this->input('flash_sale_allocation'),
-            ]]
-            : collect((array) $this->input('variants', []))->filter(fn ($row): bool => is_array($row))->values()->all();
-        if (! $isSingle && $rows === [] && (filled($this->input('flash_sale_price')) || filled($this->input('flash_sale_allocation')))) {
-            $rows = [[
-                'price' => $this->input('price'),
-                'stock' => $this->input('stock'),
-                'discount_type' => $this->input('discount_type'),
-                'discount_value' => $this->input('discount_value'),
-                'flash_sale_price' => $this->input('flash_sale_price'),
-                'flash_sale_allocation' => $this->input('flash_sale_allocation'),
-            ]];
-        }
-
-        $product = $this->editingProduct();
-        foreach ($rows as $index => $row) {
-            $flashPrice = $row['flash_sale_price'] ?? null;
-            $allocation = $row['flash_sale_allocation'] ?? null;
-            if (blank($flashPrice) && blank($allocation)) {
-                continue;
-            }
-
-            $prefix = $isSingle ? '' : "variants.{$index}.";
-            $priceField = $prefix.'flash_sale_price';
-            $allocationField = $prefix.'flash_sale_allocation';
-            if (blank($flashPrice)) {
-                $validator->errors()->add($priceField, 'Enter a flash-sale price when setting an allocation.');
-            }
-            if (blank($allocation)) {
-                $validator->errors()->add($allocationField, 'Set how many units can use the flash-sale price.');
-            }
-
-            $basePrice = $row['price'] ?? $this->input('price');
-            $discountType = strtolower((string) ($row['discount_type'] ?? $this->input('discount_type', 'none')));
-            $discountValue = (float) ($row['discount_value'] ?? $this->input('discount_value', 0));
-            if (filled($flashPrice) && is_numeric($basePrice)) {
-                $basePrice = (float) $basePrice;
-                $regularDiscount = match ($discountType) {
-                    'fixed' => min($basePrice, max(0, $discountValue)),
-                    'percentage' => min($basePrice, $basePrice * min(100, max(0, $discountValue)) / 100),
-                    default => 0,
-                };
-                $regularPrice = round(max(0, $basePrice - $regularDiscount), 2);
-                if ((float) $flashPrice >= $regularPrice) {
-                    $validator->errors()->add($priceField, 'Flash-sale price must be lower than the current regular Seller price.');
-                }
-            }
-
-            $stock = $row['stock'] ?? $this->input('stock');
-            if (filled($allocation) && is_numeric($stock)) {
-                $sold = 0;
-                $variantId = $row['id'] ?? null;
-                if ($product && filled($variantId)) {
-                    $sold = (int) $product->variants()->whereKey((int) $variantId)->value('flash_sale_sold');
-                }
-                $allocationCount = (int) $allocation;
-                if ($allocationCount < $sold) {
-                    $validator->errors()->add($allocationField, 'Flash-sale allocation cannot be lower than units already sold at the flash price.');
-                } elseif ($allocationCount - $sold > (int) $stock) {
-                    $validator->errors()->add($allocationField, 'Flash-sale allocation cannot exceed the variant stock available for this sale.');
-                }
-            }
-        }
-    }
-
-    private function validateDiscount($validator, array $rows, string $attribute, mixed $fallbackPrice = null): void
-    {
-        foreach ($rows as $index => $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-
-            $value = (float) ($row['discount_value'] ?? $row['discount'] ?? 0);
-            $type = strtolower((string) ($row['discount_type'] ?? ($value > 0 ? 'percentage' : 'none')));
-            $price = $row['price'] ?? $fallbackPrice;
-            $prefix = $attribute !== '' ? $attribute.'.'.$index : '';
-
-            if ($type === 'percentage' && $value > 100) {
-                $validator->errors()->add(
-                    $prefix !== '' ? $prefix.'.discount_value' : 'discount_value',
-                    'Discount cannot exceed 100%.'
-                );
-            }
-
-            if ($type === 'fixed' && $price !== null && $price !== '' && $value > (float) $price) {
-                $validator->errors()->add(
-                    $prefix !== '' ? $prefix.'.discount_value' : 'discount_value',
-                    'Fixed discount cannot exceed the product price.'
-                );
-            }
-        }
     }
 
     private function preservingUnavailableCategory(): bool
@@ -311,6 +177,94 @@ class SaveSellerProductRequest extends FormRequest
         }
     }
 
+    private function validateDescriptionImages($validator): void
+    {
+        $description = (string) $this->input('description', '');
+        $readableDescription = preg_replace('/\[\[(?:image|description-image):[^\]]+\]\]/', '', $description) ?? $description;
+        if (mb_strlen($readableDescription) > 10000) {
+            $validator->errors()->add('description', 'Product description must be 10,000 characters or fewer, not counting inserted pictures.');
+        }
+
+        $legacyMatchCount = preg_match_all('/\[\[image:([^\]]+)\]\]/', $description, $legacyMatches);
+        $descriptionMatchCount = preg_match_all('/\[\[description-image:([^\]]+)\]\]/', $description, $descriptionMatches);
+        if (! $legacyMatchCount && ! $descriptionMatchCount) {
+            return;
+        }
+
+        if (($legacyMatchCount ?: 0) + ($descriptionMatchCount ?: 0) > 10) {
+            $validator->errors()->add('description', 'Add up to 10 pictures in a product description.');
+        }
+
+        $product = $this->editingProduct();
+        $deletedImageIds = collect((array) $this->input('delete_image_ids', []))
+            ->map(fn ($id): int => (int) $id)
+            ->all();
+        $additionalUploads = $this->file('images', []);
+        $additionalUploads = is_array($additionalUploads) ? $additionalUploads : [$additionalUploads];
+
+        foreach ($legacyMatches[1] ?? [] as $reference) {
+            if (preg_match('/^image:(\d+)$/', $reference, $imageMatch)) {
+                $imageId = (int) $imageMatch[1];
+                $belongsToProduct = $product
+                    && $product->images()->whereKey($imageId)->exists()
+                    && ! in_array($imageId, $deletedImageIds, true);
+
+                if (! $belongsToProduct) {
+                    $validator->errors()->add('description', 'Remove or reselect a description picture that is no longer in this product’s image library.');
+                }
+
+                continue;
+            }
+
+            if ($reference === 'upload:primary') {
+                $file = $this->file('image');
+                if (! $file instanceof UploadedFile || ! $file->isValid()) {
+                    $validator->errors()->add('description', 'Reupload the primary picture used in the description before saving.');
+                }
+
+                continue;
+            }
+
+            if (preg_match('/^upload:additional:(\d+)$/', $reference, $uploadMatch)) {
+                $file = $additionalUploads[(int) $uploadMatch[1]] ?? null;
+                if (! $file instanceof UploadedFile || ! $file->isValid()) {
+                    $validator->errors()->add('description', 'Reupload each additional picture used in the description before saving.');
+                }
+
+                continue;
+            }
+
+            $validator->errors()->add('description', 'A description picture reference is invalid. Choose an image from this product’s uploaded image library.');
+        }
+
+        $descriptionUploads = $this->file('description_images', []);
+        $descriptionUploads = is_array($descriptionUploads) ? $descriptionUploads : [$descriptionUploads];
+        foreach ($descriptionMatches[1] ?? [] as $reference) {
+            if (preg_match('/^stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))$/i', $reference, $storedMatch)) {
+                $filename = $storedMatch[1];
+                $path = $product
+                    ? "sellers/{$product->seller_profile_id}/products/{$product->id}/descriptions/{$filename}"
+                    : null;
+                if (! $path || ! Storage::disk('public')->exists($path)) {
+                    $validator->errors()->add('description', 'Remove or reupload a description picture that is no longer available.');
+                }
+
+                continue;
+            }
+
+            if (preg_match('/^upload:(\d+)$/', $reference, $uploadMatch)) {
+                $file = $descriptionUploads[(int) $uploadMatch[1]] ?? null;
+                if (! $file instanceof UploadedFile || ! $file->isValid()) {
+                    $validator->errors()->add('description', 'Reupload each picture inserted into the description before saving.');
+                }
+
+                continue;
+            }
+
+            $validator->errors()->add('description', 'A description picture reference is invalid. Upload a separate picture for the description.');
+        }
+    }
+
     private function validatePublicationRequirements($validator): void
     {
         $product = $this->editingProduct();
@@ -325,7 +279,7 @@ class SaveSellerProductRequest extends FormRequest
             && ! $hasValidStoredImage && ! $hasValidUpload && $deleteIds === [];
 
         if (! $hasValidStoredImage && ! $hasValidUpload && ! $mayKeepLegacyImageGap) {
-            $validator->errors()->add('image', 'Upload a valid primary product image before publishing.');
+            $validator->errors()->add('image', 'Upload a primary product image (JPG, PNG, or WebP, up to 5 MB) before publishing. Description pictures do not count as the product image.');
         }
 
         if ($this->input('product_type') !== 'variations') {

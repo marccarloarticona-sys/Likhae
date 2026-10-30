@@ -201,15 +201,6 @@ class DispatchController extends Controller
             $batch->setAttribute('reassignable_riders', $eligible);
         });
 
-        $mapShipments = $pickups->map->shipment->filter()
-            ->concat($sellerPickupRequests->flatMap(fn ($pickup) => $pickup->memberships->map->shipment)->filter())
-            ->unique('id')
-            ->values();
-        $mapMarkers = app(MapDataService::class)->forShipments(
-            $mapShipments,
-            includeSeller: true,
-            viewer: auth()->user(),
-        );
         return view('logistics.pickups.index', [
             'center' => $center,
             'tracking' => $tracking,
@@ -217,7 +208,6 @@ class DispatchController extends Controller
             'sellerPickupRequests' => $sellerPickupRequests,
             'activePickupBatches' => $activePickupBatches,
             'riders' => $riders,
-            'mapMarkers' => $mapMarkers,
             'pickupSchemaReady' => $schema->sellerPickupBatchesReady(),
         ]);
     }
@@ -433,9 +423,8 @@ class DispatchController extends Controller
                 ->groupBy('rider_profile_id');
         }
 
-        $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
         $localTripDispatchReady = $schema->localTripsReady();
-        return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady', 'mapMarkers'));
+        return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady'));
     }
 
     public function tracking(Request $request, LogisticsShipmentQuery $shipmentQuery): View

@@ -19,11 +19,11 @@
 <section
     class="lk-map-shell {{ $class }}"
     data-likhae-map
-    data-map-token="{{ config('mapbox.public_token') }}"
-    data-map-style="{{ config('mapbox.style') }}"
+    data-geoapify-key="{{ config('services.geoapify.key') }}"
+    data-map-style="{{ config('maps.style') }}"
     data-map-markers="{{ json_encode(array_values($markers), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) }}"
-    data-map-center="{{ json_encode($center ?: config('mapbox.default_center')) }}"
-    data-map-zoom="{{ $zoom ?: config('mapbox.default_zoom') }}"
+    data-map-center="{{ json_encode($center ?: config('maps.default_center')) }}"
+    data-map-zoom="{{ $zoom ?: config('maps.default_zoom') }}"
     data-map-user-target="{{ $userLocationTarget }}"
     data-map-rider-gps="{{ $riderGps ? 'true' : 'false' }}"
     data-map-live-device-gps="{{ $liveDeviceGps ? 'true' : 'false' }}"

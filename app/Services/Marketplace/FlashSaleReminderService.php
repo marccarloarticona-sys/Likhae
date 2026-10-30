@@ -82,6 +82,7 @@ class FlashSaleReminderService
             && $product->sellerProfile?->status === 'ACTIVE'
             && (bool) $product->sellerProfile?->store_visibility
             && $product->sellerProfile?->user?->status === User::STATUS_ACTIVE
+            && ! (bool) ($product->flash_sale_is_paused ?? false)
             && $product->flash_sale_starts_at?->isFuture()
             && (! $product->flash_sale_ends_at || $product->flash_sale_ends_at->isFuture())
             && $product->variants->contains(fn (ProductVariant $variant): bool => $this->variantHasDiscount($variant));
@@ -203,6 +204,7 @@ class FlashSaleReminderService
             && $product->sellerProfile?->status === 'ACTIVE'
             && (bool) $product->sellerProfile?->store_visibility
             && $product->sellerProfile?->user?->status === User::STATUS_ACTIVE
+            && ! (bool) ($product->flash_sale_is_paused ?? false)
             && $startsAt?->isFuture()
             && $startsAt->greaterThan(now()->addMinutes(self::LEAD_MINUTES))
             && (! $product->flash_sale_ends_at || $product->flash_sale_ends_at->isFuture())
@@ -237,6 +239,7 @@ class FlashSaleReminderService
             && $product->sellerProfile?->status === 'ACTIVE'
             && (bool) $product->sellerProfile?->store_visibility
             && $product->sellerProfile?->user?->status === User::STATUS_ACTIVE
+            && ! (bool) ($product->flash_sale_is_paused ?? false)
             && $product->flash_sale_starts_at?->isFuture()
             && (! $product->flash_sale_ends_at || $product->flash_sale_ends_at->isFuture())
             && $product->variants->contains(fn (ProductVariant $variant): bool => $this->variantHasDiscount($variant));

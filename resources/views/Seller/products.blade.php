@@ -19,12 +19,17 @@
     $singleVariant = collect(data_get($product, 'variation_rows', []))->first();
     $listingStatus = old('listing_status', strtolower(data_get($product, 'status', 'draft')));
     $imageLibrary = collect(data_get($product, 'image_library', []));
-    $singleDiscountType = old('discount_type', data_get($singleVariant, 'discount_type', 'none'));
-    $singleDiscountType = in_array($singleDiscountType, ['none', 'percentage', 'fixed'], true) ? $singleDiscountType : 'none';
-    $singleDiscountValue = old('discount_value', data_get($singleVariant, 'discount_value', 0));
     $singlePaymentMethod = old('payment_method', data_get($singleVariant, 'payment_method', 'cod_online')) ?: 'cod_online';
     $singleActive = filter_var(old('is_active', data_get($singleVariant, 'is_active', true)), FILTER_VALIDATE_BOOLEAN);
+    $initialDescriptionValue = (string) old('description', data_get($product, 'description', ''));
+    $initialDescriptionText = preg_replace('/\[\[(?:image|description-image):[^\]]+\]\]/', '', $initialDescriptionValue) ?? $initialDescriptionValue;
 @endphp
+
+@if(in_array($currentMode, ['add', 'edit'], true))
+    @push('head')
+        <script>document.documentElement.classList.add('has-seller-description-editor');</script>
+    @endpush
+@endif
 
 @section('title', $pageTitle)
 @section('active', 'products')
@@ -35,30 +40,51 @@
     @if(session('product_saved'))
         @php
             $savedProduct = session('product_saved');
-            $wasPublished = data_get($savedProduct, 'status') === 'ACTIVE';
+            $savedStatus = strtoupper((string) data_get($savedProduct, 'status'));
+            $saveConfirmationTitle = match ($savedStatus) {
+                'ACTIVE' => 'Product published successfully',
+                'SUSPENDED' => 'Changes saved; product remains suspended',
+                default => 'Draft saved successfully',
+            };
+            $saveConfirmationMessage = match ($savedStatus) {
+                'ACTIVE' => 'is now published and available to buyers.',
+                'SUSPENDED' => 'was updated but remains hidden from buyers until Admin reviews it.',
+                default => 'has been saved as a draft and is not visible to buyers.',
+            };
         @endphp
         <dialog class="sl-product-save-dialog" data-product-save-dialog aria-labelledby="product-save-title" aria-describedby="product-save-message">
             <span class="sl-product-save-dialog__icon" aria-hidden="true">✓</span>
-            <h2 id="product-save-title">{{ $wasPublished ? 'Product published' : 'Draft saved' }}</h2>
-            <p id="product-save-message"><strong>{{ data_get($savedProduct, 'name') }}</strong> {{ $wasPublished ? 'is now published and available to buyers.' : 'has been saved as a draft and is not visible to buyers.' }}</p>
+            <h2 id="product-save-title">{{ $saveConfirmationTitle }}</h2>
+            <p id="product-save-message"><strong>{{ data_get($savedProduct, 'name') }}</strong> {{ $saveConfirmationMessage }}</p>
             <form method="dialog"><button class="sl-btn sl-btn-primary" autofocus>Continue editing</button></form>
         </dialog>
-        <style>
-            .sl-product-save-dialog{width:min(520px,calc(100% - 32px));padding:42px 38px;border:1px solid #e8d6c5;border-radius:28px;background:radial-gradient(ellipse 60% 80% at 0 0,rgba(208,177,151,.13),transparent 72%),radial-gradient(ellipse 55% 70% at 100% 100%,rgba(208,177,151,.12),transparent 72%),linear-gradient(145deg,#fffaf3,#fbf5ec);color:#4b211b;text-align:center;box-shadow:0 30px 90px rgba(35,20,17,.27)}
-            .sl-product-save-dialog::backdrop{background:rgba(53,35,27,.42);backdrop-filter:blur(8px) saturate(.8)}
-            .sl-product-save-dialog__icon{display:grid;width:64px;height:64px;margin:0 auto 18px;place-items:center;border:1px solid #e8d6c5;border-radius:50%;background:linear-gradient(145deg,#fff,#f5e9dc);color:#5a281f;font-size:30px;font-weight:800;box-shadow:0 0 0 9px rgba(213,190,168,.13)}
-            .sl-product-save-dialog h2{margin:0;font-family:'Playfair Display',Georgia,serif;font-size:30px;font-weight:600}
-            .sl-product-save-dialog p{margin:12px 0 24px;color:#927260;font-size:15px;line-height:1.6}
-            .sl-product-save-dialog .sl-btn{min-height:46px;padding-inline:24px;border-radius:999px}
-            .sl-product-save-dialog form{display:flex;justify-content:center}
-            html.dark .sl-product-save-dialog{border-color:#513b32;background:linear-gradient(145deg,#2d211d,#241b18);color:#f6e9de}
-            html.dark .sl-product-save-dialog p{color:#c2a99a}
-        </style>
         <script>
-            document.querySelector('[data-product-save-dialog]')?.showModal();
+            (() => {
+                const dialog = document.querySelector('[data-product-save-dialog]');
+                if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+            })();
         </script>
     @elseif(session('status'))
         <div class="sl-alert sl-alert-success" role="status">{{ session('status') }}</div>
+    @endif
+    @if($errors->any() && in_array($currentMode, ['add', 'edit'], true))
+        <dialog class="sl-product-save-dialog sl-product-save-error-dialog" data-product-save-error-dialog aria-labelledby="product-save-error-title" aria-describedby="product-save-error-intro product-save-error-list">
+            <span class="sl-product-save-dialog__icon is-error" aria-hidden="true">!</span>
+            <h2 id="product-save-error-title">Product could not be saved</h2>
+            <p id="product-save-error-intro">Fix the following and try again:</p>
+            <ul class="sl-product-save-dialog__errors" id="product-save-error-list">
+                @foreach($errors->all() as $error)
+                    <li>{{ $error }}</li>
+                @endforeach
+            </ul>
+            <form method="dialog"><button class="sl-btn sl-btn-primary" autofocus>Close and review form</button></form>
+        </dialog>
+        <script>
+            (() => {
+                const dialog = document.querySelector('[data-product-save-error-dialog]');
+                if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+            })();
+        </script>
     @endif
     @if($currentMode === 'inventory' && $errors->any())
         <div class="sl-form-errors" role="alert"><strong>Stock was not updated.</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>
@@ -67,11 +93,12 @@
         <div class="sl-page-toolbar">
             <div><a href="{{ route('seller.products') }}" class="sl-editor-back">&larr; Back to Products</a><h2>{{ $editing ? 'Edit '.data_get($product, 'name') : 'Create New Product' }}</h2><p>Add product information, pricing, images, and availability.</p></div>
             @if($editing && data_get($product, 'db_id'))
-                <a href="{{ route('seller.marketing', ['section' => 'flash-sales', 'product_id' => data_get($product, 'db_id')]) }}" class="sl-btn sl-btn-ghost">Manage flash sale</a>
+                <a href="{{ route('seller.marketing', ['section' => 'product-discounts', 'product_id' => data_get($product, 'db_id')]) }}" class="sl-btn sl-btn-ghost">Manage Discounts</a>
+                <a href="{{ route('seller.marketing', ['section' => 'flash-sales', 'product_id' => data_get($product, 'db_id')]) }}" class="sl-btn sl-btn-ghost">Manage Flash Sale</a>
             @endif
         </div>
 
-        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}">
+        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}" data-saved-variant-prices='@json($savedVariantPrices)'>
             @csrf
             @if($editing) @method('PUT') @endif
             @unless($editing)<input type="hidden" name="idempotency_key" value="{{ old('idempotency_key', $submissionToken) }}">@endunless
@@ -84,9 +111,25 @@
                         <label class="sl-field sl-span-2"><span>Product name <b>*</b></span><input name="name" type="text" value="{{ old('name', data_get($product, 'name')) }}" required></label>
                         <label class="sl-field"><span>Line of Business</span><input value="{{ $lineOfBusinessCategory?->name ?? 'Not assigned' }}" readonly></label>
                         <label class="sl-field"><span>Subcategory <b>*</b></span><select name="category_id" required><option value="">Select subcategory</option>@foreach($categories as $category)<option value="{{ $category->id }}" @selected((string) old('category_id', data_get($product, 'category_id')) === (string) $category->id)>{{ $category->name }}{{ $category->is_unavailable_assignment ?? false ? ' (currently assigned · unavailable for new listings)' : '' }}</option>@endforeach</select>@if($editing && ($categories->firstWhere('id', data_get($product, 'category_id'))?->is_unavailable_assignment ?? false))<small class="sl-compliance-warning">This product keeps its historical category assignment. Choose an active category in your registered line of business when correcting it.</small>@endif</label>
-                        <label class="sl-field sl-span-2"><span>Description <b>* for publishing</b></span><textarea name="description" rows="7" maxlength="10000" placeholder="Describe the product, materials, dimensions, care instructions, and inclusions.">{{ old('description', data_get($product, 'description')) }}</textarea><small><span data-character-count>0</span>/10000 characters</small>@error('description')<small class="sl-error">{{ $message }}</small>@enderror</label>
-                        <div class="sl-field sl-span-2"><span>Primary image</span><label class="sl-upload-box"><input name="image" type="file" accept="image/*" data-image-input><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v5h16v-5"/></svg><strong>Upload product image</strong><small>JPG, PNG, WebP · maximum 5 MB</small></label><div class="sl-image-preview" data-image-preview>@if(data_get($product,'image'))<img src="{{ data_get($product,'image') }}" alt="">@endif</div></div>
-                        <div class="sl-field sl-span-2"><span>Additional images</span><label class="sl-upload-box"><input name="images[]" type="file" accept="image/*" multiple data-images-input><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v5h16v-5"/></svg><strong>Upload multiple product images</strong><small>JPG, PNG, WebP · maximum 5 MB each, 10 photos per product including the primary image</small></label>
+                        <div class="sl-field sl-span-2">
+                            <span id="product-description-label">Description <b>* for publishing</b></span>
+                            <textarea id="product-description" name="description" rows="7" maxlength="11000" placeholder="Describe the product, materials, dimensions, care instructions, and inclusions." data-description-value>{{ $initialDescriptionValue }}</textarea>
+                            <div class="sl-description-editor" data-description-visual>
+                                <div class="sl-description-editor__toolbar"><button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-description-insert-image disabled>Add picture</button><small>Description pictures are separate from the product gallery · JPG, PNG, WebP · 5 MB max each · 10 pictures max.</small></div>
+                                <div class="sl-description-editor__content" contenteditable="false" role="textbox" aria-multiline="true" aria-labelledby="product-description-label" data-description-content data-placeholder="Describe the product, then insert pictures where buyers should see them.">{{ $initialDescriptionText }}</div>
+                            </div>
+                            <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-description-image-picker hidden>
+                            <input type="file" name="description_images[]" accept="image/jpeg,image/png,image/webp" multiple data-description-images-input hidden>
+                            <div data-description-image-library hidden>
+                                @foreach(data_get($product, 'description_image_library', []) as $descriptionImage)
+                                    <span data-description-image-item data-description-image-ref="{{ data_get($descriptionImage, 'ref') }}" data-image-url="{{ data_get($descriptionImage, 'url') }}" data-image-label="{{ data_get($descriptionImage, 'alt', 'Product description image') }}"></span>
+                                @endforeach
+                            </div>
+                            <small><span data-character-count>{{ mb_strlen($initialDescriptionText) }}</span>/10000 characters. Inserted pictures do not count toward the text limit.</small>
+                            @error('description')<small class="sl-error">{{ $message }}</small>@enderror
+                        </div>
+                        <div class="sl-field sl-span-2"><span>Primary product image <b>* for publishing</b></span><label class="sl-upload-box"><input name="image" type="file" accept="image/jpeg,image/png,image/webp" data-image-input><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v5h16v-5"/></svg><strong>Upload primary product image</strong><small>Required to publish. JPG, PNG, or WebP · maximum 5 MB. Description pictures do not count.</small></label><div class="sl-image-preview" data-image-preview>@if(data_get($product,'image'))<img src="{{ data_get($product,'image') }}" alt="">@endif</div>@error('image')<small class="sl-error">{{ $message }}</small>@enderror</div>
+                        <div class="sl-field sl-span-2"><span>Additional images</span><label class="sl-upload-box"><input name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple data-images-input><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v5h16v-5"/></svg><strong>Upload multiple product images</strong><small>JPG, PNG, or WebP · maximum 5 MB each, 10 photos per product including the primary image</small></label>
                             <small class="sl-upload-help">Selected images appear in the uploaded product image library below.</small>
                             <div class="sl-product-image-library" data-product-image-library>
                                 <div class="sl-product-image-library__head"><strong>Uploaded product image library</strong><small>These images are uploaded once and can be assigned to many variants below.</small></div>
@@ -109,16 +152,49 @@
 
                 <section class="sl-card sl-form-section">
                     <header class="sl-form-section-head"><span>2</span><div><h3>Pricing &amp; Variations</h3><p>Set one price or add options such as size and color.</p></div></header>
+                    @php
+                        $currentProductId = data_get($product, 'db_id') ?? data_get($product, 'id');
+                        $currentProductConflicts = $editing ? ($promotionConflicts['products'][$currentProductId] ?? []) : [];
+                    @endphp
+                    @if(!empty($currentProductConflicts))
+                        <div class="sl-compliance-feedback is-warning sl-promotion-conflict" role="status">
+                            <strong>Existing offers affect this product</strong>
+                            <ul>
+                                @foreach($currentProductConflicts as $conflict)
+                                    <li>{{ $conflict['label'] }} · {{ $conflict['status'] }}</li>
+                                @endforeach
+                            </ul>
+                            <p>Discounts, flash sales, vouchers, and bundle deals are managed in Marketing. Base price changes can affect active promotions, so review them before changing a saved price.</p>
+                        </div>
+                    @else
+                        <div class="sl-compliance-feedback is-warning sl-promotion-conflict" role="note">Manage Seller discounts and schedules in Marketing. Product pricing here is the regular catalog price.</div>
+                    @endif
+                    <div class="sl-compliance-feedback is-warning sl-promotion-conflict" data-price-reduction-warning role="status" hidden><strong>Price reduction detected</strong><p data-price-reduction-message></p><p>The amount below the saved catalog price is Seller-funded.</p></div>
+                    @if($editing)
+                        @php
+                            $savedDiscountRows = collect(data_get($product, 'variation_rows', []))->filter(fn ($row) => strtolower((string) data_get($row, 'discount_type', 'none')) !== 'none' && (float) data_get($row, 'discount_value', 0) > 0);
+                            $savedDiscountStatus = ! (bool) data_get($product, 'discounts_enabled', true) ? 'Paused'
+                                : (data_get($product, 'discount_starts_at') && \Illuminate\Support\Carbon::parse(data_get($product, 'discount_starts_at'))->isFuture() ? 'Scheduled'
+                                    : (data_get($product, 'discount_ends_at') && \Illuminate\Support\Carbon::parse(data_get($product, 'discount_ends_at'))->isPast() ? 'Ended' : 'Active'));
+                        @endphp
+                        <div class="sl-compliance-feedback" role="status">
+                            <strong>Product discounts · {{ $savedDiscountStatus }}</strong>
+                            @if($savedDiscountRows->isEmpty())
+                                <p>No product discounts are configured.</p>
+                            @else
+                                <ul>@foreach($savedDiscountRows as $discountRow)<li>{{ data_get($discountRow, 'description') ?: data_get($discountRow, 'sku') }}: {{ data_get($discountRow, 'discount_type') === 'fixed' ? 'PHP '.number_format((float) data_get($discountRow, 'discount_value'), 2).' off' : number_format((float) data_get($discountRow, 'discount_value'), 2).'% off' }}</li>@endforeach</ul>
+                            @endif
+                            <p>Discount settings are read-only here. <a href="{{ route('seller.marketing', ['section' => 'product-discounts', 'product_id' => data_get($product, 'db_id')]) }}">Manage Discounts in Marketing</a>.</p>
+                        </div>
+                    @endif
                     <div class="sl-product-type-grid" data-product-type-editor><label class="sl-product-type-card"><input type="radio" name="product_type" value="single" @checked($productType === 'single')><strong>Single Product</strong><small>One price, stock, and SKU.</small></label><label class="sl-product-type-card"><input type="radio" name="product_type" value="variations" @checked($productType === 'variations')><strong>Has Variations</strong><small>Different sizes, colors, prices, or stock.</small></label></div>
                     <div data-single-product-fields>
                     <input type="hidden" name="single_variant_id" value="{{ data_get($singleVariant, 'id') }}">
                     <div class="sl-form-grid sl-form-grid-4">
-                        <label class="sl-field"><span>Price <b>* for publishing</b></span><div class="sl-input-prefix"><i>₱</i><input name="price" type="number" min="0" step="0.01" value="{{ old('price', data_get($product, 'base_price')) }}"></div>@error('price')<small class="sl-error">{{ $message }}</small>@enderror</label>
-                        <label class="sl-field"><span>Stock <b>* for publishing</b></span><input name="stock" type="number" min="0" value="{{ old('stock', data_get($product, 'stock', 0)) }}">@error('stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                        <label class="sl-field"><span>Price <b>* for publishing</b></span><div class="sl-input-prefix"><i>₱</i><input name="price" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($singleVariant, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($singleVariant, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($singleVariant, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($singleVariant, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($singleVariant, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($singleVariant, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($singleVariant, 'flash_sale_remaining', 0) }}" value="{{ old('price', data_get($product, 'base_price')) }}"></div>@error('price')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                        <label class="sl-field"><span>Stock <b>* for publishing</b></span><input name="stock" type="number" min="0" value="{{ old('stock', data_get($product, 'stock')) }}">@error('stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Weight (kg)</span><input name="weight_kg" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ old('weight_kg', data_get($singleVariant, 'weight_kg')) }}" placeholder="e.g. 0.500"><small>Weight of one item, before packing.</small></label>
                         <label class="sl-field sl-span-2"><span>SKU</span><input name="sku" maxlength="100" value="{{ old('sku', data_get($singleVariant, 'sku')) }}" placeholder="Generated automatically when blank"><small>Leave blank to create a SKU automatically.</small></label>
-                        <label class="sl-field"><span>Discount type</span><select name="discount_type" data-single-discount-type><option value="none" @selected($singleDiscountType === 'none')>No discount</option><option value="percentage" @selected($singleDiscountType === 'percentage')>Percentage</option><option value="fixed" @selected($singleDiscountType === 'fixed')>Fixed amount</option></select></label>
-                        <label class="sl-field"><span data-single-discount-label>{{ $singleDiscountType === 'fixed' ? 'Discount amount (₱)' : 'Discount (%)' }}</span><div class="sl-input-prefix"><i data-single-discount-prefix @if($singleDiscountType !== 'fixed') hidden @endif>₱</i><input name="discount_value" data-single-discount-value type="number" min="0" max="999999.99" step="0.01" value="{{ $singleDiscountValue ?: 0 }}" placeholder="0" aria-label="Discount value"></div></label>
                         <label class="sl-field"><span>Accepted payment</span><select name="payment_method"><option value="cod_online" @selected($singlePaymentMethod === 'cod_online')>COD + Online</option><option value="cod" @selected($singlePaymentMethod === 'cod')>COD only</option><option value="online" @selected($singlePaymentMethod === 'online')>Online only</option></select></label>
                         <label class="sl-field"><span>Availability</span><select name="is_active"><option value="1" @selected((bool) $singleActive)>Available</option><option value="0" @selected(! (bool) $singleActive)>Unavailable</option></select></label>
                     </div>
@@ -132,16 +208,13 @@
                     <div class="sl-variation-bulk" data-variation-bulk>
                         <label><span>Apply to</span><select data-bulk-scope><option value="all">All variations</option><option value="selected">Selected variations</option></select></label>
                         <label><span>Image</span><button type="button" class="sl-bulk-image-button" data-bulk-image-trigger><span class="sl-variant-image-thumb" data-bulk-image-thumb></span><span data-bulk-image-label>Choose image</span></button><input type="hidden" data-bulk-image-ref></label>
-                        <label><span>Discount type</span><select data-bulk-discount-type><option value="none">No discount</option><option value="percentage">Percentage</option><option value="fixed">Fixed amount</option></select></label>
-                        <label><span data-bulk-discount-label>Discount (%)</span><input data-bulk-discount-value type="number" min="0" max="999999.99" step="0.01" value="0" placeholder="0" aria-label="Bulk discount value"></label>
                         <label><span>Payment</span><select data-bulk-payment><option value="cod_online">COD + Online</option><option value="cod">COD only</option><option value="online">Online only</option></select></label>
                         <label><span>Availability</span><select data-bulk-active><option value="1">Available</option><option value="0">Unavailable</option></select></label>
-                        <button type="button" class="sl-btn sl-btn-ghost sl-btn-sm" data-clear-bulk-discount>Clear Discount</button><button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-apply-bulk>Apply</button>
+                        <button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-apply-bulk>Apply</button>
                     </div>
                     <div class="sl-variation-table" data-variation-list>
-                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span><span>Discount type</span><span>Discount</span><span>Payment</span><span>Availability</span><span></span></div>
+                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span><span>Payment</span><span>Availability</span><span></span></div>
                         @foreach($variationRows as $index => $row)
-                            @php $variantDiscountType = strtolower((string) data_get($row, 'discount_type', 'none')); $variantDiscountType = in_array($variantDiscountType, ['none', 'percentage', 'fixed'], true) ? $variantDiscountType : 'none'; @endphp
                             <div class="sl-variation-row">
                                 <label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label>
                                 <input name="variants[{{ $index }}][id]" type="hidden" value="{{ data_get($row, 'id') }}">
@@ -149,11 +222,9 @@
                                 <input name="variants[{{ $index }}][product_image_ref]" type="hidden" value="{{ data_get($row, 'product_image_ref') }}" data-variant-image-ref>
                                 <button type="button" class="sl-variant-image-button" data-variant-image-trigger data-image-ref="{{ data_get($row, 'product_image_ref') }}" aria-label="Choose image for {{ data_get($row, 'values', 'variation') }}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button>
                                 <input name="variants[{{ $index }}][sku]" value="{{ data_get($row, 'sku') }}" placeholder="Auto-generated SKU" aria-label="Variant SKU">
-                                <input name="variants[{{ $index }}][price]" type="number" min="0" step="0.01" value="{{ data_get($row, 'price') }}" placeholder="Price" aria-label="Variant price">
+                                <input name="variants[{{ $index }}][price]" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($row, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($row, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($row, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($row, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($row, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($row, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($row, 'flash_sale_remaining', 0) }}" value="{{ data_get($row, 'price') }}" placeholder="Price" aria-label="Variant price">
                                 <input name="variants[{{ $index }}][stock]" type="number" min="0" value="{{ data_get($row, 'stock') }}" aria-label="Variant stock">
                                 <input name="variants[{{ $index }}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ data_get($row, 'weight_kg') }}" placeholder="kg" aria-label="Weight per item in kilograms">
-                                <select name="variants[{{ $index }}][discount_type]" data-discount-type aria-label="Discount type"><option value="none" @selected($variantDiscountType === 'none')>None</option><option value="percentage" @selected($variantDiscountType === 'percentage')>Percentage</option><option value="fixed" @selected($variantDiscountType === 'fixed')>Fixed</option></select>
-                                <input name="variants[{{ $index }}][discount_value]" data-discount-value type="number" min="0" max="999999.99" step="0.01" value="{{ data_get($row, 'discount_value', 0) ?: 0 }}" placeholder="0" aria-label="Discount value">
                                 <select name="variants[{{ $index }}][payment_method]" aria-label="Payment method"><option value="cod_online" @selected(data_get($row, 'payment_method', 'cod_online') === 'cod_online')>COD + Online</option><option value="cod" @selected(data_get($row, 'payment_method') === 'cod')>COD</option><option value="online" @selected(data_get($row, 'payment_method') === 'online')>Online</option></select>
                                 <select name="variants[{{ $index }}][is_active]" aria-label="Availability"><option value="1" @selected(filter_var(data_get($row, 'is_active', true), FILTER_VALIDATE_BOOLEAN))>Available</option><option value="0" @selected(! filter_var(data_get($row, 'is_active', true), FILTER_VALIDATE_BOOLEAN))>Unavailable</option></select>
                                 <button type="button" class="sl-icon-btn" data-remove-variant aria-label="Remove variation">&times;</button>
@@ -167,9 +238,8 @@
                     </div>
                 </section>
             </div>
-            @if($errors->any())<div class="sl-form-errors" role="alert"><strong>Product could not be saved.</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
             <aside class="sl-editor-side">
-                <section class="sl-card sl-publish-card sl-publish-card-current" data-product-status-card><h3>Product Status</h3><p class="sl-sidebar-help">{{ $editing && data_get($product, 'status') === 'SUSPENDED' ? 'Correct the listing while it remains suspended. Admin must authorize reinstatement.' : 'Complete the required information before publishing.' }}</p><div class="sl-completion-list"><p data-check="name"><span></span> Product information</p><p data-check="description"><span></span> Product description</p><p data-check="category"><span></span> Subcategory</p><p data-check="image"><span></span> Primary image</p><p data-check="pricing"><span></span> Pricing</p><p data-check="inventory"><span></span> Inventory</p><p data-check="variations"><span></span> Variations</p></div><button type="submit" data-listing-status="draft" onclick="this.form.elements.listing_status.value='draft'" class="sl-btn sl-btn-ghost sl-btn-block" data-confirm-title="{{ $editing ? 'Save product changes?' : 'Save product as draft?' }}" data-confirm-message="Save this product listing as a draft?" data-confirm-label="{{ $editing ? 'Save changes' : 'Save draft' }}">{{ $editing && data_get($product, 'status') === 'SUSPENDED' ? 'Save Corrections' : 'Save as Draft' }}</button>@if(!($editing && data_get($product, 'status') === 'SUSPENDED'))<button type="submit" data-listing-status="active" onclick="this.form.elements.listing_status.value='active'" class="sl-btn sl-btn-primary sl-btn-block" data-publish-product data-confirm-title="{{ $editing ? 'Save product changes?' : 'Publish product?' }}" data-confirm-message="{{ $editing ? 'Save and publish the changes to this listing?' : 'Publish this product to your catalog so buyers can find it?' }}" data-confirm-label="{{ $editing ? 'Save changes' : 'Publish product' }}">{{ $editing && $listingStatus === 'active' ? 'Save Changes' : 'Publish Product' }}</button>@endif</section>
+                <section class="sl-card sl-publish-card sl-publish-card-current" data-product-status-card><h3>Product Status</h3><p class="sl-sidebar-help">{{ $editing && data_get($product, 'status') === 'SUSPENDED' ? 'Correct the listing while it remains suspended. Admin must authorize reinstatement.' : 'Complete the required information before publishing.' }}</p><div class="sl-completion-list"><p data-check="name"><span></span> Product information</p><p data-check="description"><span></span> Product description</p><p data-check="category"><span></span> Subcategory</p><p data-check="image"><span></span> Primary image</p><p data-check="pricing"><span></span> Pricing</p><p data-check="inventory"><span></span> Inventory</p><p data-check="variations"><span></span> Variations</p></div><button type="submit" data-listing-status="draft" onclick="this.form.elements.listing_status.value='draft'" class="sl-btn sl-btn-ghost sl-btn-block" data-confirm-title="{{ $editing ? 'Save product changes?' : 'Save product as draft?' }}" data-confirm-message="Save this product listing as a draft?" data-confirm-label="{{ $editing ? 'Save changes' : 'Save draft' }}">{{ $editing && data_get($product, 'status') === 'SUSPENDED' ? 'Save Corrections' : 'Save as Draft' }}</button>@if(!($editing && data_get($product, 'status') === 'SUSPENDED'))<button type="submit" data-listing-status="active" onclick="this.form.elements.listing_status.value='active'" class="sl-btn sl-btn-primary sl-btn-block" data-publish-product data-confirm-title="{{ $editing ? 'Save product changes?' : 'Publish product?' }}" data-confirm-message="{{ $editing ? 'Save and publish the changes to this listing?' : 'Publish this product to your catalog so buyers can find it?' }}" data-confirm-label="{{ $editing ? 'Save changes' : 'Publish product' }}">{{ $editing && $listingStatus === 'active' ? 'Save Changes' : 'Publish Product' }}</button>@endif<p class="sl-product-save-progress" data-product-save-progress role="status" aria-live="polite" hidden></p></section>
                 <section class="sl-card sl-buyer-preview" data-seller-buyer-preview><header><h3>Buyer Preview</h3><p>This is how your product may appear to customers.</p><small>Preview only - your product is not published yet.</small></header><img src="{{ data_get($product, 'image', $productImageFallback) }}" alt="Product preview" data-preview-image data-preview-default-src="{{ data_get($product, 'image', $productImageFallback) }}"><div class="sl-preview-gallery" data-preview-gallery aria-label="Product image preview" @if($imageLibrary->isEmpty()) hidden @endif>@foreach($imageLibrary as $previewIndex => $previewLibraryImage)<button type="button" class="sl-preview-gallery-button {{ $previewIndex === 0 ? 'is-selected' : '' }}" data-preview-saved-image data-image-url="{{ data_get($previewLibraryImage, 'url') }}" data-image-label="Preview image {{ $previewIndex + 1 }}" aria-label="Preview image {{ $previewIndex + 1 }}" aria-pressed="{{ $previewIndex === 0 ? 'true' : 'false' }}"><img src="{{ data_get($previewLibraryImage, 'url') }}" alt="{{ data_get($previewLibraryImage, 'alt', data_get($product, 'name', 'Product image')) }}"></button>@endforeach</div><div><span data-preview-category>Subcategory</span><h4 data-preview-name>{{ old('name', data_get($product, 'name', 'Your product name')) ?: 'Your product name' }}</h4><strong data-preview-price>&#8369;0.00</strong><span class="sl-preview-discount" data-preview-discount hidden></span><p data-preview-stock>0 available</p><div class="sl-preview-options" data-preview-options></div><button type="button" disabled>Add to Cart</button><button type="button" disabled>Buy Now</button></div></section>
             </aside>
             <dialog class="sl-image-assignment-dialog" data-image-assignment-dialog aria-labelledby="image-assignment-title">
@@ -226,8 +296,13 @@
                     </form>
                 </header>
                 <div class="sl-inventory-groups" data-inventory-groups>
-                @forelse($inventoryGroups as $group)
-                    @php($isExpanded = (int) $expandedInventoryProductId === (int) $group['db_id'])
+                @if($inventoryGroups->isEmpty())
+                    <div class="sl-empty-state"><h3>No inventory records yet</h3><p>Active product variants will appear here after they are saved.</p></div>
+                @else
+                @foreach($inventoryGroups as $group)
+                    @php
+                        $isExpanded = (int) $expandedInventoryProductId === (int) $group['db_id'];
+                    @endphp
                     <article class="sl-inventory-product" data-inventory-product data-product-id="{{ $group['db_id'] }}" data-product-name="{{ mb_strtolower($group['name']) }}">
                         <header class="sl-inventory-product__summary">
                             <img class="sl-inventory-product__image" src="{{ $group['image'] ?: $productImageFallback }}" alt="{{ $group['name'] }}" loading="lazy" onerror="this.onerror=null;this.src='{{ $productImageFallback }}'">
@@ -254,9 +329,8 @@
                             @endforeach
                         </div>
                     </article>
-                @empty
-                    <div class="sl-empty-state"><h3>No inventory records yet</h3><p>Active product variants will appear here after they are saved.</p></div>
-                @endforelse
+                @endforeach
+                @endif
                 </div>
                 @if($inventoryPage && $inventoryPage->hasPages())
                     <footer class="sl-table-footer"><span>Showing {{ $inventoryPage->firstItem() }}–{{ $inventoryPage->lastItem() }} of {{ $inventoryPage->total() }} products</span>{{ $inventoryPage->links() }}</footer>

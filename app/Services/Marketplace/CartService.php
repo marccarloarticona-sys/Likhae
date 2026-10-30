@@ -113,6 +113,103 @@ class CartService
         }, attempts: 3);
     }
 
+    /** @param array<int|string, int> $variantQuantities */
+    public function addMany(User $buyer, array $variantQuantities): void
+    {
+        $quantities = collect($variantQuantities)
+            ->mapWithKeys(fn ($quantity, $variantId): array => [(int) $variantId => (int) $quantity])
+            ->filter(fn (int $quantity, int $variantId): bool => $variantId > 0 && $quantity > 0)
+            ->sortKeys();
+        if ($quantities->isEmpty()) {
+            throw ValidationException::withMessages(['cart' => 'Choose at least one available item to add to your cart.']);
+        }
+
+        DB::transaction(function () use ($buyer, $quantities): void {
+            $cart = $this->activeCart($buyer);
+            $lockedCarts = Cart::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->where('status', Cart::STATUS_ACTIVE)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $cart = $lockedCarts->firstWhere('id', $cart->id) ?? $cart;
+            $existingItems = CartItem::query()
+                ->where('cart_id', $cart->id)
+                ->with('productVariant.product')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $variants = ProductVariant::query()
+                ->whereIn('id', $quantities->keys())
+                ->where('is_active', true)
+                ->with('product.sellerProfile.user')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            if ($variants->count() !== $quantities->count()) {
+                throw ValidationException::withMessages(['cart' => 'One or more offer variations are no longer available. Refresh the offer and try again.']);
+            }
+            $products = Product::query()
+                ->whereIn('id', $variants->pluck('product_id')->unique())
+                ->with('sellerProfile.user')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $existingByVariant = $existingItems->groupBy('product_variant_id')->map(fn ($items) => $items->first());
+            $addingByProduct = $quantities->groupBy(fn ($quantity, $variantId): int => (int) $variants->get($variantId)->product_id)
+                ->map(fn ($rows): int => (int) $rows->sum());
+
+            foreach ($addingByProduct as $productId => $addingQuantity) {
+                $product = $products->get((int) $productId);
+                if (! $product) {
+                    throw ValidationException::withMessages(['cart' => 'An offer item is no longer available.']);
+                }
+                $existingProductQuantity = $this->purchaseLimits->cartQuantity($buyer, (int) $product->id, lockForUpdate: true);
+                $this->purchaseLimits->assertWithinLimit(
+                    $buyer,
+                    $product,
+                    (int) $addingQuantity,
+                    $existingProductQuantity,
+                    'quantity',
+                    lockHistoricalRows: true,
+                );
+            }
+
+            foreach ($quantities as $variantId => $quantity) {
+                $variant = $variants->get((int) $variantId);
+                $product = $products->get((int) $variant->product_id);
+                $availability = $this->productAvailability->inspect(
+                    $variant,
+                    $product,
+                    $product?->sellerProfile,
+                    $product?->sellerProfile?->user,
+                    (int) $quantity,
+                );
+                if (! $availability['available']) {
+                    throw ValidationException::withMessages(['cart' => $availability['message']]);
+                }
+
+                $existing = $existingByVariant->get((int) $variantId);
+                $newQuantity = (int) ($existing?->quantity ?? 0) + (int) $quantity;
+                if ($newQuantity > (int) $variant->stock) {
+                    throw ValidationException::withMessages([
+                        'cart' => 'The requested offer quantities exceed available stock for '.($product?->name ?? 'one product').'.',
+                    ]);
+                }
+                if ($existing) {
+                    $existing->update(['quantity' => $newQuantity]);
+                } else {
+                    $cart->items()->create([
+                        'product_variant_id' => $variant->id,
+                        'quantity' => (int) $quantity,
+                    ]);
+                }
+            }
+        }, attempts: 3);
+    }
+
     public function update(User $buyer, CartItem $item, int $quantity): CartItem
     {
         $this->ensureOwner($buyer, $item);

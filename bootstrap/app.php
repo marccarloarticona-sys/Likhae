@@ -34,7 +34,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectGuestsTo(fn (Request $request) => route(
             $request->is('logistics/*', 'rider', 'rider/*') ? 'logistics.login' : 'login'
         ));
-        $middleware->redirectUsersTo(fn (Request $request) => route($request->user()->workspaceRoute()));
+        $middleware->redirectUsersTo(fn (Request $request) => route(
+            $request->user()->pendingRegistrationApplication()
+                ? 'registration.status'
+                : $request->user()->workspaceRoute(),
+        ));
         $middleware->alias([
             'role' => EnsureWorkspaceRole::class,
             'workspace.role' => EnsureWorkspaceRole::class,

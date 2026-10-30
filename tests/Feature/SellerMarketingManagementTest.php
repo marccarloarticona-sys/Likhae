@@ -10,6 +10,7 @@ use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\Voucher;
 use App\Models\User;
+use App\Services\Reports\SellerMarketingOverviewService;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
@@ -53,7 +54,7 @@ class SellerMarketingManagementTest extends TestCase
         $this->recordSellerOrder($sellerProfile, $exhausted, 'CANCELLED');
         $this->makeVoucher($foreignProfile, ['code' => 'FOREIGNVOUCHER']);
 
-        $response = $this->actingAs($this->seller)->get(route('seller.marketing'));
+        $response = $this->actingAs($this->seller)->get(route('seller.marketing', ['section' => 'vouchers']));
 
         $response->assertOk()
             ->assertSee('B6ACTIVE')
@@ -76,7 +77,7 @@ class SellerMarketingManagementTest extends TestCase
 
         try {
             $this->actingAs($this->seller)
-                ->get(route('seller.marketing'))
+                ->get(route('seller.marketing', ['section' => 'vouchers']))
                 ->assertOk()
                 ->assertSee('Vouchers for selected products are temporarily unavailable')
                 ->assertSee('SCHEMAFALLBACK')
@@ -106,12 +107,14 @@ class SellerMarketingManagementTest extends TestCase
         }
     }
 
-    public function test_marketing_center_has_four_working_sections_with_the_current_section_active(): void
+    public function test_marketing_center_has_six_working_sections_with_the_current_section_active(): void
     {
         foreach ([
-            'vouchers' => 'Your Vouchers',
+            'product-discounts' => 'Product and variant discounts',
             'flash-sales' => 'Variant Flash Sales',
-            'special-offers' => 'Bundle Deals and Buy X Get Y',
+            'vouchers' => 'Your Vouchers',
+            'bundle-deals' => 'Bundle Deals',
+            'buy-x-get-y' => 'Buy X Get Y',
             'overview' => 'Confirmed promotional discounts',
         ] as $section => $heading) {
             $this->actingAs($this->seller)
@@ -120,6 +123,43 @@ class SellerMarketingManagementTest extends TestCase
                 ->assertSee('aria-current="page"', escape: false)
                 ->assertSee($heading);
         }
+    }
+
+    public function test_marketing_overview_shows_claim_counts_and_campaign_history(): void
+    {
+        $voucher = $this->makeVoucher($this->seller->sellerProfile, [
+            'name' => 'Overview history voucher',
+            'code' => 'OVERVIEWHISTORY',
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+        ]);
+        $buyer = User::query()->where('account_type', User::TYPE_BUYER)->firstOrFail();
+        BuyerVoucherClaim::query()->create([
+            'buyer_user_id' => $buyer->id,
+            'voucher_id' => $voucher->id,
+        ]);
+
+        $overview = app(SellerMarketingOverviewService::class)->forSeller((int) $this->seller->sellerProfile->id);
+        $this->assertSame(1, $overview['voucher_claims']);
+        $this->assertSame('active', $overview['campaign_history']->firstWhere('name', 'Overview history voucher')['status']);
+
+        $this->actingAs($this->seller)
+            ->get(route('seller.marketing', ['section' => 'overview']))
+            ->assertOk()
+            ->assertSee('Voucher claims')
+            ->assertSee('Bundle sets sold')
+            ->assertSee('Buy X Get Y redemptions')
+            ->assertSee('Promotion-attributed revenue')
+            ->assertSee('Seller-funded discount cost')
+            ->assertSee('Active campaigns')
+            ->assertSee('Scheduled campaigns')
+            ->assertSee('Active product discounts')
+            ->assertSee('Scheduled product discounts')
+            ->assertSee('Active flash sales')
+            ->assertSee('Scheduled flash sales')
+            ->assertSee('Campaign history')
+            ->assertSee('Overview history voucher')
+            ->assertSee('recognized completed seller orders');
     }
 
     public function test_seller_can_edit_own_voucher_but_cannot_edit_or_pause_another_sellers_or_platform_voucher(): void
@@ -228,14 +268,14 @@ class SellerMarketingManagementTest extends TestCase
         ]);
 
         $this->actingAs($this->seller)
-            ->get(route('seller.marketing'))
+            ->get(route('seller.marketing', ['section' => 'vouchers']))
             ->assertOk()
             ->assertSee('name="applies_to"', escape: false)
             ->assertSee('name="product_ids[]"', escape: false)
             ->assertSee($ownedProduct->name)
             ->assertDontSee($foreignProduct->name);
 
-        $this->from(route('seller.marketing'))
+        $this->from(route('seller.marketing', ['section' => 'vouchers']))
             ->post(route('seller.marketing.campaigns.store'), [
                 'code' => 'TARGETOWNED',
                 'name' => 'Owned product voucher',
@@ -245,14 +285,14 @@ class SellerMarketingManagementTest extends TestCase
                 'applies_to' => 'PRODUCTS',
                 'product_ids' => [$ownedProduct->id],
             ])
-            ->assertRedirect(route('seller.marketing'))
+            ->assertRedirect(route('seller.marketing', ['section' => 'vouchers']))
             ->assertSessionHas('status', 'Voucher saved.');
 
         $voucher = Voucher::query()->where('code', 'TARGETOWNED')->sole();
         $this->assertSame('PRODUCTS', $voucher->applies_to);
         $this->assertSame([$ownedProduct->id], $voucher->eligibleProducts()->pluck('products.id')->all());
 
-        $this->from(route('seller.marketing'))
+        $this->from(route('seller.marketing', ['section' => 'vouchers']))
             ->post(route('seller.marketing.campaigns.store'), [
                 'code' => 'TARGETFOREIGN',
                 'name' => 'Foreign product voucher',
@@ -261,7 +301,7 @@ class SellerMarketingManagementTest extends TestCase
                 'applies_to' => 'PRODUCTS',
                 'product_ids' => [$foreignProduct->id],
             ])
-            ->assertRedirect(route('seller.marketing'))
+            ->assertRedirect(route('seller.marketing', ['section' => 'vouchers']))
             ->assertSessionHasErrors('product_ids');
 
         $this->assertDatabaseMissing('vouchers', ['code' => 'TARGETFOREIGN']);

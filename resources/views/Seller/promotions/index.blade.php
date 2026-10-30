@@ -12,10 +12,12 @@
         <div><a href="{{ route('seller.marketing', ['section' => 'special-offers']) }}" class="sl-editor-back">&larr; Back to Marketing</a><h2>Product Promotions</h2><p>Set discounts that apply when buyers place the required products in their cart.</p></div>
         <a href="{{ route('seller.marketing', ['section' => 'vouchers']) }}" class="sl-btn sl-btn-ghost">Voucher Center</a>
     </div>
-    @include('seller.promotions._management', [
+    @include('seller.promotions._marketing-management', [
         'variants' => $variants,
         'promotions' => $promotions,
         'promotionStorageReady' => $promotionStorageReady,
+        'promotionConflicts' => $promotionConflicts,
+        'section' => 'bundle-deals',
     ])
 </div>
 @endsection

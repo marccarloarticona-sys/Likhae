@@ -30,6 +30,14 @@ class PurgeExpiredSoftDeletes extends Command
                 }
 
                 $paths = $product->images->pluck('file_path')->filter()->values()->all();
+                preg_match_all(
+                    '/\[\[description-image:stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))\]\]/i',
+                    (string) $product->description,
+                    $matches,
+                );
+                foreach (array_unique($matches[1] ?? []) as $filename) {
+                    $paths[] = "sellers/{$product->seller_profile_id}/products/{$product->id}/descriptions/{$filename}";
+                }
                 $product->forceDelete();
 
                 return $paths;

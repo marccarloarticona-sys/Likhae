@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\GoogleAuthenticationController;
 use App\Http\Controllers\Auth\MobileGoogleAuthenticationController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Auth\RegistrationController;
+use App\Http\Controllers\Auth\RegistrationStatusController;
 use App\Http\Controllers\PolicyAcceptanceController;
 use App\Http\Controllers\Buyer\GuestMarketplaceController;
 use App\Http\Controllers\Buyer\BuyerController;
@@ -177,6 +178,12 @@ Route::prefix('address/philippines')
     });
 
 Route::post('/logout', [AuthenticationController::class, 'destroy'])->name('logout');
+Route::middleware(['auth', 'verified'])->group(function (): void {
+    Route::get('/application/status', [RegistrationStatusController::class, 'show'])->name('registration.status');
+    Route::post('/application/documents/resubmit', [RegistrationStatusController::class, 'resubmit'])
+        ->middleware('throttle:5,1')
+        ->name('registration.documents.resubmit');
+});
 Route::post('/policy-acceptance', [PolicyAcceptanceController::class, 'store'])
     ->middleware('auth')
     ->name('policies.accept');

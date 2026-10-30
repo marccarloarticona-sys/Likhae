@@ -3,6 +3,7 @@
     $smartStatus = $smartSession['status'] ?? 'AUTOMATED_HELP';
     $humanHandoff = in_array($smartStatus, ['HUMAN_ASSISTANCE_REQUESTED', 'HUMAN_CONVERSATION'], true);
     $lastFeedback = $smartSession['last_feedback'] ?? null;
+    $handoffLabel = ($smartHelp['recipient_type'] ?? null) === \App\Models\Communication\MessagingFaq::OWNER_ADMIN ? 'Talk to Live Admin' : 'Request live help';
 @endphp
 <style>
     .lk-smart-help{margin:18px 0 10px;padding:14px;border:1px solid #ead5c3;border-radius:18px;background:rgba(255,250,245,.94);color:#3c2019;font-size:12px}
@@ -23,12 +24,13 @@
     .lk-smart-help-feedback span{color:#76594b}
     .lk-smart-help-error{color:#922e23}
     .lk-smart-help-feedback-result{margin:7px 0 0;color:#76594b;font-size:11px}
+    .lk-smart-help-ask{display:flex;gap:7px;margin-top:10px}.lk-smart-help-ask input{min-width:0;flex:1;padding:9px 11px;border:1px solid #dfc4ad;border-radius:10px;background:#fff;color:#3c2019;font:inherit}.lk-smart-help-ask button{white-space:nowrap}
     @media(max-width:700px){.lk-smart-help{margin:14px 0 8px;padding:11px}.lk-smart-help-question-bubble,.lk-smart-help-answer-bubble{max-width:96%}.lk-smart-help-questions button{max-width:100%;text-align:left}}
 </style>
 <section
     class="lk-smart-help"
     data-smart-help
-    data-answer-url="{{ route('buyer.messages.smart-help.answer', ['conversation' => $smartHelp['conversation_id']]) }}"
+    data-answer-url="{{ $smartHelp['answer_url'] }}"
     data-feedback-url="{{ $smartHelp['feedback_url'] }}"
     data-handoff-url="{{ $smartHelp['handoff_url'] }}"
     data-product-id="{{ $smartHelp['product_id'] ?? '' }}"
@@ -51,6 +53,7 @@
             Choose a suggested question. Its verified answer will appear in this conversation.
         @endif
     </p>
+    @if(! $humanHandoff)<div class="lk-smart-help-answer-bubble" style="max-width:100%"><small>LIKHAE Support</small><p>{{ $smartHelp['welcome_message'] }}</p></div>@endif
     <div class="lk-smart-help-feedback" data-smart-help-feedback @if(empty($smartSession['answer']) || $humanHandoff || filled($lastFeedback)) hidden @endif>
         <span>Did this answer help?</span>
         <button type="button" data-smart-feedback="RESOLVED">Yes, thanks</button>
@@ -64,8 +67,14 @@
             <button type="button" data-smart-question data-question-key="{{ $suggestion['key'] }}" {{ $humanHandoff ? 'disabled' : '' }}>{{ $suggestion['question'] }}</button>
         @endforeach
     </div>
+    @if(! $humanHandoff)
+        <form class="lk-smart-help-ask" data-smart-ask-form>
+            <input type="text" maxlength="300" data-smart-ask-input placeholder="Ask a question in your own words" aria-label="Ask a support question">
+            <button type="submit" data-smart-ask-submit>Ask</button>
+        </form>
+    @endif
     <div class="lk-smart-help-feedback" data-smart-help-handoff-row @if($humanHandoff) hidden @endif>
-        <span>Use the message box below to add details. Live help stays in this conversation.</span>
-        <button type="button" data-smart-handoff>Request live help in this conversation</button>
+        <span>Use the message box below to add details. This keeps the same conversation history.</span>
+        <button type="button" data-smart-handoff>{{ $handoffLabel }}</button>
     </div>
 </section>

@@ -4,6 +4,8 @@
     $pageSubtitle = trim($__env->yieldContent('subtitle')) ?: 'Manage your store operations and performance.';
     $sellerThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
     $sellerAiEnabled = (bool) data_get(auth()->user()?->notification_preferences, 'seller_ai_assistant_enabled', true);
+    $suppressProductValidationToast = request()->routeIs('seller.products')
+        && in_array(request()->query('mode'), ['add', 'edit'], true);
 @endphp
 <!doctype html>
 <html lang="en">
@@ -41,7 +43,7 @@
         @include('components.seller.footer')
     </div>
 
-    <x-shared.feedback-region workspace="seller" />
+    <x-shared.feedback-region workspace="seller" :suppress-validation-errors="$suppressProductValidationToast" />
     <x-shared.announcement-popup />
     <x-shared.notification-popover />
     @include('components.shared.confirm-action-modal')

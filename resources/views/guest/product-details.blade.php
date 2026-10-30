@@ -56,6 +56,21 @@
                     <a href="{{ route('register', ['role' => 'buyer']) }}" class="lk-btn lk-btn-light">Register as Buyer</a>
                 </div>
             </div>
+            @if(collect(data_get($product, 'seller_voucher_badges', []))->isNotEmpty())
+                <section class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4" aria-label="Available seller vouchers">
+                    <h2 class="text-sm font-bold text-amber-950">Seller vouchers for this product</h2>
+                    <p class="mt-1 text-xs text-amber-900/80">Eligibility and minimum spend are checked at checkout.</p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        @foreach(collect(data_get($product, 'seller_voucher_badges', [])) as $voucherBadge)
+                            <span class="rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-950">
+                                {{ strtoupper((string) data_get($voucherBadge, 'discount_type')) === 'PERCENT' ? rtrim(rtrim(number_format((float) data_get($voucherBadge, 'discount_value'), 2, '.', ''), '0'), '.').'%' : '₱'.number_format((float) data_get($voucherBadge, 'discount_value'), 2) }} off
+                                @if((float) data_get($voucherBadge, 'minimum_order_amount', 0) > 0) · Min. ₱{{ number_format((float) data_get($voucherBadge, 'minimum_order_amount'), 2) }} @endif
+                            </span>
+                        @endforeach
+                    </div>
+                    <a class="mt-3 inline-flex text-xs font-bold text-amber-950 underline" href="{{ route('login') }}">Sign in to collect</a>
+                </section>
+            @endif
 
         </div>
     </section>
@@ -83,6 +98,8 @@
             <div class="mt-3 whitespace-pre-line text-sm leading-7 text-stone-600">{{ data_get($product, 'description', 'A carefully selected product from a trusted LIKHAE seller. Built for everyday use and covered by marketplace buyer protection.') }}</div>
         </section>
     </div>
+
+    <x-buyer.seller-promotions :promotions="$sellerPromotions ?? collect()" guest />
 
     @if($related->isNotEmpty())
         <section class="lk-section"><div class="lk-section-head"><div><span class="lk-kicker">Keep exploring</span><h2>Related Products</h2><p>More finds you may like.</p></div></div><div class="lk-product-grid">@foreach($related as $relatedProduct) @include('components.guest.product-card', ['product' => $relatedProduct]) @endforeach</div></section>

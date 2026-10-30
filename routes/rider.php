@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Rider\RiderController;
+use App\Http\Controllers\Communication\SmartMessagingController;
 use App\Http\Controllers\Rider\RiderFinanceController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Rider\RiderPickupBatchController;
@@ -103,4 +104,7 @@ Route::prefix('rider')
         Route::get('/messages', [RiderController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [RiderController::class, 'messageStream'])->name('messages.stream');
         Route::post('/messages', [RiderController::class, 'sendMessage'])->name('messages.send');
+        Route::post('/messages/{conversation}/smart-help/answer', [SmartMessagingController::class, 'answer'])->whereNumber('conversation')->middleware('throttle:120,1')->name('messages.smart-help.answer');
+        Route::post('/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])->whereNumber('conversation')->middleware('throttle:60,1')->name('messages.smart-help.feedback');
+        Route::post('/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])->whereNumber('conversation')->middleware('throttle:20,1')->name('messages.smart-help.handoff');
     });

@@ -217,19 +217,24 @@
                     $supportRequestId = data_get($activeSupportState, 'request_id');
                     $supportRequestStatus = data_get($activeSupportState, 'request_status');
                     $hasActiveHumanRequest = filled($supportRequestId) && in_array($supportRequestStatus, ['NEW', 'AWAITING_RESPONSE', 'IN_PROGRESS'], true);
+                    $isSupportRequester = (int) data_get($activeSupportState, 'requester_user_id') === (int) auth()->id();
+                    $canManageSupportRequest = ! $isSupportRequester
+                        && ((int) data_get($activeSupportState, 'recipient_user_id') === (int) auth()->id())
+                        && (! in_array($supportRequestStatus, ['IN_PROGRESS'], true)
+                            || (int) data_get($activeSupportState, 'accepted_by_user_id') === (int) auth()->id());
                     $supportSnapshot = data_get($activeSupportState, 'context', []);
                     $requestRoutePrefix = auth()->user()->isAccountType(\App\Models\User::TYPE_ADMIN) ? 'admin' : 'seller';
                 @endphp
                 @if($hasActiveHumanRequest)
                     <section class="lk-support-session" data-support-session data-status="{{ $supportRequestStatus }}">
-                        <strong>Buyer requested live help · {{ str((string) $supportRequestStatus)->replace('_', ' ')->title() }}</strong>
+                        <strong>{{ $activeSupportState['requester_role'] === \App\Models\User::TYPE_BUYER ? 'Buyer requested live help' : str((string) $activeSupportState['requester_role'])->lower()->title().' requested live help' }} · {{ str((string) $supportRequestStatus)->replace('_', ' ')->title() }}</strong>
                         @if(filled(data_get($supportSnapshot, 'question')))<span>Question: {{ data_get($supportSnapshot, 'question') }}</span>@endif
                         @if(filled(data_get($supportSnapshot, 'product')))<span>Product: {{ data_get($supportSnapshot, 'product') }}</span>@endif
                         @if(filled(data_get($supportSnapshot, 'variant')))<span>Variant: {{ data_get($supportSnapshot, 'variant') }}</span>@endif
                         @if(filled(data_get($supportSnapshot, 'order_number')))<span>Order #{{ data_get($supportSnapshot, 'order_number') }} · {{ str((string) data_get($supportSnapshot, 'order_status'))->replace('_', ' ')->title() }}</span>@endif
-                        @if($supportRequestStatus === 'NEW')<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.acknowledge', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark awaiting response</button></form>@endif
-                        @if(in_array($supportRequestStatus, ['NEW', 'AWAITING_RESPONSE'], true))<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.accept', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Accept request</button></form>@endif
-                        <form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.resolve', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark resolved</button></form>
+                        @if($canManageSupportRequest && $supportRequestStatus === 'NEW')<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.acknowledge', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark awaiting response</button></form>@endif
+                        @if($canManageSupportRequest && in_array($supportRequestStatus, ['NEW', 'AWAITING_RESPONSE'], true))<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.accept', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Accept request</button></form>@endif
+                        @if($canManageSupportRequest)<form method="POST" action="{{ route($requestRoutePrefix.'.messages.support-requests.resolve', ['supportRequest' => $supportRequestId]) }}">@csrf<button type="submit">Mark resolved</button></form>@endif
                     </section>
                 @endif
                 <div class="lk-chat-stream" data-message-thread data-conversation-id="{{ $activeConversation->id }}" data-current-user-id="{{ auth()->id() }}" data-other-user-id="{{ $activeOther->id }}" data-other-avatar="{{ $activeOtherAvatar }}" data-other-name="{{ $activeOtherName }}" data-other-last-read-at="{{ $activeOtherReadAt?->toIso8601String() }}" data-read-url="{{ route('messages.read', ['conversation' => $activeConversation->id]) }}" data-read-url-template="{{ route('messages.read', ['conversation' => '__conversation__']) }}" data-receipt-url="{{ route('messages.receipt', ['conversation' => $activeConversation->id]) }}" data-receipt-url-template="{{ route('messages.receipt', ['conversation' => '__conversation__']) }}" @if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false) data-attachments-enabled="true" @endif @if($activeStreamUrl) data-stream-url="{{ $activeStreamUrl }}" @endif>
@@ -250,6 +255,7 @@
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message.</div>
                     @endforelse
+                    @if(!empty($smartHelpBootstrap))@include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap, 'showSmartHistory' => true])@endif
                 </div>
                 <form method="POST" enctype="multipart/form-data" action="{{ $sendRoute }}" class="lk-chat-form" data-live-message-form>@csrf<input type="hidden" name="recipient_user_id" value="{{ $activeOther->id }}"><input type="hidden" name="conversation_id" value="{{ $activeConversation->id }}"><input class="lk-chat-input" name="body" maxlength="1000" data-message-body autocomplete="off" placeholder="Type your message to {{ $activeOtherName }}..."><span class="text-xs text-stone-500"><span data-message-count>0</span>/1000</span>@if($messageAttachmentsReady ?? $sellerMessageAttachments ?? false)<span class="lk-attachment-selection"><label class="lk-message-attachment" title="Attach up to 5 files or images" aria-label="Attach up to 5 files or images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/><path d="M15 3v4h4"/></svg><input type="file" name="attachments[]" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.mp3,.wav,.mp4,.mov" data-message-attachment-input><span class="sr-only">Attach up to 5 files or images</span></label><img data-attachment-preview hidden alt="Selected image preview"><span data-attachment-filename hidden></span></span>@endif<button class="lk-chat-send" type="submit">Send</button></form>
             @else

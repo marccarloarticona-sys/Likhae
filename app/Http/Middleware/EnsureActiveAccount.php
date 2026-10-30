@@ -15,6 +15,21 @@ class EnsureActiveAccount
         $user = Auth::user();
 
         if ($user instanceof User && ! $user->isActive()) {
+            if ($user->pendingRegistrationApplication()
+                && $request->routeIs(
+                    'login',
+                    'login.store',
+                    'logistics.login',
+                    'logistics.login.store',
+                    'google.callback',
+                    'registration.status',
+                    'registration.documents.resubmit',
+                    'policies.accept',
+                    'logout',
+                )) {
+                return $next($request);
+            }
+
             $message = $user->inactiveMessage();
 
             Auth::logout();

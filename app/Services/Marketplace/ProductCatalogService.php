@@ -8,12 +8,14 @@ use App\Models\Seller\ProductImage;
 use App\Models\Seller\ProductOptionValue;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\Voucher;
 use App\Models\Buyer\Review;
 use App\Services\ReviewImageService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -21,7 +23,13 @@ use Illuminate\Support\Str;
 
 class ProductCatalogService
 {
-    public function __construct(private readonly ReviewImageService $reviewImages) {}
+    /** @var array<int, Collection<int, Voucher>> */
+    private array $publicVoucherCampaignsBySeller = [];
+
+    public function __construct(
+        private readonly ReviewImageService $reviewImages,
+        private readonly SellerPromotionBuyerService $sellerPromotions,
+    ) {}
 
     /** @return array<int, string> */
     public function productRelations(): array
@@ -116,22 +124,7 @@ class ProductCatalogService
                 $variant->where('is_active', true)
                     ->where('stock', '>', 0)
                     ->where('price', '>', 0)
-                    ->where(function (Builder $promotion): void {
-                        $promotion->where(function (Builder $discount): void {
-                            $discount->where('discount_value', '>', 0)
-                                ->where(fn (Builder $type) => $type->whereNull('discount_type')
-                                    ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'"));
-                        });
-
-                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
-                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
-                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
-                            $promotion->orWhere(fn (Builder $flash) => $flash
-                                ->whereNotNull('flash_sale_price')
-                                ->where('flash_sale_price', '>', 0)
-                                ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold'));
-                        }
-                    });
+                    ->whereRaw($this->variantSellingPriceSql().' < product_variants.price');
             });
         }
 
@@ -153,30 +146,7 @@ class ProductCatalogService
 
     private function variantSellingPriceSql(): string
     {
-        $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
-        $value = 'COALESCE(product_variants.discount_value, 0)';
-        $price = 'product_variants.price';
-        $saleWindow = '(1 = 1)';
-        if (Schema::hasColumn('products', 'flash_sale_starts_at') && Schema::hasColumn('products', 'flash_sale_ends_at')) {
-            $now = now()->toDateTimeString();
-            $saleWindow = "((products.flash_sale_starts_at IS NULL OR products.flash_sale_starts_at <= '{$now}') AND (products.flash_sale_ends_at IS NULL OR products.flash_sale_ends_at > '{$now}'))";
-        }
-        $flashActive = '(1 = 0)';
-        $hasFlashPrice = Schema::hasColumn('product_variants', 'flash_sale_price');
-        if ($hasFlashPrice && Schema::hasColumn('product_variants', 'flash_sale_allocation')
-            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
-            $flashActive = "(product_variants.flash_sale_price IS NOT NULL AND product_variants.flash_sale_price > 0 AND product_variants.flash_sale_allocation > product_variants.flash_sale_sold AND {$saleWindow})";
-        }
-        $regularDiscountActive = $hasFlashPrice
-            ? "(product_variants.flash_sale_price IS NOT NULL OR {$saleWindow})"
-            : $saleWindow;
-
-        return "CAST(CASE
-            WHEN {$flashActive} THEN product_variants.flash_sale_price
-            WHEN {$regularDiscountActive} AND {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
-            WHEN {$regularDiscountActive} AND ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
-            ELSE {$price}
-        END AS DECIMAL(12, 2))";
+        return app(ProductPriceResolver::class)->sqlExpression();
     }
 
     private function variantPriceSubquery(string $aggregate): Builder
@@ -241,6 +211,7 @@ class ProductCatalogService
 
         $primaryImage = $images->firstWhere('is_primary', true) ?: $images->first();
         $activeVariants = $product->variants->where('is_active', true)->values();
+        $activeVariants->each(fn (ProductVariant $variant) => $variant->setRelation('product', $product));
         $availableVariants = $activeVariants->filter(fn (ProductVariant $variant): bool => (int) $variant->stock > 0)->values();
         $dealVariant = $availableVariants
             ->filter(fn (ProductVariant $variant): bool => $variant->discount_amount > 0)
@@ -284,6 +255,20 @@ class ProductCatalogService
             'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
                 ? null
                 : (int) $product->purchase_limit_per_buyer,
+            'flash_sale_starts_at' => $product->flash_sale_starts_at?->toIso8601String(),
+            'flash_sale_ends_at' => $product->flash_sale_ends_at?->toIso8601String(),
+            'flash_sale_is_paused' => (bool) ($product->flash_sale_is_paused ?? false),
+            'flash_sale_limit_per_buyer' => $product->flash_sale_limit_per_buyer === null
+                ? null
+                : (int) $product->flash_sale_limit_per_buyer,
+            'seller_promotion_badges' => $this->sellerPromotions->forProduct($product)
+                ->map(fn ($offer): string => $offer->promotion_type === \App\Models\Seller\SellerPromotion::TYPE_BUNDLE
+                    ? 'Bundle deal'
+                    : 'Buy '.$offer->buy_quantity.' Get '.$offer->reward_quantity.((float) $offer->reward_discount_percent >= 100 ? ' Free' : ' · '.$offer->reward_discount_percent.'% off'))
+                ->unique()
+                ->values()
+                ->all(),
+            'seller_voucher_badges' => $this->publicVoucherBadgesForProduct($product),
             'rating' => (float) ($product->reviews_avg_rating ?? 0),
             'reviews' => (int) ($product->reviews_count ?? 0),
             'sold' => (int) ($product->order_items_sum_quantity ?? 0),
@@ -319,6 +304,7 @@ class ProductCatalogService
         }
 
         if ($includeDetails) {
+            $payload['description_blocks'] = $this->descriptionBlocks($product, $images);
             $product->loadMissing(['reviews.buyer', 'reviews.orderItem']);
             $reviewPhotoUrls = $this->reviewImages->photoUrlsFor($product->reviews);
             $payload['customer_reviews'] = $product->reviews
@@ -356,11 +342,89 @@ class ProductCatalogService
         return $payload;
     }
 
+    /** @return array<int, array<string, mixed>> */
+    private function publicVoucherBadgesForProduct(Product $product): array
+    {
+        $sellerId = (int) $product->seller_profile_id;
+        if (! Schema::hasTable('vouchers') || ! Schema::hasColumn('vouchers', 'visibility')) {
+            return [];
+        }
+
+        if (! array_key_exists($sellerId, $this->publicVoucherCampaignsBySeller)) {
+            $query = Voucher::query()
+                ->where('seller_profile_id', $sellerId)
+                ->where('visibility', 'PUBLIC')
+                ->where('is_active', true)
+                ->where(fn ($campaign) => $campaign->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+                ->where(fn ($campaign) => $campaign->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+                ->where(fn ($campaign) => $campaign->whereNull('usage_limit')->orWhereRaw(
+                    'vouchers.usage_limit > (SELECT COUNT(*) FROM seller_orders WHERE seller_orders.voucher_id = vouchers.id AND seller_orders.status <> ?)',
+                    ['CANCELLED'],
+                ));
+
+            if (Schema::hasColumn('vouchers', 'platform_code_key')) {
+                $query->whereNull('platform_code_key');
+            }
+            if (Schema::hasColumn('vouchers', 'requires_review')) {
+                $query->where('requires_review', false);
+            }
+            if (Schema::hasColumn('vouchers', 'applies_to')
+                && Schema::hasTable('voucher_products')
+                && Schema::hasTable('voucher_variants')) {
+                $query->with([
+                    'eligibleProducts:id',
+                    'eligibleVariants:id,product_id',
+                ]);
+            }
+            $this->publicVoucherCampaignsBySeller[$sellerId] = $query->orderBy('id')->get()
+                ->filter(fn (Voucher $voucher): bool => ! $voucher->requiresReview())
+                ->values();
+        }
+
+        $badges = $this->publicVoucherCampaignsBySeller[$sellerId]
+            ->filter(function (Voucher $voucher) use ($product): bool {
+                if (! Schema::hasColumn('vouchers', 'applies_to')) {
+                    return true;
+                }
+                return match (strtoupper((string) ($voucher->applies_to ?? 'STORE'))) {
+                    'STORE' => true,
+                    'PRODUCTS' => $voucher->relationLoaded('eligibleProducts')
+                        && $voucher->eligibleProducts->contains('id', $product->id),
+                    'VARIANTS' => $voucher->relationLoaded('eligibleVariants')
+                        && $voucher->eligibleVariants->contains(fn ($variant): bool => (int) $variant->product_id === (int) $product->id),
+                    default => false,
+                };
+            })
+            ->map(fn (Voucher $voucher): array => [
+                'name' => $voucher->name,
+                'discount_type' => $voucher->discount_type,
+                'discount_value' => (float) $voucher->discount_value,
+                'minimum_order_amount' => (float) $voucher->minimum_order_amount,
+            ])
+            ->values()
+            ->take(3)
+            ->values()
+            ->all();
+
+        return $badges;
+    }
+
     /** @return array<string, mixed> */
     public function variantPayload(ProductVariant $variant): array
     {
-        $variant->loadMissing(['optionValues.option', 'optionValues.images', 'productImage']);
-        $discountType = $variant->resolved_discount_type;
+        $variant->loadMissing(['product', 'optionValues.option', 'optionValues.images', 'productImage']);
+        $resolvedPrice = app(ProductPriceResolver::class)->resolve($variant);
+        $flashSaleStatus = $variant->flash_sale_status;
+        $flashSaleVisiblePrice = in_array($flashSaleStatus, ['ACTIVE', 'SCHEDULED'], true)
+            && $variant->flash_sale_price !== null
+            ? number_format((float) $variant->flash_sale_price, 2, '.', '')
+            : null;
+        $discountType = $resolvedPrice['source'] === 'flash_sale'
+            ? 'fixed'
+            : ($resolvedPrice['source'] === 'product_discount' ? $variant->resolved_discount_type : 'none');
+        $discountValue = $resolvedPrice['source'] === 'flash_sale'
+            ? $resolvedPrice['discount_amount']
+            : (float) ($variant->discount_value ?? 0);
         $assignedImage = $variant->productImage?->file_path
             ? collect([$this->publicUrl($variant->productImage->file_path)])
             : collect();
@@ -372,12 +436,22 @@ class ProductCatalogService
         return [
             'id' => $variant->id,
             'sku' => $variant->sku,
-            'price' => number_format($variant->final_price, 2, '.', ''),
+            'price' => number_format($resolvedPrice['price'], 2, '.', ''),
             'original_price' => number_format((float) $variant->price, 2, '.', ''),
             'discount_type' => $discountType === 'none' ? null : $discountType,
-            'discount_value' => number_format((float) ($variant->discount_value ?? 0), 2, '.', ''),
-            'discount_percentage' => $variant->discount_percentage,
-            'discount_amount' => number_format($variant->discount_amount, 2, '.', ''),
+            'discount_value' => number_format($discountValue, 2, '.', ''),
+            'discount_percentage' => $discountType === 'fixed' ? 0 : $variant->discount_percentage,
+            'discount_amount' => number_format($resolvedPrice['discount_amount'], 2, '.', ''),
+            'price_source' => $resolvedPrice['source'],
+            'flash_sale_active' => $variant->active_flash_sale_price !== null,
+            'flash_sale_price' => $flashSaleVisiblePrice,
+            'flash_sale_remaining' => $variant->flash_sale_price === null ? 0 : (int) $variant->flash_sale_remaining,
+            'flash_sale_status' => $flashSaleStatus,
+            'flash_sale_starts_at' => $variant->product?->flash_sale_starts_at?->toIso8601String(),
+            'flash_sale_ends_at' => $variant->product?->flash_sale_ends_at?->toIso8601String(),
+            'flash_sale_limit_per_buyer' => $variant->product?->flash_sale_limit_per_buyer === null
+                ? null
+                : (int) $variant->product->flash_sale_limit_per_buyer,
             'payment_method' => $variant->payment_method ?: 'cod_online',
             'stock' => (int) $variant->stock,
             'is_default' => (bool) $variant->is_default,
@@ -451,6 +525,61 @@ class ProductCatalogService
         }
 
         return mb_substr($name, 0, 2).'****'.mb_substr($name, -2);
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $images
+     * @return array<int, array<string, mixed>>
+     */
+    private function descriptionBlocks(Product $product, Collection $images): array
+    {
+        $description = (string) $product->description;
+        $imagesById = $images->keyBy('id');
+        $filenamePattern = '(?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp)';
+        $pattern = '/\[\[image:image:(\d+)\]\]|\[\[description-image:stored:('.$filenamePattern.')\]\]/i';
+        $matched = preg_match_all($pattern, $description, $matches, PREG_OFFSET_CAPTURE);
+
+        if (! $matched) {
+            return $description === '' ? [] : [['type' => 'text', 'text' => $description]];
+        }
+
+        $blocks = [];
+        $offset = 0;
+        foreach ($matches[0] as $index => [$token, $tokenOffset]) {
+            $text = substr($description, $offset, $tokenOffset - $offset);
+            if ($text !== '') {
+                $blocks[] = ['type' => 'text', 'text' => $text];
+            }
+
+            $imageId = $matches[1][$index][0] ?? '';
+            $filename = $matches[2][$index][0] ?? '';
+            $image = $imageId !== '' ? $imagesById->get((int) $imageId) : null;
+            if ($image) {
+                $blocks[] = [
+                    'type' => 'image',
+                    'url' => $image['url'],
+                    'alt' => $image['alt_text'] ?: 'Product description image',
+                ];
+            } elseif ($filename !== '') {
+                $path = "sellers/{$product->seller_profile_id}/products/{$product->id}/descriptions/{$filename}";
+                if (Storage::disk('public')->exists($path)) {
+                    $blocks[] = [
+                        'type' => 'image',
+                        'url' => $this->publicUrl($path),
+                        'alt' => 'Product description image',
+                    ];
+                }
+            }
+
+            $offset = $tokenOffset + strlen($token);
+        }
+
+        $remainingText = substr($description, $offset);
+        if ($remainingText !== '') {
+            $blocks[] = ['type' => 'text', 'text' => $remainingText];
+        }
+
+        return $blocks;
     }
 
     public function categories()

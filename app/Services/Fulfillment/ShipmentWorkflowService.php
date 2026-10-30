@@ -26,6 +26,7 @@ use App\Models\Seller\SellerOrder;
 use App\Models\Seller\ProductVariant;
 use App\Services\Finance\CodCollectionService;
 use App\Services\Finance\FinancialAllocationService;
+use App\Services\Marketplace\SellerPromotionUsageService;
 use App\Models\User;
 use App\Support\RiderVehicleType;
 use App\Support\OrderItemParcelAmount;
@@ -1342,6 +1343,7 @@ class ShipmentWorkflowService
             }
         }
 
+        app(SellerPromotionUsageService::class)->releaseForSellerOrder($sellerOrder, $items);
         $sellerOrder->update(['status' => 'CANCELLED']);
         app(\App\Services\Finance\PlatformCampaignBudgetService::class)
             ->releaseForSellerOrder($sellerOrder, $actor);

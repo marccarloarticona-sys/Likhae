@@ -59,28 +59,45 @@ class StoreRegistrationRequest extends FormRequest
         $isSeller = $type === 'seller';
         $isLogistics = $type === 'logistics';
         $isRider = $type === 'rider';
+        $isBuyer = $type === 'buyer';
+        $recognizedType = in_array($type, ['buyer', 'seller', 'logistics', 'rider'], true);
+        $rejectedApplicant = $recognizedType
+            ? User::rejectedRegistrationApplicant((string) $this->input('email'))
+            : null;
+        if (! $rejectedApplicant?->canResubmitRejectedRegistration($this->accountTypeConstant())) {
+            $rejectedApplicant = null;
+        }
+        $sellerProfileId = $rejectedApplicant?->sellerProfile?->getKey();
+        $logisticsCenterId = $rejectedApplicant?->logisticsCenter?->getKey();
+        $riderProfileId = $rejectedApplicant?->riderProfile?->getKey();
 
         $businessRegistrationRules = [Rule::requiredIf($isLogistics), 'nullable', 'string', 'max:100'];
         if ($isSeller) {
-            $businessRegistrationRules[] = Rule::unique('seller_profiles', 'business_registration_number');
+            $businessRegistrationRule = Rule::unique('seller_profiles', 'business_registration_number');
+            $businessRegistrationRules[] = $sellerProfileId ? $businessRegistrationRule->ignore($sellerProfileId) : $businessRegistrationRule;
         } elseif ($isLogistics) {
             $businessRegistrationRules[] = 'regex:/^[A-Za-z]{2}\d{9}$/';
-            $businessRegistrationRules[] = Rule::unique('logistics_centers', 'business_registration_number');
+            $businessRegistrationRule = Rule::unique('logistics_centers', 'business_registration_number');
+            $businessRegistrationRules[] = $logisticsCenterId ? $businessRegistrationRule->ignore($logisticsCenterId) : $businessRegistrationRule;
         }
 
         $businessNameRules = [Rule::requiredIf($isSeller || $isLogistics), 'nullable', 'string'];
         $businessNameRules[] = $isSeller ? 'min:3' : 'min:1';
         $businessNameRules[] = $isSeller ? 'max:30' : 'max:200';
         if ($isSeller) {
-            $businessNameRules[] = Rule::unique('seller_profiles', 'business_name');
+            $businessNameRule = Rule::unique('seller_profiles', 'business_name');
+            $businessNameRules[] = $sellerProfileId ? $businessNameRule->ignore($sellerProfileId) : $businessNameRule;
         } elseif ($isLogistics) {
-            $businessNameRules[] = Rule::unique('logistics_centers', 'business_name');
+            $businessNameRule = Rule::unique('logistics_centers', 'business_name');
+            $businessNameRules[] = $logisticsCenterId ? $businessNameRule->ignore($logisticsCenterId) : $businessNameRule;
         }
 
         $tinRules = [Rule::requiredIf($isSeller || $isLogistics), 'nullable', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{3}$/'];
         if ($isSeller || $isLogistics) {
-            $tinRules[] = Rule::unique('seller_profiles', 'tin');
-            $tinRules[] = Rule::unique('logistics_centers', 'tin');
+            $sellerTinRule = Rule::unique('seller_profiles', 'tin');
+            $logisticsTinRule = Rule::unique('logistics_centers', 'tin');
+            $tinRules[] = $sellerProfileId ? $sellerTinRule->ignore($sellerProfileId) : $sellerTinRule;
+            $tinRules[] = $logisticsCenterId ? $logisticsTinRule->ignore($logisticsCenterId) : $logisticsTinRule;
         }
 
         return [
@@ -89,7 +106,12 @@ class StoreRegistrationRequest extends FormRequest
             'middle_initial' => ['nullable', 'string', 'max:10'],
             'last_name' => ['required', 'string', 'min:2', 'max:50', 'regex:/^[\pL][\pL\s\x{27}.\x{2D}]*$/u'],
             'sex' => ['required', Rule::in(['male', 'female', 'other', 'prefer_not_to_say'])],
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')],
+            'email' => [
+                'required', 'email', 'max:255',
+                $rejectedApplicant
+                    ? Rule::unique('users', 'email')->ignore($rejectedApplicant->id)
+                    : Rule::unique('users', 'email'),
+            ],
             // Mobile registration consumes this one-time token after the
             // email verification endpoint has confirmed ownership.
             'email_verification_token' => ['sometimes', 'nullable', 'string', 'size:64'],
@@ -98,7 +120,9 @@ class StoreRegistrationRequest extends FormRequest
                 'string',
                 'max:30',
                 'regex:/^(?:\+63|0)9\d{9}$/',
-                Rule::unique('users', 'contact_number'),
+                $rejectedApplicant
+                    ? Rule::unique('users', 'contact_number')->ignore($rejectedApplicant->id)
+                    : Rule::unique('users', 'contact_number'),
             ],
             'birthday' => ['required', 'date', 'before_or_equal:'.now()->subYears(18)->toDateString()],
             'age' => ['required', 'integer', 'between:18,120'],
@@ -125,7 +149,12 @@ class StoreRegistrationRequest extends FormRequest
             'seller_type' => [Rule::requiredIf($isSeller), 'nullable', Rule::in(['individual', 'sole_proprietorship', 'corporation'])],
             'tin' => $tinRules,
             'business_registration_number' => $businessRegistrationRules,
-            'dti_registration_number' => ['nullable', 'string', 'max:100', Rule::unique('logistics_centers', 'dti_registration_number')],
+            'dti_registration_number' => [
+                'nullable', 'string', 'max:100',
+                $logisticsCenterId
+                    ? Rule::unique('logistics_centers', 'dti_registration_number')->ignore($logisticsCenterId)
+                    : Rule::unique('logistics_centers', 'dti_registration_number'),
+            ],
 
             'target_logistics_center_id' => [
                 Rule::requiredIf($isRider),
@@ -139,17 +168,21 @@ class StoreRegistrationRequest extends FormRequest
                 'nullable',
                 'string',
                 'max:50',
-                Rule::unique('rider_profiles', 'plate_number'),
+                $riderProfileId
+                    ? Rule::unique('rider_profiles', 'plate_number')->ignore($riderProfileId)
+                    : Rule::unique('rider_profiles', 'plate_number'),
             ],
             'drivers_license_number' => [
                 Rule::requiredIf($isRider),
                 'nullable',
                 'string',
                 'max:100',
-                Rule::unique('rider_profiles', 'drivers_license_number'),
+                $riderProfileId
+                    ? Rule::unique('rider_profiles', 'drivers_license_number')->ignore($riderProfileId)
+                    : Rule::unique('rider_profiles', 'drivers_license_number'),
             ],
 
-            'valid_id' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'valid_id' => [Rule::requiredIf(! $isBuyer), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'business_permit' => [Rule::requiredIf($isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'dti_certificate' => [Rule::requiredIf($isSeller && $this->input('seller_type') === 'sole_proprietorship'), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'sec_certificate' => [Rule::requiredIf(($isSeller && $this->input('seller_type') === 'corporation') || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],

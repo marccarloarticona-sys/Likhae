@@ -11,6 +11,7 @@ use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
 use App\Services\Media\ImageOptimizationService;
 use App\Services\Moderation\ProductModerationService;
+use App\Services\Seller\SellerPromotionConflictService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -27,6 +28,7 @@ class SellerCatalogService
     public function __construct(
         private readonly ImageOptimizationService $images,
         private readonly ProductModerationService $moderation,
+        private readonly SellerPromotionConflictService $promotionConflicts,
     ) {}
 
     public function save(SellerProfile $seller, SaveSellerProductRequest $request, ?Product $product = null): Product
@@ -62,6 +64,7 @@ class SellerCatalogService
                     abort(403);
                 }
 
+                $previousDescription = (string) ($product->description ?? '');
                 $wasActive = $product->exists && $product->status === 'ACTIVE';
                 if ($product->exists) {
                     $previousModerationFingerprint = $this->moderation->revisionFingerprint($product);
@@ -93,14 +96,6 @@ class SellerCatalogService
                     $productAttributes['submission_token'] = $idempotencyKey;
                     $productAttributes['submission_fingerprint'] = $submissionFingerprint;
                 }
-                if (Schema::hasColumn('products', 'flash_sale_starts_at')
-                    && Schema::hasColumn('products', 'flash_sale_ends_at')) {
-                    foreach (['flash_sale_starts_at', 'flash_sale_ends_at'] as $flashSaleScheduleField) {
-                        if ($request->exists($flashSaleScheduleField)) {
-                            $productAttributes[$flashSaleScheduleField] = $request->input($flashSaleScheduleField) ?: null;
-                        }
-                    }
-                }
                 $product->fill($productAttributes);
 
                 $product->save();
@@ -120,8 +115,37 @@ class SellerCatalogService
                     $request,
                     $storedPaths,
                 );
+                $this->promotePrimaryImageIfNeeded($product);
+                $newDescriptionImageReferences = $this->storeDescriptionImages(
+                    $seller,
+                    $product,
+                    $request,
+                    $storedPaths,
+                );
+                $description = $request->input('description');
+                $resolvedDescription = $description === null
+                    ? null
+                    : $this->resolveDescriptionImages((string) $description, $product, $newImageReferences, $newDescriptionImageReferences);
+                $oldDescriptionPaths = $this->descriptionImagePaths($previousDescription, $product);
+                $currentDescriptionPaths = $this->descriptionImagePaths((string) $resolvedDescription, $product);
+                $deletedPaths = array_merge($deletedPaths, array_values(array_diff($oldDescriptionPaths, $currentDescriptionPaths)));
+                foreach ($newDescriptionImageReferences as $filename) {
+                    $path = $this->descriptionImagePath($product, $filename);
+                    if (! in_array($path, $currentDescriptionPaths, true)) {
+                        $deletedPaths[] = $path;
+                    }
+                }
+                $product->description = $resolvedDescription;
+                $product->save();
+
                 if ($syncVariantData) {
-                    $this->syncVariants($product, $request, $optionValuesByKey, $newImageReferences);
+                    $this->syncVariants($product, $request, $optionValuesByKey, $newImageReferences, $seller, $wasActive);
+                }
+
+                if (Schema::hasColumn('products', 'flash_sale_campaign_key')
+                    && ! $product->flash_sale_campaign_key
+                    && $product->variants()->whereNotNull('flash_sale_price')->exists()) {
+                    $product->update(['flash_sale_campaign_key' => (string) Str::uuid()]);
                 }
 
                 if ($status === 'ACTIVE') {
@@ -173,6 +197,117 @@ class SellerCatalogService
         }
 
         return $savedProduct;
+    }
+
+    /**
+     * Resolve form-only references to product-owned images and description files.
+     * Descriptions never store arbitrary image URLs or HTML.
+     *
+     * @param array<string, ProductImage> $newImageReferences
+     * @param array<string, string> $newDescriptionImageReferences
+     */
+    private function resolveDescriptionImages(
+        string $description,
+        Product $product,
+        array $newImageReferences,
+        array $newDescriptionImageReferences,
+    ): string
+    {
+        $existingImages = $product->images()->get()->keyBy('id');
+
+        $resolved = preg_replace_callback(
+            '/\[\[(image|description-image):([^\]]+)\]\]/',
+            function (array $match) use ($product, $existingImages, $newImageReferences, $newDescriptionImageReferences): string {
+                $tokenType = $match[1];
+                $image = null;
+
+                if ($tokenType === 'image') {
+                    $reference = $match[2];
+                    if (preg_match('/^image:(\d+)$/', $reference, $imageMatch)) {
+                        $image = $existingImages->get((int) $imageMatch[1]);
+                    } else {
+                        $image = $newImageReferences[$reference] ?? null;
+                    }
+
+                    if (! $image instanceof ProductImage) {
+                        throw ValidationException::withMessages([
+                            'description' => 'A description picture could not be matched to this product’s image library. Reselect it and save again.',
+                        ]);
+                    }
+
+                    return '[[image:image:'.$image->id.']]';
+                }
+
+                if (preg_match('/^stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))$/i', $match[2], $storedMatch)) {
+                    $filename = $storedMatch[1];
+                    $path = $this->descriptionImagePath($product, $filename);
+                    if (Storage::disk('public')->exists($path)) {
+                        return '[[description-image:stored:'.$filename.']]';
+                    }
+                } elseif (preg_match('/^upload:(\d+)$/', $match[2], $uploadMatch)) {
+                    $filename = $newDescriptionImageReferences['upload:'.(int) $uploadMatch[1]] ?? null;
+                    if (is_string($filename)) {
+                        return '[[description-image:stored:'.$filename.']]';
+                    }
+                }
+
+                throw ValidationException::withMessages([
+                    'description' => 'A description picture could not be matched to an uploaded description image. Reselect it and save again.',
+                ]);
+            },
+            $description,
+        );
+
+        return is_string($resolved) ? $resolved : $description;
+    }
+
+    /**
+     * @param array<int, string> $storedPaths
+     * @return array<string, string> Form upload reference to stored filename.
+     */
+    private function storeDescriptionImages(
+        SellerProfile $seller,
+        Product $product,
+        SaveSellerProductRequest $request,
+        array &$storedPaths,
+    ): array {
+        $uploads = $request->file('description_images', []);
+        $uploads = is_array($uploads) ? $uploads : [$uploads];
+        $references = [];
+        $directory = "sellers/{$seller->id}/products/{$product->id}/descriptions";
+
+        foreach ($uploads as $index => $file) {
+            if (! $file instanceof UploadedFile || ! $file->isValid()) {
+                continue;
+            }
+
+            $path = $this->images->store($file, $directory);
+            $storedPaths[] = $path;
+            $references['upload:'.$index] = basename($path);
+        }
+
+        return $references;
+    }
+
+    /** @return array<int, string> */
+    private function descriptionImagePaths(string $description, Product $product): array
+    {
+        preg_match_all(
+            '/\[\[description-image:stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))\]\]/i',
+            $description,
+            $matches,
+        );
+
+        return collect($matches[1] ?? [])
+            ->map(fn (string $filename): string => $this->descriptionImagePath($product, $filename))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function descriptionImagePath(Product $product, string $filename): string
+    {
+        return "sellers/{$product->seller_profile_id}/products/{$product->id}/descriptions/{$filename}";
     }
 
     public function archiveOrRestore(SellerProfile $seller, Product $product): Product
@@ -296,9 +431,10 @@ class SellerCatalogService
     private function submissionFingerprint(SaveSellerProductRequest $request): string
     {
         $payload = $request->all();
-        unset($payload['_token'], $payload['_method'], $payload['idempotency_key'], $payload['image'], $payload['images']);
+        unset($payload['_token'], $payload['_method'], $payload['idempotency_key'], $payload['image'], $payload['images'], $payload['description_images']);
         $uploads = collect([$request->file('image')])
             ->merge((array) $request->file('images', []))
+            ->merge((array) $request->file('description_images', []))
             ->filter(fn ($file): bool => $file instanceof UploadedFile && $file->isValid())
             ->map(fn (UploadedFile $file): array => [
                 'name' => $file->getClientOriginalName(),
@@ -495,10 +631,9 @@ class SellerCatalogService
             $errors['category_id'] = 'Choose an active category within your approved line of business before publishing.';
         }
 
-        $hasPrimary = $product->images()->where('is_primary', true)->get()->contains(fn (ProductImage $image): bool => filled($image->file_path)
-            && Storage::disk('public')->exists($image->file_path));
-        if (! $hasPrimary && ! $allowLegacyImageGap) {
-            $errors['image'] = 'Upload a valid primary product image before publishing.';
+        $this->promotePrimaryImageIfNeeded($product);
+        if (! $this->hasValidProductImage($product) && ! $allowLegacyImageGap) {
+            $errors['image'] = 'The primary product image could not be verified after upload. Reupload a JPG, PNG, or WebP product image up to 5 MB, then publish again.';
         }
 
         $options = $product->options()->with('values')->orderBy('sort_order')->get();
@@ -611,14 +746,16 @@ class SellerCatalogService
         Product $product,
         SaveSellerProductRequest $request,
         array $optionValuesByKey,
-        array $newImageReferences = [],
+        array $newImageReferences,
+        SellerProfile $seller,
+        bool $wasProductActive,
     ): void
     {
         $options = $product->options()->with('values')->orderBy('sort_order')->get();
         $protectedVariantIds = $this->unfinishedOrderVariantIds($product);
         $variantRows = collect((array) $request->input('variants', []))
             ->filter(fn ($row): bool => is_array($row))
-            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')) || filled(Arr::get($row, 'flash_sale_price')) || filled(Arr::get($row, 'flash_sale_allocation')))
+            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')))
             ->values();
 
         if ($variantRows->isEmpty() && $options->isNotEmpty()) {
@@ -639,15 +776,8 @@ class SellerCatalogService
                 'stock' => $request->input('stock'),
                 'weight_kg' => $request->input('weight_kg'),
                 'values' => '',
-                'discount_type' => $request->input('discount_type', 'none'),
-                'discount_value' => $request->input('discount_value', 0),
                 'is_active' => true,
             ];
-            foreach (['flash_sale_price', 'flash_sale_allocation'] as $flashSaleVariantField) {
-                if ($request->exists($flashSaleVariantField)) {
-                    $singleVariantRow[$flashSaleVariantField] = $request->input($flashSaleVariantField);
-                }
-            }
             $variantRows = collect([$singleVariantRow]);
         }
 
@@ -722,16 +852,59 @@ class SellerCatalogService
                     'variants' => 'Every variation needs a stock quantity.',
                 ]);
             }
-            $discountValue = Arr::get($row, 'discount_value');
-            $discountValue = $discountValue !== null && $discountValue !== ''
-                ? (float) $discountValue
-                : (float) ($request->input('discount_value') ?: 0);
-            $discountType = $this->normalizeDiscountType(
-                Arr::get($row, 'discount_type', $request->input('discount_type')),
-                $discountValue,
-            );
-            $flashSalePrice = Arr::get($row, 'flash_sale_price');
-            $flashSaleAllocation = Arr::get($row, 'flash_sale_allocation');
+            $wasExistingVariant = $variant?->exists === true;
+            $oldPrice = $wasExistingVariant ? round((float) $variant->price, 2) : null;
+            $oldDiscountType = $wasExistingVariant ? (string) ($variant->getAttribute('discount_type') ?? 'none') : 'none';
+            $resolvedOldDiscountType = $wasExistingVariant ? $variant->resolved_discount_type : 'none';
+            $oldDiscountValue = $wasExistingVariant ? round((float) $variant->discount_value, 2) : 0.0;
+            // Product editing controls catalog data only. Preserve all existing
+            // marketing values on variants and leave new variants undiscounted.
+            $discountType = $wasExistingVariant ? $oldDiscountType : 'none';
+            $discountValue = $wasExistingVariant ? $oldDiscountValue : 0.0;
+            $newFlashSalePrice = $wasExistingVariant && filled($variant->flash_sale_price)
+                ? round((float) $variant->flash_sale_price, 2)
+                : null;
+            $newPrice = round((float) $price, 2);
+            $hasDiscount = $resolvedOldDiscountType !== 'none' && $discountValue > 0;
+            $hasFlashSale = $newFlashSalePrice !== null;
+            if ($wasExistingVariant && $newPrice !== $oldPrice && $hasDiscount) {
+                $discountAmount = match ($resolvedOldDiscountType) {
+                    'fixed' => $discountValue,
+                    'percentage' => $newPrice * min(100, $discountValue) / 100,
+                    default => 0.0,
+                };
+                if (round($newPrice - $discountAmount, 2) < 0.01) {
+                    $priceAttribute = $options->isEmpty() ? 'price' : "variants.{$index}.price";
+                    throw ValidationException::withMessages([
+                        $priceAttribute => 'This base price would make the saved Marketing discount free. Update the discount in Marketing first or keep at least PHP 0.01 after the discount.',
+                    ]);
+                }
+            }
+            $discountChanged = false;
+            $flashSaleChanged = false;
+            $priceReduced = $wasExistingVariant && $oldPrice !== null && $newPrice < $oldPrice;
+            $needsOfferConflictCheck = ($hasDiscount && $discountChanged)
+                || ($hasFlashSale && $flashSaleChanged)
+                || $priceReduced
+                || (! $wasProductActive && ($hasDiscount || $hasFlashSale));
+            $conflictExclusions = [];
+            if ($hasDiscount) {
+                $conflictExclusions[] = 'discount';
+            }
+            if ($hasFlashSale) {
+                $conflictExclusions[] = 'flash_sale';
+                $conflictExclusions[] = 'voucher';
+            }
+            if ($product->status === 'ACTIVE' && $wasExistingVariant && $needsOfferConflictCheck) {
+                $conflicts = $this->promotionConflicts->conflictsForVariantIds($seller, [(int) $variant->id], [
+                    'exclude_kinds' => $conflictExclusions,
+                ]);
+                if ($conflicts->isNotEmpty()) {
+                    throw ValidationException::withMessages([
+                        'variants' => 'This price reduction overlaps an active or scheduled Seller price discount, flash sale, or incompatible special offer. Clear the existing offer first: '.$conflicts->pluck('label')->unique()->implode(', ').'. Seller vouchers may stack at checkout.',
+                    ]);
+                }
+            }
             $paymentMethod = strtolower((string) (Arr::get($row, 'payment_method') ?: $request->input('payment_method', 'cod_online')));
             $productImage = $this->resolveVariantImage(
                 $product,
@@ -753,14 +926,24 @@ class SellerCatalogService
                 'is_default' => $index === 0,
                 'is_active' => filter_var(Arr::get($row, 'is_active', $request->input('is_active', true)), FILTER_VALIDATE_BOOLEAN),
             ];
-            if (Arr::exists($row, 'flash_sale_price')) {
-                $variantAttributes['flash_sale_price'] = filled($flashSalePrice) ? (float) $flashSalePrice : null;
-            }
-            if (Arr::exists($row, 'flash_sale_allocation')) {
-                $variantAttributes['flash_sale_allocation'] = filled($flashSaleAllocation) ? (int) $flashSaleAllocation : null;
+            if (! $wasExistingVariant) {
+                $variantAttributes['flash_sale_price'] = null;
+                $variantAttributes['flash_sale_allocation'] = null;
+                $variantAttributes['flash_sale_sold'] = 0;
             }
             $variant->fill($variantAttributes);
             $variant->save();
+
+            if ($product->status === 'ACTIVE' && ! $wasExistingVariant && ($hasDiscount || $hasFlashSale)) {
+                $conflicts = $this->promotionConflicts->conflictsForVariantIds($seller, [(int) $variant->id], [
+                    'exclude_kinds' => $conflictExclusions,
+                ]);
+                if ($conflicts->isNotEmpty()) {
+                    throw ValidationException::withMessages([
+                        'variants' => 'This price reduction overlaps an active or scheduled Seller price discount, flash sale, or incompatible special offer. Clear the existing offer first: '.$conflicts->pluck('label')->unique()->implode(', ').'. Seller vouchers may stack at checkout.',
+                    ]);
+                }
+            }
 
             $variant->optionValues()->sync($valueIds);
             $keptIds[] = $variant->id;
@@ -831,16 +1014,9 @@ class SellerCatalogService
                 'stock' => $request->input('stock'),
                 'weight_kg' => $request->input('weight_kg'),
                 'values' => implode(',', $values),
-                'discount_type' => $request->input('discount_type', 'none'),
-                'discount_value' => $request->input('discount_value', 0),
                 'payment_method' => $request->input('payment_method', 'cod_online'),
                 'is_active' => true,
             ];
-            foreach (['flash_sale_price', 'flash_sale_allocation'] as $flashSaleVariantField) {
-                if ($request->exists($flashSaleVariantField)) {
-                    $row[$flashSaleVariantField] = $request->input($flashSaleVariantField);
-                }
-            }
 
             return $row;
         });
@@ -926,6 +1102,7 @@ class SellerCatalogService
         }
 
         $existing = $product->images()->count();
+        $hasValidExistingImage = $this->hasValidProductImage($product);
         if ($existing + $baseFiles->count() > 10) {
             throw ValidationException::withMessages([
                 'images' => 'A product may have at most 10 images.',
@@ -944,7 +1121,7 @@ class SellerCatalogService
             $storedPaths[] = $path;
             $isPrimary = $uploadedPrimary
                 ? $index === 0
-                : $existing === 0 && $index === 0;
+                : ! $hasValidExistingImage && $index === 0;
 
             $image = $product->images()->create([
                 'file_path' => $path,

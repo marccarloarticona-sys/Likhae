@@ -21,12 +21,12 @@ class ConversationSupportRequest extends Model
         'conversation_id', 'requester_user_id', 'recipient_user_id', 'seller_profile_id', 'selected_faq_id',
         'category', 'selected_question', 'answer_snapshot', 'answer_source', 'last_feedback', 'unresolved_concern',
         'order_reference', 'context_snapshot', 'status', 'requested_at', 'acknowledged_at', 'acknowledged_by_user_id',
-        'accepted_at', 'accepted_by_user_id', 'resolved_at', 'resolved_by_user_id',
+        'accepted_at', 'accepted_by_user_id', 'resolved_at', 'resolved_by_user_id', 'internal_notes',
     ];
 
     protected function casts(): array
     {
-        return ['context_snapshot' => 'array', 'requested_at' => 'datetime', 'acknowledged_at' => 'datetime', 'accepted_at' => 'datetime', 'resolved_at' => 'datetime'];
+        return ['context_snapshot' => 'array', 'internal_notes' => 'array', 'requested_at' => 'datetime', 'acknowledged_at' => 'datetime', 'accepted_at' => 'datetime', 'resolved_at' => 'datetime'];
     }
 
     public function conversation(): BelongsTo { return $this->belongsTo(Conversation::class); }

@@ -31,7 +31,7 @@ class SupportOverviewService
         $counts = (clone $base)->select('status', DB::raw('COUNT(*) as aggregate'))->groupBy('status')->pluck('aggregate', 'status');
 
         $query = (clone $base)->with([
-            'requester:id,first_name,middle_initial,last_name,name_extension',
+            'requester:id,first_name,middle_initial,last_name,name_extension,account_type',
             'selectedFaq:id,question,category',
             'acceptedBy:id,first_name,middle_initial,last_name,name_extension',
             'acknowledgedBy:id,first_name,middle_initial,last_name,name_extension',
@@ -75,7 +75,14 @@ class SupportOverviewService
         $requests = $query->orderByRaw("CASE status WHEN 'NEW' THEN 0 WHEN 'AWAITING_RESPONSE' THEN 1 WHEN 'IN_PROGRESS' THEN 2 ELSE 3 END")
             ->orderByDesc('requested_at')->paginate(12)->withQueryString();
 
-        $interactions = ConversationSupportInteraction::query()->whereHas('supportSession', fn (Builder $session) => $session->where('recipient_user_id', $recipient->id));
+        $isAdmin = $recipient->isAccountType(User::TYPE_ADMIN);
+        $interactions = ConversationSupportInteraction::query()->whereHas('supportSession', function (Builder $session) use ($recipient, $isAdmin): void {
+            if ($isAdmin) {
+                $session->whereHas('recipient', fn (Builder $user) => $user->where('account_type', User::TYPE_ADMIN));
+            } else {
+                $session->where('recipient_user_id', $recipient->id);
+            }
+        });
         $faqStats = [
             'faq_resolved' => (clone $interactions)->where('feedback', 'RESOLVED')->count(),
             'faq_unresolved' => (clone $interactions)->where('feedback', 'UNRESOLVED')->count(),
@@ -84,12 +91,13 @@ class SupportOverviewService
             ->where('owner_type', $recipient->isAccountType(User::TYPE_ADMIN) ? MessagingFaq::OWNER_ADMIN : MessagingFaq::OWNER_SELLER)
             ->when($recipient->isAccountType(User::TYPE_ADMIN), fn (Builder $faq) => $faq->whereNull('seller_profile_id'))
             ->when($recipient->isAccountType(User::TYPE_SELLER), fn (Builder $faq) => $faq->where('seller_profile_id', $recipient->sellerProfile?->id))
+            ->where('entry_type', 'FAQ')->where('is_automatic', true)
             ->where('selection_count', '>', 0)
             ->orderByDesc('selection_count')->orderBy('id')->limit(3)->get(['id', 'question', 'category', 'selection_count']);
 
         $selected = $selectedId ? (clone $this->scopeForRecipient($recipient))
             ->with([
-                'requester:id,first_name,middle_initial,last_name,name_extension',
+                'requester:id,first_name,middle_initial,last_name,name_extension,account_type',
                 'selectedFaq:id,question,category',
                 'acknowledgedBy:id,first_name,middle_initial,last_name,name_extension',
                 'acceptedBy:id,first_name,middle_initial,last_name,name_extension',
@@ -109,11 +117,46 @@ class SupportOverviewService
             ])->whereKey($selectedId)->firstOrFail() : null;
 
         if ($selected) {
-            $this->authorization->assertCanAccess($recipient, $selected->conversation);
             $participantIds = $selected->conversation->participantRecords()->whereNull('left_at')->pluck('user_id')->map(fn ($id) => (int) $id)->all();
             abort_unless(count($participantIds) === 2
                 && in_array((int) $selected->requester_user_id, $participantIds, true)
-                && in_array((int) $selected->recipient_user_id, $participantIds, true), 403);
+                && (in_array((int) $selected->recipient_user_id, $participantIds, true)
+                    || in_array((int) $selected->accepted_by_user_id, $participantIds, true)), 403);
+            if (! $isAdmin) {
+                $this->authorization->assertCanAccess($recipient, $selected->conversation);
+                abort_unless(in_array((int) $recipient->id, $participantIds, true), 403);
+            }
+        }
+
+        $totalSessions = 0;
+        $botResolved = 0;
+        $averageResponseMinutes = null;
+        $averageResolutionMinutes = null;
+        $unansweredQuestions = collect();
+        $topCategories = collect();
+        if ($isAdmin) {
+            $sessions = \App\Models\Communication\ConversationSupportSession::query()
+                ->whereHas('recipient', fn (Builder $user) => $user->where('account_type', User::TYPE_ADMIN));
+            $totalSessions = (clone $sessions)->count();
+            $botResolved = (clone $sessions)->where('status', 'RESOLVED')->whereNull('current_request_id')->count();
+            $metricRequests = ConversationSupportRequest::query()->whereNull('seller_profile_id')
+                ->addSelect(['first_human_response_at' => DB::table('messages')->select('sent_at')
+                    ->whereColumn('messages.conversation_id', 'conversation_support_requests.conversation_id')
+                    ->whereColumn('messages.sender_user_id', 'conversation_support_requests.accepted_by_user_id')
+                    ->whereColumn('messages.sent_at', '>=', 'conversation_support_requests.requested_at')
+                    ->orderBy('messages.sent_at')->orderBy('messages.id')->limit(1)])
+                ->get();
+            $responseMinutes = $metricRequests->filter(fn ($row) => $row->requested_at && $row->first_human_response_at)
+                ->map(fn ($row) => max(0, $row->requested_at->diffInSeconds(\Illuminate\Support\Carbon::parse($row->first_human_response_at)) / 60));
+            $resolutionMinutes = $metricRequests->filter(fn ($row) => $row->requested_at && $row->resolved_at)
+                ->map(fn ($row) => max(0, $row->requested_at->diffInSeconds($row->resolved_at) / 60));
+            $averageResponseMinutes = $responseMinutes->isNotEmpty() ? (int) round($responseMinutes->avg()) : null;
+            $averageResolutionMinutes = $resolutionMinutes->isNotEmpty() ? (int) round($resolutionMinutes->avg()) : null;
+            $unansweredQuestions = (clone $interactions)->where('feedback', 'UNRESOLVED')
+                ->select('question_snapshot')->selectRaw('COUNT(*) AS attempts')
+                ->groupBy('question_snapshot')->orderByDesc('attempts')->limit(5)->get();
+            $topCategories = (clone $interactions)->select('category')->selectRaw('COUNT(*) AS selections')
+                ->groupBy('category')->orderByDesc('selections')->limit(5)->get();
         }
 
         return [
@@ -123,9 +166,17 @@ class SupportOverviewService
                 'awaiting_response' => (int) $counts->get(ConversationSupportRequest::AWAITING_RESPONSE, 0),
                 'in_progress' => (int) $counts->get(ConversationSupportRequest::IN_PROGRESS, 0),
                 'resolved' => (int) $counts->get(ConversationSupportRequest::RESOLVED, 0),
+                'total_conversations' => $totalSessions,
+                'bot_resolved' => $botResolved,
+                'escalated' => $isAdmin ? (clone $base)->count() : 0,
+                'waiting' => $isAdmin ? (int) $counts->get(ConversationSupportRequest::NEW, 0) + (int) $counts->get(ConversationSupportRequest::AWAITING_RESPONSE, 0) : 0,
+                'avg_first_response_minutes' => $averageResponseMinutes,
+                'avg_resolution_minutes' => $averageResolutionMinutes,
                 ...$faqStats,
             ],
             'top_faqs' => $topFaqs,
+            'top_categories' => $topCategories,
+            'unanswered_questions' => $unansweredQuestions,
             'selected' => $selected,
             'filter' => $filter,
             'search' => $search,
@@ -145,8 +196,6 @@ class SupportOverviewService
         }
         abort_unless($recipient->isAccountType(User::TYPE_ADMIN), 403);
 
-        return ConversationSupportRequest::query()
-            ->where('recipient_user_id', $recipient->id)
-            ->whereNull('seller_profile_id');
+        return ConversationSupportRequest::query()->whereNull('seller_profile_id');
     }
 }

@@ -7,6 +7,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Rider\RiderAssignment;
 use App\Models\User;
+use Illuminate\Support\Facades\Schema;
 
 class MapDataService
 {
@@ -25,16 +26,21 @@ class MapDataService
         }
 
         $viewer ??= auth()->user();
-        $shipment->loadMissing([
+        $relations = [
             'sellerOrder.order.address',
             'sellerOrder.sellerProfile.businessAddress',
             'riderAssignments.riderProfile',
             'riderAssignments.liveLocation',
             'logisticsCenter.address',
             'serviceArea.logisticsCenter.address',
-            'transferLegs.originLogisticsCenter.address',
-            'transferLegs.destinationLogisticsCenter.address',
-        ]);
+        ];
+        if (Schema::hasTable('shipment_transfer_legs')) {
+            $relations[] = 'transferLegs.originLogisticsCenter.address';
+            $relations[] = 'transferLegs.destinationLogisticsCenter.address';
+        } elseif (! $shipment->relationLoaded('transferLegs')) {
+            $shipment->setRelation('transferLegs', collect());
+        }
+        $shipment->loadMissing($relations);
         $tracking = $this->trackingState($shipment, $viewer);
         $markers = [];
 
@@ -86,17 +92,13 @@ class MapDataService
                 ShipmentTransferLeg::IN_TRANSIT,
                 ShipmentTransferLeg::RECEIVED,
             ], true));
-        $seenTransferCenters = [];
+        $transferCenterMarkerIndexes = [];
         foreach ($transferLegs as $transferLeg) {
             foreach ([
                 ['center' => $transferLeg->originLogisticsCenter, 'role' => 'origin'],
                 ['center' => $transferLeg->destinationLogisticsCenter, 'role' => 'destination'],
             ] as $transferStop) {
                 $centerId = (int) ($transferStop['center']?->id ?? 0);
-                if ($centerId > 0 && isset($seenTransferCenters[$centerId])) {
-                    continue;
-                }
-
                 $marker = $this->transferCenterMarker(
                     $transferStop['center'],
                     $transferStop['role'],
@@ -105,25 +107,41 @@ class MapDataService
                     $transferLeg->status,
                     (int) $transferLeg->sequence_no,
                 );
-                if ($marker) {
-                    if ($centerId > 0) {
-                        $seenTransferCenters[$centerId] = true;
-                    }
-                    $markers[] = $marker;
+                if (! $marker) {
+                    continue;
                 }
+
+                // A hub can be the destination of one leg and the origin of
+                // the next. Keep one visible stop, but retain its latest leg
+                // role/status so route progress points at the active transfer.
+                if ($centerId > 0 && isset($transferCenterMarkerIndexes[$centerId])) {
+                    $index = $transferCenterMarkerIndexes[$centerId];
+                    if ((int) ($markers[$index]['sequence_no'] ?? -1) <= (int) $transferLeg->sequence_no) {
+                        $markers[$index] = $marker;
+                    }
+                    continue;
+                }
+
+                if ($centerId > 0) {
+                    $transferCenterMarkerIndexes[$centerId] = count($markers);
+                }
+                $markers[] = $marker;
             }
         }
 
         $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
         $centerId = (int) ($center?->id ?? 0);
-        if ($center && ($centerId === 0 || ! isset($seenTransferCenters[$centerId]))) {
+        if ($centerId > 0 && isset($transferCenterMarkerIndexes[$centerId])) {
+            $markers[$transferCenterMarkerIndexes[$centerId]]['target_kind'] = 'logistics';
+        }
+        if ($center && ($centerId === 0 || ! isset($transferCenterMarkerIndexes[$centerId]))) {
             $marker = $this->centerMarker($center);
             if ($marker) {
                 $marker['id'] = 'logistics-center-'.$centerId.'-shipment-'.$shipment->id;
                 $marker['center_id'] = $center->id;
                 $marker['shipment_id'] = $shipment->id;
                 $marker['target_kind'] = 'logistics';
-                if ($transferLegs->isNotEmpty() && $seenTransferCenters !== []) {
+                if ($transferLegs->isNotEmpty() && $transferCenterMarkerIndexes !== []) {
                     $marker['sequence_no'] = (int) $transferLegs->max('sequence_no') + 1;
                     $marker['center_role'] = 'current';
                     $marker['label'] = 'Current logistics center';
@@ -294,6 +312,7 @@ class MapDataService
         $marker['id'] = 'logistics-center-'.$center->id.'-shipment-'.$shipmentId.'-transfer-'.$legId.'-'.$role;
         $marker['shipment_id'] = $shipmentId;
         $marker['center_role'] = $role;
+        $marker['transfer_leg_id'] = $legId;
         $marker['transfer_status'] = $status;
         $marker['sequence_no'] = $sequenceNo;
         $marker['label'] = $label;

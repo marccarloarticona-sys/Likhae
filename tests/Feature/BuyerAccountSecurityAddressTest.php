@@ -300,11 +300,11 @@ class BuyerAccountSecurityAddressTest extends TestCase
         $this->assertDatabaseCount('addresses', 0);
     }
 
-    public function test_address_book_enforces_ten_owned_addresses_and_normalizes_recipient_phone(): void
+    public function test_address_book_enforces_five_owned_addresses_and_normalizes_recipient_phone(): void
     {
         $buyer = User::factory()->create(['contact_number' => '+639171234567']);
 
-        for ($index = 1; $index <= 10; $index++) {
+        for ($index = 1; $index <= 5; $index++) {
             $this->actingAs($buyer)
                 ->post(route('buyer.account.addresses.store'), $this->addressPayload([
                     'street_address' => 'Street '.$index,
@@ -314,17 +314,17 @@ class BuyerAccountSecurityAddressTest extends TestCase
                 ->assertRedirect();
         }
 
-        $this->assertDatabaseCount('addresses', 10);
+        $this->assertDatabaseCount('addresses', 5);
         $this->assertDatabaseHas('addresses', ['user_id' => $buyer->id, 'contact_number' => '+639171234567']);
 
         $this->actingAs($buyer)
             ->post(route('buyer.account.addresses.store'), $this->addressPayload())
             ->assertSessionHasErrors('address_limit');
 
-        $this->assertDatabaseCount('addresses', 10);
+        $this->assertDatabaseCount('addresses', 5);
         $this->actingAs($buyer)->get(route('buyer.account', ['tab' => 'addresses']))
             ->assertOk()
-            ->assertSee('You can save up to 10 delivery addresses.');
+            ->assertSee('You can save up to 5 delivery addresses.');
     }
 
     public function test_default_address_must_be_changed_before_delete_and_only_owners_are_affected(): void

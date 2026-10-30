@@ -1,8 +1,8 @@
 @extends('layouts.buyer.app')
 
-@section('title', 'Discounted Products')
+@section('title', 'Flash Deals')
 @section('active', 'products')
-@section('subtitle', 'Shop current discounts and set reminders for upcoming flash sales.')
+@section('subtitle', 'Shop active flash sales and set reminders for upcoming offers.')
 
 @push('head')
 <style>
@@ -52,13 +52,13 @@
         <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
             <div>
                 <span class="mb-2 inline-flex text-[10px] font-extrabold uppercase tracking-[0.22em] text-[#561C17]">
-                    Seller Discounts
+                    Flash Sales
                 </span>
                 <h1 id="buyer-deals-heading" class="lk-deals-heading">
-                    Discounted Products
+                    Flash Deals
                 </h1>
                 <p class="mt-2 text-sm text-[#987865]">
-                    Current discounts and scheduled sales from LIKHAE sellers.
+                    Active seller flash sales with promotional stock and authoritative sale end times.
                 </p>
             </div>
 
@@ -77,13 +77,13 @@
             <div class="mt-8">
                 {{ $products->links() }}
             </div>
-        @elseif($upcomingDealProducts->isEmpty())
+        @elseif($upcomingDealProducts->isEmpty() && $soldOutDealProducts->isEmpty())
             <div class="rounded-2xl border border-dashed border-[#DBCEC1] bg-[#FFFDF9] px-6 py-12 text-center">
                 <h2 class="text-base font-semibold text-[#3B211B]">
-                    No discounted products are available right now
+                    No active flash sales are available right now
                 </h2>
                 <p class="mt-2 text-sm text-[#987865]">
-                    Check back later for current seller discounts.
+                    Check back later for active seller flash sales.
                 </p>
                 <a href="{{ route('buyer.products') }}" class="mt-5 inline-flex rounded-xl bg-[#561C17] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#3E130F]">
                     Browse Products
@@ -102,6 +102,21 @@
             <div class="lk-deals-grid">
                 @foreach($upcomingDealProducts as $product)
                     <x-buyer.product-card :product="$product" deal flash-reminder :reminder-active="isset($flashSaleReminderStates[$product['id']])" :reminder-available="$product['flash_sale_reminder_available']" />
+                @endforeach
+            </div>
+        </section>
+    @endif
+
+    @if($soldOutDealProducts->isNotEmpty())
+        <section class="mt-12" aria-labelledby="sold-out-flash-sales-heading">
+            <div class="mb-6">
+                <span class="mb-2 inline-flex text-[10px] font-extrabold uppercase tracking-[0.22em] text-[#987865]">Allocation reached</span>
+                <h2 id="sold-out-flash-sales-heading" class="lk-deals-heading">Flash sales sold out</h2>
+                <p class="mt-2 text-sm text-[#987865]">These promotional units are gone. Product pages show the current price and stock for other available units.</p>
+            </div>
+            <div class="lk-deals-grid">
+                @foreach($soldOutDealProducts as $product)
+                    <x-buyer.product-card :product="$product" deal />
                 @endforeach
             </div>
         </section>

@@ -11,12 +11,14 @@ use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\Voucher;
 use App\Models\Buyer\OrderItem;
+use App\Models\Buyer\SellerFollower;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Maps\MapDataService;
 use App\Services\Reports\SellerSalesSummaryService;
+use App\Services\Reports\SellerReportTrendService;
 use App\Services\Reports\SellerOrderValueChartService;
 use App\Services\Reports\SellerReportPdfService;
 use App\Services\Reports\WorkspaceExportPdfService;
@@ -162,6 +164,9 @@ class SellerOperationsController extends Controller
             ->where('status', 'ACTIVE')
             ->whereHas('variants', fn ($query) => $query->where('is_active', true))
             ->count();
+        $followerCount = Schema::hasTable('seller_followers')
+            ? SellerFollower::query()->where('seller_profile_id', $seller->id)->count()
+            : null;
 
         return view('seller.dashboard', [
             'seller' => $request->user(),
@@ -177,6 +182,7 @@ class SellerOperationsController extends Controller
                 'products_total' => $productsCount,
                 'pending_shipment' => $stats['ready'],
                 'inventory_alerts' => $inventoryAlertCount,
+                'followers' => $followerCount,
             ],
             'orderStatusCounts' => [
                 'placed' => $stats['placed'],
@@ -420,11 +426,25 @@ class SellerOperationsController extends Controller
         ]);
     }
 
-    public function reports(Request $request): View
+    public function reports(Request $request, SellerReportTrendService $trendService): View
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
-        $report = $this->buildReport($request, $seller->id, (string) $seller->business_name, app(SellerSalesSummaryService::class));
+        $salesSummary = app(SellerSalesSummaryService::class);
+        $report = $this->buildReport($request, $seller->id, (string) $seller->business_name, $salesSummary);
+        $requestedTab = $request->query('tab');
+        $analyticsActive = in_array($requestedTab, ['analytics', 'reports'], true)
+            ? $requestedTab === 'analytics'
+            : ! $request->query->has('report');
+        $reportTrends = $analyticsActive
+            ? $trendService->build(
+                $seller->id,
+                $report['from'],
+                $report['to'],
+                $report['selected_product_id'],
+                $salesSummary,
+            )
+            : null;
 
         return view('seller.reports', [
             'report' => $report['report'],
@@ -437,19 +457,33 @@ class SellerOperationsController extends Controller
             'reportScope' => $report['scope'],
             'sellerProducts' => $report['available_products'],
             'selectedProductId' => $report['selected_product_id'],
+            'reportTrends' => $reportTrends,
         ]);
+    }
+
+    public function previewReport(Request $request, SellerReportPdfService $pdf)
+    {
+        return $this->reportPdfResponse($request, $pdf, false);
     }
 
     public function downloadReport(Request $request, SellerReportPdfService $pdf)
     {
+        return $this->reportPdfResponse($request, $pdf, true);
+    }
+
+    private function reportPdfResponse(Request $request, SellerReportPdfService $pdf, bool $download)
+    {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
         $report = $this->buildReport($request, $seller->id, (string) $seller->business_name, app(SellerSalesSummaryService::class));
+        if ($request->query('tab') === 'analytics') {
+            $report['title'] = 'Store Analytics Overview';
+        }
         $filename = 'likhae-'.str($report['title'])->slug('-').'-'.$report['range_start'].'.pdf';
 
         return Response::make($pdf->render($report), 200, [
             'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Content-Disposition' => ($download ? 'attachment' : 'inline').'; filename="'.$filename.'"',
         ]);
     }
 

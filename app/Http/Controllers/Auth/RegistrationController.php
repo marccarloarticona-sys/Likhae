@@ -71,7 +71,8 @@ class RegistrationController extends Controller
         ]);
         $email = mb_strtolower(trim($data['email']));
 
-        if (User::query()->whereRaw('LOWER(email) = ?', [$email])->exists()) {
+        if (User::query()->whereRaw('LOWER(email) = ?', [$email])->exists()
+            && ! User::rejectedRegistrationApplicant($email)) {
             return response()->json([
                 'message' => 'An account with this email already exists.',
                 'errors' => ['email' => ['An account with this email already exists.']],
@@ -203,7 +204,7 @@ class RegistrationController extends Controller
                 ->withInput();
         }
 
-        AddressCoordinateValidator::assertValid($data);
+        AddressCoordinateValidator::assertValid($data, required: false);
 
         $application = $this->workflow->submit($request);
         $policies->recordRegistrationAcceptances($application->user, $acceptedPolicies, $request);
@@ -212,13 +213,13 @@ class RegistrationController extends Controller
         $type = strtolower((string) $application->user->account_type);
         $reviewer = $type === 'rider' ? 'the selected LIKHAE Logistics Center' : 'the LIKHAE administrator';
         $loginRoute = in_array($type, ['logistics', 'rider'], true) ? 'logistics.login' : 'login';
+        $statusMessage = $type === 'buyer'
+            ? 'Your Buyer account is active. Sign in to start using LIKHAE.'
+            : 'Registration submitted successfully. Application '.$application->application_number.' is pending review by '.$reviewer.'. Sign in to check its status and replace any document that needs correction.';
 
         return redirect()
             ->route($loginRoute)
-            ->with(
-                'status',
-                'Registration submitted successfully. Application '.$application->application_number.' is pending review by '.$reviewer.'. You can sign in after your application is approved.',
-            );
+            ->with('status', $statusMessage);
     }
 
     private function emailCodeCacheKey(string $email): string

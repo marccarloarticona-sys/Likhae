@@ -112,7 +112,7 @@ class TransferController extends Controller
 
         return redirect()->route('logistics.transfers.show', $manifest)->with('status', $transferLegIds === []
             ? 'Empty transfer preparation created. Add parcels before sealing.'
-            : 'Transfer prepared with '.count($transferLegIds).' '.\Illuminate\Support\Str::plural('parcel', count($transferLegIds)).'. Review measurements and assign a driver before sealing.');
+            : 'Transfer prepared with '.count($transferLegIds).' '.\Illuminate\Support\Str::plural('parcel', count($transferLegIds)).'. Review the recorded or product-estimated weights and assign a driver before sealing.');
     }
 
     public function show(Request $request, int $manifest): View
@@ -123,7 +123,13 @@ class TransferController extends Controller
             || (int) $manifest->destination_logistics_center_id === (int) $center->id, 403);
         $isOriginCenter = (int) $manifest->origin_logistics_center_id === (int) $center->id;
 
-        $manifest->load(['originLogisticsCenter', 'destinationLogisticsCenter', 'assignedDriver.user', 'items.transferLeg.shipment.sellerOrder.items']);
+        $manifest->load([
+            'originLogisticsCenter',
+            'destinationLogisticsCenter',
+            'assignedDriver.user',
+            'items.transferLeg.shipment.sellerOrder.items',
+            'items.transferLeg.shipment.orderItem.productVariant',
+        ]);
         $readyLegs = ShipmentTransferLeg::query()
             ->where('origin_logistics_center_id', $manifest->origin_logistics_center_id)
             ->where('destination_logistics_center_id', $manifest->destination_logistics_center_id)
@@ -161,8 +167,8 @@ class TransferController extends Controller
     {
         $manifest = $this->loadManifest($manifest);
         $data = $request->validate([
-            'parcel_weight_kg' => ['required', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
-            'parcel_volume_liters' => ['nullable', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
+            'parcel_weight_kg' => ['nullable', 'required_without:parcel_volume_liters', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
+            'parcel_volume_liters' => ['nullable', 'required_without:parcel_weight_kg', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
         ]);
 
         try {
@@ -170,16 +176,16 @@ class TransferController extends Controller
                 $request->user(),
                 $manifest,
                 TransferManifestItem::query()->findOrFail($item),
-                (string) $data['parcel_weight_kg'],
+                isset($data['parcel_weight_kg']) ? (string) $data['parcel_weight_kg'] : null,
                 isset($data['parcel_volume_liters']) ? (string) $data['parcel_volume_liters'] : null,
             );
         } catch (RuntimeException $exception) {
             return back()->withErrors(['measurements' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', isset($data['parcel_volume_liters'])
-            ? 'Required parcel weight and optional volume saved.'
-            : 'Parcel weight saved; volume was left blank.');
+        return back()->with('status', isset($data['parcel_weight_kg']) && isset($data['parcel_volume_liters'])
+            ? 'Parcel weight and volume saved.'
+            : (isset($data['parcel_weight_kg']) ? 'Packed parcel weight saved.' : 'Optional parcel volume saved.'));
     }
 
     public function assignDriver(Request $request, int $manifest): RedirectResponse

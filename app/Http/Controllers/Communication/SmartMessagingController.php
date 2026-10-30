@@ -13,7 +13,8 @@ class SmartMessagingController extends Controller
     public function answer(Request $request, Conversation $conversation, SmartMessagingService $smartMessaging): JsonResponse
     {
         $data = $request->validate([
-            'question_key' => ['required', 'string', 'max:100'],
+            'question_key' => ['nullable', 'string', 'max:100', 'required_without:question_text'],
+            'question_text' => ['nullable', 'string', 'max:300', 'required_without:question_key'],
             'product_id' => ['nullable', 'integer', 'exists:products,id'],
             'variant_id' => ['nullable', 'integer', 'exists:product_variants,id'],
         ]);
@@ -21,9 +22,10 @@ class SmartMessagingController extends Controller
         return response()->json($smartMessaging->answer(
             $request->user(),
             $conversation,
-            $data['question_key'],
+            $data['question_key'] ?? 'free_text',
             isset($data['product_id']) ? (int) $data['product_id'] : null,
             isset($data['variant_id']) ? (int) $data['variant_id'] : null,
+            isset($data['question_text']) ? (string) $data['question_text'] : null,
         ))->header('Cache-Control', 'no-store, private');
     }
 

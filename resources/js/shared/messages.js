@@ -735,9 +735,21 @@ const subscribeToUserMessages = () => {
             if (String(payload.sender_id || '') === String(userId)) return;
             if (document.body.dataset.messageRedirecting === 'true') return;
             const activeThread = document.querySelector('.lk-chat-stream[data-message-thread]');
+            const hasSellerHeaderPreview = Boolean(document.querySelector('[data-message-header-popover]'));
+            const publishSellerHeaderPreview = () => {
+                if (!hasSellerHeaderPreview) return;
+                document.dispatchEvent(new CustomEvent('likhae:seller-message-received', { detail: payload }));
+            };
             if (activeThread && String(activeThread.dataset.conversationId) === String(payload.conversation_id)) {
                 appendRealtimeMessage(activeThread, payload);
                 acknowledgeIncomingMessage(activeThread, payload);
+                publishSellerHeaderPreview();
+                window.likhaePlayNotificationSound?.('MESSAGE');
+                return;
+            }
+
+            if (hasSellerHeaderPreview) {
+                publishSellerHeaderPreview();
                 window.likhaePlayNotificationSound?.('MESSAGE');
                 return;
             }
@@ -902,6 +914,8 @@ const initializeSmartMessaging = () => {
         const feedback = panel.querySelector('[data-smart-help-feedback]');
         const feedbackNote = panel.querySelector('[data-smart-help-feedback-note]');
         const handoffRow = panel.querySelector('[data-smart-help-handoff-row]');
+        const askForm = panel.querySelector('[data-smart-ask-form]');
+        const askInput = panel.querySelector('[data-smart-ask-input]');
         const conversationInput = panel.closest('.lk-chat-area')?.querySelector('[data-chat-input]');
         const token = panel.querySelector('[data-smart-help-token]')?.value || '';
         let humanHandoff = panel.dataset.humanHandoff === 'true';
@@ -910,7 +924,7 @@ const initializeSmartMessaging = () => {
         let retryUntil = 0;
         let cooldownTimer = null;
 
-        const controls = () => panel.querySelectorAll('[data-smart-question], [data-smart-feedback], [data-smart-handoff]');
+        const controls = () => panel.querySelectorAll('[data-smart-question], [data-smart-feedback], [data-smart-handoff], [data-smart-ask-submit]');
         const coolingDown = () => Date.now() < retryUntil;
         const unlockControls = () => {
             if (busy || humanHandoff || coolingDown()) return;
@@ -988,11 +1002,13 @@ const initializeSmartMessaging = () => {
             if (feedback) feedback.hidden = true;
             if (feedbackNote) feedbackNote.hidden = true;
             if (handoffRow) handoffRow.hidden = true;
+            if (askForm) askForm.hidden = true;
             setStatus(message);
         };
         const appendExchange = (result) => {
             const stream = panel.closest('.lk-chat-stream');
-            if (!stream) return;
+            const exchanges = panel.querySelector('[data-smart-help-exchanges]');
+            if (!stream || !exchanges) return;
             const exchange = document.createElement('article');
             exchange.className = 'lk-smart-help-exchange';
 
@@ -1008,7 +1024,7 @@ const initializeSmartMessaging = () => {
             answerText.textContent = result.answer || 'No answer is available right now.';
             answerBubble.append(source, answerText);
             exchange.append(question, answerBubble);
-            stream.insertBefore(exchange, panel);
+            exchanges.appendChild(exchange);
             hasAnswer = true;
             panel.dataset.hasAnswer = 'true';
             if (feedback) feedback.hidden = false;
@@ -1016,28 +1032,40 @@ const initializeSmartMessaging = () => {
             if (stream) stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' });
         };
 
-        panel.querySelectorAll('[data-smart-question]').forEach((button) => button.addEventListener('click', async () => {
+        const submitQuestion = async (questionKey = null, questionText = null) => {
             if (humanHandoff || busy || coolingDown()) return;
-            const questionKey = button.dataset.questionKey;
-            if (!questionKey) return;
             busy = true;
             lockControls();
-            setStatus('Checking the approved answer...');
+            setStatus('Checking approved answers...');
             try {
                 const result = await post(panel.dataset.answerUrl, {
                     question_key: questionKey,
+                    question_text: questionText,
                     product_id: panel.dataset.productId || null,
                     variant_id: panel.dataset.variantId || null,
                 });
                 appendExchange(result);
-                setStatus('The verified answer has been added to this conversation.');
+                if (askInput) askInput.value = '';
+                setStatus('The answer has been added to this conversation.');
             } catch (error) {
                 showError(error);
             } finally {
                 busy = false;
                 unlockControls();
             }
+        };
+
+        panel.querySelectorAll('[data-smart-question]').forEach((button) => button.addEventListener('click', async () => {
+            const questionKey = button.dataset.questionKey;
+            if (!questionKey) return;
+            await submitQuestion(questionKey);
         }));
+
+        askForm?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const questionText = askInput?.value?.trim();
+            if (questionText) await submitQuestion(null, questionText);
+        });
 
         panel.querySelectorAll('[data-smart-feedback]').forEach((button) => button.addEventListener('click', async () => {
             if (humanHandoff || busy || coolingDown() || !hasAnswer) return;

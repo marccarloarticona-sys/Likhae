@@ -15,6 +15,7 @@ use App\Models\Communication\Message;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\Category;
+use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Account\BuyerEmailChangeOtpService;
@@ -32,7 +33,9 @@ use App\Services\Marketplace\FlashSaleReminderService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\PurchaseLimitService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductPriceResolver;
 use App\Services\Marketplace\RewardPointsService;
+use App\Services\Marketplace\SellerPromotionBuyerService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
@@ -65,6 +68,7 @@ class BuyerController extends Controller
         private readonly ConversationService $conversations,
         private readonly PlatformCampaignCatalog $platformCampaigns,
         private readonly PurchaseLimitService $purchaseLimits,
+        private readonly SellerPromotionBuyerService $sellerPromotions,
     ) {}
 
     public function home(Request $request): View
@@ -75,71 +79,110 @@ class BuyerController extends Controller
             'best-selling'
         )->limit(2)->get()
             ->map(fn (Product $product) => $this->catalog->productPayload($product));
-        $dealProducts = $this->discountedProductsQuery()
+        $dealProducts = $this->productDiscountsQuery()
             ->limit(4)
             ->get()
-            ->map(fn (Product $product) => $this->dealProductPayload($product))
+            ->map(fn (Product $product) => $this->dealProductPayload($product, 'product_discount'))
             ->filter()
             ->values();
+        $flashDealProducts = $this->activeFlashSaleProductsQuery()
+            ->limit(4)
+            ->get()
+            ->map(fn (Product $product) => $this->dealProductPayload($product, 'flash_sale'))
+            ->filter()
+            ->values();
+        $marketplacePromotions = $this->sellerPromotions->forMarketplace($request->user(), 8);
 
         return view('buyer.home', [
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
             'heroProducts' => $bestSellingProducts,
             'dealProducts' => $dealProducts,
+            'flashDealProducts' => $flashDealProducts,
+            'bundleOffers' => $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUNDLE)->take(3)->values(),
+            'freeGiftOffers' => $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y)->take(3)->values(),
+            'homeVoucherPreviews' => $this->homepageVoucherPreviews($request->user()),
             'platformCampaigns' => $this->platformCampaigns->homePreview(),
             'categories' => $this->catalog->categories(),
         ]);
     }
 
-    public function flashDeals(Request $request, FlashSaleReminderService $reminders): View
+    public function discounts(Request $request): View
     {
-        $query = $this->catalog->applyFilters($this->discountedProductsQuery(), $request);
-        $products = $this->catalog->applySort(
-            $query,
-            $request->query('sort', 'best-selling')
-        )->paginate(24)->withQueryString();
-
-        $dealProducts = $products->getCollection()
-            ->map(fn (Product $product) => $this->dealProductPayload($product))
+        $query = $this->catalog->applyFilters($this->productDiscountsQuery(), $request);
+        $products = $this->catalog->applySort($query, $request->query('sort', 'best-selling'))
+            ->paginate(24)
+            ->withQueryString();
+        $discountProducts = $products->getCollection()
+            ->map(fn (Product $product) => $this->dealProductPayload($product, 'product_discount'))
             ->filter()
             ->values();
 
-        $upcomingQuery = $this->catalog->visibleQuery()
-            ->whereNotNull('flash_sale_starts_at')
-            ->where('flash_sale_starts_at', '>', now())
-            ->where(function (Builder $query): void {
-                $query->whereNull('flash_sale_ends_at')->orWhereColumn('flash_sale_ends_at', '>', 'flash_sale_starts_at');
-            })
-            ->whereHas('variants', function (Builder $variants): void {
-                $variants->where('is_active', true)
-                    ->where('stock', '>', 0)
-                    ->where('price', '>', 0)
-                    ->where(function (Builder $promotion): void {
-                        $promotion->where(function (Builder $discount): void {
-                            $discount->where('discount_value', '>', 0)
-                                ->where(function (Builder $discountType): void {
-                                    $discountType->whereNull('discount_type')
-                                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
-                                });
-                        });
+        return view('buyer.discounts', [
+            'products' => $products,
+            'dealProducts' => $discountProducts,
+        ]);
+    }
 
-                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
-                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
-                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
-                            $promotion->orWhere(function (Builder $flash): void {
-                                $flash->whereNotNull('flash_sale_price')
-                                    ->where('flash_sale_price', '>', 0)
-                                    ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold');
-                            });
-                        }
-                    });
-            });
+    public function freeGifts(Request $request): View
+    {
+        return view('buyer.free-gifts', [
+            'promotions' => $this->sellerPromotions->forMarketplace(
+                $request->user(),
+                80,
+                SellerPromotion::TYPE_BUY_X_GET_Y,
+            ),
+        ]);
+    }
+
+    public function flashDeals(Request $request, FlashSaleReminderService $reminders): View
+    {
+        $query = $this->catalog->applyFilters($this->activeFlashSaleProductsQuery(), $request);
+        $products = $this->catalog->applySort(
+            $query,
+            $request->query('sort', 'latest')
+        )->paginate(24)->withQueryString();
+
+        $dealProducts = $products->getCollection()
+            ->map(fn (Product $product) => $this->dealProductPayload($product, 'flash_sale'))
+            ->filter()
+            ->values();
+
+        $upcomingQuery = $this->catalog->visibleQuery();
+        $upcomingFlashSchemaReady = Schema::hasColumn('products', 'flash_sale_starts_at')
+            && Schema::hasColumn('products', 'flash_sale_ends_at')
+            && Schema::hasColumn('product_variants', 'flash_sale_price')
+            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+            && Schema::hasColumn('product_variants', 'flash_sale_sold');
+        if ($upcomingFlashSchemaReady) {
+            $upcomingQuery->whereNotNull('flash_sale_starts_at')
+                ->where('flash_sale_starts_at', '>', now())
+                ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+                ->where(function (Builder $query): void {
+                    $query->whereNull('flash_sale_ends_at')->orWhereColumn('flash_sale_ends_at', '>', 'flash_sale_starts_at');
+                })
+                ->whereHas('variants', function (Builder $variants): void {
+                    $variants->where('is_active', true)
+                        ->where('stock', '>', 0)
+                        ->where('price', '>', 0)
+                        ->whereNotNull('flash_sale_price')
+                        ->where('flash_sale_price', '>', 0)
+                        ->whereColumn('flash_sale_price', '<', 'product_variants.price')
+                        ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold')
+                        ->when(Schema::hasColumn('products', 'flash_sale_is_paused'), fn (Builder $flash) => $flash->whereRaw('COALESCE(products.flash_sale_is_paused, 0) = 0'));
+                });
+        } else {
+            $upcomingQuery->whereRaw('1 = 0');
+        }
         $upcomingProducts = $this->catalog->applySort(
             $this->catalog->applyFilters($upcomingQuery, $request),
             $request->query('sort', 'latest')
         )->limit(24)->get()
             ->map(fn (Product $product) => $this->upcomingDealProductPayload($product))
+            ->filter()
+            ->values();
+        $soldOutProducts = $this->soldOutFlashSaleProductsQuery()->limit(24)->get()
+            ->map(fn (Product $product) => $this->soldOutFlashSaleProductPayload($product))
             ->filter()
             ->values();
         $reminderStates = $reminders->reminderStatesFor($request->user(), $upcomingProducts);
@@ -148,50 +191,155 @@ class BuyerController extends Controller
             'products' => $products,
             'dealProducts' => $dealProducts,
             'upcomingDealProducts' => $upcomingProducts,
+            'soldOutDealProducts' => $soldOutProducts,
             'flashSaleReminderStates' => $reminderStates,
         ]);
     }
 
     private function discountedProductsQuery(): Builder
     {
-        $query = $this->catalog->visibleQuery()
-            ->whereHas('variants', function (Builder $variants): void {
+        return $this->catalog->visibleQuery()
+            ->whereHas('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('price', '>', 0)
+                ->whereRaw(app(ProductPriceResolver::class)->sqlExpression().' < product_variants.price'));
+    }
+
+    private function productDiscountsQuery(): Builder
+    {
+        $now = now()->toDateTimeString();
+
+        return $this->catalog->visibleQuery()
+            ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+            ->when(Schema::hasColumn('products', 'discounts_enabled'), fn (Builder $query) => $query
+                ->where(fn (Builder $enabled) => $enabled->whereNull('discounts_enabled')->orWhere('discounts_enabled', true)))
+            ->when(Schema::hasColumn('products', 'discount_starts_at'), fn (Builder $query) => $query
+                ->where(fn (Builder $window) => $window->whereNull('discount_starts_at')->orWhere('discount_starts_at', '<=', $now)))
+            ->when(Schema::hasColumn('products', 'discount_ends_at'), fn (Builder $query) => $query
+                ->where(fn (Builder $window) => $window->whereNull('discount_ends_at')->orWhere('discount_ends_at', '>', $now)))
+            ->whereHas('variants', function (Builder $variants) use ($now): void {
                 $variants->where('is_active', true)
                     ->where('stock', '>', 0)
-                    ->where('price', '>', 0)
-                    ->where(function (Builder $promotion): void {
-                        $promotion->where(function (Builder $discount): void {
-                            $discount->where('discount_value', '>', 0)
-                                ->where(function (Builder $discountType): void {
-                                    $discountType->whereNull('discount_type')
-                                        ->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'");
-                                });
-                        });
-
-                        if (Schema::hasColumn('product_variants', 'flash_sale_price')
-                            && Schema::hasColumn('product_variants', 'flash_sale_allocation')
-                            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
-                            $promotion->orWhere(function (Builder $flash): void {
-                                $flash->whereNotNull('flash_sale_price')
-                                    ->where('flash_sale_price', '>', 0)
-                                    ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold');
-                            });
-                        }
+                    ->where('price', '>', 0.01)
+                    ->where('discount_value', '>', 0)
+                    ->where(function (Builder $types): void {
+                        $types->whereRaw("LOWER(TRIM(COALESCE(discount_type, ''))) = 'fixed'")
+                            ->orWhereRaw("LOWER(TRIM(COALESCE(discount_type, ''))) <> 'none'");
                     });
-            });
 
-        if (Schema::hasColumn('products', 'flash_sale_starts_at')) {
-            $query->where(function (Builder $scheduled): void {
-                $scheduled->whereNull('flash_sale_starts_at')->orWhere('flash_sale_starts_at', '<=', now());
+                if (Schema::hasColumn('product_variants', 'flash_sale_price')
+                    && Schema::hasColumn('product_variants', 'flash_sale_allocation')
+                    && Schema::hasColumn('product_variants', 'flash_sale_sold')
+                    && Schema::hasColumn('products', 'flash_sale_starts_at')
+                    && Schema::hasColumn('products', 'flash_sale_ends_at')) {
+                    $variants->where(function (Builder $notActiveFlashSale) use ($now): void {
+                        $notActiveFlashSale->whereNull('flash_sale_price')
+                            ->orWhere('flash_sale_price', '<=', 0)
+                            ->orWhereColumn('flash_sale_allocation', '<=', 'flash_sale_sold')
+                            ->orWhereHas('product', function (Builder $product) use ($now): void {
+                                $product->where(function (Builder $inactive) use ($now): void {
+                                    if (Schema::hasColumn('products', 'flash_sale_is_paused')) {
+                                        $inactive->where('flash_sale_is_paused', true)->orWhere(function (Builder $window) use ($now): void {
+                                            $window->whereNotNull('flash_sale_starts_at')->where('flash_sale_starts_at', '>', $now);
+                                        })->orWhere(function (Builder $window) use ($now): void {
+                                            $window->whereNotNull('flash_sale_ends_at')->where('flash_sale_ends_at', '<=', $now);
+                                        });
+                                    } else {
+                                        $inactive->where(function (Builder $window) use ($now): void {
+                                            $window->whereNotNull('flash_sale_starts_at')->where('flash_sale_starts_at', '>', $now);
+                                        })->orWhere(function (Builder $window) use ($now): void {
+                                            $window->whereNotNull('flash_sale_ends_at')->where('flash_sale_ends_at', '<=', $now);
+                                        });
+                                    }
+                                });
+                            });
+                    });
+                }
             });
+    }
+
+    private function activeFlashSaleProductsQuery(): Builder
+    {
+        if (! Schema::hasColumn('products', 'flash_sale_starts_at')
+            || ! Schema::hasColumn('products', 'flash_sale_ends_at')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_price')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_allocation')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+            return $this->catalog->visibleQuery()->whereRaw('1 = 0');
         }
-        if (Schema::hasColumn('products', 'flash_sale_ends_at')) {
-            $query->where(function (Builder $scheduled): void {
-                $scheduled->whereNull('flash_sale_ends_at')->orWhere('flash_sale_ends_at', '>', now());
-            });
+
+        $query = $this->catalog->visibleQuery()
+            ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+            ->where(fn (Builder $window) => $window->whereNull('flash_sale_starts_at')->orWhere('flash_sale_starts_at', '<=', now()))
+            ->where(fn (Builder $window) => $window->whereNull('flash_sale_ends_at')->orWhere('flash_sale_ends_at', '>', now()))
+            ->whereHas('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('price', '>', 0)
+                ->where('flash_sale_price', '>', 0)
+                ->whereColumn('flash_sale_price', '<', 'product_variants.price')
+                ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold'));
+
+        if (Schema::hasColumn('products', 'flash_sale_is_paused')) {
+            $query->where(fn (Builder $paused) => $paused->whereNull('flash_sale_is_paused')->orWhere('flash_sale_is_paused', false));
         }
 
         return $query;
+    }
+
+    private function soldOutFlashSaleProductsQuery(): Builder
+    {
+        if (! Schema::hasColumn('products', 'flash_sale_starts_at')
+            || ! Schema::hasColumn('products', 'flash_sale_ends_at')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_price')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_allocation')
+            || ! Schema::hasColumn('product_variants', 'flash_sale_sold')) {
+            return $this->catalog->visibleQuery()->whereRaw('1 = 0');
+        }
+
+        return $this->catalog->visibleQuery()
+            ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+            ->where(fn (Builder $window) => $window->whereNull('flash_sale_starts_at')->orWhere('flash_sale_starts_at', '<=', now()))
+            ->where(fn (Builder $window) => $window->whereNull('flash_sale_ends_at')->orWhere('flash_sale_ends_at', '>', now()))
+            ->when(Schema::hasColumn('products', 'flash_sale_is_paused'), fn (Builder $query) => $query
+                ->where(fn (Builder $paused) => $paused->whereNull('flash_sale_is_paused')->orWhere('flash_sale_is_paused', false)))
+            ->whereHas('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('flash_sale_price', '>', 0)
+                ->where('flash_sale_allocation', '>', 0)
+                ->whereColumn('flash_sale_price', '<', 'product_variants.price')
+                ->where(fn (Builder $soldOut) => $soldOut
+                    ->whereColumn('flash_sale_allocation', '<=', 'flash_sale_sold')
+                    ->orWhere('stock', '<=', 0)))
+            ->whereDoesntHave('variants', fn (Builder $variants) => $variants
+                ->where('is_active', true)
+                ->where('stock', '>', 0)
+                ->where('flash_sale_price', '>', 0)
+                ->whereColumn('flash_sale_price', '<', 'product_variants.price')
+                ->whereColumn('flash_sale_allocation', '>', 'flash_sale_sold'));
+    }
+
+    /** @return array<string, mixed>|null */
+    private function soldOutFlashSaleProductPayload(Product $product): ?array
+    {
+        $product->loadMissing('variants.product', 'sellerProfile', 'category');
+        $variant = $product->variants
+            ->filter(fn (ProductVariant $variant): bool => $variant->is_active
+                && $variant->flash_sale_price !== null
+                && (float) $variant->flash_sale_price > 0
+                && ($variant->flash_sale_remaining <= 0 || $variant->stock <= 0))
+            ->sortBy(fn (ProductVariant $variant): float => (float) $variant->flash_sale_price)
+            ->first();
+
+        if (! $variant) {
+            return null;
+        }
+
+        $payload = $this->catalog->productPayload($product);
+        $payload['deal_variant'] = $this->catalog->variantPayload($variant);
+
+        return $payload;
     }
 
     /** @return array<string, mixed>|null */
@@ -201,22 +349,23 @@ class BuyerController extends Controller
         $variant = $product->variants
             ->filter(fn (ProductVariant $variant): bool => $variant->is_active && $variant->stock > 0)
             ->map(function (ProductVariant $variant): array {
-                $type = $variant->resolved_discount_type;
-                $rawPrice = (float) $variant->price;
-                $value = max(0.0, (float) $variant->discount_value);
-                $amount = match ($type) {
-                    'fixed' => round(min($rawPrice, $value), 2),
-                    'percentage' => round(min($rawPrice, $rawPrice * min(100, $value) / 100), 2),
-                    default => 0.0,
-                };
+                $upcomingFlashSale = $variant->flash_sale_status === 'SCHEDULED'
+                    && $variant->flash_sale_remaining > 0
+                    && $variant->flash_sale_price !== null;
+                $price = $upcomingFlashSale
+                    ? [
+                        'price' => min((float) $variant->price, (float) $variant->flash_sale_price),
+                        'discount_amount' => max(0, (float) $variant->price - (float) $variant->flash_sale_price),
+                        'source' => 'flash_sale',
+                    ]
+                    : app(ProductPriceResolver::class)->resolve($variant);
 
-                $regularPrice = max(0.0, $rawPrice - $amount);
-                $flashPrice = $variant->flash_sale_price !== null && $variant->flash_sale_remaining > 0
-                    ? (float) $variant->flash_sale_price
-                    : null;
-                $finalPrice = $flashPrice !== null ? $flashPrice : $regularPrice;
-
-                return ['variant' => $variant, 'discount_amount' => round(max(0, $rawPrice - $finalPrice), 2), 'final_price' => $finalPrice];
+                return [
+                    'variant' => $variant,
+                    'discount_amount' => $price['discount_amount'],
+                    'final_price' => $price['price'],
+                    'upcoming_flash_sale' => $upcomingFlashSale,
+                ];
             })
             ->filter(fn (array $row): bool => $row['discount_amount'] > 0)
             ->sortBy('final_price')
@@ -229,6 +378,7 @@ class BuyerController extends Controller
         $dealVariant = array_merge($this->catalog->variantPayload($variant['variant']), [
             'price' => number_format($variant['final_price'], 2, '.', ''),
             'discount_amount' => number_format($variant['discount_amount'], 2, '.', ''),
+            'price_source' => $variant['upcoming_flash_sale'] ? 'flash_sale' : $this->catalog->variantPayload($variant['variant'])['price_source'],
         ]);
         $payload = $this->catalog->productPayload($product);
         $payload['deal_variant'] = $dealVariant;
@@ -239,29 +389,97 @@ class BuyerController extends Controller
     }
 
     /** @return array<string, mixed>|null */
-    private function dealProductPayload(Product $product): ?array
+    private function dealProductPayload(Product $product, ?string $source = null): ?array
     {
+        $product->loadMissing('variants.product', 'sellerProfile', 'category');
         $dealVariant = $product->variants
             ->filter(fn (ProductVariant $variant): bool => $variant->is_active
                 && $variant->stock > 0
-                && $variant->discount_amount > 0)
-            ->sortBy(fn (ProductVariant $variant): float => $variant->final_price)
+                && $variant->price > 0)
+            ->map(function (ProductVariant $variant): array {
+                return ['variant' => $variant, 'resolved' => app(ProductPriceResolver::class)->resolve($variant)];
+            })
+            ->filter(fn (array $row): bool => $row['resolved']['discount_amount'] > 0
+                && ($source === null || $row['resolved']['source'] === $source))
+            ->sortBy(fn (array $row): float => $row['resolved']['price'])
             ->first();
 
         if (! $dealVariant) {
             return null;
         }
 
-        return array_merge($this->catalog->productPayload($product), [
-            'deal_variant' => $this->catalog->variantPayload($dealVariant),
-        ]);
+        $payload = $this->catalog->productPayload($product);
+        $payload['deal_variant'] = $this->catalog->variantPayload($dealVariant['variant']);
+
+        return $payload;
+    }
+
+    /** @return Collection<int, array<string, mixed>> */
+    private function homepageVoucherPreviews(User $buyer): Collection
+    {
+        $sellerVouchers = app(BuyerVoucherClaimService::class)->claimableSellerVouchers($buyer)
+            ->reject(fn (Voucher $voucher): bool => (bool) ($voucher->sellerProfile?->vacation_mode ?? false))
+            ->take(3)
+            ->map(fn (Voucher $voucher): array => [
+                'id' => (int) $voucher->id,
+                'kind' => 'seller',
+                'name' => $voucher->name,
+                'source' => $voucher->sellerProfile?->business_name ?? 'Seller',
+                'value' => $voucher->discount_type === 'PERCENT'
+                    ? number_format((float) $voucher->discount_value, 0).'% off'
+                    : '₱'.number_format((float) $voucher->discount_value, 2).' off',
+                'minimum' => (float) $voucher->minimum_order_amount,
+                'maximum' => $voucher->maximum_discount_amount,
+                'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
+            ]);
+
+        if (! Schema::hasTable('vouchers') || ! Schema::hasColumn('vouchers', 'platform_code_key')) {
+            return $sellerVouchers->values();
+        }
+
+        $platformVouchers = Voucher::query()
+            ->whereNull('seller_profile_id')
+            ->whereNotNull('platform_code_key')
+            ->where('is_active', true)
+            ->where(fn (Builder $query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+            ->where(fn (Builder $query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+            ->orderBy('ends_at')
+            ->limit(24)
+            ->get();
+        $globalUses = VoucherRedemptionCounter::countsFor($platformVouchers);
+        $buyerUses = VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id);
+        $selectable = app(\App\Services\Finance\PlatformCampaignBudgetService::class);
+
+        $platformCards = $platformVouchers
+            ->filter(fn (Voucher $voucher): bool => ! $voucher->requiresReview()
+                && ($voucher->usage_limit === null || $globalUses->get($voucher->id, 0) < $voucher->usage_limit)
+                && ($voucher->per_user_limit === null || $buyerUses->get($voucher->id, 0) < $voucher->per_user_limit)
+                && $selectable->selectable($voucher))
+            ->take(3)
+            ->map(fn (Voucher $voucher): array => [
+                'id' => (int) $voucher->id,
+                'kind' => 'platform',
+                'name' => $voucher->name,
+                'source' => 'LIKHAE',
+                'value' => $voucher->discount_type === 'PERCENT'
+                    ? number_format((float) $voucher->discount_value, 0).'% off'
+                    : '₱'.number_format((float) $voucher->discount_value, 2).' off',
+                'minimum' => (float) $voucher->minimum_order_amount,
+                'maximum' => $voucher->maximum_discount_amount,
+                'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
+            ]);
+
+        return $sellerVouchers->concat($platformCards)->take(4)->values();
     }
 
     public function products(Request $request): View
     {
         [$filters, $catalogFilterValues, $catalogErrors] = $this->validatedCatalogFilters($request);
         $catalogBaseQuery = $this->catalog->visibleQuery()->with('sellerProfile.businessAddress');
-        $catalogPriceRange = $this->buyerPriceRange(clone $catalogBaseQuery);
+        $catalogPriceRangeQuery = $this->filterBuyerCatalog(clone $catalogBaseQuery, [
+            'category' => $filters['category'] ?? '',
+        ]);
+        $catalogPriceRange = $this->buyerPriceRange($catalogPriceRangeQuery);
         $query = $this->filterBuyerCatalog($catalogBaseQuery, $filters);
         $invalidPriceRange = $catalogErrors->has('min_price') || $catalogErrors->has('max_price');
         if ($invalidPriceRange) {
@@ -443,30 +661,7 @@ class BuyerController extends Controller
 
     private function variantSellingPriceSql(): string
     {
-        $type = "LOWER(TRIM(COALESCE(product_variants.discount_type, '')))";
-        $value = 'COALESCE(product_variants.discount_value, 0)';
-        $price = 'product_variants.price';
-        $saleWindow = '(1 = 1)';
-        if (Schema::hasColumn('products', 'flash_sale_starts_at') && Schema::hasColumn('products', 'flash_sale_ends_at')) {
-            $now = now()->toDateTimeString();
-            $saleWindow = "((products.flash_sale_starts_at IS NULL OR products.flash_sale_starts_at <= '{$now}') AND (products.flash_sale_ends_at IS NULL OR products.flash_sale_ends_at > '{$now}'))";
-        }
-        $flashActive = '(1 = 0)';
-        $hasFlashPrice = Schema::hasColumn('product_variants', 'flash_sale_price');
-        if ($hasFlashPrice && Schema::hasColumn('product_variants', 'flash_sale_allocation')
-            && Schema::hasColumn('product_variants', 'flash_sale_sold')) {
-            $flashActive = "(product_variants.flash_sale_price IS NOT NULL AND product_variants.flash_sale_price > 0 AND product_variants.flash_sale_allocation > product_variants.flash_sale_sold AND {$saleWindow})";
-        }
-        $regularDiscountActive = $hasFlashPrice
-            ? "(product_variants.flash_sale_price IS NOT NULL OR {$saleWindow})"
-            : $saleWindow;
-
-        return "CAST(CASE
-            WHEN {$flashActive} THEN product_variants.flash_sale_price
-            WHEN {$regularDiscountActive} AND {$type} = 'fixed' AND {$value} > 0 THEN CASE WHEN {$value} >= {$price} THEN 0 ELSE {$price} - {$value} END
-            WHEN {$regularDiscountActive} AND ({$type} = 'percentage' OR ({$type} NOT IN ('fixed', 'percentage', 'none') AND {$value} > 0)) AND {$value} > 0 THEN CASE WHEN {$value} >= 100 THEN 0 ELSE {$price} * (1 - {$value} / 100) END
-            ELSE {$price}
-        END AS DECIMAL(12, 2))";
+        return app(ProductPriceResolver::class)->sqlExpression();
     }
 
     /** @return array{min: float, max: float, step: float, available: bool} */
@@ -640,9 +835,54 @@ class BuyerController extends Controller
             ? $this->catalog->sellerRating($product->sellerProfile)
             : 0;
 
+        $productVouchers = collect();
+        if ($request->user()) {
+            $product->loadMissing('variants');
+            $claimService = app(BuyerVoucherClaimService::class);
+            $collectedClaims = $claimService->collectedSellerClaims($request->user());
+            $collectedVouchers = $collectedClaims->pluck('voucher')->filter()->values();
+            $collectedGlobalUses = VoucherRedemptionCounter::countsFor($collectedVouchers);
+            $collectedBuyerUses = VoucherRedemptionCounter::countsFor($collectedVouchers, (int) $request->user()->id);
+            $availableCollectedVouchers = $collectedClaims
+                ->filter(fn (BuyerVoucherClaim $claim): bool => $claim->voucher
+                    && $claimService->unavailableReason(
+                        $claim->voucher,
+                        $request->user(),
+                        $collectedGlobalUses->get($claim->voucher->id, 0),
+                        $collectedBuyerUses->get($claim->voucher->id, 0),
+                    ) === null)
+                ->pluck('voucher');
+            $ownedSellerVouchers = $claimService->claimableSellerVouchers($request->user())
+                ->concat($availableCollectedVouchers);
+            $variantIds = $product->variants->pluck('id')->map(fn ($id): int => (int) $id)->all();
+            $productVouchers = $ownedSellerVouchers
+                ->filter(function (Voucher $voucher) use ($product, $variantIds): bool {
+                    if ((int) $voucher->seller_profile_id !== (int) $product->seller_profile_id || $voucher->requiresReview()) {
+                        return false;
+                    }
+
+                    return match (strtoupper((string) ($voucher->applies_to ?? 'STORE'))) {
+                        'PRODUCTS' => $voucher->relationLoaded('eligibleProducts')
+                            && $voucher->eligibleProducts->contains('id', $product->id),
+                        'VARIANTS' => $voucher->relationLoaded('eligibleVariants')
+                            && $voucher->eligibleVariants->contains(fn ($variant): bool => in_array((int) $variant->id, $variantIds, true)),
+                        default => true,
+                    };
+                })
+                ->unique('id')
+                ->values();
+            $claimedIds = $availableCollectedVouchers
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
+            $productVouchers->each(fn (Voucher $voucher) => $voucher->setAttribute('buyer_has_claim', in_array((int) $voucher->id, $claimedIds, true)));
+        }
+
         return view('buyer.product-details', [
             'productModel' => $product,
             'product' => $productPayload,
+            'sellerPromotions' => $this->sellerPromotions->forProduct($product, $request->user()),
+            'productVouchers' => $productVouchers,
             'relatedProducts' => $this->catalog->visibleQuery()
                 ->whereKeyNot($product->id)
                 ->where('category_id', $product->category_id)
@@ -768,6 +1008,7 @@ class BuyerController extends Controller
             ->appends($filters['query_parameters']);
 
         $storeVouchers = collect();
+        $storeClaimableVouchers = collect();
         if (! $guest && $request->user()) {
             $claimedVouchers = Voucher::query()
                 ->where('seller_profile_id', $sellerProfile->id)
@@ -778,6 +1019,8 @@ class BuyerController extends Controller
                 ->whereHas('buyerClaims', fn ($claims) => $claims->where('buyer_user_id', $request->user()->id))
                 ->with('sellerProfile.user')
                 ->orderBy('id')
+                ->when(Schema::hasTable('voucher_products'), fn ($vouchers) => $vouchers->with('eligibleProducts:id'))
+                ->when(Schema::hasTable('voucher_variants'), fn ($vouchers) => $vouchers->with('eligibleVariants:id,product_id'))
                 ->get();
             $globalUses = VoucherRedemptionCounter::countsFor($claimedVouchers);
             $buyerUses = VoucherRedemptionCounter::countsFor($claimedVouchers, (int) $request->user()->id);
@@ -798,6 +1041,35 @@ class BuyerController extends Controller
                     ->values();
                 $storeVouchers->first()->setAttribute('selected_for_store', true);
             }
+
+            $storeClaimableVouchers = $claimService->claimableSellerVouchers($request->user())
+                ->where('seller_profile_id', $sellerProfile->id)
+                ->values();
+        } elseif ($guest) {
+            $publicVouchersQuery = Voucher::query()
+                ->where('seller_profile_id', $sellerProfile->id)
+                ->where('is_active', true)
+                ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+                ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+                ->where(fn ($query) => $query->whereNull('usage_limit')->orWhereRaw(
+                    'vouchers.usage_limit > (SELECT COUNT(*) FROM seller_orders WHERE seller_orders.voucher_id = vouchers.id AND seller_orders.status <> ?)',
+                    ['CANCELLED'],
+                ));
+            if (Schema::hasColumn('vouchers', 'visibility')) {
+                $publicVouchersQuery->where('visibility', 'PUBLIC');
+            }
+            if (Schema::hasColumn('vouchers', 'platform_code_key')) {
+                $publicVouchersQuery->whereNull('platform_code_key');
+            }
+            if (Schema::hasColumn('vouchers', 'requires_review')) {
+                $publicVouchersQuery->where('requires_review', false);
+            }
+            if (Schema::hasColumn('vouchers', 'applies_to')) {
+                $publicVouchersQuery->whereIn('applies_to', ['STORE', 'store']);
+            }
+            $storeVouchers = $publicVouchersQuery->orderBy('id')->limit(10)->get()
+                ->filter(fn (Voucher $voucher): bool => ! $voucher->requiresReview())
+                ->values();
         }
 
         return view($guest ? 'guest.store' : 'buyer.store', [
@@ -812,6 +1084,8 @@ class BuyerController extends Controller
             'storeCategories' => $storeCategories,
             'storeSubcategories' => $storeSubcategories,
             'storeVouchers' => $storeVouchers,
+            'storeClaimableVouchers' => $storeClaimableVouchers,
+            'sellerPromotions' => $this->sellerPromotions->forSeller((int) $sellerProfile->id, $request->user()),
             'guest' => $guest,
         ]);
     }
@@ -979,10 +1253,18 @@ class BuyerController extends Controller
                 })->values();
             })
             ->filter(fn ($vouchers) => $vouchers->isNotEmpty());
+        $cartPromotions = $cartItems
+            ->map(fn (CartItem $item): int => (int) ($item->productVariant?->product?->seller_profile_id ?? 0))
+            ->filter()
+            ->unique()
+            ->flatMap(fn (int $sellerId) => $this->sellerPromotions->forSeller($sellerId, $request->user()))
+            ->unique('id')
+            ->values();
 
         return view('buyer.cart', [
             'cartItems' => $cartItems,
             'availableVouchers' => $availableVouchers,
+            'cartPromotions' => $cartPromotions,
             'defaultAddress' => $buyer->addresses()->orderByDesc('is_default')->latest()->first(),
         ]);
     }
@@ -1741,11 +2023,12 @@ class BuyerController extends Controller
         $sellerVoucherCard = function (Voucher $voucher, bool $collected, ?string $unavailableReason = null): array {
             return [
                 'id' => (int) $voucher->id,
-                'icon' => $voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱',
+                'icon' => $voucher->requiresReview() ? 'Review' : ($voucher->discount_type === 'PERCENT' ? number_format((float) $voucher->discount_value, 0).'%' : '₱'),
                 'status' => $voucher->sellerProfile?->business_name ?? 'Seller',
-                'value' => $voucher->discount_type === 'PERCENT'
+                'value' => $voucher->requiresReview() ? 'Voucher under review'
+                    : ($voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
-                    : '₱'.number_format((float) $voucher->discount_value, 2).' off',
+                    : '₱'.number_format((float) $voucher->discount_value, 2).' off'),
                 'condition' => (float) $voucher->minimum_order_amount > 0
                     ? 'Minimum spend ₱'.number_format((float) $voucher->minimum_order_amount, 2)
                     : 'No minimum spend',
@@ -1791,6 +2074,7 @@ class BuyerController extends Controller
                     || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
                 && ($voucher->per_user_limit === null
                     || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
+                && ! $voucher->requiresReview()
                 && app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($voucher))
             ->map(fn (Voucher $voucher): array => [
                 'id' => (int) $voucher->id,
@@ -1984,7 +2268,7 @@ class BuyerController extends Controller
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
             'addressCount' => $addresses->count(),
-            'addressLimit' => 10,
+            'addressLimit' => 5,
             'followingStoresReady' => $followingStoresReady,
             'followingStores' => $followingStores,
             'pendingEmail' => $emailChanges->pendingEmail($buyer),
@@ -2492,9 +2776,9 @@ class BuyerController extends Controller
             $lockedBuyer = User::query()->whereKey($buyer->id)->lockForUpdate()->firstOrFail();
             $addressCount = $lockedBuyer->addresses()->count();
 
-            if ($addressCount >= 10) {
+            if ($addressCount >= 5) {
                 throw ValidationException::withMessages([
-                    'address_limit' => 'You can save up to 10 delivery addresses.',
+                    'address_limit' => 'You can save up to 5 delivery addresses.',
                 ]);
             }
 
@@ -2508,7 +2792,8 @@ class BuyerController extends Controller
             ]);
         });
 
-        return back()->with('buyer_notice', 'Address saved.');
+        return redirect()->route('buyer.account', ['tab' => 'addresses'])
+            ->with('address_notice', 'Delivery address saved successfully.');
     }
 
     public function setDefaultAddress(Request $request): RedirectResponse
@@ -2529,7 +2814,8 @@ class BuyerController extends Controller
             $address->forceFill(['is_default' => true])->save();
         });
 
-        return back()->with('buyer_notice', 'Default delivery address updated.');
+        return redirect()->route('buyer.account', ['tab' => 'addresses'])
+            ->with('address_notice', 'Default delivery address updated successfully.');
     }
 
     public function updateAddress(Request $request, Address $address): RedirectResponse
@@ -2556,7 +2842,8 @@ class BuyerController extends Controller
             ]);
         });
 
-        return back()->with('buyer_notice', 'Address updated.');
+        return redirect()->route('buyer.account', ['tab' => 'addresses'])
+            ->with('address_notice', 'Delivery address updated successfully.');
     }
 
     private function validatedAddress(Request $request, ?Address $existing = null): array
@@ -2619,6 +2906,7 @@ class BuyerController extends Controller
             $lockedAddress->delete();
         });
 
-        return back()->with('buyer_notice', 'Address deleted.');
+        return redirect()->route('buyer.account', ['tab' => 'addresses'])
+            ->with('address_notice', 'Delivery address deleted successfully.');
     }
 }

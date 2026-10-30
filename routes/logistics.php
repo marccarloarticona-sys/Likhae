@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthenticationController;
+use App\Http\Controllers\Communication\SmartMessagingController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
 use App\Http\Controllers\Logistics\LogisticsReturnWorkflowController;
@@ -154,6 +155,9 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/messages', [LogisticsPortalController::class, 'messages'])->name('messages');
         Route::get('/messages/stream', [LogisticsPortalController::class, 'messageStream'])->name('messages.stream');
         Route::post('/messages', [LogisticsPortalController::class, 'sendMessage'])->name('messages.send');
+        Route::post('/messages/{conversation}/smart-help/answer', [SmartMessagingController::class, 'answer'])->whereNumber('conversation')->middleware('throttle:120,1')->name('messages.smart-help.answer');
+        Route::post('/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])->whereNumber('conversation')->middleware('throttle:60,1')->name('messages.smart-help.feedback');
+        Route::post('/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])->whereNumber('conversation')->middleware('throttle:20,1')->name('messages.smart-help.handoff');
         Route::get('/reports', [LogisticsPortalController::class, 'reports'])->name('reports');
         Route::get('/reports/transactions.csv', [LogisticsPortalController::class, 'exportFinancialTransactionsCsv'])->name('reports.transactions.csv');
         Route::get('/reports/transactions.pdf', [LogisticsPortalController::class, 'exportFinancialTransactionsPdf'])->name('reports.transactions.pdf');

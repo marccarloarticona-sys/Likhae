@@ -2,10 +2,14 @@
 
 use App\Http\Controllers\Api\BuyerApiController;
 use App\Http\Controllers\Api\LookupApiController;
+use App\Http\Controllers\Api\LogisticsApiController;
+use App\Http\Controllers\Api\MapProxyController;
 use App\Http\Controllers\Api\MobileAuthController;
 use App\Http\Controllers\Api\PlatformEventApiController;
 use App\Http\Controllers\Api\ProductApiController;
 use App\Http\Controllers\Api\RiderApiController;
+use App\Http\Controllers\Api\RiderPickupBatchApiController;
+use App\Http\Controllers\Api\RiderTransferApiController;
 use App\Http\Controllers\Api\RiderVehicleProfileController;
 use App\Http\Controllers\Api\TrackingApiController;
 use App\Http\Controllers\Api\WorkflowApiController;
@@ -62,6 +66,12 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/stores/{seller}', [ProductApiController::class, 'store'])->name('api.v1.stores.show');
 
     Route::get('/tracking/{trackingNumber}', [TrackingApiController::class, 'show'])->name('api.v1.tracking.show');
+    Route::get('/maps/geocode', [MapProxyController::class, 'geocode'])
+        ->middleware('throttle:30,1')
+        ->name('api.v1.maps.geocode');
+    Route::get('/maps/route', [MapProxyController::class, 'route'])
+        ->middleware('throttle:30,1')
+        ->name('api.v1.maps.route');
 
     Route::middleware([AuthenticateApiToken::class, RequireApiPolicyAcceptance::class])->group(function (): void {
         Route::post('/policies/accept', [PolicyAcceptanceController::class, 'apiStore'])->name('api.v1.policies.accept');
@@ -105,14 +115,30 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/buyer/rewards', [BuyerApiController::class, 'rewards'])->name('api.v1.buyer.rewards.show');
         Route::get('/buyer/notifications', [BuyerApiController::class, 'notifications'])->name('api.v1.buyer.notifications.index');
         Route::post('/buyer/notifications/read-all', [BuyerApiController::class, 'markNotificationsRead'])->name('api.v1.buyer.notifications.read-all');
+        Route::post('/buyer/notifications/{notification}/read', [BuyerApiController::class, 'markNotificationRead'])->name('api.v1.buyer.notifications.read');
+        Route::post('/buyer/notifications/{notification}/open', [BuyerApiController::class, 'openNotification'])->name('api.v1.buyer.notifications.open');
+        Route::delete('/buyer/notifications/{notification}', [BuyerApiController::class, 'dismissNotification'])->name('api.v1.buyer.notifications.destroy');
         Route::get('/buyer/messages', [BuyerApiController::class, 'conversations'])->name('api.v1.buyer.messages.index');
         Route::get('/buyer/messages/{conversation}', [BuyerApiController::class, 'conversationMessages'])->name('api.v1.buyer.messages.show');
         Route::post('/buyer/messages', [BuyerApiController::class, 'sendMessage'])->name('api.v1.buyer.messages.store');
         Route::post('/buyer/orders/{order}/messages', [BuyerApiController::class, 'sendOrderMessage'])->name('api.v1.buyer.orders.messages.store');
         Route::post('/buyer/ai/chat', [BuyerAiController::class, 'chat'])->name('api.v1.buyer.ai.chat');
+        Route::middleware('rider.operational:INTER_LOGISTICS')
+            ->prefix('rider/transfers')
+            ->name('api.v1.rider.transfers.')
+            ->group(function (): void {
+                Route::get('/', [RiderTransferApiController::class, 'index'])->name('index');
+                Route::get('/{manifest}', [RiderTransferApiController::class, 'show'])->whereNumber('manifest')->name('show');
+                Route::post('/{manifest}/accept', [RiderTransferApiController::class, 'accept'])->whereNumber('manifest')->name('accept');
+                Route::post('/{manifest}/decline', [RiderTransferApiController::class, 'decline'])->whereNumber('manifest')->name('decline');
+                Route::post('/{manifest}/start', [RiderTransferApiController::class, 'start'])->whereNumber('manifest')->name('start');
+            });
         Route::get('/rider/dashboard', [RiderApiController::class, 'dashboard'])->name('api.v1.rider.dashboard');
         Route::get('/rider/assignments', [RiderApiController::class, 'assignments'])->name('api.v1.rider.assignments.index');
         Route::get('/rider/pickups', [RiderApiController::class, 'pickups'])->name('api.v1.rider.pickups.index');
+        Route::get('/rider/pickups/batches/{trip}', [RiderPickupBatchApiController::class, 'show'])
+            ->whereNumber('trip')
+            ->name('api.v1.rider.pickups.batches.show');
         Route::post('/rider/pickups/batches/{trip}/accept', [RiderApiController::class, 'acceptPickupBatch'])->name('api.v1.rider.pickups.batches.accept');
         Route::post('/rider/pickups/batches/{trip}/start', [RiderApiController::class, 'startPickupBatch'])->name('api.v1.rider.pickups.batches.start');
         Route::post('/rider/pickups/batches/{trip}/scan', [RiderPickupBatchController::class, 'scan'])->name('api.v1.rider.pickups.batches.scan');
@@ -130,6 +156,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/rider/messages', [RiderApiController::class, 'conversations'])->name('api.v1.rider.messages.index');
         Route::get('/rider/messages/{conversation}', [RiderApiController::class, 'conversationMessages'])->name('api.v1.rider.messages.show');
         Route::post('/rider/messages', [RiderApiController::class, 'sendMessage'])->name('api.v1.rider.messages.store');
+        Route::get('/logistics/dashboard', [LogisticsApiController::class, 'dashboard'])->name('api.v1.logistics.dashboard');
+        Route::post('/logistics/scan-receive', [LogisticsApiController::class, 'receiveScan'])->name('api.v1.logistics.scan-receive');
         Route::patch('/seller/orders/{sellerOrder}', [WorkflowApiController::class, 'sellerOrder'])->name('api.v1.seller.orders.transition');
         Route::patch('/rider/assignments/{assignment}', [WorkflowApiController::class, 'riderAssignment'])->name('api.v1.rider.assignments.transition');
         Route::post('/logistics/shipments/{shipment}/receive', [WorkflowApiController::class, 'receiveParcel'])->name('api.v1.logistics.shipments.receive');

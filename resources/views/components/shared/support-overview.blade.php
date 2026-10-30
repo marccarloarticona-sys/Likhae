@@ -17,7 +17,7 @@
     .lk-support-overview-head h2{margin:0;font-size:20px;font-weight:800;color:#3b211b}
     .lk-support-overview-head p{margin:5px 0 0;color:#876958;font-size:12px}
     .lk-support-overview-head a{color:#5b2018;font-size:11px;font-weight:800;text-decoration:none}
-    .lk-support-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+    .lk-support-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px}
     .lk-support-stat{padding:13px;border:1px solid #ead5c3;border-radius:12px;background:#fffdf9}
     .lk-support-stat span{display:block;color:#876958;font-size:10px;font-weight:700}
     .lk-support-stat strong{display:block;margin-top:5px;color:#5b2018;font-size:22px;font-weight:900;line-height:1}
@@ -60,10 +60,18 @@
     @if(session('status'))<div class="lk-support-flash" role="status">{{ session('status') }}</div>@endif
     <section class="lk-support-overview-card">
         <header class="lk-support-overview-head">
-            <div><h2>{{ $scopeLabel }} Support Overview</h2><p>Review Buyer concerns here. Opening this page does not mark their messages as read.</p></div>
+            <div><h2>{{ $scopeLabel }} Support Overview</h2><p>Review support requests here. Opening this page does not mark messages as read.</p></div>
             @if($faqUrl)<a href="{{ $faqUrl }}">Manage approved FAQs</a>@endif
         </header>
         <div class="lk-support-stats" aria-label="Support statistics">
+            @if($scopeLabel === 'Admin')
+                <div class="lk-support-stat"><span>Total conversations</span><strong>{{ $stats['total_conversations'] }}</strong><small>Chatbot sessions with Admin Support</small></div>
+                <div class="lk-support-stat"><span>Bot resolved</span><strong>{{ $stats['bot_resolved'] }}</strong><small>Users marked automated help resolved</small></div>
+                <div class="lk-support-stat"><span>Escalated</span><strong>{{ $stats['escalated'] }}</strong><small>Support tickets created</small></div>
+                <div class="lk-support-stat"><span>Waiting</span><strong>{{ $stats['waiting'] }}</strong><small>New or awaiting a representative</small></div>
+                <div class="lk-support-stat"><span>Avg. first human reply</span><strong>{{ $stats['avg_first_response_minutes'] === null ? '—' : $stats['avg_first_response_minutes'].'m' }}</strong><small>Based on recorded Admin messages</small></div>
+                <div class="lk-support-stat"><span>Avg. resolution</span><strong>{{ $stats['avg_resolution_minutes'] === null ? '—' : $stats['avg_resolution_minutes'].'m' }}</strong><small>Based on resolved support tickets</small></div>
+            @endif
             <div class="lk-support-stat"><span>New requests</span><strong>{{ $stats['new'] }}</strong><small>Not yet acknowledged</small></div>
             <div class="lk-support-stat"><span>Awaiting response</span><strong>{{ $stats['awaiting_response'] }}</strong><small>Acknowledged, waiting for handling</small></div>
             <div class="lk-support-stat"><span>In progress</span><strong>{{ $stats['in_progress'] }}</strong><small>Accepted by a representative</small></div>
@@ -74,11 +82,18 @@
         @if($supportOverview['top_faqs']->isNotEmpty())
             <div class="lk-support-faq-performance"><h3>Most selected FAQs</h3><ul>@foreach($supportOverview['top_faqs'] as $faq)<li>{{ $faq->question }} · {{ number_format($faq->selection_count) }} selected</li>@endforeach</ul></div>
         @endif
+        @if($scopeLabel === 'Admin' && $supportOverview['top_categories']->isNotEmpty())
+            <div class="lk-support-faq-performance"><h3>Most selected support categories</h3><ul>@foreach($supportOverview['top_categories'] as $category)<li>{{ $category->category }} · {{ number_format($category->selections) }} selections</li>@endforeach</ul></div>
+        @endif
+        @if($scopeLabel === 'Admin' && $supportOverview['unanswered_questions']->isNotEmpty())
+            <div class="lk-support-faq-performance"><h3>Common unanswered questions</h3><ul>@foreach($supportOverview['unanswered_questions'] as $question)<li>{{ $question->question_snapshot }} · {{ number_format($question->attempts) }}</li>@endforeach</ul></div>
+        @endif
     </section>
 
     @if($selected)
         @php
             $context = $selected->context_snapshot ?? [];
+            $requesterRole = str((string) $selected->requester?->account_type)->lower()->title()->toString();
             $activeRequest = in_array($selected->status, [\App\Models\Communication\ConversationSupportRequest::NEW, \App\Models\Communication\ConversationSupportRequest::AWAITING_RESPONSE, \App\Models\Communication\ConversationSupportRequest::IN_PROGRESS], true);
             $requestActionUrls = [
                 'acknowledge' => route($supportRequestRouteNames['acknowledge'], $selected),
@@ -87,10 +102,10 @@
             ];
         @endphp
         <section class="lk-support-detail" aria-labelledby="supportRequestDetailTitle">
-            <div class="lk-support-detail-head"><div><h3 id="supportRequestDetailTitle">Concern from {{ $selected->requester?->name ?: 'Buyer' }}</h3><p class="lk-support-queue-meta">{{ $selected->category }} · Requested {{ $selected->requested_at?->format('M j, Y · g:i A') }}</p></div><span class="lk-support-status {{ $statusClasses[$selected->status] ?? '' }}">{{ $statusLabels[$selected->status] ?? $selected->status }}</span></div>
+            <div class="lk-support-detail-head"><div><h3 id="supportRequestDetailTitle">{{ $requesterRole ?: 'User' }} request from {{ $selected->requester?->name ?: 'User' }}</h3><p class="lk-support-queue-meta">{{ $selected->category }} · Requested {{ $selected->requested_at?->format('M j, Y · g:i A') }}</p></div><span class="lk-support-status {{ $statusClasses[$selected->status] ?? '' }}">{{ $statusLabels[$selected->status] ?? $selected->status }}</span></div>
             <div class="lk-support-detail-grid">
-                <div class="lk-support-detail-block"><h4>Buyer concern</h4><p><strong>{{ $selected->selected_question ?: 'Live assistance requested' }}</strong></p>@if(filled($selected->unresolved_concern))<p>{{ $selected->unresolved_concern }}</p>@endif</div>
-                <div class="lk-support-detail-block"><h4>Automated answer</h4>@if(filled($selected->answer_snapshot))<p>{{ $selected->answer_snapshot }}</p><p><small>{{ $selected->answer_source }}</small></p>@else<p>No automatic answer was displayed before the handoff.</p>@endif<p>Buyer feedback: {{ $selected->last_feedback === 'UNRESOLVED' ? 'Still needs help' : ($selected->last_feedback === 'RESOLVED' ? 'Marked helpful' : 'No feedback recorded') }}</p></div>
+                <div class="lk-support-detail-block"><h4>User concern</h4><p><strong>{{ $selected->selected_question ?: 'Live assistance requested' }}</strong></p>@if(filled($selected->unresolved_concern))<p>{{ $selected->unresolved_concern }}</p>@endif</div>
+                <div class="lk-support-detail-block"><h4>Automated answer</h4>@if(filled($selected->answer_snapshot))<p>{{ $selected->answer_snapshot }}</p><p><small>{{ $selected->answer_source }}</small></p>@else<p>No automatic answer was displayed before the handoff.</p>@endif<p>User feedback: {{ $selected->last_feedback === 'UNRESOLVED' ? 'Still needs help' : ($selected->last_feedback === 'RESOLVED' ? 'Marked helpful' : 'No feedback recorded') }}</p></div>
                 <div class="lk-support-detail-block"><h4>Related context</h4>
                     @if(filled(data_get($context, 'product')))<p>Product: {{ data_get($context, 'product') }}</p>@endif
                     @if(filled(data_get($context, 'variant')))<p>Variant: {{ data_get($context, 'variant') }}</p>@endif
@@ -103,7 +118,8 @@
                     @if($selected->acknowledged_at)<p>Acknowledged {{ $selected->acknowledged_at->format('M j, Y · g:i A') }} by {{ $selected->acknowledgedBy?->name ?: 'Representative' }}</p>@endif
                     @if($selected->accepted_at)<p>Accepted {{ $selected->accepted_at->format('M j, Y · g:i A') }} by {{ $selected->acceptedBy?->name ?: 'Representative' }}</p>@endif
                     @if($selected->resolved_at)<p>Resolved {{ $selected->resolved_at->format('M j, Y · g:i A') }} by {{ $selected->resolvedBy?->name ?: 'Representative' }}</p>@endif
-                    <p>Last Buyer message: {{ $selected->last_buyer_message ?: 'No Buyer message yet' }}</p>
+                    <p>Assigned Admin: {{ $selected->acceptedBy?->name ?: 'Waiting for an Admin to accept' }}</p>
+                    <p>Last user message: {{ $selected->last_buyer_message ?: 'No user message yet' }}</p>
                     @if($selected->last_buyer_message_at)<p><small>{{ $lastMessageTime($selected->last_buyer_message_at) }}</small></p>@endif
                 </div>
             </div>
@@ -114,6 +130,12 @@
                     @endforeach
                 </div>
             @endif
+            @if($scopeLabel === 'Admin')
+                <div class="lk-support-detail-block" style="margin-top:12px"><h4>Internal notes · Admin only</h4>
+                    @forelse($selected->internal_notes ?? [] as $note)<p><strong>{{ $note['author'] ?? 'Admin' }}</strong> · {{ \Illuminate\Support\Carbon::parse($note['created_at'] ?? now())->format('M j, Y · g:i A') }}<br>{{ $note['body'] ?? '' }}</p>@empty<p>No internal notes yet.</p>@endforelse
+                    <form method="POST" action="{{ route('admin.messages.support-requests.notes', $selected) }}" style="display:grid;gap:7px;margin-top:8px">@csrf<textarea name="note" maxlength="1500" rows="3" required placeholder="Add a private note for other Admins" style="padding:9px;border:1px solid #dfc4ad;border-radius:8px"></textarea><button class="lk-support-action" type="submit">Add internal note</button></form>
+                </div>
+            @endif
             <div class="lk-support-queue-actions">
                 <a class="lk-support-action" href="{{ $overviewUrl }}">Return to Overview</a>
                 @if($selected->status === \App\Models\Communication\ConversationSupportRequest::NEW)
@@ -121,19 +143,27 @@
                 @endif
                 @if(in_array($selected->status, [\App\Models\Communication\ConversationSupportRequest::NEW, \App\Models\Communication\ConversationSupportRequest::AWAITING_RESPONSE], true))
                     <form method="POST" action="{{ $requestActionUrls['accept'] }}">@csrf<button class="lk-support-action is-primary" type="submit">Accept &amp; Open Live Chat</button></form>
-                @else
+                @elseif(! $selected->accepted_by_user_id || (int) $selected->accepted_by_user_id === (int) auth()->id() || $scopeLabel !== 'Admin')
                     <a class="lk-support-action is-primary" href="{{ $chatUrl($selected->conversation_id) }}">Open Live Chat</a>
+                @else
+                    <span class="lk-support-action">Assigned to {{ $selected->acceptedBy?->name ?: 'another Admin' }}</span>
                 @endif
                 @if($activeRequest)<form method="POST" action="{{ $requestActionUrls['resolve'] }}">@csrf<button class="lk-support-action" type="submit">Mark Resolved</button></form>@endif
             </div>
+            @if($scopeLabel === 'Admin' && $selected->status === \App\Models\Communication\ConversationSupportRequest::RESOLVED)
+                <form method="POST" action="{{ route('admin.messages.support-requests.reopen', $selected) }}" style="margin-top:10px">@csrf<button class="lk-support-action is-primary" type="submit">Reopen support request</button></form>
+            @endif
+            @if($scopeLabel === 'Admin' && $selected->status === \App\Models\Communication\ConversationSupportRequest::IN_PROGRESS)
+                <form method="POST" action="{{ route('admin.messages.support-requests.assignment', $selected) }}" style="display:flex;gap:8px;align-items:center;margin-top:10px">@csrf @method('PATCH')<label for="supportAdminAssignee">Reassign</label><select id="supportAdminAssignee" name="admin_user_id" required style="min-height:36px;padding:7px 10px;border:1px solid #dfc4ad;border-radius:9px">@foreach($supportAdmins ?? [] as $admin)<option value="{{ $admin->id }}" @selected((int) $selected->accepted_by_user_id === (int) $admin->id)>{{ $admin->name }}</option>@endforeach</select><button class="lk-support-action" type="submit">Save assignment</button></form>
+            @endif
         </section>
     @endif
 
     <section class="lk-support-overview-card">
-        <header class="lk-support-overview-head"><div><h2>Buyer assistance requests</h2><p>FAQ feedback and human support requests are tracked separately.</p></div></header>
+        <header class="lk-support-overview-head"><div><h2>Support requests</h2><p>Automated answer feedback and human support requests are tracked separately.</p></div></header>
         <form class="lk-support-filters" method="GET" action="{{ route($messagesRouteName) }}">
             <input type="hidden" name="section" value="overview">
-            <input type="search" name="q" value="{{ $supportOverview['search'] }}" placeholder="Search Buyer, order reference, or concern" aria-label="Search support requests">
+            <input type="search" name="q" value="{{ $supportOverview['search'] }}" placeholder="Search user, order reference, or concern" aria-label="Search support requests">
             <select name="status" aria-label="Filter by support status">
                 <option value="">All requests</option>
                 @foreach($statusLabels as $value => $label)<option value="{{ $value }}" @selected($supportOverview['filter'] === $value)>{{ $label }}</option>@endforeach
@@ -148,17 +178,22 @@
                     $isUnaccepted = in_array($supportRequest->status, [\App\Models\Communication\ConversationSupportRequest::NEW, \App\Models\Communication\ConversationSupportRequest::AWAITING_RESPONSE], true);
                 @endphp
                 <article class="lk-support-queue-card">
-                    <div class="lk-support-queue-top"><div><h3>{{ $supportRequest->requester?->name ?: 'Buyer' }} · {{ $supportRequest->category }}</h3><p class="lk-support-queue-meta">{{ $supportRequest->requested_at?->format('M j, Y · g:i A') }}@if($supportRequest->order_reference) · Order #{{ $supportRequest->order_reference }}@endif</p></div><span class="lk-support-status {{ $statusClasses[$supportRequest->status] ?? '' }}">{{ $statusLabels[$supportRequest->status] ?? $supportRequest->status }}</span></div>
+                    <div class="lk-support-queue-top"><div><h3>{{ $supportRequest->requester?->name ?: 'User' }} · {{ str((string) $supportRequest->requester?->account_type)->lower()->title() }} · {{ $supportRequest->category }}</h3><p class="lk-support-queue-meta">{{ $supportRequest->requested_at?->format('M j, Y · g:i A') }}@if($supportRequest->order_reference) · Order #{{ $supportRequest->order_reference }}@endif</p></div><span class="lk-support-status {{ $statusClasses[$supportRequest->status] ?? '' }}">{{ $statusLabels[$supportRequest->status] ?? $supportRequest->status }}</span></div>
                     @if($supportRequest->selected_question)<p class="lk-support-snippet"><strong>Question:</strong> {{ $supportRequest->selected_question }}</p>@endif
                     @if(filled($supportRequest->answer_snapshot))<p class="lk-support-snippet"><strong>Automatic answer:</strong> {{ \Illuminate\Support\Str::limit($supportRequest->answer_snapshot, 190) }}</p>@endif
-                    @if(filled($supportRequest->unresolved_concern))<p class="lk-support-snippet"><strong>Buyer note:</strong> {{ \Illuminate\Support\Str::limit($supportRequest->unresolved_concern, 180) }}</p>@endif
-                    @if($supportRequest->last_feedback)<p class="lk-support-queue-meta">Buyer feedback: {{ $supportRequest->last_feedback === 'UNRESOLVED' ? 'Still needs help' : 'Marked helpful before requesting a person' }}</p>@endif
-                    @if(filled($supportRequest->last_buyer_message))<p class="lk-support-snippet"><strong>Last Buyer message:</strong> {{ \Illuminate\Support\Str::limit($supportRequest->last_buyer_message, 150) }}</p>@endif
+                    @if(filled($supportRequest->unresolved_concern))<p class="lk-support-snippet"><strong>User note:</strong> {{ \Illuminate\Support\Str::limit($supportRequest->unresolved_concern, 180) }}</p>@endif
+                    @if($supportRequest->last_feedback)<p class="lk-support-queue-meta">User feedback: {{ $supportRequest->last_feedback === 'UNRESOLVED' ? 'Still needs help' : 'Marked helpful before requesting a person' }}</p>@endif
+                    @if(filled($supportRequest->last_buyer_message))<p class="lk-support-snippet"><strong>Last user message:</strong> {{ \Illuminate\Support\Str::limit($supportRequest->last_buyer_message, 150) }}</p>@endif
                     @if(filled(data_get($supportRequest->context_snapshot, 'product')))<p class="lk-support-queue-meta">Product: {{ data_get($supportRequest->context_snapshot, 'product') }}@if(filled(data_get($supportRequest->context_snapshot, 'variant'))) · Variant {{ data_get($supportRequest->context_snapshot, 'variant') }}@endif</p>@endif
                     <div class="lk-support-queue-actions">
                         <a class="lk-support-action" href="{{ $reviewUrl }}">Review concern</a>
-                        @if($isUnaccepted)<form method="POST" action="{{ $actionUrl }}">@csrf<button class="lk-support-action is-primary" type="submit">Accept &amp; Open Live Chat</button></form>
-                        @else<a class="lk-support-action is-primary" href="{{ $chatUrl($supportRequest->conversation_id) }}">Open Live Chat</a>@endif
+                        @if($isUnaccepted)
+                            <form method="POST" action="{{ $actionUrl }}">@csrf<button class="lk-support-action is-primary" type="submit">Accept &amp; Open Live Chat</button></form>
+                        @elseif(! $supportRequest->accepted_by_user_id || (int) $supportRequest->accepted_by_user_id === (int) auth()->id() || $scopeLabel !== 'Admin')
+                            <a class="lk-support-action is-primary" href="{{ $chatUrl($supportRequest->conversation_id) }}">Open Live Chat</a>
+                        @else
+                            <span class="lk-support-action">Assigned to {{ $supportRequest->acceptedBy?->name ?: 'another Admin' }}</span>
+                        @endif
                     </div>
                 </article>
             @empty

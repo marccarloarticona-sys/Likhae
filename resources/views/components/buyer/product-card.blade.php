@@ -78,8 +78,46 @@
     $variants = collect(data_get($product, 'variants', []));
     $hasVariations = $variants->count() > 1;
     $singleVariant = $hasVariations ? null : $variants->first();
+    $productId = (int) data_get($product, 'id', 0);
+    $variantIds = $variants->pluck('id')->map(fn ($variantId) => (int) $variantId)->all();
+    $sellerVoucherBadges = collect(data_get($product, 'seller_voucher_badges', []))
+        ->concat(collect($storeVouchers)->filter(function ($voucher) use ($productId, $variantIds): bool {
+            return match (strtoupper((string) data_get($voucher, 'applies_to', 'STORE'))) {
+                'PRODUCTS' => method_exists($voucher, 'relationLoaded')
+                    && $voucher->relationLoaded('eligibleProducts')
+                    && $voucher->eligibleProducts->contains('id', $productId),
+                'VARIANTS' => method_exists($voucher, 'relationLoaded')
+                    && $voucher->relationLoaded('eligibleVariants')
+                    && $voucher->eligibleVariants->contains(fn ($variant): bool => in_array((int) $variant->id, $variantIds, true)),
+                default => true,
+            };
+        })->map(fn ($voucher) => [
+            'name' => data_get($voucher, 'name'),
+            'discount_type' => data_get($voucher, 'discount_type'),
+            'discount_value' => data_get($voucher, 'discount_value'),
+            'minimum_order_amount' => data_get($voucher, 'minimum_order_amount'),
+        ]))
+        ->unique(fn ($voucher) => implode(':', [
+            data_get($voucher, 'name'),
+            data_get($voucher, 'discount_type'),
+            data_get($voucher, 'discount_value'),
+        ]))
+        ->take(3)
+        ->values();
+    $displayVariant = $deal ? $dealVariant : $variants->sortBy(fn ($variant) => (float) data_get($variant, 'price', PHP_INT_MAX))->first();
+    $flashSaleActive = (bool) data_get($displayVariant, 'flash_sale_active', false);
+    $flashSaleScheduled = data_get($displayVariant, 'flash_sale_status') === 'SCHEDULED';
+    $flashSaleSoldOut = data_get($displayVariant, 'flash_sale_status') === 'SOLD_OUT';
+    $flashSaleScheduledPrice = data_get($displayVariant, 'flash_sale_price');
+    $flashSaleStartsAt = data_get($displayVariant, 'flash_sale_starts_at');
+    $flashSaleRemaining = max(0, (int) data_get($displayVariant, 'flash_sale_remaining', 0));
+    $flashSaleEndsAt = data_get($displayVariant, 'flash_sale_ends_at');
+    $flashSaleLimit = data_get($displayVariant, 'flash_sale_limit_per_buyer');
     $sellerOnVacation = ($catalogListing || $home) && (bool) data_get($product, 'seller.vacation_mode', false);
     $catalogStock = max(0, (int) data_get($product, 'stock', $variants->sum('stock')));
+    $catalogMaxQuantity = $flashSaleActive && $flashSaleRemaining > 0
+        ? max(1, min($catalogStock, $flashSaleRemaining, $flashSaleLimit ? (int) $flashSaleLimit : $flashSaleRemaining))
+        : max(1, $catalogStock);
     $outOfStock = ($catalogListing || $home) && $catalogStock < 1;
     $canAddToCart = ! $unavailable && ! $availabilityRestricted && ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
     $isWishlistSaved = false;
@@ -766,15 +804,24 @@
             {{ $category }}
         </span>
 
-        @if(collect($storeVouchers)->isNotEmpty())
+        @if(! $availabilityRestricted && collect(data_get($product, 'seller_promotion_badges', []))->isNotEmpty())
+            <div class="mt-2 flex flex-wrap gap-1.5" aria-label="Available seller promotions">
+                @foreach(collect(data_get($product, 'seller_promotion_badges', []))->take(2) as $promotionBadge)
+                    <span class="rounded-full bg-[#f4e6df] px-2 py-1 text-[9px] font-bold text-[#561c17]">{{ $promotionBadge }}</span>
+                @endforeach
+            </div>
+        @endif
+
+        @if(! $availabilityRestricted && $sellerVoucherBadges->isNotEmpty())
             <div class="mt-2 flex flex-wrap gap-1.5" aria-label="Available seller vouchers">
-                @foreach($storeVouchers as $storeVoucher)
+                @foreach($sellerVoucherBadges as $voucherBadge)
                     <span class="rounded-full bg-red-100 px-2 py-1 text-[9px] font-bold text-red-900">
-                        @if(strtoupper((string) $storeVoucher->discount_type) === 'PERCENT')
-                            {{ rtrim(rtrim(number_format((float) $storeVoucher->discount_value, 2, '.', ''), '0'), '.') }}% OFF voucher
+                        @if(strtoupper((string) data_get($voucherBadge, 'discount_type')) === 'PERCENT')
+                            {{ rtrim(rtrim(number_format((float) data_get($voucherBadge, 'discount_value'), 2, '.', ''), '0'), '.') }}% OFF voucher
                         @else
-                            &#8369;{{ number_format((float) $storeVoucher->discount_value, 2) }} OFF voucher
+                            &#8369;{{ number_format((float) data_get($voucherBadge, 'discount_value'), 2) }} OFF voucher
                         @endif
+                        @if((float) data_get($voucherBadge, 'minimum_order_amount', 0) > 0)<span class="font-medium"> · Min ₱{{ number_format((float) data_get($voucherBadge, 'minimum_order_amount'), 2) }}</span>@endif
                     </span>
                 @endforeach
             </div>
@@ -830,6 +877,24 @@
             @endif
             @endif
         </div>
+
+        @if($flashSaleActive && $flashSaleRemaining > 0)
+            <div class="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[10px] font-semibold text-rose-900" role="status">
+                <span>Flash Sale · {{ number_format($flashSaleRemaining) }} promotional units left</span>
+                @if($flashSaleLimit)<span class="block mt-0.5">Limit {{ number_format((int) $flashSaleLimit) }} per Buyer</span>@endif
+                @if($flashSaleEndsAt)<time class="block mt-0.5" data-flash-sale-countdown datetime="{{ $flashSaleEndsAt }}">Sale ends {{ \Illuminate\Support\Carbon::parse($flashSaleEndsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
+            </div>
+        @endif
+        @if($flashSaleSoldOut)
+            <div class="mt-2 rounded-lg border border-[#EADCCC] bg-[#F6EFE7] px-3 py-2 text-xs font-bold text-[#6C4936]" role="status">Flash Sale allocation sold out</div>
+        @endif
+        @if($flashSaleScheduled && $flashSaleRemaining > 0 && $flashSaleScheduledPrice)
+            <div class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold text-amber-950" role="status">
+                <span>Upcoming Flash Sale · starts at ₱{{ number_format((float) $flashSaleScheduledPrice, 2) }}</span>
+                <span class="block mt-0.5">{{ number_format($flashSaleRemaining) }} promotional units allocated</span>
+                @if($flashSaleStartsAt)<time class="block mt-0.5" data-flash-sale-start-countdown datetime="{{ $flashSaleStartsAt }}">Sale starts {{ \Illuminate\Support\Carbon::parse($flashSaleStartsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
+            </div>
+        @endif
 
         <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : ($home ? 'lk-card-actions--home' : '')) }}">
             @if($guest)
@@ -939,7 +1004,7 @@
                             id="catalog-quantity-{{ \Illuminate\Support\Str::slug((string) $slug) }}"
                             type="number"
                             min="1"
-                            max="{{ max(1, $catalogStock) }}"
+                            max="{{ $catalogMaxQuantity }}"
                             value="1"
                             inputmode="numeric"
                             aria-label="Quantity for {{ $name }}"

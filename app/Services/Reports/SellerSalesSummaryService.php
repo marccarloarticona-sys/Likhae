@@ -119,9 +119,9 @@ final class SellerSalesSummaryService
     }
 
     /** @return Collection<string, array{gross: float, commission: float}> */
-    public function daily(int $sellerProfileId, Carbon $from, Carbon $to): Collection
+    public function daily(int $sellerProfileId, Carbon $from, Carbon $to, ?int $productId = null): Collection
     {
-        return $this->transactions($sellerProfileId, $from, $to)
+        return $this->transactions($sellerProfileId, $from, $to, $productId)
             ->get(['id', 'commissionable_amount', 'commission_amount', 'calculated_at'])
             ->groupBy(fn (CommissionTransaction $transaction): string => $transaction->calculated_at
                 ->copy()

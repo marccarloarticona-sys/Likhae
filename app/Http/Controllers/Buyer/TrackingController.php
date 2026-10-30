@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use App\Models\Logistics\DeliveryAttempt;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\ShipmentReturnWorkflow;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Maps\MapDataService;
+use App\Services\Marketplace\BuyerOrderActionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -16,7 +19,7 @@ class TrackingController extends Controller
 {
     public function show(Request $request, string $tracking): View
     {
-        $shipment = Shipment::query()
+        $shipmentQuery = Shipment::query()
             ->where('tracking_number', $tracking)
             ->with([
                 'sellerOrder.order.buyer',
@@ -27,17 +30,42 @@ class TrackingController extends Controller
                 'deliveryAttempts',
                 'riderAssignments.liveLocation',
                 'logisticsCenter.address',
-            ])
-            ->firstOrFail();
+            ]);
+        if (app(LogisticsSchemaReadiness::class)->shipmentReturnsReady()) {
+            $shipmentQuery->with('returnWorkflow');
+        }
+        $shipment = $shipmentQuery->firstOrFail();
 
         $user = $request->user();
         if ($user !== null) {
             abort_unless($this->canView($shipment, $user), 403);
         }
 
+        $order = $shipment->sellerOrder?->order;
+        if ($order && app(BuyerOrderActionService::class)->returnRefundStorageReady()) {
+            $order->loadMissing('returnRefundRequests');
+        }
+        $hasReturnRefundRequest = $order?->relationLoaded('returnRefundRequests')
+            && $order->returnRefundRequests->isNotEmpty();
+        $hasCancellationEvent = $shipment->events->contains(fn ($event): bool =>
+            str_starts_with((string) $event->notes, 'BUYER_ORDER_CANCELLED:')
+            || str_starts_with((string) $event->notes, 'SELLER_ORDER_CANCELLED:')
+        );
+        $returnWorkflow = $shipment->relationLoaded('returnWorkflow') ? $shipment->getRelation('returnWorkflow') : null;
+        $hasSellerReturnInProgress = $returnWorkflow
+            && $returnWorkflow->return_disposition === ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN
+            && (in_array($returnWorkflow->status, ShipmentReturnWorkflow::OPEN_STATUSES, true)
+                || $returnWorkflow->status === ShipmentReturnWorkflow::SELLER_RECEIVED);
+        $hideMap = in_array($order?->status, ['COMPLETED', 'RETURNED', 'CANCELLED'], true)
+            || $shipment->sellerOrder?->status === 'CANCELLED'
+            || in_array($shipment->current_status, ['COMPLETED', 'RETURNED', 'CANCELLED'], true)
+            || $hasReturnRefundRequest
+            || $hasSellerReturnInProgress
+            || $hasCancellationEvent;
+
         $mapMarkers = app(MapDataService::class)->forShipment($shipment);
 
-        return view('buyer.tracking.show', compact('shipment', 'mapMarkers'));
+        return view('buyer.tracking.show', compact('shipment', 'mapMarkers', 'hideMap'));
     }
 
     public function live(Request $request, string $trackingCode): JsonResponse

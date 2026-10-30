@@ -95,6 +95,7 @@ class DatabaseSeeder extends Seeder
         );
 
         $this->call(BackstreetSellerSeeder::class);
+        $this->call(KizaniaDemoSellerSeeder::class);
         $this->call(TestSellerCatalogSeeder::class);
 
         $center = LogisticsCenter::updateOrCreate(

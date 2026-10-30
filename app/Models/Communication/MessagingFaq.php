@@ -18,6 +18,7 @@ class MessagingFaq extends Model
     protected $fillable = [
         'owner_type', 'seller_profile_id', 'created_by_user_id', 'category', 'question', 'answer',
         'product_id', 'product_variant_id', 'is_active', 'sort_order', 'selection_count', 'last_selected_at',
+        'target_role', 'entry_type', 'keywords', 'alternate_questions', 'is_automatic',
     ];
 
     protected function casts(): array
@@ -27,6 +28,9 @@ class MessagingFaq extends Model
             'sort_order' => 'integer',
             'selection_count' => 'integer',
             'last_selected_at' => 'datetime',
+            'keywords' => 'array',
+            'alternate_questions' => 'array',
+            'is_automatic' => 'boolean',
         ];
     }
 

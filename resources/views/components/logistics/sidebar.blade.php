@@ -1,8 +1,5 @@
 @props(['active' => null, 'workspaceName' => 'Logistics Center', 'sidebarCounts' => [], 'notificationCount' => null])
 @php
-    $demoUser = session('demo_user');
-    $name     = auth()->user()?->name ?? $demoUser['email'] ?? 'Logistics Operator';
-    $initial  = mb_strtoupper(mb_substr($name, 0, 1));
     $notificationCount = (int) ($notificationCount ?? data_get($sidebarCounts, 'notifications', 0));
     $routeActive = [
         'dashboard' => ['logistics.dashboard'],
@@ -61,12 +58,6 @@
             <span class="sl-brand-mark">L</span>
             <span class="sl-brand-copy"><strong>LIKHAE</strong><small>{{ $workspaceName }}</small></span>
         </a>
-    </div>
-
-    <div class="sl-seller-card">
-        <span class="sl-avatar">{{ $initial }}</span>
-        <span class="sl-seller-copy"><strong>{{ $name }}</strong><small>Sorting Center</small></span>
-        <span class="sl-verified">✓</span>
     </div>
 
     <nav class="sl-sidebar-scroll">

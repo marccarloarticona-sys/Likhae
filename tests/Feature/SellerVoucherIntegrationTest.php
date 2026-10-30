@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\Seller\Voucher;
+use App\Models\Seller\Product;
+use App\Models\Seller\ProductVariant;
 use App\Models\User;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,7 +26,7 @@ class SellerVoucherIntegrationTest extends TestCase
     public function test_seller_can_configure_existing_voucher_cap_and_buyer_limit_fields(): void
     {
         $this->actingAs($this->seller)
-            ->get(route('seller.marketing'))
+            ->get(route('seller.marketing', ['section' => 'vouchers']))
             ->assertOk()
             ->assertSee('name="maximum_discount_amount"', escape: false)
             ->assertSee('name="per_user_limit"', escape: false);
@@ -34,6 +36,7 @@ class SellerVoucherIntegrationTest extends TestCase
             'name' => 'Store limit voucher',
             'discount_type' => 'PERCENT',
             'discount_value' => 10,
+            'visibility' => 'FOLLOWERS',
             'minimum_order_amount' => 300,
             'maximum_discount_amount' => 50,
             'seller_discount_budget_total' => 5000,
@@ -55,6 +58,7 @@ class SellerVoucherIntegrationTest extends TestCase
         $this->assertSame(80, $voucher->usage_limit);
         $this->assertSame('300.00', $voucher->minimum_order_amount);
         $this->assertSame('5000.00', $voucher->seller_discount_budget_total);
+        $this->assertSame('FOLLOWERS', $voucher->visibility);
     }
 
     public function test_seller_voucher_rejects_invalid_percentage_and_backwards_dates(): void
@@ -81,5 +85,38 @@ class SellerVoucherIntegrationTest extends TestCase
 
         $this->assertDatabaseMissing('vouchers', ['code' => 'TOOMUCH']);
         $this->assertDatabaseMissing('vouchers', ['code' => 'BADDATES']);
+    }
+
+    public function test_seller_can_create_a_voucher_for_an_active_flash_sale_variant(): void
+    {
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $variant = ProductVariant::query()->where('product_id', $product->id)->where('is_active', true)->firstOrFail();
+        $product->update([
+            'flash_sale_starts_at' => now()->subMinute(),
+            'flash_sale_ends_at' => now()->addHour(),
+            'flash_sale_campaign_key' => (string) str()->uuid(),
+        ]);
+        $variant->update([
+            'flash_sale_price' => round((float) $variant->final_price * 0.8, 2),
+            'flash_sale_allocation' => 2,
+            'flash_sale_sold' => 0,
+        ]);
+
+        $this->actingAs($this->seller)
+            ->from(route('seller.marketing', ['section' => 'vouchers']))
+            ->post(route('seller.marketing.campaigns.store', ['section' => 'vouchers']), [
+                'code' => 'FLASHVOUCHEROK',
+                'name' => 'Flash sale compatible voucher',
+                'discount_type' => 'FIXED',
+                'discount_value' => 1,
+                'applies_to' => 'VARIANTS',
+                'variant_ids' => [$variant->id],
+                'visibility' => 'PUBLIC',
+                'minimum_order_amount' => 0,
+            ])
+            ->assertRedirect(route('seller.marketing', ['section' => 'vouchers']))
+            ->assertSessionHas('status', 'Voucher saved.');
+
+        $this->assertDatabaseHas('vouchers', ['code' => 'FLASHVOUCHEROK', 'seller_profile_id' => $this->seller->sellerProfile->id]);
     }
 }

@@ -12,9 +12,11 @@ use App\Models\Seller\ProductOptionValue;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerProfile;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductPriceResolver;
 use App\Services\Marketplace\SellerCatalogService;
 use App\Services\Reports\SellerInventoryPdfService;
 use App\Services\Reports\WorkspaceExportPdfService;
+use App\Services\Seller\SellerPromotionConflictService;
 use App\Support\InventoryStockStatus;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -33,7 +35,7 @@ class SellerProductController extends Controller
         private readonly ProductCatalogService $catalog,
     ) {}
 
-    public function index(Request $request): View
+    public function index(Request $request, SellerPromotionConflictService $promotionConflictService): View
     {
         $seller = $this->seller($request);
         $seller->loadMissing('primaryCategory.children');
@@ -81,11 +83,20 @@ class SellerProductController extends Controller
         } elseif ($mode === 'edit') {
             abort_unless($request->filled('product'), 404);
             $selectedProductModel = $seller->products()
-                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'orderItems.review'])
+                ->select('products.*')
+                ->withSum('orderItems as sold_units', 'quantity')
+                ->selectSub(
+                    DB::table('reviews')
+                        ->join('order_items', 'order_items.id', '=', 'reviews.order_item_id')
+                        ->selectRaw('AVG(reviews.rating)')
+                        ->whereColumn('order_items.product_id', 'products.id'),
+                    'average_rating',
+                )
+                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option'])
                 ->whereKey($request->integer('product'))
                 ->firstOrFail();
             $products = collect([$selectedProductModel]);
-            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
+            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product, true));
             $inventoryProducts = collect();
         } elseif ($mode === 'add') {
             $products = collect();
@@ -99,7 +110,16 @@ class SellerProductController extends Controller
             $search = trim((string) ($filters['search'] ?? ''));
             $status = $filters['status'] ?? 'all';
             $productsQuery = $seller->products()
-                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option', 'orderItems.review'])
+                ->select('products.*')
+                ->withSum('orderItems as sold_units', 'quantity')
+                ->selectSub(
+                    DB::table('reviews')
+                        ->join('order_items', 'order_items.id', '=', 'reviews.order_item_id')
+                        ->selectRaw('AVG(reviews.rating)')
+                        ->whereColumn('order_items.product_id', 'products.id'),
+                    'average_rating',
+                )
+                ->with(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option'])
                 ->when($status !== 'all', fn ($query) => $query->where('status', strtoupper($status)))
                 ->latest('id');
 
@@ -141,6 +161,9 @@ class SellerProductController extends Controller
         ];
 
         $selected = $mode === 'edit' ? $sellerProducts->first() : null;
+        $promotionConflicts = $selectedProductModel
+            ? $promotionConflictService->forProducts($seller, collect([$selectedProductModel]))
+            : ['products' => [], 'variants' => []];
 
         return view('seller.products', [
             'mode' => $mode,
@@ -160,6 +183,10 @@ class SellerProductController extends Controller
             'inventoryStatus' => $request->query('status', 'all'),
             'expandedInventoryProductId' => $request->integer('expanded_product'),
             'selectedProduct' => $selected,
+            'savedVariantPrices' => $selectedProductModel
+                ? $selectedProductModel->variants->mapWithKeys(fn (ProductVariant $variant) => [(int) $variant->id => (float) $variant->price])->all()
+                : [],
+            'promotionConflicts' => $promotionConflicts,
             'lineOfBusinessCategory' => $seller->primaryCategory,
             'categories' => $this->allowedCategories($seller, $selectedProductModel),
             'complianceCases' => $seller->complianceCases()
@@ -212,9 +239,10 @@ class SellerProductController extends Controller
         $seller = $this->seller($request);
         abort_unless((int) $product->seller_profile_id === (int) $seller->id, 404);
         $copiedImagePaths = [];
+        $copiedDescriptionPaths = [];
 
         try {
-            $duplicate = DB::transaction(function () use ($seller, $product, &$copiedImagePaths): Product {
+            $duplicate = DB::transaction(function () use ($seller, $product, &$copiedImagePaths, &$copiedDescriptionPaths): Product {
                 $source = $seller->products()
                     ->with(['images', 'options.values', 'variants.optionValues', 'variants.productImage'])
                     ->whereKey($product->id)
@@ -294,6 +322,38 @@ class SellerProductController extends Controller
                     $imageIds[(int) $sourceImage->id] = (int) $image->id;
                 }
 
+                $copy->description = $source->description === null
+                    ? null
+                    : preg_replace_callback(
+                        '/\[\[image:image:(\d+)\]\]/',
+                        static fn (array $match): string => isset($imageIds[(int) $match[1]])
+                            ? '[[image:image:'.$imageIds[(int) $match[1]].']]'
+                            : '',
+                        $source->description,
+                    );
+                if ($copy->description !== null) {
+                    $copy->description = preg_replace_callback(
+                        '/\[\[description-image:stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))\]\]/i',
+                        function (array $match) use ($seller, $source, $copy, &$copiedDescriptionPaths): string {
+                            $sourcePath = "sellers/{$source->seller_profile_id}/products/{$source->id}/descriptions/{$match[1]}";
+                            if (! Storage::disk('public')->exists($sourcePath)) {
+                                return '';
+                            }
+
+                            $filename = Str::lower(Str::random(40)).'.'.strtolower(pathinfo($sourcePath, PATHINFO_EXTENSION));
+                            $copyPath = "sellers/{$seller->id}/products/{$copy->id}/descriptions/{$filename}";
+                            if (! Storage::disk('public')->copy($sourcePath, $copyPath)) {
+                                throw new \RuntimeException('A product description image could not be copied safely.');
+                            }
+                            $copiedDescriptionPaths[] = $copyPath;
+
+                            return '[[description-image:stored:'.$filename.']]';
+                        },
+                        $copy->description,
+                    );
+                }
+                $copy->save();
+
                 foreach ($source->variants as $index => $sourceVariant) {
                     $variantAttributes = [
                         'product_id' => $copy->id,
@@ -335,6 +395,9 @@ class SellerProductController extends Controller
             }, attempts: 3);
         } catch (Throwable $exception) {
             foreach (array_unique($copiedImagePaths) as $path) {
+                Storage::disk('public')->delete($path);
+            }
+            foreach (array_unique($copiedDescriptionPaths) as $path) {
                 Storage::disk('public')->delete($path);
             }
 
@@ -634,16 +697,36 @@ class SellerProductController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function viewData(Product $product): array
+    private function viewData(Product $product, bool $includeDescriptionImageLibrary = false): array
     {
         $product->loadMissing(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option']);
         $allVariants = $product->variants->sortBy('id')->values();
+        $priceResolver = app(ProductPriceResolver::class);
+        $allVariants->each(fn (ProductVariant $variant) => $variant->setRelation('product', $product));
         $activeVariants = $allVariants->where('is_active', true)->values();
         $imageLibrary = $product->images
             ->sortBy(fn (ProductImage $image): int => ((int) ! $image->is_primary * 1000000) + ((int) $image->sort_order * 1000) + (int) $image->id)
             ->values();
         $baseImages = $imageLibrary;
         $firstImage = $baseImages->first();
+        $descriptionImageLibrary = [];
+        if ($includeDescriptionImageLibrary
+            && preg_match_all(
+                '/\[\[description-image:stored:((?:[A-Za-z0-9]{40}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.(?:jpg|jpeg|png|webp))\]\]/i',
+                (string) $product->description,
+                $descriptionImageMatches,
+            )) {
+            foreach (array_unique($descriptionImageMatches[1]) as $filename) {
+                $path = "sellers/{$product->seller_profile_id}/products/{$product->id}/descriptions/{$filename}";
+                if (Storage::disk('public')->exists($path)) {
+                    $descriptionImageLibrary[] = [
+                        'ref' => 'stored:'.$filename,
+                        'url' => $this->catalog->publicUrl($path),
+                        'alt' => 'Product description image',
+                    ];
+                }
+            }
+        }
 
         return [
             'db_id' => $product->id,
@@ -660,8 +743,8 @@ class SellerProductController extends Controller
             'stock' => (int) $activeVariants->sum('stock'),
             'low_stock_count' => $activeVariants->filter(fn (ProductVariant $variant): bool => InventoryStockStatus::isLow((int) $variant->stock))->count(),
             'out_of_stock_count' => $activeVariants->filter(fn (ProductVariant $variant): bool => InventoryStockStatus::isOut((int) $variant->stock))->count(),
-            'sold' => (int) $product->orderItems->sum('quantity'),
-            'rating' => (float) $product->orderItems->pluck('review.rating')->filter()->avg(),
+            'sold' => (int) ($product->sold_units ?? 0),
+            'rating' => (float) ($product->average_rating ?? 0),
             // Keep a stable canonical key for logic and a title-cased value
             // for the existing Seller table presentation.
             'status' => str((string) $product->status)->replace('_', ' ')->headline(),
@@ -673,8 +756,13 @@ class SellerProductController extends Controller
                 default => 'is-neutral',
             },
             'description' => $product->description,
+            'description_image_library' => $descriptionImageLibrary,
             'flash_sale_starts_at' => $product->flash_sale_starts_at,
             'flash_sale_ends_at' => $product->flash_sale_ends_at,
+            'flash_sale_is_paused' => (bool) ($product->flash_sale_is_paused ?? false),
+            'discounts_enabled' => $product->discounts_enabled ?? true,
+            'discount_starts_at' => $product->discount_starts_at,
+            'discount_ends_at' => $product->discount_ends_at,
             'image' => $firstImage?->file_path
                 ? $this->catalog->publicUrl($firstImage->file_path)
                 : asset('images/product-placeholder.svg'),
@@ -702,24 +790,31 @@ class SellerProductController extends Controller
                     'value' => $value->value,
                 ])->all(),
             ])->all(),
-            'variation_rows' => $allVariants->map(fn (ProductVariant $variant): array => [
-                'id' => $variant->id,
-                'sku' => $variant->sku,
-                'price' => $variant->price,
-                'discount_type' => $variant->resolved_discount_type,
-                'discount_value' => $variant->discount_value,
-                'flash_sale_price' => $variant->flash_sale_price,
-                'flash_sale_allocation' => $variant->flash_sale_allocation,
-                'payment_method' => $variant->payment_method ?: 'cod_online',
-                'stock' => $variant->stock,
-                'weight_kg' => $variant->weight_kg,
-                'values' => $variant->optionValues->sortBy(fn ($value) => $value->option?->sort_order ?? 0)->pluck('value')->join(', '),
-                'option_value_ids' => $variant->optionValues->pluck('id')->values()->all(),
-                'product_image_id' => $variant->product_image_id,
-                'product_image_ref' => $variant->product_image_id ? 'image:'.$variant->product_image_id : null,
-                'description' => $variant->description,
-                'is_active' => $variant->is_active,
-            ])->all(),
+            'variation_rows' => $allVariants->map(function (ProductVariant $variant) use ($priceResolver): array {
+                $basePrice = round((float) $variant->price, 2);
+
+                return [
+                    'id' => $variant->id,
+                    'sku' => $variant->sku,
+                    'price' => $variant->price,
+                    'discount_type' => $variant->resolved_discount_type,
+                    'discount_value' => $variant->discount_value,
+                    'discount_active' => $priceResolver->productDiscountPrice($variant) < $basePrice,
+                    'flash_sale_price' => $variant->flash_sale_price,
+                    'flash_sale_active' => $priceResolver->activeFlashSalePrice($variant) !== null,
+                    'flash_sale_remaining' => $priceResolver->remainingFlashSaleUnits($variant),
+                    'flash_sale_allocation' => $variant->flash_sale_allocation,
+                    'payment_method' => $variant->payment_method ?: 'cod_online',
+                    'stock' => $variant->stock,
+                    'weight_kg' => $variant->weight_kg,
+                    'values' => $variant->optionValues->sortBy(fn ($value) => $value->option?->sort_order ?? 0)->pluck('value')->join(', '),
+                    'option_value_ids' => $variant->optionValues->pluck('id')->values()->all(),
+                    'product_image_id' => $variant->product_image_id,
+                    'product_image_ref' => $variant->product_image_id ? 'image:'.$variant->product_image_id : null,
+                    'description' => $variant->description,
+                    'is_active' => $variant->is_active,
+                ];
+            })->all(),
             'image_library' => $imageLibrary->map(fn (ProductImage $image, int $index): array => [
                 'id' => $image->id,
                 'ref' => 'image:'.$image->id,

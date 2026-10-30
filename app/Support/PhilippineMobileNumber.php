@@ -30,4 +30,14 @@ final class PhilippineMobileNumber
 
         return substr($local, 0, 4).' '.substr($local, 4, 3).' '.substr($local, 7, 4);
     }
+
+    public static function formatInternational(string $value): string
+    {
+        $normalized = self::normalize($value);
+        if ($normalized === null) {
+            return $value;
+        }
+
+        return substr($normalized, 0, 3).' '.substr($normalized, 3, 3).' '.substr($normalized, 6, 3).' '.substr($normalized, 9, 4);
+    }
 }

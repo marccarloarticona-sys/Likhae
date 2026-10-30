@@ -24,9 +24,12 @@ use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\SellerPromotion;
+use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\AccountNotificationService;
 use App\Services\Buyer\BuyerStoreNotificationService;
+use App\Services\Communication\ConversationService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Moderation\CloudflareProductModerationProvider;
 use App\Services\Moderation\FallbackProductModerationProvider;
@@ -147,6 +150,21 @@ class AppServiceProvider extends ServiceProvider
         Product::updated(function (Product $product) use ($buyerStoreNotifications): void {
             if ($product->wasChanged('status') && strtoupper((string) $product->status) === 'ACTIVE') {
                 $buyerStoreNotifications->productActivated($product);
+            }
+            if ($product->wasChanged(['flash_sale_starts_at', 'flash_sale_ends_at'])) {
+                $buyerStoreNotifications->productFlashSaleScheduleChanged($product);
+            }
+        });
+        SellerPromotion::created(fn (SellerPromotion $promotion) => $buyerStoreNotifications->sellerPromotionChanged((int) $promotion->id));
+        SellerPromotion::updated(function (SellerPromotion $promotion) use ($buyerStoreNotifications): void {
+            if ($promotion->wasChanged(['name', 'promotion_type', 'bundle_price', 'buy_variant_id', 'buy_quantity', 'reward_variant_id', 'reward_quantity', 'starts_at', 'ends_at', 'is_active'])) {
+                $buyerStoreNotifications->sellerPromotionChanged((int) $promotion->id);
+            }
+        });
+        Voucher::created(fn (Voucher $voucher) => $buyerStoreNotifications->sellerVoucherChanged((int) $voucher->id));
+        Voucher::updated(function (Voucher $voucher) use ($buyerStoreNotifications): void {
+            if ($voucher->wasChanged(['name', 'code', 'applies_to', 'visibility', 'discount_type', 'discount_value', 'minimum_order_amount', 'maximum_discount_amount', 'usage_limit', 'per_user_limit', 'starts_at', 'ends_at', 'is_active'])) {
+                $buyerStoreNotifications->sellerVoucherChanged((int) $voucher->id);
             }
         });
 
@@ -276,6 +294,21 @@ class AppServiceProvider extends ServiceProvider
 
             $view->with('sellerSidebarCounts', $counts);
             $view->with('sellerUiCounts', $counts);
+        });
+
+        View::composer('components.seller.header', function ($view) use ($hasTable): void {
+            /** @var User|null $sellerUser */
+            $sellerUser = auth()->user();
+            $messagePreview = ['items' => [], 'unread_count' => 0];
+
+            if ($sellerUser?->isAccountType(User::TYPE_SELLER)
+                && $hasTable('messages')
+                && $hasTable('conversation_participants')
+                && $hasTable('conversations')) {
+                $messagePreview = app(ConversationService::class)->headerPreviewFor($sellerUser);
+            }
+
+            $view->with('sellerMessagePreview', $messagePreview);
         });
 
         View::composer(['components.buyer.sidebar', 'components.buyer.header'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {

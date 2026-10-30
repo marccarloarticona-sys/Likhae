@@ -13,6 +13,46 @@ if (document.querySelector('[data-hero-carousel]')) {
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
+    const updateFlashSaleCountdown = (element) => {
+        const endAt = Date.parse(element.dateTime || element.getAttribute('datetime') || '');
+        if (!Number.isFinite(endAt)) return;
+        const remaining = endAt - Date.now();
+        if (remaining <= 0) {
+            element.textContent = 'Sale ended · refresh to see the current price';
+            return;
+        }
+
+        const totalSeconds = Math.floor(remaining / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const clock = [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+        element.textContent = days > 0 ? `Ends in ${days}d ${clock}` : `Ends in ${clock}`;
+    };
+    const updateFlashSaleStartCountdown = (element) => {
+        const startsAt = Date.parse(element.dateTime || element.getAttribute('datetime') || '');
+        if (!Number.isFinite(startsAt)) return;
+        const remaining = startsAt - Date.now();
+        if (remaining <= 0) {
+            element.textContent = 'Flash Sale is starting - refresh to update the price';
+            return;
+        }
+
+        const totalSeconds = Math.floor(remaining / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const clock = [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+        element.textContent = days > 0 ? `Starts in ${days}d ${clock}` : `Starts in ${clock}`;
+    };
+    const syncFlashSaleCountdowns = () => {
+        all('[data-flash-sale-countdown]').forEach(updateFlashSaleCountdown);
+        all('[data-flash-sale-start-countdown]').forEach(updateFlashSaleStartCountdown);
+    };
+    syncFlashSaleCountdowns();
+    window.setInterval(syncFlashSaleCountdowns, 1000);
     const body = document.body;
     const sidebar = one('[data-lk-sidebar]');
     const mobileButton = one('[data-lk-mobile-menu]');
@@ -48,6 +88,40 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast.timer = window.setTimeout(() => toast.classList.remove('is-visible'), 2800);
     };
     window.lkBuyerToast = showToast;
+
+    all('[data-home-voucher-claim]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const button = one('button[type="submit"]', form);
+            const card = form.closest('.lk-home-voucher-card');
+            const feedback = one('[data-voucher-feedback]', card || form);
+            if (!button || button.disabled) return;
+
+            const originalLabel = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Claiming…';
+            if (feedback) feedback.textContent = '';
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: new FormData(form),
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.message || 'This voucher could not be claimed. Refresh and try again.');
+
+                button.textContent = 'Claimed';
+                if (feedback) feedback.textContent = result.message || 'Voucher collected. Checkout will confirm eligibility.';
+                showToast('Voucher collected');
+            } catch (error) {
+                button.disabled = false;
+                button.textContent = originalLabel;
+                if (feedback) feedback.textContent = error.message || 'This voucher could not be claimed. Try again.';
+            }
+        });
+    });
 
     let marketplaceSearchOptionId = 0;
     all('[data-marketplace-search]').forEach((form) => {
@@ -213,7 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    all('[data-price-range]').forEach((range) => {
+    const initializePriceRange = (range) => {
         const minSlider = one('[data-price-min-slider]', range);
         const maxSlider = one('[data-price-max-slider]', range);
         const minInput = one('[data-price-min-input]', range);
@@ -289,7 +363,8 @@ document.addEventListener('DOMContentLoaded', () => {
         maxSlider.addEventListener('focus', () => raiseHandle(maxSlider));
         minSlider.addEventListener('input', () => { raiseHandle(minSlider); syncFromSliders(minSlider); });
         maxSlider.addEventListener('input', () => { raiseHandle(maxSlider); syncFromSliders(maxSlider); });
-    });
+    };
+    all('[data-price-range]').forEach(initializePriceRange);
 
     all('[data-live-filters]').forEach((form) => {
         let searchTimer;
@@ -461,9 +536,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const nextOutput = nextForm.querySelector(`[${output.hasAttribute('data-price-min-output') ? 'data-price-min-output' : 'data-price-max-output'}]`);
             if (nextOutput) output.textContent = nextOutput.textContent;
         });
-        const currentFill = one('[data-price-range-fill]', catalogFilterForm);
-        const nextFill = nextForm.querySelector('[data-price-range-fill]');
-        if (currentFill && nextFill) currentFill.style.cssText = nextFill.style.cssText;
+        const currentPriceRange = one('[data-price-range]', catalogFilterForm);
+        const nextPriceRange = nextForm.querySelector('[data-price-range]');
+        if (currentPriceRange && nextPriceRange) {
+            const focusedRangeControlId = currentPriceRange.contains(document.activeElement)
+                ? document.activeElement.id
+                : '';
+            const refreshedPriceRange = nextPriceRange.cloneNode(true);
+            currentPriceRange.replaceWith(refreshedPriceRange);
+            initializePriceRange(refreshedPriceRange);
+            if (focusedRangeControlId) one(`#${CSS.escape(focusedRangeControlId)}`, refreshedPriceRange)?.focus();
+        }
 
         const errorSummary = one('[data-catalog-ajax-error]', catalogFilterForm);
         if (errorSummary) {
@@ -481,11 +564,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const nextCategoryNav = documentWithResults.querySelector('[data-catalog-category-nav]');
         if (!nextCategoryNav) return;
 
-        const openCategories = new Set(all('details[data-category-slug][open]', catalogCategoryNav)
-            .map((category) => category.dataset.categorySlug));
+        const currentOpenCategory = one('details[data-category-slug][open]', catalogCategoryNav)?.dataset.categorySlug;
         catalogCategoryNav.innerHTML = nextCategoryNav.innerHTML;
+        const serverOpenCategory = one('details[data-category-slug][open]', catalogCategoryNav)?.dataset.categorySlug;
+        const openCategory = serverOpenCategory || currentOpenCategory;
         all('details[data-category-slug]', catalogCategoryNav).forEach((category) => {
-            if (openCategories.has(category.dataset.categorySlug)) category.open = true;
+            category.open = category.dataset.categorySlug === openCategory;
         });
     };
 
@@ -603,6 +687,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (catalogCategoryNav) {
         catalogCategoryNav.addEventListener('click', (event) => {
+            const summary = event.target instanceof Element ? event.target.closest('summary') : null;
+            const requestedCategory = summary?.closest('details[data-category-slug]');
+            if (requestedCategory && !requestedCategory.open) {
+                all('details[data-category-slug][open]', catalogCategoryNav)
+                    .filter((category) => category !== requestedCategory)
+                    .forEach((category) => { category.open = false; });
+            }
+
             const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
             if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
@@ -872,6 +964,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedVariation = (scope) => {
         const selected = one('[data-variation-option][aria-pressed="true"]', scope);
         if (!selected) return null;
+        const product = selected.closest('[data-variant-stock-product]');
+        let flashSales = {};
+        try { flashSales = JSON.parse(product?.dataset.variationFlashSales || '{}'); } catch (_) {}
+        const flashSale = flashSales[selected.dataset.variationId || ''] || {};
 
         return {
             id: selected.dataset.variationId || '',
@@ -882,6 +978,13 @@ document.addEventListener('DOMContentLoaded', () => {
             discountType: selected.dataset.variationDiscountType || 'none',
             discountValue: Number(selected.dataset.variationDiscountValue ?? selected.dataset.variationDiscount ?? 0),
             discountAmount: Number(selected.dataset.variationDiscountAmount || 0),
+            flashSaleStatus: flashSale.status || '',
+            flashSaleActive: flashSale.active ?? selected.dataset.variationFlashSaleActive === '1',
+            flashSalePrice: Number(flashSale.price ?? 0),
+            flashSaleRemaining: Number(flashSale.remaining ?? selected.dataset.variationFlashSaleRemaining ?? 0),
+            flashSaleStartsAt: flashSale.starts_at || '',
+            flashSaleEndsAt: flashSale.ends_at || selected.dataset.variationFlashSaleEndsAt || '',
+            flashSaleLimit: flashSale.limit ?? selected.dataset.variationFlashSaleLimit ?? '',
         };
     };
 
@@ -950,6 +1053,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (requestedQuantity > variation.stock) {
             showToast('Requested quantity exceeds available stock.');
+            return;
+        }
+        if (variation.flashSaleActive && variation.flashSaleRemaining > 0 && requestedQuantity > variation.flashSaleRemaining) {
+            showToast(`Only ${variation.flashSaleRemaining} promotional unit${variation.flashSaleRemaining === 1 ? '' : 's'} remain for this variation.`);
+            return;
+        }
+        if (variation.flashSaleActive && Number(variation.flashSaleLimit) > 0 && requestedQuantity > Number(variation.flashSaleLimit)) {
+            showToast(`This flash sale allows up to ${variation.flashSaleLimit} unit${Number(variation.flashSaleLimit) === 1 ? '' : 's'} per Buyer.`);
             return;
         }
         const remainingAllowance = scope.dataset.purchaseLimitRemaining === undefined
@@ -1021,6 +1132,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (requestedQuantity > variation.stock) {
             event.preventDefault();
             showToast('Requested quantity exceeds available stock.');
+            return;
+        }
+        if (variation.flashSaleActive && variation.flashSaleRemaining > 0 && requestedQuantity > variation.flashSaleRemaining) {
+            event.preventDefault();
+            showToast(`Only ${variation.flashSaleRemaining} promotional unit${variation.flashSaleRemaining === 1 ? '' : 's'} remain for this variation.`);
+            return;
+        }
+        if (variation.flashSaleActive && Number(variation.flashSaleLimit) > 0 && requestedQuantity > Number(variation.flashSaleLimit)) {
+            event.preventDefault();
+            showToast(`This flash sale allows up to ${variation.flashSaleLimit} unit${Number(variation.flashSaleLimit) === 1 ? '' : 's'} per Buyer.`);
             return;
         }
         const remainingAllowance = scope.dataset.purchaseLimitRemaining === undefined
@@ -1146,10 +1267,56 @@ document.addEventListener('DOMContentLoaded', () => {
                         : `${(variation?.discountValue || 0).toLocaleString('en-PH', {maximumFractionDigits: 2})}% OFF`;
                 }
             }
+            const flashSaleBadge = one('[data-variation-flash-sale-badge]', product);
+            const flashSaleStock = one('[data-variation-flash-sale-stock]', product);
+            const flashSaleRemaining = one('[data-flash-sale-remaining]', product);
+            const flashSaleLimit = one('[data-flash-sale-limit]', product);
+            const flashSaleCountdown = one('[data-flash-sale-countdown]', product);
+            const flashSaleAvailable = Boolean(variation?.flashSaleActive && variation.flashSaleRemaining > 0 && stock > 0);
+            if (flashSaleBadge) flashSaleBadge.hidden = !flashSaleAvailable;
+            if (flashSaleStock) flashSaleStock.hidden = !flashSaleAvailable;
+            if (flashSaleRemaining) flashSaleRemaining.textContent = new Intl.NumberFormat('en-PH').format(variation?.flashSaleRemaining || 0);
+            if (flashSaleLimit) {
+                flashSaleLimit.hidden = !variation?.flashSaleLimit;
+                flashSaleLimit.textContent = variation?.flashSaleLimit
+                    ? `Limit ${new Intl.NumberFormat('en-PH').format(Number(variation.flashSaleLimit))} per Buyer`
+                    : '';
+            }
+            if (flashSaleCountdown) {
+                const endAt = variation?.flashSaleEndsAt || '';
+                flashSaleCountdown.dateTime = endAt;
+                if (endAt) flashSaleCountdown.setAttribute('datetime', endAt);
+                else flashSaleCountdown.removeAttribute('datetime');
+                flashSaleCountdown.hidden = !flashSaleAvailable || !endAt;
+                if (!flashSaleCountdown.hidden) updateFlashSaleCountdown(flashSaleCountdown);
+            }
+            const upcomingFlashSale = one('[data-variation-flash-sale-upcoming]', product);
+            const upcomingFlashSalePrice = one('[data-flash-sale-upcoming-price]', product);
+            const upcomingFlashSaleStock = one('[data-flash-sale-upcoming-stock]', product);
+            const flashSaleStartCountdown = one('[data-flash-sale-start-countdown]', product);
+            const flashSaleScheduled = variation?.flashSaleStatus === 'SCHEDULED' && variation.flashSaleRemaining > 0 && stock > 0;
+            if (upcomingFlashSale) upcomingFlashSale.hidden = !flashSaleScheduled;
+            if (upcomingFlashSalePrice && flashSaleScheduled) {
+                upcomingFlashSalePrice.textContent = `₱${variation.flashSalePrice.toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            }
+            if (upcomingFlashSaleStock && flashSaleScheduled) {
+                upcomingFlashSaleStock.textContent = `${new Intl.NumberFormat('en-PH').format(variation.flashSaleRemaining)} promotional units allocated`;
+            }
+            if (flashSaleStartCountdown) {
+                const startAt = variation?.flashSaleStartsAt || '';
+                flashSaleStartCountdown.dateTime = startAt;
+                if (startAt) flashSaleStartCountdown.setAttribute('datetime', startAt);
+                else flashSaleStartCountdown.removeAttribute('datetime');
+                flashSaleStartCountdown.hidden = !flashSaleScheduled || !startAt;
+                if (!flashSaleStartCountdown.hidden) updateFlashSaleStartCountdown(flashSaleStartCountdown);
+            }
             const remainingAllowance = product.dataset.purchaseLimitRemaining === undefined
                 ? null
                 : Number(product.dataset.purchaseLimitRemaining);
-            const maxQuantity = Math.max(0, Math.min(stock, remainingAllowance ?? stock));
+            const flashSaleQuantityLimit = flashSaleAvailable
+                ? Math.min(variation.flashSaleRemaining, Number(variation.flashSaleLimit) > 0 ? Number(variation.flashSaleLimit) : stock)
+                : stock;
+            const maxQuantity = Math.max(0, Math.min(stock, remainingAllowance ?? stock, flashSaleQuantityLimit));
             if (quantity) {
                 quantity.max = Math.max(1, maxQuantity);
                 quantity.value = Math.min(Number(quantity.value || 1), Math.max(1, maxQuantity));
@@ -1537,7 +1704,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? 'DELIVERED' : order.status;
                 const trackingUpdate = (shipment) => {
                     if (['CANCELLED', 'RETURNED'].includes(shipment.status)) return '';
-                    if (['DELIVERED', 'COMPLETED'].includes(shipment.status)) return 'Parcel has been delivered';
+                    if (shipment.status === 'COMPLETED') return 'Buyer confirmed receipt';
+                    if (shipment.status === 'DELIVERED') return 'Parcel has been delivered';
+                    if (shipment.status === 'DELIVERY_FAILED' && shipment.return_workflow_open) {
+                        return shipment.return_disposition === 'REDELIVERY'
+                            ? 'Redelivery is being arranged'
+                            : 'Return to seller is in progress';
+                    }
+                    if (shipment.status === 'DELIVERY_FAILED' && shipment.return_workflow_status === 'SELLER_RECEIVED') {
+                        return 'Seller has received the returned parcel';
+                    }
                     const inTransitLeg = (shipment.transfer_legs || []).find((leg) => leg.status === 'IN_TRANSIT');
                     const originName = inTransitLeg?.origin_center_name || shipment.current_center_name || 'the origin hub';
                     const destinationName = inTransitLeg?.destination_center_name || 'the next hub';
@@ -1556,7 +1732,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     return 'Seller is preparing your parcel';
                 };
                 (payload.orders || []).forEach((order) => {
+                    const currentTabKey = (orderPage.dataset.orderTabKey || 'all').toUpperCase().replaceAll('-', '_');
+                    if (['TO_RECEIVE', 'COMPLETED', 'RETURNS'].includes(currentTabKey)) {
+                        const tabChangedOnPage = (order.shipments || []).some((shipment) => {
+                            const row = orderPage.querySelector(`[data-shipment-tab-key-id="${shipment.id}"]`);
+                            return row && row.dataset.shipmentTabKey !== shipment.tab_key;
+                        });
+                        if (tabChangedOnPage) {
+                            window.location.reload();
+                            return;
+                        }
+                    }
+
+                    const confirmableShipmentIds = new Set((order.confirmable_shipment_ids || []).map(Number));
+                    if (detailOrderId === Number(order.id) && order.actions?.confirmable_shipment_ids) {
+                        order.actions.confirmable_shipment_ids.forEach((id) => confirmableShipmentIds.add(Number(id)));
+                    }
+                    orderPage.querySelectorAll('[data-confirm-shipment-action]').forEach((form) => {
+                        if (!confirmableShipmentIds.has(Number(form.dataset.confirmShipmentAction))) form.hidden = true;
+                        else form.hidden = false;
+                    });
+
                     document.querySelectorAll(`[data-order-status-id="${order.id}"]`).forEach((element) => { element.textContent = headline(displayStatus(order)); });
+                    (order.seller_orders || []).forEach((sellerOrder) => {
+                        document.querySelectorAll(`[data-seller-order-status-id="${sellerOrder.id}"]`).forEach((element) => {
+                            element.textContent = sellerOrder.display_status || element.textContent;
+                        });
+                    });
                     (order.shipments || []).forEach((shipment) => {
                         const buyerUpdate = trackingUpdate(shipment);
                         document.querySelectorAll(`[data-shipment-status-id="${shipment.id}"]`).forEach((element) => {
@@ -1571,6 +1773,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (detailOrderId === Number(order.id) && order.actions) {
                         const receivedAction = orderPage.querySelector('[data-order-received-action]');
                         const returnAction = orderPage.querySelector('[data-order-return-action]');
+                        const detailActions = orderPage.querySelector('[data-order-detail-actions]');
                         const deadline = orderPage.querySelector('[data-auto-receipt-deadline]');
                         const detailMessage = orderPage.querySelector('[data-order-detail-message]');
                         if (receivedAction) receivedAction.hidden = !order.actions.can_confirm_received;
@@ -1584,7 +1787,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (detailMessage) {
                             detailMessage.textContent = order.actions.completed
                                 ? (orderPage.querySelector('#reviews') ? 'Your order is complete. You can rate the products below.' : 'Your order was received. Refresh to open the product review forms.')
-                                : (order.actions.can_confirm_received ? 'Check the delivered items before confirming receipt.' : 'Review your delivery and order details.');
+                                : (order.actions.can_confirm_received ? 'Check the delivered items before confirming receipt.' : '');
+                            detailMessage.hidden = detailMessage.textContent === '';
+                        }
+                        if (detailActions) {
+                            detailActions.hidden = Boolean(detailMessage?.hidden)
+                                && !order.actions.can_confirm_received
+                                && !order.actions.can_request_return;
                         }
                         if (order.actions.can_confirm_received) {
                             orderPage.querySelectorAll('[data-shipment-guidance-id]').forEach((guidance) => {

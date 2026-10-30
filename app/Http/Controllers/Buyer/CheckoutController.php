@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\Address;
 use App\Models\Seller\Voucher;
+use App\Services\Buyer\BuyerRiskMonitor;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Support\AddressCoordinateValidator;
@@ -376,7 +377,7 @@ class CheckoutController extends Controller
         return redirect()->route('buyer.checkout');
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request, BuyerRiskMonitor $riskMonitor): RedirectResponse
     {
         $automaticRouting = $this->checkoutService->automaticRoutingReady();
         $logisticsRules = $automaticRouting
@@ -472,6 +473,8 @@ class CheckoutController extends Controller
 
             throw $exception;
         }
+
+        $riskMonitor->recordBuyerRiskSignals($request->user());
 
         $request->session()->forget(['checkout_cart_item_ids', 'checkout_protection_item_ids', 'checkout_reward_points', 'checkout_seller_notes', 'checkout_price_snapshots']);
         $this->storeVoucherSelection($request, ['seller' => [], 'platform' => '', 'shipping' => '']);

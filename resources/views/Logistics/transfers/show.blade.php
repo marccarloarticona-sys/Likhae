@@ -3,8 +3,14 @@
 @section('title', 'Transfer Manifest - LIKHAE Logistics')
 
 @section('content')
-@php($releasedParcelCount = $manifest->items->filter(fn ($item) => $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED)->count())
-@php($accountedParcelCount = $manifest->items->filter(fn ($item) => $item->status !== \App\Models\Logistics\TransferManifestItem::EXPECTED)->count())
+@php
+    $releasedParcelCount = $manifest->items
+        ->filter(fn ($item) => $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED)
+        ->count();
+    $accountedParcelCount = $manifest->items
+        ->filter(fn ($item) => $item->status !== \App\Models\Logistics\TransferManifestItem::EXPECTED)
+        ->count();
+@endphp
 <div class="flex w-full flex-col gap-6" @if(! $isOriginCenter) data-transfer-scan-container="receive" @endif>
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -12,7 +18,7 @@
             <h1 class="mt-2 font-display text-[28px] font-semibold tracking-[-0.04em] text-ink">{{ $manifest->manifest_number }}</h1>
             <p class="mt-1 text-[10px] text-muted">{{ $manifest->originLogisticsCenter?->business_name }} &rarr; {{ $manifest->destinationLogisticsCenter?->business_name }} &middot; {{ $manifest->status === 'DRAFT' ? 'Preparing' : str($manifest->status)->headline() }} @if($manifest->status === 'SEALED')<span data-manifest-handoff-progress class="{{ $releasedParcelCount > 0 ? '' : 'hidden' }}">&middot; {{ $releasedParcelCount }} / {{ $manifest->items->count() }} parcels released</span>@endif</p>
             @if($manifest->status === 'DRAFT')
-                <p class="mt-2 max-w-2xl text-[10px] leading-5 text-muted">Review the parcels and their measurements, assign an approved four-wheel driver, then seal the transfer. Parcels leave this hub after the driver accepts and staff scan the handoff.</p>
+                <p class="mt-2 max-w-2xl text-[10px] leading-5 text-muted">Review the parcel weights and assign an approved four-wheel driver, then seal the transfer. Saved packed weights are reused; missing weights are estimated from product weight × quantity. Parcels leave this hub after the driver accepts and staff scan the handoff.</p>
             @endif
         </div>
         <a href="{{ route('logistics.transfers') }}" class="rounded-lg border border-line px-4 py-3 text-[10px] font-semibold text-ink">Back to transfers</a>
@@ -82,8 +88,10 @@
                             <input type="hidden" data-scanner-method value="MANUAL">
                         </section>
                         @forelse($manifest->items as $item)
-                            @php($trackingNumber = (string) $item->transferLeg?->shipment?->tracking_number)
-                            @php($isReleased = $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED)
+                            @php
+                                $trackingNumber = (string) $item->transferLeg?->shipment?->tracking_number;
+                                $isReleased = $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED;
+                            @endphp
                             <form method="POST" action="{{ route('logistics.transfers.items.release', [$manifest, $item]) }}" data-transfer-parcel-row data-released="{{ $isReleased ? 'true' : 'false' }}" class="grid gap-2 border-b border-line pb-3 text-[10px] sm:grid-cols-[1fr_1fr_auto_auto] sm:items-center">
                                 @csrf
                                 <strong>{{ $trackingNumber }}</strong>
@@ -225,7 +233,9 @@
         <h2 class="text-[13px] font-semibold text-ink">Parcels in this transfer</h2>
         @if($isOriginCenter && $manifest->status === 'DRAFT')
             <p class="mt-1 text-[10px] text-muted">Weight is required for every parcel. Volume is optional; its capacity is checked only when a volume is entered for every parcel.</p>
-            @php($itemsMissingWeight = $manifest->items->filter(fn ($item) => blank($item->transferLeg?->shipment?->parcel_weight_kg)))
+            @php
+                $itemsMissingWeight = $manifest->items->filter(fn ($item) => blank($item->transferLeg?->shipment?->parcel_weight_kg));
+            @endphp
             @if($itemsMissingWeight->isNotEmpty())
                 <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] text-amber-950">
                     <strong>Weight needed for {{ $itemsMissingWeight->count() }} {{ \Illuminate\Support\Str::plural('parcel', $itemsMissingWeight->count()) }}:</strong>
@@ -244,28 +254,41 @@
                 <thead><tr class="border-b border-line text-muted"><th class="px-2 py-3">Leg</th><th class="px-2 py-3">Shipment</th><th class="px-2 py-3">Status</th><th class="px-2 py-3">Receipt</th></tr></thead>
                 <tbody>
                     @forelse($manifest->items as $item)
+                        @php
+                            $shipment = $item->transferLeg?->shipment;
+                            $orderItem = $shipment?->orderItem;
+                            $savedWeight = is_numeric($shipment?->parcel_weight_kg) && (float) $shipment->parcel_weight_kg > 0
+                                ? (float) $shipment->parcel_weight_kg
+                                : null;
+                            $unitWeight = $orderItem?->productVariant?->weight_kg;
+                            $quantity = (int) ($orderItem?->quantity ?? 0);
+                            $estimatedWeight = $savedWeight === null && is_numeric($unitWeight) && (float) $unitWeight > 0 && $quantity > 0
+                                ? round((float) $unitWeight * $quantity, 3, PHP_ROUND_HALF_UP)
+                                : null;
+                            $displayWeight = $savedWeight ?? $estimatedWeight;
+                        @endphp
                         <tr class="border-b border-line">
                             <td class="px-2 py-3">#{{ $item->transfer_leg_id }} · {{ $item->transferLeg?->status }}</td>
                             <td class="px-2 py-3">
                                 <strong class="block">{{ $item->transferLeg?->shipment?->tracking_number }}</strong>
                                 @if($isOriginCenter && $manifest->status === 'DRAFT')
-                                    @if(blank($item->transferLeg?->shipment?->parcel_weight_kg))
-                                        <span class="mt-1 inline-block rounded bg-amber-100 px-2 py-1 text-[9px] font-semibold text-amber-900">Weight needed</span>
+                                    @if($savedWeight !== null)
+                                        <span class="mt-1 inline-block rounded bg-green-100 px-2 py-1 text-[9px] font-semibold text-green-900">Weight recorded</span>
+                                    @elseif($estimatedWeight !== null)
+                                        <span class="mt-1 inline-block rounded bg-blue-100 px-2 py-1 text-[9px] font-semibold text-blue-900">Product weight estimate</span>
                                     @else
-                                        <span class="mt-1 inline-block rounded bg-green-100 px-2 py-1 text-[9px] font-semibold text-green-900">Weight saved</span>
+                                        <span class="mt-1 inline-block rounded bg-amber-100 px-2 py-1 text-[9px] font-semibold text-amber-900">Product weight needed</span>
                                     @endif
                                 @endif
                                 @if($item->transferLeg?->shipment?->orderItem?->hasAdditionalCare())<span class="ml-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 font-bold uppercase text-amber-900">Fragile / Additional Care</span>@endif
+                                <p class="mt-1 text-muted">Weight: {{ $displayWeight !== null ? number_format($displayWeight, 3).' kg' : 'Not recorded' }}@if($estimatedWeight !== null) <span class="text-blue-800">(product weight × quantity; packaging not included)</span>@endif &middot; Volume: {{ $shipment?->parcel_volume_liters ? $shipment->parcel_volume_liters.' L' : 'Not recorded (optional)' }}</p>
                                 @if($isOriginCenter && $manifest->status === 'DRAFT' && $item->status === 'EXPECTED')
                                     <form method="POST" action="{{ route('logistics.transfers.items.measurements', [$manifest, $item]) }}" class="mt-3 grid gap-2 rounded-lg border border-line p-3 sm:grid-cols-2">
                                         @csrf @method('PATCH')
-                                        <strong class="sm:col-span-2">Measurements for {{ $item->transferLeg?->shipment?->tracking_number }}</strong>
-                                        <label>Weight (kg) <span class="text-red-700">required</span><input name="parcel_weight_kg" type="number" min="0.001" max="9999999.999" step="0.001" required value="{{ $item->transferLeg?->shipment?->parcel_weight_kg }}" class="mt-1 w-full rounded border border-line px-2 py-2"></label>
-                                        <label>Volume (L) <span class="text-muted">optional</span><input name="parcel_volume_liters" type="number" min="0.001" max="999999999.999" step="0.001" value="{{ $item->transferLeg?->shipment?->parcel_volume_liters }}" class="mt-1 w-full rounded border border-line px-2 py-2"></label>
-                                        <button class="rounded bg-primary px-3 py-2 font-semibold text-white sm:col-span-2">Save measurements</button>
+                                        <strong class="sm:col-span-2">Optional volume for {{ $shipment?->tracking_number }}</strong>
+                                        <label class="sm:col-span-2">Volume (L) <span class="text-muted">optional</span><input name="parcel_volume_liters" type="number" min="0.001" max="999999999.999" step="0.001" required value="{{ $shipment?->parcel_volume_liters }}" class="mt-1 w-full rounded border border-line px-2 py-2"></label>
+                                        <button class="rounded bg-primary px-3 py-2 font-semibold text-white sm:col-span-2">Save volume</button>
                                     </form>
-                                @else
-                                    <p class="mt-1 text-muted">Weight: {{ $item->transferLeg?->shipment?->parcel_weight_kg ?? 'Not recorded' }} kg &middot; Volume: {{ $item->transferLeg?->shipment?->parcel_volume_liters ? $item->transferLeg->shipment->parcel_volume_liters.' L' : 'Not recorded (optional)' }}</p>
                                 @endif
                             </td>
                             <td class="px-2 py-3" data-transfer-leg-status="{{ $item->id }}">

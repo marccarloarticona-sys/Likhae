@@ -15,9 +15,11 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Seller\SellerApplicationData;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
+use App\Notifications\RegistrationDocumentResubmissionNotification;
 use App\Notifications\RegistrationDecisionNotification;
 use App\Services\Media\ImageOptimizationService;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -39,21 +41,42 @@ class RegistrationWorkflowService
         $publicPaths = [];
 
         try {
-            return DB::transaction(function () use ($request, $data, &$storedPaths, &$publicPaths): RegistrationApplication {
-                $user = User::create([
-                    'account_type' => $request->accountTypeConstant(),
+            $application = DB::transaction(function () use ($request, $data, &$storedPaths, &$publicPaths): RegistrationApplication {
+                $accountType = $request->accountTypeConstant();
+                $email = mb_strtolower(trim($data['email']));
+                $existingUser = User::query()
+                    ->whereRaw('LOWER(email) = ?', [$email])
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($existingUser && ! $existingUser->canResubmitRejectedRegistration($accountType)) {
+                    throw ValidationException::withMessages([
+                        'email' => 'This email cannot be used to submit another registration application.',
+                    ]);
+                }
+
+                $isBuyer = $accountType === User::TYPE_BUYER;
+                $userData = [
+                    'account_type' => $accountType,
                     'first_name' => trim($data['first_name']),
                     'middle_initial' => filled($data['middle_initial'] ?? null) ? trim((string) $data['middle_initial']) : null,
                     'last_name' => trim($data['last_name']),
                     'name_extension' => filled($data['name_extension'] ?? null) ? trim((string) $data['name_extension']) : null,
                     'sex' => $this->normalizeSex((string) $data['sex']),
-                    'email' => mb_strtolower(trim($data['email'])),
+                    'email' => $email,
                     'contact_number' => trim($data['contact_number']),
                     'birthday' => $data['birthday'],
                     'email_verified_at' => now(),
                     'password' => $data['password'],
-                    'status' => User::STATUS_PENDING,
-                ]);
+                    'status' => $isBuyer ? User::STATUS_ACTIVE : User::STATUS_PENDING,
+                ];
+
+                if ($existingUser) {
+                    $user = $existingUser;
+                    $user->fill($userData)->save();
+                } else {
+                    $user = User::create($userData);
+                }
 
                 $addressData = [
                     'user_id' => $user->id,
@@ -62,6 +85,8 @@ class RegistrationWorkflowService
                     'contact_number' => $user->contact_number,
                     'province_code' => $data['province_code'],
                     'province_name' => $data['province'],
+                    'region_code' => $data['region_code'],
+                    'region_name' => $data['region'],
                     'municipality_code' => $data['municipality_code'],
                     'municipality_name' => $data['municipality'],
                     'barangay_code' => $data['barangay_code'],
@@ -74,13 +99,29 @@ class RegistrationWorkflowService
                     'longitude' => $data['longitude'] ?? null,
                     'is_default' => true,
                 ];
-                $address = Address::create($addressData);
+                Address::query()
+                    ->where('user_id', $user->id)
+                    ->where('is_default', true)
+                    ->update(['is_default' => false]);
+                $address = $user->addresses()
+                    ->where('label', 'Primary')
+                    ->orderBy('id')
+                    ->first();
+                if ($address) {
+                    $address->fill($addressData)->save();
+                } else {
+                    $address = Address::create($addressData);
+                }
 
                 $application = RegistrationApplication::create([
                     'application_number' => $this->newApplicationNumber(),
                     'user_id' => $user->id,
-                    'status' => RegistrationApplication::STATUS_PENDING,
+                    'status' => $isBuyer
+                        ? RegistrationApplication::STATUS_APPROVED
+                        : RegistrationApplication::STATUS_PENDING,
                     'submitted_at' => now(),
+                    'reviewed_at' => $isBuyer ? now() : null,
+                    'decision_notes' => $isBuyer ? 'Buyer registration is approved automatically.' : null,
                 ]);
 
                 match ($user->account_type) {
@@ -111,8 +152,8 @@ class RegistrationWorkflowService
                 };
 
                 if ($user->account_type === User::TYPE_SELLER) {
-                    SellerProfile::create([
-                        'user_id' => $user->id,
+                    $sellerProfile = SellerProfile::query()->firstOrNew(['user_id' => $user->id]);
+                    $sellerProfile->fill([
                         'primary_category_id' => (int) $data['line_of_business'],
                         'business_address_id' => $address->id,
                         'business_name' => trim($data['business_name']),
@@ -120,40 +161,42 @@ class RegistrationWorkflowService
                         'seller_type' => $data['seller_type'] ?? null,
                         'tin' => $data['tin'] ?? null,
                         'status' => 'PENDING',
-                    ]);
+                        'approved_by_user_id' => null,
+                        'approved_at' => null,
+                    ])->save();
                 } elseif ($user->account_type === User::TYPE_LOGISTICS) {
-                    LogisticsCenter::create([
-                        'owner_user_id' => $user->id,
+                    $logisticsCenter = LogisticsCenter::query()->firstOrNew(['owner_user_id' => $user->id]);
+                    if (! $logisticsCenter->exists) {
+                        $logisticsCenter->code = 'LC-'.str_pad((string) $application->id, 6, '0', STR_PAD_LEFT);
+                    }
+                    $logisticsCenter->fill([
                         'address_id' => $address->id,
-                        'code' => 'LC-'.str_pad((string) $application->id, 6, '0', STR_PAD_LEFT),
                         'business_name' => trim($data['business_name']),
                         'business_registration_number' => $data['business_registration_number'] ?? null,
                         'dti_registration_number' => $data['dti_registration_number'] ?? null,
                         'tin' => $data['tin'] ?? null,
                         'status' => 'PENDING',
-                    ]);
+                        'approved_by_user_id' => null,
+                        'approved_at' => null,
+                    ])->save();
                 } elseif ($user->account_type === User::TYPE_RIDER) {
-                    RiderProfile::create([
-                        'user_id' => $user->id,
+                    $riderProfile = RiderProfile::query()->firstOrNew(['user_id' => $user->id]);
+                    $riderProfile->fill([
                         'logistics_center_id' => (int) $data['target_logistics_center_id'],
                         'vehicle_type' => $data['vehicle_type'],
                         'plate_number' => mb_strtoupper(trim($data['plate_number'])),
                         'drivers_license_number' => mb_strtoupper(trim($data['drivers_license_number'])),
                         'status' => 'PENDING',
-                    ]);
+                        'is_online' => false,
+                        'availability_latitude' => null,
+                        'availability_longitude' => null,
+                        'availability_location_updated_at' => null,
+                        'approved_by_user_id' => null,
+                        'approved_at' => null,
+                    ])->save();
                 }
 
-                $documentMap = [
-                    'valid_id' => 'VALID_ID',
-                    'business_permit' => 'BUSINESS_PERMIT',
-                    'dti_certificate' => 'DTI_CERTIFICATE',
-                    'sec_certificate' => 'SEC_CERTIFICATE',
-                    'bir_form_2303' => 'BIR_FORM_2303',
-                    'or_cr' => 'VEHICLE_OR_CR',
-                    'drivers_license' => 'DRIVERS_LICENSE',
-                ];
-
-                foreach ($documentMap as $input => $type) {
+                foreach (ApplicationDocument::UPLOAD_FIELDS as $input => $type) {
                     $file = $request->file($input);
                     if (! $file) {
                         continue;
@@ -163,30 +206,16 @@ class RegistrationWorkflowService
                         .strtolower($user->account_type).'/'
                         .$application->application_number.'/'
                         .strtolower($type);
-                    $mimeType = $file->getMimeType();
-                    $path = in_array($mimeType, ['image/jpeg', 'image/png', 'image/webp'], true)
-                        ? app(ImageOptimizationService::class)->store($file, $directory, 'registrations')
-                        : $file->store($directory, 'registrations');
-
-                    if (! is_string($path)) {
-                        throw new RuntimeException('The registration document could not be stored.');
-                    }
-
+                    $storedFile = $this->storeRegistrationDocument($file, $directory);
+                    $path = $storedFile['path'];
                     $storedPaths[] = $path;
-                    $storedMimeType = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-                        'jpg', 'jpeg' => 'image/jpeg',
-                        'png' => 'image/png',
-                        'webp' => 'image/webp',
-                        'pdf' => 'application/pdf',
-                        default => $mimeType ?: 'application/octet-stream',
-                    };
 
                     ApplicationDocument::create([
                         'registration_application_id' => $application->id,
                         'document_type' => $type,
                         'file_path' => $path,
                         'original_name' => $file->getClientOriginalName(),
-                        'mime_type' => $storedMimeType,
+                        'mime_type' => $storedFile['mime_type'],
                         'verification_status' => 'PENDING',
                     ]);
                 }
@@ -232,14 +261,31 @@ class RegistrationWorkflowService
                     record: $application,
                     oldValues: null,
                     newValues: [
-                        'status' => RegistrationApplication::STATUS_PENDING,
+                        'status' => $application->status,
                         'account_type' => $user->account_type,
                     ],
                     request: $request,
                 );
 
+                if ($isBuyer) {
+                    $this->audit(
+                        actor: null,
+                        event: 'registration.auto_approved',
+                        record: $application,
+                        oldValues: ['status' => RegistrationApplication::STATUS_PENDING],
+                        newValues: ['status' => RegistrationApplication::STATUS_APPROVED, 'account_type' => User::TYPE_BUYER],
+                        request: $request,
+                    );
+                }
+
                 return $application->load(['user', 'documents', 'sellerData', 'logisticsData', 'riderData']);
             });
+
+            if ($application->user?->isAccountType(User::TYPE_BUYER)) {
+                $this->notifyDecision($application);
+            }
+
+            return $application;
         } catch (Throwable $exception) {
             foreach ($storedPaths as $path) {
                 Storage::disk('registrations')->delete($path);
@@ -501,6 +547,10 @@ class RegistrationWorkflowService
                 throw ValidationException::withMessages(['document' => 'This document does not belong to the application.']);
             }
 
+            if ((int) $application->documents()->whereRaw('UPPER(document_type) = ?', [strtoupper((string) $document->document_type)])->max('id') !== (int) $document->id) {
+                throw ValidationException::withMessages(['document' => 'Only the latest submission can be reviewed.']);
+            }
+
             $before = $document->verification_status;
             $document->update([
                 'verification_status' => 'VERIFIED',
@@ -533,13 +583,17 @@ class RegistrationWorkflowService
         string $reason,
         ?Request $request = null,
     ): ApplicationDocument {
-        return DB::transaction(function () use ($application, $document, $reviewer, $reason, $request): ApplicationDocument {
+        $rejectedDocument = DB::transaction(function () use ($application, $document, $reviewer, $reason, $request): ApplicationDocument {
             $application = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
             $this->ensureReviewableStatus($application);
             $document = $application->documents()->lockForUpdate()->find($document->id);
 
             if (! $document) {
                 throw ValidationException::withMessages(['document' => 'This document does not belong to the application.']);
+            }
+
+            if ((int) $application->documents()->whereRaw('UPPER(document_type) = ?', [strtoupper((string) $document->document_type)])->max('id') !== (int) $document->id) {
+                throw ValidationException::withMessages(['document' => 'Only the latest submission can be reviewed.']);
             }
 
             $before = $document->verification_status;
@@ -565,6 +619,132 @@ class RegistrationWorkflowService
 
             return $document->fresh('verifier');
         });
+
+        $freshApplication = $application->fresh(['user']);
+        if ($freshApplication?->user) {
+            try {
+                $freshApplication->user->notify(new RegistrationDocumentResubmissionNotification(
+                    $freshApplication,
+                    $rejectedDocument,
+                ));
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return $rejectedDocument;
+    }
+
+    /** @return array<int, array{input: string, document: ApplicationDocument}> */
+    public function rejectedDocumentUploads(RegistrationApplication $application): array
+    {
+        $latestByType = $application->documents
+            ->groupBy(fn (ApplicationDocument $document): string => strtoupper((string) $document->document_type))
+            ->map(fn ($versions): ApplicationDocument => $versions->sortByDesc('id')->first());
+
+        return collect(ApplicationDocument::UPLOAD_FIELDS)
+            ->map(fn (string $type, string $input): array => [
+                'input' => $input,
+                'document' => $latestByType->get($type),
+            ])
+            ->filter(fn (array $entry): bool => $entry['document'] instanceof ApplicationDocument
+                && strtoupper((string) $entry['document']->verification_status) === 'REJECTED')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, \Illuminate\Http\UploadedFile>  $files  Upload field => replacement file.
+     */
+    public function resubmitRejectedDocuments(
+        RegistrationApplication $application,
+        array $files,
+        User $applicant,
+        ?Request $request = null,
+    ): RegistrationApplication {
+        $storedPaths = [];
+
+        try {
+            return DB::transaction(function () use ($application, $files, $applicant, $request, &$storedPaths): RegistrationApplication {
+                $lockedApplication = $application->newQuery()->lockForUpdate()->findOrFail($application->id);
+                $lockedApplication->loadMissing('user');
+
+                if ((int) $lockedApplication->user_id !== (int) $applicant->id
+                    || ! in_array($lockedApplication->status, [RegistrationApplication::STATUS_PENDING, RegistrationApplication::STATUS_UNDER_REVIEW], true)
+                    || strtoupper((string) $lockedApplication->user?->status) !== User::STATUS_PENDING) {
+                    throw ValidationException::withMessages(['application' => 'This application is no longer available for document updates.']);
+                }
+
+                $latestByType = $lockedApplication->documents()
+                    ->lockForUpdate()
+                    ->get()
+                    ->groupBy(fn (ApplicationDocument $document): string => strtoupper((string) $document->document_type))
+                    ->map(fn ($versions): ApplicationDocument => $versions->sortByDesc('id')->first());
+                $replacementTypes = [];
+                $beforeStatus = $lockedApplication->status;
+
+                foreach ($files as $input => $file) {
+                    $type = ApplicationDocument::UPLOAD_FIELDS[$input] ?? null;
+                    $latest = $type ? $latestByType->get($type) : null;
+
+                    if (! $latest || strtoupper((string) $latest->verification_status) !== 'REJECTED') {
+                        throw ValidationException::withMessages([
+                            'documents' => 'Only the latest rejected documents can be replaced.',
+                        ]);
+                    }
+
+                    $directory = 'registration/'
+                        .strtolower((string) $lockedApplication->user->account_type).'/'
+                        .$lockedApplication->application_number.'/'.strtolower($type);
+                    $storedFile = $this->storeRegistrationDocument($file, $directory);
+                    $path = $storedFile['path'];
+                    $storedPaths[] = $path;
+
+                    $replacement = $lockedApplication->documents()->create([
+                        'document_type' => $type,
+                        'file_path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $storedFile['mime_type'],
+                        'verification_status' => 'PENDING',
+                    ]);
+                    $replacementTypes[] = [
+                        'document_id' => $replacement->id,
+                        'document_type' => $type,
+                        'verification_status' => 'PENDING',
+                    ];
+                }
+
+                if ($replacementTypes === []) {
+                    throw ValidationException::withMessages(['documents' => 'Choose at least one rejected document to replace.']);
+                }
+
+                $lockedApplication->update([
+                    'status' => RegistrationApplication::STATUS_PENDING,
+                    'submitted_at' => now(),
+                    'reviewed_by_user_id' => null,
+                    'reviewed_at' => null,
+                    'decision_notes' => null,
+                    'rejection_reason' => null,
+                ]);
+
+                $this->audit(
+                    actor: $applicant,
+                    event: 'registration.document_resubmitted',
+                    record: $lockedApplication,
+                    oldValues: ['status' => $beforeStatus],
+                    newValues: ['status' => RegistrationApplication::STATUS_PENDING, 'documents' => $replacementTypes],
+                    request: $request,
+                );
+
+                return $lockedApplication->fresh(['user', 'documents']);
+            });
+        } catch (Throwable $exception) {
+            foreach ($storedPaths as $path) {
+                Storage::disk('registrations')->delete($path);
+            }
+
+            throw $exception;
+        }
     }
 
     private function ensureReviewableStatus(RegistrationApplication $application): void
@@ -574,9 +754,36 @@ class RegistrationWorkflowService
         }
     }
 
+    /** @return array{path: string, mime_type: string} */
+    private function storeRegistrationDocument(UploadedFile $file, string $directory): array
+    {
+        $mimeType = $file->getMimeType();
+        $path = in_array($mimeType, ['image/jpeg', 'image/png', 'image/webp'], true)
+            ? app(ImageOptimizationService::class)->store($file, $directory, 'registrations')
+            : $file->store($directory, 'registrations');
+
+        if (! is_string($path)) {
+            throw new RuntimeException('The registration document could not be stored.');
+        }
+
+        return [
+            'path' => $path,
+            'mime_type' => match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+                'jpg', 'jpeg' => 'image/jpeg',
+                'png' => 'image/png',
+                'webp' => 'image/webp',
+                'pdf' => 'application/pdf',
+                default => $mimeType ?: 'application/octet-stream',
+            },
+        ];
+    }
+
     private function ensureDocumentsReady(RegistrationApplication $application, string $expectedType): void
     {
-        $documents = $application->documents;
+        $documents = $application->documents
+            ->groupBy(fn (ApplicationDocument $document): string => strtoupper((string) $document->document_type))
+            ->map(fn ($versions): ApplicationDocument => $versions->sortByDesc('id')->first())
+            ->values();
         $requiredTypes = $this->requiredDocumentTypes($application, $expectedType);
         $missing = collect($requiredTypes)
             ->reject(fn (string $type): bool => $documents->contains(fn (ApplicationDocument $document): bool => strtoupper((string) $document->document_type) === $type))

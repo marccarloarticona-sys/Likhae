@@ -9,6 +9,8 @@
     $role = $role ?? request('role', 'all');
     $status = $status ?? request('status', 'all');
     $search = $search ?? request('q', '');
+    $riskFilter = $riskFilter ?? request('risk', 'all');
+    $openRiskBuyerIds = $openRiskBuyerIds ?? collect();
     $roles = $roles ?? [
         'all' => 'All users',
         'buyers' => 'Buyers',
@@ -115,16 +117,26 @@
             <a
                 class="ad-tab {{ $role === $key ? 'is-active' : '' }}"
                 @if($role === $key) aria-current="page" @endif
-                href="{{ route('admin.users', ['role' => $key, 'status' => $status, 'q' => $search]) }}"
+                href="{{ route('admin.users', ['role' => $key, 'status' => $status, 'q' => $search, 'risk' => $key === 'buyers' && $riskFilter === 'flagged' ? 'flagged' : null]) }}"
             >
                 {{ $label }}
             </a>
         @endforeach
     </nav>
 
+    <div class="ad-inline-actions" style="justify-content:flex-end; margin:12px 0">
+        <a class="ad-btn {{ $riskFilter === 'flagged' ? 'ad-btn-primary' : 'ad-btn-secondary' }} ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">
+            Buyers flagged for safety review ({{ number_format($stats['open_buyer_risk_reviews'] ?? 0) }})
+        </a>
+        @if($riskFilter === 'flagged')
+            <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers']) }}">Show all buyers</a>
+        @endif
+    </div>
+
     <section class="ad-card ad-users-card" id="user-table">
         <form class="ad-filter-bar" action="{{ route('admin.users') }}" method="GET" role="search">
             <input type="hidden" name="role" value="{{ $role }}">
+            @if($riskFilter === 'flagged')<input type="hidden" name="risk" value="flagged">@endif
             <label class="ad-filter-search">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="11" cy="11" r="7"/>
@@ -257,6 +269,9 @@
                                             <small>
                                                 USR-{{ $user->id }} - {{ $user->email }}
                                             </small>
+                                            @if($user->account_type === \App\Models\User::TYPE_SELLER && (int) ($user->pending_seller_document_updates_count ?? 0) > 0)
+                                                <a class="ad-user-update-link" href="{{ route('admin.users.show', $user) }}#seller-verification">Seller document update waiting for review</a>
+                                            @endif
                                         </span>
                                     </div>
                                 </td>
@@ -278,6 +293,9 @@
                                     <span class="ad-status is-{{ $statusClass }}">
                                         {{ $statusLabel }}
                                     </span>
+                                    @if($user->isAccountType(\App\Models\User::TYPE_BUYER) && $openRiskBuyerIds->contains((int) $user->id))
+                                        <small class="ad-status is-warning" style="display:block; width:max-content; margin-top:5px">Safety review open</small>
+                                    @endif
                                 </td>
 
                                 <td>

@@ -255,6 +255,45 @@
         box-shadow: 0 14px 34px rgba(86, 28, 23, 0.08) !important;
     }
 
+    .lk-quick-card:focus-visible {
+        outline: 3px solid var(--lk-tan) !important;
+        outline-offset: 3px !important;
+    }
+
+    .lk-home-marketing-section {
+        margin-top: 28px !important;
+    }
+
+    .lk-home-marketing-section .lk-section-head {
+        margin-bottom: 14px !important;
+    }
+
+    .lk-home-voucher-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .lk-home-voucher-card {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 16px;
+        border: 1px solid var(--lk-border);
+        border-radius: 18px;
+        background: var(--lk-card);
+        box-shadow: var(--lk-shadow-soft);
+    }
+
+    .lk-home-voucher-card h3 { margin: 5px 0 0; color: var(--lk-text); font-size: 14px; font-weight: 800; }
+    .lk-home-voucher-card p { margin: 4px 0 0; color: var(--lk-muted); font-size: 12px; }
+    .lk-home-voucher-card strong { color: var(--lk-maroon); font-size: 18px; }
+    .lk-home-voucher-card button,
+    .lk-home-voucher-card a { align-self: flex-start; }
+    .lk-home-voucher-feedback { min-height: 1.25em; color: var(--lk-brown); font-size: 11px; }
+
     .lk-quick-icon {
         display: inline-flex !important;
         align-items: center !important;
@@ -1302,6 +1341,645 @@
             transition: none;
         }
     }
+
+    /* Keep the home page in normal document flow so the full page can scroll. */
+    body.lk-buyer-home-sidebar-hover {
+        min-height: 100vh;
+        height: auto;
+        overflow-x: hidden;
+        overflow-y: auto !important;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-shell {
+        display: flex;
+        min-height: 100vh;
+        height: auto;
+        flex-direction: column;
+        overflow: visible;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-buyer-app {
+        min-height: 100vh;
+        overflow: visible;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-header {
+        flex: 0 0 auto;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-main {
+        display: block;
+        flex: 1 0 auto;
+        min-height: auto;
+        overflow: visible;
+        padding: 12px clamp(12px, 1.7vw, 24px) !important;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-footer {
+        flex: 0 0 auto;
+        min-height: 38px;
+        margin-top: 0;
+    }
+
+    body.lk-buyer-home-sidebar-hover .lk-footer:not(:has(.lk-footer-inner)) {
+        min-height: 38px;
+        padding: 6px clamp(12px, 1.7vw, 24px);
+    }
+
+    .lk-home-page {
+        display: flex !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        flex-direction: column;
+        gap: clamp(22px, 3vw, 36px);
+        overflow: visible !important;
+        padding: 0 0 36px !important;
+    }
+
+    .lk-home-page .lk-home-editorial-hero {
+        min-height: clamp(280px, 34vh, 420px) !important;
+        height: auto !important;
+        padding: clamp(16px, 2.5vw, 30px) !important;
+        border-radius: 16px;
+    }
+
+    .lk-home-page .lk-home-editorial-title {
+        font-size: clamp(38px, 4.4vw, 58px);
+    }
+
+    .lk-home-page .lk-home-editorial-description {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 1.45;
+    }
+
+    .lk-home-page .lk-home-editorial-cta {
+        min-height: 36px;
+        margin-top: 9px;
+    }
+
+    .lk-home-tabs {
+        display: grid;
+        min-width: 0;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    .lk-home-tabs [role="tab"] {
+        min-width: 0;
+        padding: 0 12px;
+        border: 1px solid var(--lk-border);
+        border-radius: 10px;
+        background: var(--lk-card);
+        color: var(--lk-brown);
+        font: 700 11px/1.1 Poppins, sans-serif;
+        cursor: pointer;
+        transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+    }
+
+    .lk-home-tabs [role="tab"][aria-selected="true"] {
+        border-color: var(--lk-maroon);
+        background: var(--lk-maroon);
+        color: #fffaf5;
+    }
+
+    .lk-home-tabs [role="tab"]:focus-visible,
+    .lk-home-panel:focus-visible {
+        outline: 2px solid var(--lk-tan);
+        outline-offset: 2px;
+    }
+
+    .lk-home-panel {
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .lk-home-panel[hidden] {
+        display: none !important;
+    }
+
+    .lk-home-panel--shop:not([hidden]) {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+        gap: 8px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        scrollbar-width: thin;
+    }
+
+    .lk-home-panel--products:not([hidden]),
+    .lk-home-panel--events:not([hidden]) {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .lk-home-panel--deals:not([hidden]) {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .lk-home-panel > .lk-section,
+    .lk-home-panel--products > .lk-section,
+    .lk-home-panel--events > .lk-section,
+    .lk-home-panel--deals > .lk-section {
+        min-width: 0;
+        min-height: 0;
+        margin: 0 !important;
+    }
+
+    .lk-home-panel--shop .lk-home-category-section {
+        display: grid;
+        grid-template-rows: auto auto auto;
+        gap: 6px;
+        margin: 0 !important;
+    }
+
+    .lk-home-panel--shop .lk-home-category-heading {
+        margin: 0;
+    }
+
+    .lk-home-panel--shop .lk-home-category-heading h2 {
+        font-size: clamp(22px, 2vw, 28px);
+    }
+
+    .lk-home-panel--shop .lk-home-category-pages,
+    .lk-home-panel--shop .lk-home-category-page,
+    .lk-home-panel--shop .lk-home-category-grid {
+        min-height: 0;
+    }
+
+    .lk-home-panel--shop .lk-home-category-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .lk-home-panel--shop .lk-home-category-card {
+        min-height: 0;
+    }
+
+    .lk-home-panel--shop .lk-home-category-visual {
+        aspect-ratio: 2.8 / 1;
+    }
+
+    .lk-home-panel--shop .lk-home-category-pagination {
+        margin: 0;
+    }
+
+    .lk-home-panel--shop > .lk-section {
+        margin: 0 !important;
+    }
+
+    .lk-home-page .lk-home-panel--shop .lk-home-category-section + .lk-section {
+        margin-top: 0 !important;
+    }
+
+    .lk-home-panel--shop .lk-quick-grid {
+        gap: 8px !important;
+    }
+
+    .lk-home-panel--shop .lk-quick-card {
+        min-height: 54px !important;
+        padding: 7px 10px !important;
+    }
+
+    .lk-home-panel--products > .lk-section,
+    .lk-home-panel--events > .lk-section {
+        display: grid;
+        height: 100%;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .lk-home-panel .lk-section-head {
+        align-items: center !important;
+        flex-direction: row !important;
+        gap: 12px !important;
+        margin: 0 !important;
+    }
+
+    .lk-home-panel .lk-section-head h2 {
+        font-size: clamp(23px, 2.2vw, 32px) !important;
+        line-height: 1 !important;
+    }
+
+    .lk-home-panel .lk-section-head p {
+        display: none;
+    }
+
+    .lk-home-panel .lk-section-head .lk-kicker {
+        margin: 0 0 4px !important;
+        font-size: 8px !important;
+    }
+
+    .lk-home-panel .lk-home-product-carousel {
+        display: grid !important;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        gap: 10px !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        scroll-snap-type: none;
+    }
+
+    .lk-home-panel .lk-home-product-carousel > .lk-product-card {
+        width: 100% !important;
+        min-width: 0 !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        flex: initial !important;
+        scroll-snap-align: unset;
+        border-radius: 14px !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-media {
+        height: clamp(78px, 18vh, 150px) !important;
+        min-height: 0 !important;
+        flex: 0 0 auto !important;
+        aspect-ratio: auto !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-palette-tag,
+    .lk-home-panel .lk-product-card--palette .lk-product-heart {
+        display: none !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-body {
+        min-height: 0 !important;
+        gap: 3px;
+        padding: 8px 10px !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-category,
+    .lk-home-panel .lk-product-card--palette .lk-product-seller,
+    .lk-home-panel .lk-product-card--palette .lk-product-meta {
+        display: none !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-title-link {
+        margin-top: 0 !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-name {
+        min-height: 30px !important;
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-price-row {
+        min-height: 22px !important;
+        margin-top: 3px !important;
+        gap: 5px !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-product-price-row strong {
+        font-size: 14px !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-card-actions {
+        gap: 5px !important;
+        padding-top: 5px !important;
+    }
+
+    .lk-home-panel .lk-product-card--palette .lk-btn-view,
+    .lk-home-panel .lk-product-card--palette .lk-add-cart,
+    .lk-home-panel .lk-product-card--palette .lk-catalog-buy-now {
+        min-height: 30px !important;
+        padding: 0 6px !important;
+        font-size: 9px !important;
+    }
+
+    .lk-home-panel--deals .lk-deal-banner {
+        display: flex !important;
+        min-height: 0 !important;
+        justify-content: space-between !important;
+        gap: 12px !important;
+        padding: 8px 14px !important;
+        border-radius: 12px !important;
+    }
+
+    .lk-home-panel--deals .lk-deal-banner .lk-kicker,
+    .lk-home-panel--deals .lk-deal-banner p {
+        display: none !important;
+    }
+
+    .lk-home-panel--deals .lk-deal-banner h2 {
+        font-size: 23px !important;
+    }
+
+    .lk-home-panel--deals .lk-deal-banner .lk-btn {
+        min-height: 32px;
+        padding: 0 12px;
+    }
+
+    .lk-home-panel--deals > .lk-section:last-child {
+        display: grid;
+        height: 100%;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .lk-home-panel--deals .lk-platform-events-grid {
+        height: 100%;
+        min-height: 0;
+        gap: 10px;
+    }
+
+    .lk-home-panel--events .lk-platform-events-grid {
+        height: 100%;
+        min-height: 0;
+    }
+
+    .lk-home-panel--events .lk-event-card {
+        min-height: 0;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 14px;
+    }
+
+    .lk-home-panel--events .lk-event-card__image,
+    .lk-home-panel--events .lk-event-card__details {
+        display: none !important;
+    }
+
+    .lk-home-panel--events .lk-event-card__offer {
+        min-width: 0;
+        padding: 6px 10px;
+        border-radius: 10px;
+    }
+
+    .lk-home-panel--events .lk-event-card__offer strong {
+        font-size: clamp(22px, 2.5vw, 30px);
+    }
+
+    .lk-home-panel--events .lk-event-card__action {
+        min-height: 30px;
+        padding: 0 12px;
+        font-size: 10px;
+    }
+
+    .lk-home-panel--events .lk-event-card__title {
+        font-size: clamp(24px, 3vw, 36px);
+    }
+
+    .lk-home-panel--events .lk-platform-events-empty {
+        display: flex;
+        min-height: 0;
+        height: 100%;
+        flex-direction: column;
+        justify-content: center;
+        padding: 16px;
+    }
+
+    @media (max-width: 680px) {
+        body.lk-buyer-home-sidebar-hover .lk-main {
+            padding: 8px 10px !important;
+        }
+
+        body.lk-buyer-home-sidebar-hover .lk-footer span {
+            display: none;
+        }
+
+        body.lk-buyer-home-sidebar-hover .lk-footer nav {
+            width: 100%;
+            justify-content: center;
+            gap: 14px;
+        }
+
+        .lk-home-page {
+            grid-template-rows: clamp(96px, 19vh, 142px) 34px minmax(0, 1fr);
+            gap: 8px;
+        }
+
+        .lk-home-page .lk-home-editorial-hero {
+            padding: 12px 16px !important;
+        }
+
+        .lk-home-page .lk-home-editorial-copy {
+            width: min(78%, 350px);
+        }
+
+        .lk-home-page .lk-home-editorial-title {
+            font-size: clamp(30px, 8vw, 42px);
+        }
+
+        .lk-home-page .lk-home-editorial-description {
+            font-size: 10px;
+        }
+
+        .lk-home-page .lk-home-editorial-cta {
+            min-height: 30px;
+            margin-top: 5px;
+            padding-inline: 10px;
+            font-size: 10px;
+        }
+
+        .lk-home-tabs {
+            gap: 4px;
+        }
+
+        .lk-home-tabs [role="tab"] {
+            padding: 0 4px;
+            border-radius: 8px;
+            font-size: 9px;
+        }
+
+        .lk-home-panel--shop:not([hidden]) {
+            grid-template-rows: minmax(0, 1fr) auto;
+            gap: 6px;
+        }
+
+        .lk-home-panel--shop .lk-home-category-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        .lk-home-panel--shop .lk-home-category-card-footer {
+            min-height: 24px;
+            padding: 2px 5px;
+        }
+
+        .lk-home-panel--shop .lk-home-category-name {
+            font-size: 9px;
+        }
+
+        .lk-home-panel--shop .lk-quick-grid {
+            gap: 5px !important;
+        }
+
+        .lk-home-panel--shop .lk-quick-card {
+            min-height: 42px !important;
+            gap: 5px !important;
+            padding: 5px 6px !important;
+        }
+
+        .lk-home-panel--shop .lk-quick-icon {
+            width: 28px !important;
+            height: 28px !important;
+        }
+
+        .lk-home-panel--shop .lk-quick-icon svg {
+            width: 16px !important;
+            height: 16px !important;
+        }
+
+        .lk-home-panel--shop .lk-quick-card strong {
+            font-size: 9px !important;
+        }
+
+        .lk-home-panel--shop .lk-quick-card small {
+            display: none !important;
+        }
+
+        .lk-home-panel .lk-section-head h2 {
+            font-size: 20px !important;
+        }
+
+        .lk-home-panel .lk-section-head .lk-kicker {
+            font-size: 7px !important;
+        }
+
+        .lk-home-panel .lk-home-product-carousel {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 6px !important;
+        }
+
+        .lk-home-panel .lk-home-product-carousel > .lk-product-card:nth-child(n + 3) {
+            display: none !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-product-media {
+            height: clamp(54px, 14vh, 92px) !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-product-body {
+            padding: 5px 7px !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-product-name {
+            min-height: 25px !important;
+            font-size: 10px !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-product-price-row {
+            min-height: 18px !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-product-price-row strong {
+            font-size: 12px !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-card-actions {
+            padding-top: 3px !important;
+        }
+
+        .lk-home-panel .lk-product-card--palette .lk-btn-view,
+        .lk-home-panel .lk-product-card--palette .lk-add-cart,
+        .lk-home-panel .lk-product-card--palette .lk-catalog-buy-now {
+            min-height: 24px !important;
+            font-size: 8px !important;
+        }
+
+        .lk-home-panel--deals:not([hidden]) {
+            grid-template-rows: 36px minmax(0, 1fr);
+            gap: 6px;
+        }
+
+        .lk-home-panel--deals .lk-deal-banner {
+            padding: 4px 10px !important;
+        }
+
+        .lk-home-panel--deals .lk-deal-banner h2 {
+            font-size: 18px !important;
+        }
+
+        .lk-home-panel--deals .lk-deal-banner .lk-btn {
+            min-height: 26px;
+            font-size: 9px;
+        }
+
+        .lk-home-panel--events .lk-platform-events-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        .lk-home-panel--events .lk-event-card {
+            gap: 5px;
+            padding: 9px;
+        }
+
+        .lk-home-panel--events .lk-event-card__title {
+            font-size: 16px;
+        }
+
+        .lk-home-panel--events .lk-event-card__hero {
+            align-items: center;
+            flex-direction: row;
+            gap: 6px;
+        }
+
+        .lk-home-panel--events .lk-event-card__offer strong {
+            font-size: 20px;
+        }
+
+        .lk-home-panel--events .lk-event-card__offer {
+            padding: 4px 7px;
+        }
+
+        .lk-home-panel--events .lk-event-card__action {
+            min-height: 24px;
+            padding-inline: 8px;
+            font-size: 8px;
+        }
+    }
+
+    @media (max-height: 620px) {
+        body.lk-buyer-home-sidebar-hover .lk-main {
+            padding-block: 6px !important;
+        }
+
+        .lk-home-page {
+            grid-template-rows: clamp(82px, 18vh, 112px) 32px minmax(0, 1fr);
+            gap: 6px;
+        }
+
+        .lk-home-page .lk-home-editorial-description {
+            display: none;
+        }
+
+        .lk-home-page .lk-home-editorial-cta {
+            min-height: 26px;
+            margin-top: 4px;
+            font-size: 9px;
+        }
+
+        .lk-home-tabs [role="tab"] {
+            font-size: 9px;
+        }
+
+        body.lk-buyer-home-sidebar-hover .lk-footer:not(:has(.lk-footer-inner)) {
+            min-height: 32px;
+            padding-block: 3px;
+        }
+
+        .lk-home-panel--events .lk-event-card {
+            gap: 5px;
+            padding: 8px;
+        }
+
+        .lk-home-panel--events .lk-event-card__title {
+            font-size: 20px;
+        }
+
+        .lk-home-panel--events .lk-event-card__action {
+            min-height: 24px;
+        }
+    }
 </style>
 @endpush
 
@@ -1361,6 +2039,8 @@
             </a>
         </div>
     </section>
+
+    <section class="lk-home-flow-section" aria-label="Shop and promotions">
 
     <section class="lk-home-category-section" aria-labelledby="categories-heading" data-category-carousel data-category-total="{{ $categoryTotal }}">
         <div class="lk-home-category-heading">
@@ -1475,117 +2155,90 @@
         </div>
 
         <div class="lk-quick-grid">
-            <a
-                href="{{ route('buyer.orders') }}"
-                class="lk-quick-card"
-            >
-                <div class="lk-quick-icon">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <path d="M6 2h12l2 4v16H4V6z"/>
-                        <path d="M6 6h12"/>
-                        <path d="M8 11h8"/>
-                        <path d="M8 15h6"/>
-                    </svg>
-                </div>
-
-                <div>
-                    <strong>My Orders</strong>
-                    <small>Track and review</small>
-                </div>
+            <a href="{{ route('buyer.discounts') }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20.6 13.4-7.2 7.2a2 2 0 0 1-2.8 0l-7.2-7.2a2 2 0 0 1 0-2.8l7.2-7.2A2 2 0 0 1 12 2.8h7.2a2 2 0 0 1 2 2V12a2 2 0 0 1-.6 1.4Z"/><circle cx="16.5" cy="7.5" r="1"/></svg></div>
+                <div><strong>Discounts</strong><small>Products on sale</small></div>
             </a>
-
-            <a
-                href="{{ $wishlistUrl }}"
-                class="lk-quick-card"
-                @if (!$hasWishlistRoute)
-                    data-frontend-placeholder
-                    onclick="return false;"
-                @endif
-            >
-                <div class="lk-quick-icon">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z"/>
-                    </svg>
-                </div>
-
-                <div>
-                    <strong>Wishlist</strong>
-                    <small>Saved products</small>
-                </div>
+            <a href="{{ route('buyer.flash-deals') }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13 2-3 8H5l6 12 3-8h5L13 2Z"/></svg></div>
+                <div><strong>Flash Deals</strong><small>Limited-time offers</small></div>
             </a>
-
-            <a
-                href="{{ route('buyer.messages') }}"
-                class="lk-quick-card"
-            >
-                <div class="lk-quick-icon">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <path d="M4 5h16v11H8l-4 4z"/>
-                        <path d="M8 9h8"/>
-                        <path d="M8 13h5"/>
-                    </svg>
-                </div>
-
-                <div>
-                    <strong>Messages</strong>
-                    <small>Chat with sellers</small>
-                </div>
+            <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 0 0 4v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5a2 2 0 0 1 0-4V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1Z"/><path d="M13 5v2m0 4v2m0 4v2"/></svg></div>
+                <div><strong>Vouchers</strong><small>Claim and save</small></div>
             </a>
-
-            <a
-                href="{{ route('buyer.rewards') }}"
-                class="lk-quick-card"
-            >
-                <div class="lk-quick-icon">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/>
-                        <path d="M2 7h20v5H2z"/>
-                        <path d="M12 7v14"/>
-                        <path d="M12 7H7.5A2.5 2.5 0 1 1 10 4.5z"/>
-                        <path d="M12 7h4.5A2.5 2.5 0 1 0 14 4.5z"/>
-                    </svg>
-                </div>
-
-                <div>
-                    <strong>Vouchers</strong>
-                    <small>Available vouchers</small>
-                </div>
+            <a href="{{ route('buyer.free-gifts') }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/><path d="M2 7h20v5H2z"/><path d="M12 7v14"/><path d="M12 7H7.5A2.5 2.5 0 1 1 10 4.5z"/><path d="M12 7h4.5A2.5 2.5 0 1 0 14 4.5z"/></svg></div>
+                <div><strong>Free Gifts</strong><small>Buy and get rewards</small></div>
             </a>
         </div>
     </section>
 
+    @if($dealProducts->isNotEmpty())
+        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-discounts-heading">
+            <div class="lk-section-head">
+                <div><span class="lk-kicker">Save on your next find</span><h2 id="home-discounts-heading">Discounts For You</h2><p>Active product discounts from LIKHAE sellers.</p></div>
+                <a href="{{ route('buyer.discounts') }}" class="lk-text-link">View All Discounts <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Discounted products" tabindex="0">
+                @foreach($dealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
+            </div>
+        </section>
+    @endif
+
+    @if($flashDealProducts->isNotEmpty())
+        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-flash-deals-heading">
+            <div class="lk-section-head">
+                <div><span class="lk-kicker">Limited-time prices</span><h2 id="home-flash-deals-heading">Flash Deals</h2><p>Seller flash sales with promotional stock and end times.</p></div>
+                <a href="{{ route('buyer.flash-deals') }}" class="lk-text-link">View All Flash Deals <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Active flash deals" tabindex="0">
+                @foreach($flashDealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
+            </div>
+        </section>
+    @endif
+
+    <x-buyer.seller-promotions :promotions="$bundleOffers" heading="Bundle Deals" eyebrow="Save when you shop together" compact />
+    <x-buyer.seller-promotions :promotions="$freeGiftOffers" heading="Free Gift Offers" eyebrow="Buy X, get Y" compact />
+
+    @if($homeVoucherPreviews->isNotEmpty())
+        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-vouchers-heading">
+            <div class="lk-section-head">
+                <div><span class="lk-kicker">Extra savings</span><h2 id="home-vouchers-heading">Vouchers</h2><p>Eligible seller and LIKHAE vouchers for your next order.</p></div>
+                <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}" class="lk-text-link">View All Vouchers <span aria-hidden="true">→</span></a>
+            </div>
+            <div class="lk-home-voucher-grid">
+                @foreach($homeVoucherPreviews as $voucher)
+                    <article class="lk-home-voucher-card">
+                        <div>
+                            <span class="lk-kicker">{{ $voucher['source'] }}</span>
+                            <h3>{{ $voucher['name'] }}</h3>
+                            <p><strong>{{ strtoupper($voucher['value']) }} voucher</strong></p>
+                            <p>Min ₱{{ number_format((float) $voucher['minimum'], 2) }}
+                                @if($voucher['maximum'])
+                                    · Up to ₱{{ number_format((float) $voucher['maximum'], 2) }} off
+                                @endif
+                            </p>
+                            <p>Expires {{ $voucher['expires'] }}</p>
+                            <span class="lk-home-voucher-feedback" aria-live="polite" data-voucher-feedback></span>
+                        </div>
+                        @if($voucher['kind'] === 'seller')
+                            <form method="POST" action="{{ route('buyer.vouchers.claim', $voucher['id']) }}" data-home-voucher-claim>
+                                @csrf
+                                <button class="lk-btn lk-btn-red" type="submit">Claim</button>
+                            </form>
+                        @else
+                            <a class="lk-btn lk-btn-red" href="{{ route('buyer.products') }}">Shop with voucher</a>
+                        @endif
+                    </article>
+                @endforeach
+            </div>
+        </section>
+    @endif
+
+    </section>
+
+    <section class="lk-home-flow-section" aria-label="Featured products">
     {{-- Featured products --}}
     <section
         class="lk-section"
@@ -1648,83 +2301,9 @@
             </div>
         @endif
     </section>
-
-    {{-- Flash picks --}}
-    <section
-        id="flash-picks"
-        class="lk-section scroll-mt-24"
-        aria-labelledby="flash-picks-heading"
-    >
-        <div class="lk-deal-banner">
-            <div>
-                <span class="lk-kicker">
-                    Current Discounts
-                </span>
-
-                <h2 id="flash-picks-heading">
-                    Current Deals
-                </h2>
-
-                <p>
-                    Browse products with current seller discounts.
-                </p>
-            </div>
-
-            <a
-                href="{{ route('buyer.flash-deals') }}"
-                class="lk-btn lk-btn-gold"
-            >
-                Shop Deals
-            </a>
-        </div>
     </section>
 
-    {{-- Current discounted products --}}
-    <section
-        class="lk-section"
-        aria-labelledby="discounted-products-heading"
-    >
-        <div class="lk-section-head">
-            <div>
-                <span class="lk-kicker">Seller Discounts</span>
-
-                <h2 id="discounted-products-heading">
-                    Deals For You
-                </h2>
-
-                <p>
-                    Available products with a current variant discount.
-                </p>
-            </div>
-
-            <a
-                href="{{ route('buyer.flash-deals') }}"
-                class="lk-text-link"
-            >
-                See All
-                <span aria-hidden="true">→</span>
-            </a>
-        </div>
-
-        @if ($dealProducts->isNotEmpty())
-            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Current deals" tabindex="0">
-                @foreach ($dealProducts as $product)
-                    <x-buyer.product-card :product="$product" deal home />
-                @endforeach
-            </div>
-        @else
-            <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
-                <h3 class="text-sm font-semibold text-stone-900">
-                    No discounted products are available right now
-                </h3>
-
-                <p class="mt-1 text-xs text-stone-500">
-                    Check back later for current seller discounts.
-                </p>
-            </div>
-        @endif
-    </section>
-
+    <section class="lk-home-flow-section" aria-label="Platform events">
     <section class="lk-section" aria-labelledby="platform-events-heading">
         <div class="lk-section-head">
             <div>
@@ -1749,7 +2328,9 @@
             </div>
         @endif
     </section>
+    </section>
 
+    <section class="lk-home-flow-section" aria-label="Recommended products">
     {{-- Recommended products --}}
     <section
         class="lk-section"
@@ -1779,7 +2360,7 @@
 
         @if ($recommendedProducts->isNotEmpty())
             <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Recommended products" tabindex="0">
-                @foreach ($recommendedProducts as $product)
+                @foreach ($recommendedProducts->take(4) as $product)
                     <x-buyer.product-card :product="$product" home />
                 @endforeach
             </div>
@@ -1801,6 +2382,7 @@
                 </a>
             </div>
         @endif
+    </section>
     </section>
 </div>
 @endsection
@@ -1847,6 +2429,7 @@
             });
             showPage(0);
         });
+
     })();
 </script>
 @endpush

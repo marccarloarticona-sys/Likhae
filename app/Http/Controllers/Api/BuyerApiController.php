@@ -861,6 +861,35 @@ class BuyerApiController extends Controller
         return response()->json(['success' => true]);
     }
 
+    public function markNotificationRead(Request $request, string $notification): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $row = $request->user()->notifications()->whereKey($notification)->firstOrFail();
+        $row->markAsRead();
+
+        return response()->json(['success' => true]);
+    }
+
+    public function openNotification(Request $request, string $notification): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $row = $request->user()->notifications()->whereKey($notification)->firstOrFail();
+
+        return response()->json([
+            'success' => true,
+            'data' => ['action_url' => $row->action_url],
+        ]);
+    }
+
+    public function dismissNotification(Request $request, string $notification): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $row = $request->user()->notifications()->whereKey($notification)->firstOrFail();
+        $row->delete();
+
+        return response()->json(['success' => true]);
+    }
+
     public function conversations(Request $request, ConversationService $service): JsonResponse
     {
         $this->authorizeBuyer($request);
@@ -1166,7 +1195,6 @@ class BuyerApiController extends Controller
             ];
         })->values();
         $primarySellerOrder = $sellerOrders->first();
-
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,

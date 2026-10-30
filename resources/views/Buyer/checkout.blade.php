@@ -178,6 +178,11 @@
                                             <strong class="block text-sm font-semibold text-stone-900">{{ $product->name }}</strong>
                                             <span class="mt-1 block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }}</span>
                                             <span class="mt-2 block text-xs text-stone-600">&#8369;{{ number_format($unitPrice, 2) }} × {{ $item->quantity }}</span>
+                                            @if((int) ($item->getAttribute('checkout_flash_sale_units') ?? 0) > 0)
+                                                <span class="mt-1 block text-[10px] font-semibold text-rose-800">Flash Sale · {{ number_format((int) $variant->flash_sale_remaining) }} promotional units left</span>
+                                                @if($product->flash_sale_limit_per_buyer)<span class="block text-[10px] text-rose-700">Limit {{ number_format((int) $product->flash_sale_limit_per_buyer) }} per Buyer</span>@endif
+                                                @if($product->flash_sale_ends_at)<time class="block text-[10px] text-rose-700" data-flash-sale-countdown datetime="{{ $product->flash_sale_ends_at->toIso8601String() }}">Sale ends {{ $product->flash_sale_ends_at->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
+                                            @endif
                                             @foreach((array) ($item->getAttribute('checkout_promotion_snapshot') ?? []) as $promotionSnapshot)
                                                 <span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }}: −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>
                                             @endforeach

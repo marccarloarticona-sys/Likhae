@@ -12,7 +12,11 @@
         ->take(2)
         ->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))
         ->implode('') ?: 'LK';
-    $accountPhoto = data_get($accountUser, 'profile_photo_path');
+    $isSellerAccount = strtoupper((string) data_get($accountUser, 'account_type')) === 'SELLER';
+    $accountPhoto = $isSellerAccount
+        ? data_get($accountUser, 'sellerProfile.avatar_path')
+        : data_get($accountUser, 'profile_photo_path');
+    $accountPhotoRole = $isSellerAccount ? 'seller' : 'buyer';
 @endphp
 
 @once
@@ -64,7 +68,7 @@
 
 <details class="workspace-account {{ $compact ? 'workspace-account--compact' : '' }}">
     <summary class="workspace-account__trigger" aria-label="{{ $accountName }}, {{ $label }}">
-        <span class="workspace-account__avatar" aria-hidden="true"><x-shared.profile-image :path="$accountPhoto" role="buyer" alt="" /></span>
+        <span class="workspace-account__avatar" aria-hidden="true"><x-shared.profile-image :path="$accountPhoto" :role="$accountPhotoRole" alt="" /></span>
         <span class="workspace-account__copy">
             <strong>{{ $accountName }}</strong>
             <small>{{ $label }}</small>

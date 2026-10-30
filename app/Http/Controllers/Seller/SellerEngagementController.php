@@ -16,6 +16,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
+use App\Services\Buyer\BuyerStoreNotificationService;
 use App\Services\Communication\ConversationService;
 use App\Services\Communication\ConversationMessageSender;
 use App\Services\Communication\MessageAttachmentService;
@@ -23,7 +24,9 @@ use App\Services\Communication\ConversationContextPresenter;
 use App\Services\Communication\SmartMessagingService;
 use App\Services\Communication\SupportOverviewService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\Marketplace\VoucherDiscountCalculator;
 use App\Services\Reports\WorkspaceExportPdfService;
+use App\Services\Seller\SellerPromotionConflictService;
 use App\Services\ReviewImageService;
 use App\Support\FinancialRules;
 use Illuminate\Http\JsonResponse;
@@ -72,6 +75,11 @@ class SellerEngagementController extends Controller
         $overview = $section === 'overview' && $supportOverviewReady
             ? $supportOverview->overview($request->user(), $statusFilter, $search, $selectedRequest)
             : null;
+        $activeConversation = $section === 'chats' ? $conversations->firstWhere('id', $conversationId) : null;
+        $activeRecipient = $activeConversation?->participants?->first(fn ($participant) => (int) $participant->id !== (int) $request->user()->id);
+        $smartHelpBootstrap = $activeConversation && $activeRecipient?->isAccountType(User::TYPE_ADMIN)
+            ? app(SmartMessagingService::class)->bootstrapForRequester($request->user(), $activeConversation)
+            : null;
 
         return view('seller.messages', [
             'section' => $section,
@@ -86,7 +94,21 @@ class SellerEngagementController extends Controller
                 $section === 'chats' ? $conversations->firstWhere('id', $conversationId) : null,
             ),
             'supportStates' => $section === 'chats' ? app(SmartMessagingService::class)->statesFor($conversations) : [],
+            'smartHelpBootstrap' => $smartHelpBootstrap,
         ]);
+    }
+
+    public function messagePreview(Request $request, ConversationService $conversationService): JsonResponse
+    {
+        if (! Schema::hasTable('messages')
+            || ! Schema::hasTable('conversation_participants')
+            || ! Schema::hasTable('conversations')) {
+            return response()->json(['items' => [], 'unread_count' => 0])
+                ->header('Cache-Control', 'no-store, private');
+        }
+
+        return response()->json($conversationService->headerPreviewFor($request->user()))
+            ->header('Cache-Control', 'no-store, private');
     }
 
     public function stream(Request $request, ConversationService $conversationService): JsonResponse
@@ -304,14 +326,17 @@ class SellerEngagementController extends Controller
         return mb_substr($name, 0, 2).'****'.mb_substr($name, -2);
     }
 
-    public function marketing(Request $request): View
+    public function marketing(Request $request, SellerPromotionConflictService $promotionConflictService, \App\Services\Reports\SellerMarketingOverviewService $marketingOverviewService): View
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
 
         $now = now();
-        $sections = ['vouchers', 'flash-sales', 'special-offers', 'overview'];
-        $section = in_array($request->query('section'), $sections, true) ? $request->query('section') : 'vouchers';
+        $sections = ['product-discounts', 'flash-sales', 'vouchers', 'bundle-deals', 'buy-x-get-y', 'overview', 'special-offers'];
+        $section = in_array($request->query('section'), $sections, true) ? $request->query('section') : 'product-discounts';
+        if ($section === 'special-offers') {
+            $section = 'bundle-deals';
+        }
         $voucherProductTargetingReady = $this->voucherProductTargetingReady();
         $voucherVariantTargetingReady = Schema::hasColumn('vouchers', 'applies_to')
             && Schema::hasTable('voucher_variants');
@@ -331,10 +356,11 @@ class SellerEngagementController extends Controller
         $vouchers = $vouchersQuery->latest()->paginate(15);
         $vouchers->getCollection()->each(function (Voucher $voucher) use ($now): void {
             $used = (int) $voucher->seller_orders_count;
-            $status = ! $voucher->is_active ? 'Paused'
+            $status = $voucher->requiresReview() ? 'Review required'
+                : (! $voucher->is_active ? 'Paused'
                 : ($voucher->starts_at && $voucher->starts_at->greaterThan($now) ? 'Upcoming'
                     : ($voucher->ends_at && $voucher->ends_at->lessThan($now) ? 'Expired'
-                        : ($voucher->usage_limit !== null && $used >= (int) $voucher->usage_limit ? 'Usage exhausted' : 'Active')));
+                        : ($voucher->usage_limit !== null && $used >= (int) $voucher->usage_limit ? 'Usage exhausted' : 'Active'))));
 
             $voucher->setAttribute('redemption_count', $used);
             $voucher->setAttribute('remaining_capacity', $voucher->usage_limit === null
@@ -352,6 +378,7 @@ class SellerEngagementController extends Controller
 
         $activeVoucherCount = $seller->vouchers()
             ->where('is_active', true)
+            ->when(Schema::hasColumn('vouchers', 'requires_review'), fn ($query) => $query->where('requires_review', false))
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', $now))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', $now))
             ->where(fn ($query) => $query->whereNull('usage_limit')->orWhereRaw(
@@ -378,8 +405,9 @@ class SellerEngagementController extends Controller
                 ->get();
             $redemptionCounts = VoucherRedemptionCounter::countsFor($platformCampaigns);
             $platformCampaigns = $platformCampaigns
-                ->filter(fn (Voucher $voucher): bool => $voucher->usage_limit === null
-                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
+                ->filter(fn (Voucher $voucher): bool => ! $voucher->requiresReview()
+                    && ($voucher->usage_limit === null
+                        || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit))
                 ->filter(fn (Voucher $voucher): bool => app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($voucher))
                 ->each(fn (Voucher $voucher) => $voucher->setAttribute('redemption_count', $redemptionCounts->get($voucher->id, 0)))
                 ->values();
@@ -387,10 +415,19 @@ class SellerEngagementController extends Controller
 
         $eligibleProducts = $seller->products()
             ->where('status', 'ACTIVE')
+            ->when($request->integer('product_id') > 0, fn ($query) => $query->whereKey($request->integer('product_id')))
             ->with(['variants' => fn ($query) => $query->where('is_active', true)->with('optionValues.option')])
             ->orderBy('name')
-            ->get(['id', 'name', 'status']);
-        $promotionStorageReady = Schema::hasTable('seller_promotions') && Schema::hasTable('seller_promotion_components');
+            ->get();
+        $promotionConflicts = $promotionConflictService->forProducts($seller, $eligibleProducts);
+        $promotionStorageReady = Schema::hasTable('seller_promotions')
+            && Schema::hasTable('seller_promotion_components')
+            && Schema::hasColumn('seller_promotions', 'reward_product_id')
+            && Schema::hasColumn('seller_promotions', 'reward_discount_percent')
+            && Schema::hasColumn('seller_promotions', 'max_redemptions')
+            && Schema::hasColumn('seller_promotions', 'max_per_buyer')
+            && Schema::hasColumn('seller_promotions', 'redemptions_used')
+            && Schema::hasColumn('seller_promotion_components', 'choice_group');
         $promotionVariants = collect();
         $promotions = collect();
         $activeSpecialOffers = 0;
@@ -400,8 +437,13 @@ class SellerEngagementController extends Controller
                 ->sortBy(fn (ProductVariant $variant) => $variant->product->name.' '.$variant->description)
                 ->values();
             $promotionQuery = $seller->promotions()
-                ->with(['components.productVariant.product', 'buyVariant.product', 'rewardVariant.product'])
+                ->with(['components.productVariant.product', 'buyVariant.product', 'rewardVariant.product', 'rewardProduct'])
                 ->latest('id');
+            if ($section === 'bundle-deals') {
+                $promotionQuery->where('promotion_type', SellerPromotion::TYPE_BUNDLE);
+            } elseif ($section === 'buy-x-get-y') {
+                $promotionQuery->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y);
+            }
             $promotions = $promotionQuery->paginate(15)->withQueryString();
             $activeSpecialOffers = $seller->promotions()
                 ->where('is_active', true)
@@ -416,6 +458,9 @@ class SellerEngagementController extends Controller
 
         $flashSaleSchemaReady = Schema::hasColumn('products', 'flash_sale_starts_at')
             && Schema::hasColumn('products', 'flash_sale_ends_at')
+            && Schema::hasColumn('products', 'flash_sale_is_paused')
+            && Schema::hasColumn('products', 'flash_sale_limit_per_buyer')
+            && Schema::hasColumn('products', 'flash_sale_campaign_key')
             && Schema::hasColumn('product_variants', 'flash_sale_price')
             && Schema::hasColumn('product_variants', 'flash_sale_allocation')
             && Schema::hasColumn('product_variants', 'flash_sale_sold')
@@ -494,6 +539,7 @@ class SellerEngagementController extends Controller
             'seller' => $seller,
             'vouchers' => $vouchers,
             'eligibleProducts' => $eligibleProducts,
+            'promotionConflicts' => $promotionConflicts,
             'voucherStats' => [
                 'total' => $vouchers->total(),
                 'active' => $activeVoucherCount,
@@ -525,15 +571,18 @@ class SellerEngagementController extends Controller
                 'top_products' => $topPromotedProducts,
                 'top_variants' => $topPromotedVariants,
             ],
+            'marketingOverview' => $section === 'overview'
+                ? $marketingOverviewService->forSeller((int) $seller->id)
+                : [],
         ]);
     }
 
-    public function storeCampaign(Request $request): RedirectResponse
+    public function storeCampaign(Request $request, SellerPromotionConflictService $promotionConflictService): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
 
-        $data = $this->validatedMarketingVoucher($request, $seller);
+        $data = $this->validatedMarketingVoucher($request, $seller, $promotionConflictService);
         $productIds = $data['product_ids'] ?? [];
         $variantIds = $data['variant_ids'] ?? [];
         unset($data['product_ids'], $data['variant_ids']);
@@ -554,10 +603,10 @@ class SellerEngagementController extends Controller
         return back()->with('status', 'Voucher saved.');
     }
 
-    public function updateCampaign(Request $request, Voucher $voucher): RedirectResponse
+    public function updateCampaign(Request $request, Voucher $voucher, SellerPromotionConflictService $promotionConflictService): RedirectResponse
     {
         $seller = $this->sellerForOwnedVoucher($request, $voucher);
-        $data = $this->validatedMarketingVoucher($request, $seller, $voucher);
+        $data = $this->validatedMarketingVoucher($request, $seller, $promotionConflictService, $voucher);
         $productIds = $data['product_ids'] ?? [];
         $variantIds = $data['variant_ids'] ?? [];
         unset($data['product_ids'], $data['variant_ids']);
@@ -585,11 +634,12 @@ class SellerEngagementController extends Controller
                 $locked->eligibleVariants()->sync($variantIds);
             }
         });
+        app(BuyerStoreNotificationService::class)->sellerVoucherChanged((int) $voucher->id);
 
         return back()->with('status', 'Voucher updated. Existing redemptions and order totals are unchanged.');
     }
 
-    private function validatedMarketingVoucher(Request $request, SellerProfile $seller, ?Voucher $voucher = null): array
+    private function validatedMarketingVoucher(Request $request, SellerProfile $seller, SellerPromotionConflictService $promotionConflictService, ?Voucher $voucher = null): array
     {
         $request->merge([
             'name' => trim((string) $request->input('name', '')),
@@ -604,7 +654,7 @@ class SellerEngagementController extends Controller
             'discount_type' => ['required', 'string', 'in:PERCENT,FIXED'],
             'discount_value' => ['required', 'numeric', 'gt:0', 'max:9999999999.99'],
             'applies_to' => ['required', Rule::in(['STORE', 'PRODUCTS', 'VARIANTS'])],
-            'visibility' => ['required', Rule::in(['PUBLIC', 'CODE_ONLY'])],
+            'visibility' => ['required', Rule::in(['PUBLIC', 'CODE_ONLY', 'FOLLOWERS'])],
             'product_ids' => ['nullable', 'array'],
             'product_ids.*' => ['required', 'integer', 'distinct', Rule::exists('products', 'id')],
             'variant_ids' => ['nullable', 'array'],
@@ -654,18 +704,33 @@ class SellerEngagementController extends Controller
             }
         }
         if (! Schema::hasColumn('vouchers', 'visibility')) {
-            if ($data['visibility'] === 'CODE_ONLY') {
+            if (in_array($data['visibility'], ['CODE_ONLY', 'FOLLOWERS'], true)) {
                 throw ValidationException::withMessages([
-                    'visibility' => 'Code-only vouchers are temporarily unavailable until the voucher visibility migration is installed.',
+                    'visibility' => 'Private and follower rewards are temporarily unavailable until the voucher visibility migration is installed.',
                 ]);
             }
             unset($data['visibility']);
         }
-
-        if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 100) {
+        if ($data['visibility'] === 'FOLLOWERS' && ! Schema::hasTable('seller_followers')) {
             throw ValidationException::withMessages([
-                'discount_value' => 'Percentage discounts cannot exceed 100%.',
+                'visibility' => 'Follower rewards are unavailable until Seller follow support is installed.',
             ]);
+        }
+
+        if ($data['discount_type'] === 'PERCENT' && (float) $data['discount_value'] > 99.99) {
+            throw ValidationException::withMessages([
+                'discount_value' => 'A percentage voucher must be 99.99% or less so every discounted product keeps a positive price.',
+            ]);
+        }
+
+        if (Schema::hasColumn('vouchers', 'requires_review')) {
+            $data['requires_review'] = false;
+            $data['review_reason'] = null;
+        }
+
+        if (Schema::hasColumn('vouchers', 'requires_review')) {
+            $data['requires_review'] = false;
+            $data['review_reason'] = null;
         }
 
         if (! empty($data['starts_at']) && ! empty($data['ends_at'])
@@ -746,6 +811,25 @@ class SellerEngagementController extends Controller
             $data['variant_ids'] = $variantIds;
         }
 
+        $voucherTargets = match ($data['applies_to'] ?? 'STORE') {
+            'PRODUCTS' => ProductVariant::query()->whereIn('product_id', $productIds)
+                ->where('is_active', true)
+                ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE'))
+                ->pluck('id')->map(fn ($id): int => (int) $id)->all(),
+            'VARIANTS' => $variantIds,
+            default => ProductVariant::query()
+                ->where('is_active', true)
+                ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE'))
+                ->pluck('id')->map(fn ($id): int => (int) $id)->all(),
+        };
+        $voucherDraft = new Voucher([
+            'discount_type' => $data['discount_type'],
+            'discount_value' => $data['discount_value'],
+            'maximum_discount_amount' => $data['maximum_discount_amount'] ?? null,
+            'applies_to' => $data['applies_to'] ?? 'STORE',
+        ]);
+        $this->assertVoucherLeavesPositivePrice($voucherDraft, $seller, $voucherTargets, $promotionConflictService, $voucher?->id, ! $voucher || $voucher->is_active);
+
         if ($voucher && $voucher->seller_discount_budget_total === null && filled($data['seller_discount_budget_total'] ?? null)
             && ($voucher->buyerClaims()->exists() || $voucher->sellerOrders()->exists())) {
             throw ValidationException::withMessages([
@@ -806,21 +890,206 @@ class SellerEngagementController extends Controller
         return Schema::hasColumn('vouchers', 'applies_to') && Schema::hasTable('voucher_products');
     }
 
+    /** @return array<int, int> */
+    private function voucherVariantIds(SellerProfile $seller, Voucher $voucher): array
+    {
+        $scope = $this->voucherProductTargetingReady() ? strtoupper((string) $voucher->applies_to) : 'STORE';
+        if ($scope === 'PRODUCTS') {
+            return $voucher->eligibleProducts()->where('products.seller_profile_id', $seller->id)
+                ->where('products.status', 'ACTIVE')->with('variants')
+                ->get()->flatMap(fn (Product $product) => $product->variants->where('is_active', true))
+                ->pluck('id')->map(fn ($id): int => (int) $id)->unique()->values()->all();
+        }
+        if ($scope === 'VARIANTS' && $this->voucherVariantTargetingReady()) {
+            return $voucher->eligibleVariants()
+                ->where('product_variants.is_active', true)
+                ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE'))
+                ->pluck('product_variants.id')->map(fn ($id): int => (int) $id)->all();
+        }
+
+        return ProductVariant::query()->where('is_active', true)
+            ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE'))
+            ->pluck('id')->map(fn ($id): int => (int) $id)->all();
+    }
+
+    /** @param array<int, int> $variantIds */
+    private function assertVoucherLeavesPositivePrice(
+        Voucher $voucher,
+        SellerProfile $seller,
+        array $variantIds,
+        SellerPromotionConflictService $promotionConflictService,
+        ?int $excludeVoucherId = null,
+        bool $checkConflicts = true,
+    ): void {
+        $variants = ProductVariant::query()->whereIn('id', $variantIds)
+            ->where('is_active', true)
+            ->whereHas('product', fn ($query) => $query->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE'))
+            ->with('product')->get();
+        $calculator = app(VoucherDiscountCalculator::class);
+        foreach ($variants as $variant) {
+            $price = round((float) ($variant->active_flash_sale_price ?? $variant->final_price), 2);
+            $discount = $calculator->calculate($voucher, $price);
+            if ($price < 0.01 || round($price - $discount, 2) < 0.01) {
+                throw ValidationException::withMessages([
+                    'discount_value' => 'This voucher would make '.$variant->product?->name.' ('.($variant->description ?: $variant->sku).') free. Reduce the discount so the selling price stays at least PHP 0.01.',
+                ]);
+            }
+        }
+
+        if ($checkConflicts && $variants->isNotEmpty()) {
+            $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $variants->modelKeys(), [
+                'exclude_kinds' => ['flash_sale'],
+                'exclude_ids' => ['voucher' => $excludeVoucherId === null ? [] : [$excludeVoucherId]],
+            ]);
+            if ($conflicts->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'applies_to' => 'This voucher overlaps an active or scheduled Seller product discount or special offer. Clear the existing offer first: '.$conflicts->pluck('label')->unique()->implode(', ').'.',
+                ]);
+            }
+        }
+    }
+
     private function voucherVariantTargetingReady(): bool
     {
         return $this->voucherProductTargetingReady() && Schema::hasTable('voucher_variants');
     }
 
-    public function toggleCampaign(Request $request, Voucher $voucher): RedirectResponse
+    public function toggleCampaign(Request $request, Voucher $voucher, SellerPromotionConflictService $promotionConflictService): RedirectResponse
     {
-        $this->sellerForOwnedVoucher($request, $voucher);
-
-        $voucher->update(['is_active' => ! $voucher->is_active]);
+        $seller = $this->sellerForOwnedVoucher($request, $voucher);
+        DB::transaction(function () use ($voucher, $seller, $promotionConflictService): void {
+            $locked = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
+            if (! $locked->is_active) {
+                if ($locked->requiresReview()) {
+                    throw ValidationException::withMessages([
+                        'voucher' => 'This voucher needs review. Correct or replace its discount terms before activating it.',
+                    ]);
+                }
+                $targets = $this->voucherVariantIds($seller, $locked);
+                $this->assertVoucherLeavesPositivePrice($locked, $seller, $targets, $promotionConflictService, $locked->id, true);
+            }
+            $locked->update(['is_active' => ! $locked->is_active]);
+        }, attempts: 3);
 
         return back()->with('status', 'Voucher updated.');
     }
 
-    public function updateFlashSales(Request $request, Product $product): RedirectResponse
+    public function updateProductDiscounts(Request $request, Product $product, SellerPromotionConflictService $promotionConflictService): RedirectResponse
+    {
+        $seller = $request->user()?->sellerProfile;
+        abort_unless($seller && (int) $product->seller_profile_id === (int) $seller->id, 404);
+        abort_unless(Schema::hasColumn('products', 'discounts_enabled')
+            && Schema::hasColumn('products', 'discount_starts_at')
+            && Schema::hasColumn('products', 'discount_ends_at'), 503, 'Product discounts are unavailable while their database migration is pending.');
+
+        $data = $request->validate([
+            'discount_starts_at' => ['nullable', 'date'],
+            'discount_ends_at' => ['nullable', 'date'],
+            'discounts_enabled' => ['required', 'boolean'],
+            'variants' => ['required', 'array', 'min:1'],
+            'variants.*.id' => ['required', 'integer', 'distinct', Rule::exists('product_variants', 'id')],
+            'variants.*.discount_type' => ['required', Rule::in(['none', 'percentage', 'fixed'])],
+            'variants.*.discount_value' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
+        ]);
+        if (! empty($data['discount_starts_at']) && ! empty($data['discount_ends_at'])
+            && Carbon::parse($data['discount_ends_at'])->lessThanOrEqualTo(Carbon::parse($data['discount_starts_at']))) {
+            throw ValidationException::withMessages(['discount_ends_at' => 'The discount end time must be later than its start time.']);
+        }
+
+        DB::transaction(function () use ($data, $product, $seller, $promotionConflictService): void {
+            $lockedProduct = Product::query()->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE')
+                ->lockForUpdate()->firstOrFail();
+            $variants = ProductVariant::query()->where('product_id', $lockedProduct->id)
+                ->where('is_active', true)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $requested = collect($data['variants'])->pluck('id')->map(fn ($id): int => (int) $id)->unique()->sort()->values();
+            if ($requested->all() !== $variants->keys()->map(fn ($id): int => (int) $id)->sort()->values()->all()) {
+                throw ValidationException::withMessages(['variants' => 'Refresh the page and update all currently active variants for this product.']);
+            }
+
+            $discountedIds = [];
+            foreach ($data['variants'] as $index => $row) {
+                $variant = $variants->get((int) $row['id']);
+                $type = strtolower((string) $row['discount_type']);
+                $value = round((float) ($row['discount_value'] ?? 0), 2);
+                if ($type === 'percentage' && $value > 100) {
+                    throw ValidationException::withMessages(["variants.{$index}.discount_value" => 'Percentage discounts cannot exceed 100%.']);
+                }
+                if ($type === 'none' || $value <= 0) {
+                    continue;
+                }
+
+                $base = round((float) $variant->price, 2);
+                $amount = $type === 'fixed' ? $value : $base * min(100, $value) / 100;
+                if ($base < 0.01 || round($base - $amount, 2) < 0.01) {
+                    throw ValidationException::withMessages(["variants.{$index}.discount_value" => 'This discount would make the selling price free. Leave at least PHP 0.01 after the discount.']);
+                }
+                $discountedIds[] = (int) $variant->id;
+            }
+            if ($discountedIds === [] && (filled($data['discount_starts_at'] ?? null) || filled($data['discount_ends_at'] ?? null))) {
+                throw ValidationException::withMessages(['discount_starts_at' => 'Set a product or variant discount before adding its schedule.']);
+            }
+
+            if ($discountedIds !== [] && (bool) $data['discounts_enabled']) {
+                $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $discountedIds, [
+                    'exclude_kinds' => ['discount', 'flash_sale'],
+                ]);
+                if ($conflicts->isNotEmpty()) {
+                    throw ValidationException::withMessages([
+                        'variants' => 'This discount overlaps a Seller voucher or bundle deal. Change the other offer first: '.$conflicts->pluck('label')->unique()->implode(', ').'.',
+                    ]);
+                }
+            }
+
+            foreach ($data['variants'] as $row) {
+                $variant = $variants->get((int) $row['id']);
+                $value = round((float) ($row['discount_value'] ?? 0), 2);
+                $type = $value > 0 ? strtolower((string) $row['discount_type']) : 'none';
+                $variant->update(['discount_type' => $type, 'discount_value' => $type === 'none' ? 0 : $value]);
+            }
+            $lockedProduct->update([
+                'discounts_enabled' => (bool) $data['discounts_enabled'],
+                'discount_starts_at' => $data['discount_starts_at'] ?? null,
+                'discount_ends_at' => $data['discount_ends_at'] ?? null,
+            ]);
+        }, attempts: 3);
+
+        return back()->with('status', 'Product discounts and schedule saved. Flash sales take priority when both prices are active.');
+    }
+
+    public function toggleProductDiscounts(Request $request, Product $product, SellerPromotionConflictService $promotionConflictService): RedirectResponse
+    {
+        $seller = $request->user()?->sellerProfile;
+        abort_unless($seller && (int) $product->seller_profile_id === (int) $seller->id, 404);
+        abort_unless(Schema::hasColumn('products', 'discounts_enabled'), 503, 'Product discounts are unavailable while their database migration is pending.');
+
+        DB::transaction(function () use ($product, $seller, $promotionConflictService): void {
+            $lockedProduct = Product::query()->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)->where('status', 'ACTIVE')
+                ->lockForUpdate()->firstOrFail();
+            $enabling = ! (bool) $lockedProduct->discounts_enabled;
+            $discountedVariants = ProductVariant::query()->where('product_id', $lockedProduct->id)
+                ->where('is_active', true)->where('discount_value', '>', 0)
+                ->where(fn ($query) => $query->whereNull('discount_type')->orWhereRaw("LOWER(TRIM(discount_type)) <> 'none'"))
+                ->get();
+            if ($enabling && $discountedVariants->isEmpty()) {
+                throw ValidationException::withMessages(['discounts_enabled' => 'Add a product or variant discount before resuming this campaign.']);
+            }
+            if ($enabling) {
+                $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $discountedVariants->modelKeys(), [
+                    'exclude_kinds' => ['discount', 'flash_sale'],
+                ]);
+                if ($conflicts->isNotEmpty()) {
+                    throw ValidationException::withMessages(['discounts_enabled' => 'This discount overlaps a Seller voucher or bundle deal. Change the other offer first: '.$conflicts->pluck('label')->unique()->implode(', ').'.']);
+                }
+            }
+            $lockedProduct->update(['discounts_enabled' => $enabling]);
+        }, attempts: 3);
+
+        return back()->with('status', (bool) $product->discounts_enabled ? 'Product discount campaign paused.' : 'Product discount campaign resumed.');
+    }
+
+    public function updateFlashSales(Request $request, Product $product, SellerPromotionConflictService $promotionConflictService): RedirectResponse
     {
         $seller = $request->user()?->sellerProfile;
         abort_unless($seller && (int) $product->seller_profile_id === (int) $seller->id, 404);
@@ -829,9 +1098,10 @@ class SellerEngagementController extends Controller
         $data = $request->validate([
             'flash_sale_starts_at' => ['nullable', 'date'],
             'flash_sale_ends_at' => ['nullable', 'date'],
+            'flash_sale_limit_per_buyer' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
             'variants' => ['required', 'array', 'min:1'],
             'variants.*.id' => ['required', 'integer', 'distinct', Rule::exists('product_variants', 'id')],
-            'variants.*.flash_sale_price' => ['nullable', 'numeric', 'gt:0', 'max:9999999999.99'],
+            'variants.*.flash_sale_price' => ['nullable', 'numeric', 'min:0.01', 'max:9999999999.99'],
             'variants.*.flash_sale_allocation' => ['nullable', 'integer', 'min:1', 'max:4294967295'],
         ]);
         if (! empty($data['flash_sale_starts_at']) && ! empty($data['flash_sale_ends_at'])
@@ -839,7 +1109,7 @@ class SellerEngagementController extends Controller
             throw ValidationException::withMessages(['flash_sale_ends_at' => 'The flash sale end time must be later than its start time.']);
         }
 
-        DB::transaction(function () use ($data, $product, $seller): void {
+        DB::transaction(function () use ($data, $product, $seller, $promotionConflictService): void {
             $lockedProduct = Product::query()
                 ->whereKey($product->id)
                 ->where('seller_profile_id', $seller->id)
@@ -856,6 +1126,22 @@ class SellerEngagementController extends Controller
             $requestedIds = collect($data['variants'])->pluck('id')->map(fn ($id): int => (int) $id)->unique()->sort()->values();
             if ($requestedIds->all() !== $variants->keys()->map(fn ($id): int => (int) $id)->sort()->values()->all()) {
                 throw ValidationException::withMessages(['variants' => 'Refresh the page and update all currently active variants for this product.']);
+            }
+
+            $flashVariantIds = collect($data['variants'])
+                ->filter(fn (array $row): bool => filled($row['flash_sale_price'] ?? null))
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
+            if ($flashVariantIds !== []) {
+                $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $flashVariantIds, [
+                    'exclude_kinds' => ['flash_sale', 'discount', 'voucher'],
+                ]);
+                if ($conflicts->isNotEmpty()) {
+                    throw ValidationException::withMessages([
+                        'variants' => 'A flash sale cannot overlap with an existing bundle deal. Clear these offers first: '.$conflicts->pluck('label')->unique()->implode(', ').'. Flash Sale has priority over Product Discount; discounts are not compounded.',
+                    ]);
+                }
             }
 
             $hasOpenFlashOrder = OrderItem::query()
@@ -880,9 +1166,9 @@ class SellerEngagementController extends Controller
                     ]);
                 }
                 if ($price !== null) {
-                    if ((float) $price >= $this->regularVariantPrice($variant)) {
+                    if ((float) $price >= round((float) $variant->price, 2)) {
                         throw ValidationException::withMessages([
-                            'variants' => 'Each flash price must be below the variant’s regular selling price.',
+                            'variants' => 'Each flash price must be below the variant’s regular catalog price.',
                         ]);
                     }
                     if ((int) $allocation < (int) $variant->flash_sale_sold) {
@@ -908,9 +1194,16 @@ class SellerEngagementController extends Controller
                 ]);
             }
 
+            $campaignKey = $lockedProduct->flash_sale_campaign_key;
+            if ($changesExistingSale) {
+                $campaignKey = $flashVariantIds === [] ? null : (string) Str::uuid();
+            }
             $lockedProduct->update([
                 'flash_sale_starts_at' => $data['flash_sale_starts_at'] ?? null,
                 'flash_sale_ends_at' => $data['flash_sale_ends_at'] ?? null,
+                'flash_sale_is_paused' => $changesExistingSale ? false : (bool) $lockedProduct->flash_sale_is_paused,
+                'flash_sale_limit_per_buyer' => $data['flash_sale_limit_per_buyer'] ?? null,
+                'flash_sale_campaign_key' => $campaignKey,
             ]);
             foreach ($data['variants'] as $row) {
                 $variant = $variants->get((int) $row['id']);
@@ -927,7 +1220,41 @@ class SellerEngagementController extends Controller
             }
         }, attempts: 3);
 
+        app(\App\Services\Marketplace\FlashSaleReminderService::class)->syncProduct($product->fresh());
+
         return back()->with('status', 'Flash sale prices, allocations, and schedule were saved. Existing order prices remain unchanged.');
+    }
+
+    public function toggleFlashSales(Request $request, Product $product): RedirectResponse
+    {
+        $seller = $request->user()?->sellerProfile;
+        abort_unless($seller && (int) $product->seller_profile_id === (int) $seller->id, 404);
+        abort_unless($this->flashSaleStorageReady(), 503, 'Flash sales are unavailable while their database migration is pending.');
+
+        $paused = DB::transaction(function () use ($product, $seller): bool {
+            $lockedProduct = Product::query()
+                ->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $variants = ProductVariant::query()
+                ->where('product_id', $lockedProduct->id)
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+
+            abort_if($variants->every(fn (ProductVariant $variant): bool => $variant->flash_sale_price === null), 409, 'Configure at least one flash-sale variant before changing its status.');
+
+            $paused = ! (bool) $lockedProduct->flash_sale_is_paused;
+            $lockedProduct->update(['flash_sale_is_paused' => $paused]);
+
+            return $paused;
+        }, attempts: 3);
+
+        app(\App\Services\Marketplace\FlashSaleReminderService::class)->syncProduct($product->fresh());
+
+        return back()->with('status', $paused ? 'Flash sale paused. Buyer prices have returned to the regular price.' : 'Flash sale resumed.');
     }
 
     public function endFlashSales(Request $request, Product $product): RedirectResponse
@@ -950,7 +1277,13 @@ class SellerEngagementController extends Controller
                 ]);
             }
 
-            $lockedProduct->update(['flash_sale_starts_at' => null, 'flash_sale_ends_at' => null]);
+            $lockedProduct->update([
+                'flash_sale_starts_at' => null,
+                'flash_sale_ends_at' => null,
+                'flash_sale_is_paused' => false,
+                'flash_sale_limit_per_buyer' => null,
+                'flash_sale_campaign_key' => null,
+            ]);
             foreach ($variants as $variant) {
                 $variant->update(['flash_sale_price' => null, 'flash_sale_allocation' => null, 'flash_sale_sold' => 0]);
             }
@@ -959,27 +1292,18 @@ class SellerEngagementController extends Controller
         return back()->with('status', 'Flash sales for this product have ended.');
     }
 
-    private function regularVariantPrice(ProductVariant $variant): float
-    {
-        $price = (float) $variant->price;
-        $value = max(0, (float) ($variant->discount_value ?? 0));
-        $discount = match ($variant->resolved_discount_type) {
-            'fixed' => min($price, $value),
-            'percentage' => min($price, $price * min(100, $value) / 100),
-            default => 0,
-        };
-
-        return round(max(0, $price - $discount), 2);
-    }
-
     private function flashSaleStorageReady(): bool
     {
         return Schema::hasColumn('products', 'flash_sale_starts_at')
             && Schema::hasColumn('products', 'flash_sale_ends_at')
+            && Schema::hasColumn('products', 'flash_sale_is_paused')
+            && Schema::hasColumn('products', 'flash_sale_limit_per_buyer')
+            && Schema::hasColumn('products', 'flash_sale_campaign_key')
             && Schema::hasColumn('product_variants', 'flash_sale_price')
             && Schema::hasColumn('product_variants', 'flash_sale_allocation')
             && Schema::hasColumn('product_variants', 'flash_sale_sold')
-            && Schema::hasColumn('order_items', 'flash_sale_quantity');
+            && Schema::hasColumn('order_items', 'flash_sale_quantity')
+            && Schema::hasColumn('order_items', 'flash_sale_campaign_key');
     }
 
     private function sellerForOwnedVoucher(Request $request, Voucher $voucher): SellerProfile

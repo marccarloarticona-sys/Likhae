@@ -1,6 +1,6 @@
 <p>Hello,</p>
 
-<p>Use this code to confirm a mobile number change on your LIKHAE Buyer account:</p>
+<p>Use this code to confirm a mobile number change on your LIKHAE account:</p>
 
 <p style="font-size: 24px; font-weight: 700; letter-spacing: 6px;">{{ $code }}</p>
 

@@ -94,7 +94,7 @@ class MobileGoogleAuthenticationController extends Controller
             return $this->returnToApp($state, ['error' => 'inactive_account']);
         }
 
-        if (! in_array(strtoupper((string) $user->account_type), [User::TYPE_BUYER, User::TYPE_RIDER], true)) {
+        if (! in_array(strtoupper((string) $user->account_type), [User::TYPE_BUYER, User::TYPE_RIDER, User::TYPE_LOGISTICS], true)) {
             return $this->returnToApp($state, ['error' => 'mobile_access_required']);
         }
 

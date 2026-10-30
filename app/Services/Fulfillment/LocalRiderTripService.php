@@ -93,7 +93,7 @@ final class LocalRiderTripService
             $this->assertReady();
         }
 
-        return DB::transaction(function () use ($actor, $trip, $assignment): RiderLocalTripItem {
+        return DB::transaction(function () use ($actor, $trip, $assignment, $allowDeliveryAreaOverride): RiderLocalTripItem {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->lockForUpdate()->firstOrFail();
             $assignment = RiderAssignment::query()->whereKey($assignment->id)->with([
                 'riderProfile.user', 'riderProfile.logisticsCenter',

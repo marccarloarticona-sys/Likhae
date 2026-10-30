@@ -11,6 +11,9 @@
         default => 'bg-warning-soft text-warning',
     };
     $fullName = data_get($data, 'name', 'Rider Applicant');
+    $latestDocumentIds = $application->documents
+        ->groupBy(fn ($document) => strtoupper((string) $document->document_type))
+        ->map(fn ($versions) => (int) $versions->sortByDesc('id')->first()->id);
 
     $details = [
         ['Full Name', $fullName],
@@ -79,12 +82,14 @@
                     $documentUrl = route('logistics.riders.application.documents.show', [$application, $document]);
                     $previewUrl = $documentUrl.'?preview=1';
                     $mime = strtolower((string) $document->mime_type);
+                    $isCurrentSubmission = $latestDocumentIds->get(strtoupper((string) $document->document_type)) === (int) $document->id;
                 @endphp
                 <article class="rounded-xl border border-line p-4">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div>
                             <h3 class="text-[11px] font-semibold text-ink">{{ str($document->document_type)->replace('_', ' ')->headline() }}</h3>
                             <p class="mt-1 break-all text-[9px] text-muted">{{ $document->original_name ?: 'Submitted document' }}</p>
+                            @unless($isCurrentSubmission)<p class="mt-1 text-[9px] text-muted">Previous submission</p>@endunless
                         </div>
                         <a href="{{ $documentUrl }}" class="rounded-lg border border-line px-3 py-2 text-[9px] font-semibold text-ink">Download</a>
                     </div>
@@ -101,7 +106,7 @@
                     @if($document->rejection_reason)
                         <p class="mt-2 text-[9px] text-danger">Reason: {{ $document->rejection_reason }}</p>
                     @endif
-                    @if(in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
+                    @if($isCurrentSubmission && in_array($application->status, ['PENDING', 'UNDER_REVIEW'], true))
                         <div class="mt-3 grid gap-2">
                             <form method="POST" action="{{ route('logistics.riders.application.documents.verify', [$application, $document]) }}">
                                 @csrf

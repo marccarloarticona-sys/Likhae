@@ -18,7 +18,7 @@ class BuyerMobileChangeVerificationCode extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'Confirm your LIKHAE mobile number change');
+        return new Envelope(subject: 'Confirm your LIKHAE account mobile number change');
     }
 
     public function content(): Content

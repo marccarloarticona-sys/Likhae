@@ -4,6 +4,7 @@
     $currentTab = $tab ?? request('tab','profile');
     $shopName = $storeProfile->shop_name ?: 'LIKHAE Studio';
     $shopInitials = collect(explode(' ', $shopName))->filter()->take(2)->map(fn($w)=>mb_strtoupper(mb_substr($w,0,1)))->implode('');
+    $buyerPreviewLocation = collect([$storeProfile->municipality, $storeProfile->province])->filter()->implode(', ');
 @endphp
 
 @section('title','Store')
@@ -28,7 +29,27 @@
         </form>
     @else
         <form class="sl-store-layout" method="POST" enctype="multipart/form-data" action="{{ route('seller.store.update') }}">@csrf @method('PUT')
-            <aside class="sl-card sl-store-preview"><x-shared.profile-image :path="$storeProfile->banner_path" role="store-banner" class="sl-store-cover" data-branding-preview="banner" :alt="$shopName.' banner'" /><div class="sl-shop-logo"><x-shared.profile-image :path="$storeProfile->avatar_path" role="seller" data-branding-preview="avatar" :alt="$shopName.' avatar'" /></div><h2>{{ $shopName }}</h2><p>{{ $storeProfile->description ?: 'Complete your shop description.' }}</p><span class="sl-verified-store">Verified Seller</span></aside>
+            <aside class="sl-card sl-store-preview" aria-label="Buyer-facing shop preview">
+                <div class="sl-store-preview-banner">
+                    <x-shared.profile-image :path="$storeProfile->banner_path" role="store-banner" class="sl-store-cover" data-branding-preview="banner" :alt="$shopName.' banner'" />
+                    <div class="sl-store-preview-scrim" aria-hidden="true"></div>
+                </div>
+                <div class="sl-store-preview-heading">
+                    <div class="sl-shop-logo"><x-shared.profile-image :path="$storeProfile->avatar_path" role="seller" data-branding-preview="avatar" :alt="$shopName.' avatar'" /></div>
+                    <div class="sl-store-preview-copy">
+                        <span class="sl-store-preview-eyebrow">Verified LIKHAE store</span>
+                        <h2>{{ $shopName }}</h2>
+                        @if(filled($storeProfile->tagline))<p class="sl-store-preview-tagline">{{ $storeProfile->tagline }}</p>@endif
+                        @if(filled($buyerPreviewLocation) || filled($storeProfile->joined))
+                            <p class="sl-store-preview-meta">{{ $buyerPreviewLocation }}@if(filled($buyerPreviewLocation) && filled($storeProfile->joined)) · @endif @if(filled($storeProfile->joined))Joined {{ $storeProfile->joined }}@endif</p>
+                        @endif
+                    </div>
+                </div>
+                <div class="sl-store-preview-about">
+                    <h3>About this store</h3>
+                    <p>{{ $storeProfile->description ?: 'Complete your shop description.' }}</p>
+                </div>
+            </aside>
             <div class="sl-store-form">
                 <section class="sl-card sl-form-section"><header class="sl-card-head"><div><h2>Shop Information</h2><p>This information is visible to buyers.</p></div></header><div class="sl-form-grid"><label class="sl-field sl-span-2"><span>Shop name <b>*</b></span><input name="business_name" value="{{ old('business_name',$storeProfile->shop_name) }}" minlength="3" maxlength="30" required aria-describedby="shop-name-help"><small id="shop-name-help">Use a unique store name between 3 and 30 characters.</small></label>
                     <div class="sl-field sl-span-2"><span>Shop logo</span><input id="store-avatar-file" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" data-branding-file="avatar"><small>Square crop - JPEG, PNG, or WebP - max 5 MB.</small><label>Zoom <input type="range" min="100" max="200" value="100" data-branding-zoom="avatar"></label><label>Horizontal position <input type="range" min="0" max="100" value="50" data-branding-x="avatar"></label><label>Vertical position <input type="range" min="0" max="100" value="50" data-branding-y="avatar"></label></div>
@@ -53,14 +74,32 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     descriptionInput?.addEventListener('input', updateDescriptionCount);
 
+    const drawBrandingCrop = (key, image) => {
+        const ratio = key === 'avatar' ? 1 : 3;
+        const width = key === 'avatar' ? 600 : 1200;
+        const height = Math.round(width / ratio);
+        const zoom = Number(document.querySelector('[data-branding-zoom="' + key + '"]').value) / 100;
+        const scale = Math.max(width / image.width, height / image.height) * zoom;
+        const drawWidth = image.width * scale;
+        const drawHeight = image.height * scale;
+        const x = (width - drawWidth) * Number(document.querySelector('[data-branding-x="' + key + '"]').value) / 100;
+        const y = (height - drawHeight) * Number(document.querySelector('[data-branding-y="' + key + '"]').value) / 100;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(image, x, y, drawWidth, drawHeight);
+        return canvas;
+    };
+
     const updatePreview = (key) => {
         const state = states.get(key);
         const preview = document.querySelector('[data-branding-preview="' + key + '"]');
         if (!state || !preview) return;
         preview.hidden = false;
-        if (state.url) preview.src = state.url;
-        preview.style.objectPosition = document.querySelector('[data-branding-x="' + key + '"]').value + '% ' + document.querySelector('[data-branding-y="' + key + '"]').value + '%';
-        preview.style.transform = 'scale(' + (document.querySelector('[data-branding-zoom="' + key + '"]').value / 100) + ')';
+        if (!state.image.complete || !state.image.naturalWidth) return;
+        preview.style.objectPosition = '50% 50%';
+        preview.style.transform = 'none';
+        preview.src = drawBrandingCrop(key, state.image).toDataURL('image/webp', .88);
     };
 
     document.querySelectorAll('[data-branding-file]').forEach((input) => input.addEventListener('change', () => {
@@ -75,8 +114,13 @@ document.addEventListener('DOMContentLoaded', () => {
         input.setCustomValidity('');
         const old = states.get(input.dataset.brandingFile);
         if (old?.url) URL.revokeObjectURL(old.url);
-        states.set(input.dataset.brandingFile, {file, url: URL.createObjectURL(file)});
-        updatePreview(input.dataset.brandingFile);
+        const key = input.dataset.brandingFile;
+        const state = {file, url: URL.createObjectURL(file), image: new Image()};
+        states.set(key, state);
+        state.image.addEventListener('load', () => {
+            if (states.get(key) === state) updatePreview(key);
+        }, {once: true});
+        state.image.src = state.url;
     }));
 
     document.querySelectorAll('[data-branding-zoom], [data-branding-x], [data-branding-y]').forEach((control) =>
@@ -101,19 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             try {
                 const image = await createImageBitmap(state.file);
-                const ratio = key === 'avatar' ? 1 : 3;
-                const width = key === 'avatar' ? 600 : 1200;
-                const height = Math.round(width / ratio);
-                const zoom = Number(document.querySelector('[data-branding-zoom="' + key + '"]').value) / 100;
-                const scale = Math.max(width / image.width, height / image.height) * zoom;
-                const drawWidth = image.width * scale;
-                const drawHeight = image.height * scale;
-                const x = (width - drawWidth) * Number(document.querySelector('[data-branding-x="' + key + '"]').value) / 100;
-                const y = (height - drawHeight) * Number(document.querySelector('[data-branding-y="' + key + '"]').value) / 100;
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                canvas.getContext('2d').drawImage(image, x, y, drawWidth, drawHeight);
+                const canvas = drawBrandingCrop(key, image);
                 image.close();
                 const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', .88));
                 if (blob && blob.size <= maxBytes) {

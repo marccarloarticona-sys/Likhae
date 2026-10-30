@@ -1,5 +1,11 @@
 @php
     $inTransitTransfer = $shipment?->transferLegs?->last(fn ($leg) => $leg->status === 'IN_TRANSIT');
+    $returnWorkflow = $shipment && $shipment->relationLoaded('returnWorkflow') ? $shipment->returnWorkflow : null;
+    $returnWorkflowOpen = $returnWorkflow
+        && in_array($returnWorkflow->status, \App\Models\Logistics\ShipmentReturnWorkflow::OPEN_STATUSES, true);
+    $sellerHasReceivedReturn = $returnWorkflow?->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED;
+    $returnDisposition = $returnWorkflow?->return_disposition
+        ?: \App\Models\Logistics\ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN;
     $centerName = trim((string) ($inTransitTransfer?->originLogisticsCenter?->business_name
         ?: $shipment?->logisticsCenter?->business_name
         ?: ''));
@@ -11,7 +17,8 @@
         ! $shipment => null,
         $shipment->current_status === 'CANCELLED' => 'Parcel was cancelled',
         $shipment->current_status === 'RETURNED' => 'Parcel has been returned to the seller',
-        in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true) => 'Parcel has been delivered',
+        $shipment->current_status === 'COMPLETED' => 'Buyer confirmed receipt',
+        $shipment->current_status === 'DELIVERED' => 'Parcel has been delivered',
         (bool) $inTransitTransfer && filled($inTransitTransfer->arrival_scanned_at) => 'Parcel has arrived at '.$transferDestination.'. Hub receipt is being verified.',
         (bool) $inTransitTransfer => 'Parcel has departed from '.$centerLabel.' and is on the way to '.$transferDestination,
         in_array($shipment->current_status, ['AT_SORTING_CENTER', 'SORTED'], true) => 'Parcel has arrived at '.$centerLabel,
@@ -19,6 +26,9 @@
         $shipment->current_status === 'PICKED_UP' => 'Parcel has been picked up from seller',
         $shipment->current_status === 'READY_FOR_PICKUP' => 'Ready to ship',
         $shipment->current_status === 'PICKUP_ASSIGNED' => 'Pickup rider assigned',
+        $shipment->current_status === 'DELIVERY_FAILED' && $returnWorkflowOpen && $returnDisposition === \App\Models\Logistics\ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN => 'Return to seller is in progress',
+        $shipment->current_status === 'DELIVERY_FAILED' && $returnWorkflowOpen && $returnDisposition === \App\Models\Logistics\ShipmentReturnWorkflow::DISPOSITION_REDELIVERY => 'Redelivery is being arranged',
+        $shipment->current_status === 'DELIVERY_FAILED' && $sellerHasReceivedReturn => 'Seller has received the returned parcel',
         $shipment->current_status === 'DELIVERY_FAILED' => 'Delivery attempt was unsuccessful',
         $shipment->current_status === 'PLACED' => 'Waiting for seller to accept your order',
         default => 'Seller is preparing your parcel',

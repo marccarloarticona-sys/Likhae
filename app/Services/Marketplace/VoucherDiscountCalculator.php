@@ -20,6 +20,12 @@ class VoucherDiscountCalculator
 
     public function calculate(Voucher $voucher, float $eligibleSubtotal): float
     {
+        if ($voucher->requiresReview()) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'This voucher is under review and cannot be used. Please choose another voucher.',
+            ]);
+        }
+
         $eligibleSubtotal = round(max(0.0, $eligibleSubtotal), 2);
         if ($eligibleSubtotal <= 0) {
             return 0.0;

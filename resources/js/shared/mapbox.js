@@ -1,5 +1,3 @@
-const MAPBOX_SCRIPT = 'https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js';
-const MAPBOX_CSS = 'https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css';
 const MAPLIBRE_SCRIPT = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.js';
 const MAPLIBRE_CSS = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.css';
 const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -8,36 +6,6 @@ const ROUTE_OFF_PATH_DISTANCE_METERS = 100;
 const ROUTE_MAX_AGE_MS = 120000;
 const ROUTE_RETRY_DELAY_MS = 30000;
 const ORDER_ROUTE_POLL_INTERVAL_MS = 10000;
-
-let mapboxPromise;
-
-function loadMapbox() {
-    if (window.mapboxgl) return Promise.resolve(window.mapboxgl);
-    if (mapboxPromise) return mapboxPromise;
-
-    if (!document.querySelector('link[data-likhae-mapbox-css]')) {
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = MAPBOX_CSS;
-        link.dataset.likhaeMapboxCss = 'true';
-        document.head.appendChild(link);
-    }
-
-    mapboxPromise = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = MAPBOX_SCRIPT;
-        script.async = true;
-        script.onload = () => window.mapboxgl
-            ? resolve(window.mapboxgl)
-            : reject(new Error('Mapbox loaded without its browser API.'));
-        script.onerror = () => reject(new Error('Mapbox could not be loaded.'));
-        document.head.appendChild(script);
-    });
-
-    return mapboxPromise;
-}
-
-export { loadMapbox };
 
 function loadMapLibre() {
     if (window.maplibregl) return Promise.resolve(window.maplibregl);
@@ -65,6 +33,8 @@ function loadMapLibre() {
     return window._likhaeMapLibrePromise;
 }
 
+export { loadMapLibre };
+
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;',
@@ -78,9 +48,10 @@ function parseJson(value, fallback) {
 function updateStatus(shell, message, isError = false) {
     const status = shell.querySelector('[data-map-status]');
     if (!status) return;
-    const notice = shell._likhaeRealtimeNotice;
-    status.textContent = notice ? `${message} ${notice}` : message;
-    status.classList.toggle('is-error', isError || shell._likhaeRealtimeNoticeError === true);
+    const notices = [shell._likhaeMapNotice, shell._likhaeRouteNotice, shell._likhaeRealtimeNotice]
+        .filter((notice) => notice && !message.includes(notice));
+    status.textContent = [message, ...notices].filter(Boolean).join(' ');
+    status.classList.toggle('is-error', isError || shell._likhaeRouteNoticeError === true || shell._likhaeRealtimeNoticeError === true);
 }
 
 function updateTrackingStatus(shell, message, isError = false) {
@@ -160,6 +131,9 @@ function orderRouteProgress(status, stops, routeState, shipmentMarkers) {
     let distance = 0;
 
     switch (status) {
+        case 'PICKED_UP':
+            distance = firstCenterDistance;
+            break;
         case 'AT_SORTING_CENTER':
         case 'SORTED':
             distance = lastReceivedCenterIndex >= 0
@@ -206,10 +180,18 @@ function orderRouteProgress(status, stops, routeState, shipmentMarkers) {
 }
 
 function hubTransferProgressRange(stops, routeState, shipmentMarkers) {
-    if (!shipmentMarkers.some((marker) => marker.transfer_status === 'IN_TRANSIT')) return null;
+    const activeTransfer = shipmentMarkers.find((marker) => marker.transfer_status === 'IN_TRANSIT');
+    if (!activeTransfer) return null;
 
-    const originIndex = stops.findIndex((stop) => stop.kind === 'center' && stop.center_role === 'origin');
-    const destinationIndex = stops.findIndex((stop) => stop.kind === 'center' && stop.center_role === 'destination');
+    const activeLegId = activeTransfer.transfer_leg_id;
+    const belongsToActiveLeg = (stop) => activeLegId == null
+        || String(stop.transfer_leg_id ?? '') === String(activeLegId);
+    const originIndex = stops.findIndex((stop) => stop.kind === 'center'
+        && stop.center_role === 'origin'
+        && belongsToActiveLeg(stop));
+    const destinationIndex = stops.findIndex((stop) => stop.kind === 'center'
+        && stop.center_role === 'destination'
+        && belongsToActiveLeg(stop));
     const legDistances = routeState?.legDistances || [];
     const totalDistance = legDistances.reduce((sum, distance) => sum + distance, 0);
     if (originIndex < 0 || destinationIndex <= originIndex || totalDistance <= 0) return null;
@@ -341,7 +323,7 @@ function removeOrderRouteLayers(map, routeId) {
     removeRouteLayer(map, `${routeId}-remaining`);
 }
 
-function drawOrderRoutes(map, mapboxgl, markers, shell) {
+function drawOrderRoutes(map, maplibregl, markers, shell) {
     if (shell.dataset.mapOrderRoute !== 'true') return;
 
     const grouped = markers.reduce((groups, marker) => {
@@ -354,7 +336,7 @@ function drawOrderRoutes(map, mapboxgl, markers, shell) {
     const activeRouteIds = new Set();
     const routeOrder = { seller: 0, center: 1, destination: 2 };
     const centerRoleOrder = { origin: 0, destination: 1 };
-    const token = shell.dataset.mapToken?.trim() || '';
+    const apiKey = shell.dataset.geoapifyKey?.trim() || '';
     shell._likhaeOrderRouteState ||= {};
 
     Object.entries(grouped).forEach(([shipmentId, shipmentMarkers]) => {
@@ -402,19 +384,19 @@ function drawOrderRoutes(map, mapboxgl, markers, shell) {
         }
 
         if (routeState.pending
-            || (!token && routeState.noToken)
+            || (!apiKey && routeState.noApiKey)
             || (routeState.failedAt && Date.now() - routeState.failedAt < ROUTE_RETRY_DELAY_MS)) return;
 
-        if (!token) {
-            routeState.noToken = true;
+        if (!apiKey) {
+            routeState.noApiKey = true;
             routeState.failedAt = Date.now();
-            updateStatus(shell, 'Road-following directions need a Mapbox public token. Shipment progress is shown at saved stops.', true);
+            updateStatus(shell, 'Add a free Geoapify API key to show road routes and ETA. Shipment progress remains visible at saved stops.', true);
             return;
         }
 
         routeState.pending = true;
         const routePromise = Promise.all(stopCoordinates.slice(1).map((coordinate, index) =>
-            fetchRoadGeometry(token, stopCoordinates[index], coordinate)));
+            fetchRoadGeometry(apiKey, stopCoordinates[index], coordinate)));
         routePromise.then((legs) => {
             if (shell._likhaeOrderRouteState?.[shipmentId] !== routeState) return;
             const coordinates = legs.reduce((joined, leg, index) => {
@@ -422,19 +404,23 @@ function drawOrderRoutes(map, mapboxgl, markers, shell) {
                 joined.push(...(index ? next.slice(1) : next));
                 return joined;
             }, []);
-            if (coordinates.length < 2) throw new Error('Mapbox returned no drivable order route.');
+            if (coordinates.length < 2) throw new Error('No drivable route was returned for these saved coordinates.');
 
             routeState.pending = false;
             routeState.geometry = { type: 'LineString', coordinates };
             routeState.legDistances = legs.map((leg) => leg.distance);
             routeState.legGeometries = legs.map((leg) => leg.geometry);
             routeState.fetchedAt = Date.now();
-            drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || markers, shell);
+            shell._likhaeRouteNotice = '';
+            shell._likhaeRouteNoticeError = false;
+            drawOrderRoutes(map, maplibregl, shell._likhaeCurrentMarkers || markers, shell);
         }).catch((error) => {
             if (shell._likhaeOrderRouteState?.[shipmentId] !== routeState) return;
             routeState.pending = false;
             routeState.failedAt = Date.now();
-            drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || markers, shell);
+            shell._likhaeRouteNotice = error?.message || 'Road route is temporarily unavailable.';
+            shell._likhaeRouteNoticeError = true;
+            drawOrderRoutes(map, maplibregl, shell._likhaeCurrentMarkers || markers, shell);
             updateStatus(shell, error?.message || 'The road-following order route is temporarily unavailable.', true);
         });
     });
@@ -452,26 +438,74 @@ function drawOrderRoutes(map, mapboxgl, markers, shell) {
     shell._likhaeOrderRouteIds = [...activeRouteIds];
 }
 
-async function fetchRoadGeometry(token, from, to) {
-    const coordinates = `${from[0]},${from[1]};${to[0]},${to[1]}`;
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?overview=full&geometries=geojson&access_token=${encodeURIComponent(token)}`;
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-        const message = response.status === 401 || response.status === 403
-            ? `Mapbox Directions authorization failed (HTTP ${response.status}). Check the browser-safe token and its URL restrictions.`
-            : `Mapbox Directions request failed (HTTP ${response.status}).`;
-        throw new Error(message);
+async function geoapifyRequestError(response, apiName) {
+    let payload = null;
+    try {
+        payload = await response.json();
+    } catch {
+        // Some gateway and network errors do not include a JSON response.
     }
+
+    const rawDetail = payload?.message
+        || (typeof payload?.error === 'string' ? payload.error : payload?.error?.message)
+        || payload?.details
+        || '';
+    const detail = String(rawDetail)
+        .replace(/(apiKey|api_key|access_token)\s*[=:]\s*[^&\s]+/gi, '$1=[redacted]')
+        .replace(/\s+/g, ' ')
+        .slice(0, 180);
+    const suffix = detail ? ` ${detail}` : '';
+
+    if (response.status === 401 || response.status === 403) {
+        return new Error(`Geoapify denied the ${apiName} request (HTTP ${response.status}). Check that production uses a current API key and that its allowed site referrer matches this domain.${suffix}`);
+    }
+    if (response.status === 429) {
+        return new Error('Geoapify rate limit reached. Check the project usage and plan, then retry later.');
+    }
+    return new Error(`Geoapify ${apiName} request failed (HTTP ${response.status}).${suffix}`);
+}
+
+async function fetchRoadGeometry(apiKey, from, to) {
+    const url = new URL('https://api.geoapify.com/v1/routing');
+    url.searchParams.set('waypoints', `${from[1]},${from[0]}|${to[1]},${to[0]}`);
+    url.searchParams.set('mode', 'drive');
+    url.searchParams.set('lang', 'en');
+    url.searchParams.set('apiKey', apiKey);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12000);
+    let response;
+    try {
+        response = await fetch(url, {
+            headers: { Accept: 'application/geo+json, application/json' },
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw new Error('Geoapify Routing timed out. The map remains available; retry the route in a moment.');
+        }
+        throw new Error('Could not reach Geoapify Routing. Check the connection and the production key’s site restrictions.');
+    } finally {
+        window.clearTimeout(timeout);
+    }
+    if (!response.ok) throw await geoapifyRequestError(response, 'Routing');
     const payload = await response.json();
-    const route = payload.routes?.[0];
-    if (!route?.geometry?.coordinates?.length) throw new Error('Mapbox returned no drivable route for these saved coordinates.');
-    if (!Number.isFinite(Number(route.distance)) || !Number.isFinite(Number(route.duration))) {
+    const feature = payload.features?.[0];
+    const route = feature?.properties;
+    const geometry = feature?.geometry;
+    const paths = geometry?.type === 'LineString'
+        ? [geometry.coordinates]
+        : geometry?.type === 'MultiLineString'
+            ? geometry.coordinates
+            : [];
+    const coordinates = paths.reduce((joined, path) => joined.concat(joined.length ? path.slice(1) : path), []);
+    if (coordinates.length < 2) throw new Error('No drivable route was returned for these saved coordinates.');
+    if (!Number.isFinite(Number(route?.distance)) || !Number.isFinite(Number(route?.time))) {
         throw new Error('The driving route did not include distance and duration.');
     }
     return {
-        geometry: route.geometry,
+        geometry: { type: 'LineString', coordinates },
         distance: Number(route.distance),
-        duration: Number(route.duration),
+        duration: Number(route.time),
     };
 }
 
@@ -543,7 +577,7 @@ function navigationMetricPlaceholder(shell, rider, target, status) {
     const canRequestRoute = Boolean(
         markerCoordinates(rider)
         && markerCoordinates(target)
-        && shell.dataset.mapToken?.trim(),
+        && shell.dataset.geoapifyKey?.trim(),
     );
     if (!canRequestRoute) return '—';
 
@@ -602,7 +636,7 @@ function removeRouteLayer(map, routeId) {
     if (map.getSource(sourceId)) map.removeSource(sourceId);
 }
 
-async function drawPersistedRoutes(map, markers, shell, token) {
+async function drawPersistedRoutes(map, markers, shell, apiKey) {
     const grouped = markers.reduce((groups, marker) => {
         if (marker.shipment_id) {
             groups[marker.shipment_id] ||= [];
@@ -680,14 +714,14 @@ async function drawPersistedRoutes(map, markers, shell, token) {
 
             const routeId = `${shipmentId}-${rider.assignment_id || 'rider'}-${destinationKind}`;
             activeRouteIds.add(routeId);
-            if (!token) {
+            if (!apiKey) {
                 removeRouteLayer(map, routeId);
                 delete shell._likhaeRouteState[routeId];
                 if (navigationEnabled && rider.active_rider) {
                     updateNavigationPanel(shell, {
                         rider,
                         target,
-                        status: 'Live rider location is shown. Driving route previews need a Mapbox public token.',
+                        status: 'Live rider location is shown. Add a Geoapify API key to show the road route and ETA.',
                     });
                 }
                 return;
@@ -714,7 +748,7 @@ async function drawPersistedRoutes(map, markers, shell, token) {
                 });
             }
 
-            fetchRoadGeometry(token, from, to)
+            fetchRoadGeometry(apiKey, from, to)
                 .then((route) => {
                     if (shell._likhaeRouteState?.[routeId] !== routeState) return;
                     routeState.pending = false;
@@ -761,7 +795,7 @@ async function drawPersistedRoutes(map, markers, shell, token) {
         });
 }
 
-async function drawUserRoute(shell, map, mapboxgl, markers, from) {
+async function drawUserRoute(shell, map, maplibregl, markers, from) {
     // Before a pickup assignment is accepted, preview the route on the Rider's
     // own device. This coordinate is not sent to the shipment tracking API.
     if (shell.dataset.mapRiderGps !== 'true') return null;
@@ -769,8 +803,9 @@ async function drawUserRoute(shell, map, mapboxgl, markers, from) {
     const target = markers.find((marker) => marker.target_kind === shell.dataset.mapUserTarget);
     const to = markerCoordinates(target);
     if (!target || !to) return null;
-    if (!shell.dataset.mapToken?.trim()) {
-        const message = 'Your location is shown on the map. Driving route previews need a Mapbox public token.';
+    const apiKey = shell.dataset.geoapifyKey?.trim() || '';
+    if (!apiKey) {
+        const message = 'Your location is shown on the map. Add a Geoapify API key to show the road route and ETA.';
         updateNavigationPanel(shell, { target, status: message });
         updateStatus(shell, message, true);
         return false;
@@ -784,9 +819,9 @@ async function drawUserRoute(shell, map, mapboxgl, markers, from) {
     };
 
     try {
-        const route = await fetchRoadGeometry(shell.dataset.mapToken, from, to);
+        const route = await fetchRoadGeometry(apiKey, from, to);
         drawRouteGeometry(map, routeId, route.geometry, '#800000');
-        const bounds = new mapboxgl.LngLatBounds();
+        const bounds = new maplibregl.LngLatBounds();
         bounds.extend(from);
         bounds.extend(to);
         map.fitBounds(bounds, { padding: 64, maxZoom: 15, duration: 350 });
@@ -808,7 +843,7 @@ async function drawUserRoute(shell, map, mapboxgl, markers, from) {
     }
 }
 
-function addUserLocation(shell, map, mapboxgl, markers) {
+function addUserLocation(shell, map, maplibregl, markers) {
     if (shell.dataset.mapLiveDeviceGps === 'true') return;
     const button = shell.querySelector('[data-map-location]');
     if (!button) return;
@@ -842,14 +877,14 @@ function addUserLocation(shell, map, mapboxgl, markers) {
             const lng = position.coords.longitude;
             const lat = position.coords.latitude;
             shell._likhaeUserMarker?.remove();
-            const marker = new mapboxgl.Marker({ element: Object.assign(document.createElement('div'), {
+            const marker = new maplibregl.Marker({ element: Object.assign(document.createElement('div'), {
                 className: 'lk-map-marker',
             }) }).setLngLat([lng, lat]).addTo(map);
             marker.getElement().dataset.kind = shell.dataset.mapRiderGps === 'true' ? 'rider' : 'user';
             marker.getElement().dataset.mapUserMarker = 'true';
             shell._likhaeUserMarker = marker;
             map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), essential: true });
-            const hasRoute = await drawUserRoute(shell, map, mapboxgl, markers, [lng, lat]);
+            const hasRoute = await drawUserRoute(shell, map, maplibregl, markers, [lng, lat]);
             if (hasRoute === true) {
                 updateStatus(shell, 'Road route preview is ready. This GPS fix was not sent to LIKHAE tracking.');
             } else if (hasRoute === null) {
@@ -866,13 +901,13 @@ function addUserLocation(shell, map, mapboxgl, markers) {
     });
 }
 
-function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
+function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
     if (shell.dataset.mapLiveDeviceGps !== 'true') return;
 
     const button = shell.querySelector('[data-map-location]');
     const target = markers.find((marker) => marker.target_kind === shell.dataset.mapUserTarget);
     const destination = markerCoordinates(target);
-    const token = shell.dataset.mapToken?.trim() || '';
+    const apiKey = shell.dataset.geoapifyKey?.trim() || '';
     const rider = { assignment_type: 'INTER_LOGISTICS', active_destination_kind: 'destination', location_fresh: true };
     let watchId;
     let lastRouteFrom = null;
@@ -907,8 +942,8 @@ function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
             element.className = 'lk-map-marker';
             element.dataset.kind = 'rider';
             element.setAttribute('aria-label', 'Driver live location');
-            shell._likhaeUserMarker = new mapboxgl.Marker({ element, anchor: 'bottom' })
-                .setPopup(new mapboxgl.Popup({ offset: 16 }).setHTML('<div class="lk-map-popup"><strong>Driver live location</strong><span>Updated from this device GPS</span></div>'))
+            shell._likhaeUserMarker = new maplibregl.Marker({ element, anchor: 'bottom' })
+                .setPopup(new maplibregl.Popup({ offset: 16 }).setHTML('<div class="lk-map-popup"><strong>Driver live location</strong><span>Updated from this device GPS</span></div>'))
                 .setLngLat(from)
                 .addTo(map);
         } else {
@@ -916,7 +951,7 @@ function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
         }
 
         if (followDriver) {
-            const bounds = new mapboxgl.LngLatBounds();
+            const bounds = new maplibregl.LngLatBounds();
             bounds.extend(from);
             if (destination) bounds.extend(destination);
             map.fitBounds(bounds, { padding: 64, maxZoom: 13, duration: 350 });
@@ -929,9 +964,9 @@ function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
             return;
         }
 
-        if (!token) {
-            updateNavigationPanel(shell, { rider, target, status: 'Live GPS is active. Add a Mapbox public token to show the driving route and ETA.' });
-            updateStatus(shell, 'Live driver location and destination are shown. Driving route preview needs a Mapbox public token.');
+        if (!apiKey) {
+            updateNavigationPanel(shell, { rider, target, status: 'Live GPS is active. Add a Geoapify API key to show the road route and ETA.' });
+            updateStatus(shell, 'Live driver location and destination are shown. Add a Geoapify API key to show the road route and ETA.');
             return;
         }
 
@@ -943,7 +978,7 @@ function startLiveDeviceNavigation(shell, map, mapboxgl, markers) {
             lastRouteAt = now;
             const requestId = ++routeRequest;
             updateNavigationPanel(shell, { rider, target, route: activeRoute, status: 'Live GPS active. Updating the road route…' });
-            fetchRoadGeometry(token, from, destination)
+            fetchRoadGeometry(apiKey, from, destination)
                 .then((route) => {
                     if (requestId !== routeRequest) return;
                     activeRoute = { ...route, arrivalAt: Date.now() + (route.duration * 1000) };
@@ -1014,10 +1049,10 @@ function distanceMeters(first, second) {
     return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
+function renderMarkers(shell, map, maplibregl, markers, fit = false) {
     shell._likhaeMarkerRefs ||= {};
     const seen = new Set();
-    const bounds = new mapboxgl.LngLatBounds();
+    const bounds = new maplibregl.LngLatBounds();
 
     markers.forEach((markerData) => {
         const coordinates = markerCoordinates(markerData);
@@ -1041,7 +1076,7 @@ function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
         if (!marker) {
             const element = document.createElement('div');
             element.className = 'lk-map-marker';
-            marker = new mapboxgl.Marker({ element }).setLngLat(coordinates).addTo(map);
+            marker = new maplibregl.Marker({ element }).setLngLat(coordinates).addTo(map);
             shell._likhaeMarkerRefs[key] = marker;
         } else {
             marker.setLngLat(coordinates);
@@ -1049,7 +1084,7 @@ function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
 
         marker.getElement().dataset.kind = markerData.kind || 'destination';
         marker.getElement().dataset.activeRider = markerData.active_rider ? 'true' : 'false';
-        marker.setPopup(new mapboxgl.Popup({ offset: 16 }).setHTML(
+        marker.setPopup(new maplibregl.Popup({ offset: 16 }).setHTML(
             `<div class="lk-map-popup"><strong>${escapeHtml(markerData.title || markerData.label || 'Location')}</strong><span>${escapeHtml(markerData.popup || '')}</span></div>`,
         ));
         bounds.extend(coordinates);
@@ -1075,17 +1110,17 @@ function renderMarkers(shell, map, mapboxgl, markers, fit = false) {
     }
 }
 
-async function refreshTracking(shell, map, mapboxgl, payload) {
+async function refreshTracking(shell, map, maplibregl, payload) {
     const markers = Array.isArray(payload?.markers) ? payload.markers : [];
     const endpoints = markers.map((marker) => marker.tracking_endpoint).filter(Boolean);
     const channels = markers.map((marker) => marker.tracking_channel).filter(Boolean);
     if (endpoints.length) shell._likhaeTrackingEndpoints = [...new Set(endpoints)];
     if (channels.length) shell._likhaeTrackingChannels = [...new Set(channels)];
     shell._likhaeCurrentMarkers = markers;
-    renderMarkers(shell, map, mapboxgl, markers);
-    drawOrderRoutes(map, mapboxgl, markers, shell);
+    renderMarkers(shell, map, maplibregl, markers);
+    drawOrderRoutes(map, maplibregl, markers, shell);
     configureRiderLocationUpdates(shell);
-    await drawPersistedRoutes(map, markers, shell, shell.dataset.mapToken?.trim() || '');
+    await drawPersistedRoutes(map, markers, shell, shell.dataset.geoapifyKey?.trim() || '');
 
     const tracking = payload?.tracking || {};
     shell._likhaeCurrentTracking = tracking;
@@ -1096,7 +1131,7 @@ async function refreshTracking(shell, map, mapboxgl, payload) {
         const riderCoordinates = markerCoordinates(rider);
         const targetCoordinates = markerCoordinates(target);
         if (riderCoordinates && targetCoordinates) {
-            const bounds = new mapboxgl.LngLatBounds();
+            const bounds = new maplibregl.LngLatBounds();
             bounds.extend(riderCoordinates);
             bounds.extend(targetCoordinates);
             map.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 450 });
@@ -1163,7 +1198,7 @@ function validLiveEventCoordinates(event) {
     return { latitude, longitude, recordedAt };
 }
 
-async function applyRiderLocationEvent(shell, map, mapboxgl, event) {
+async function applyRiderLocationEvent(shell, map, maplibregl, event) {
     const shipmentId = String(event?.shipment_id || '');
     const assignmentId = String(event?.assignment_id || '');
     if (!shipmentId || !assignmentId) return false;
@@ -1204,9 +1239,9 @@ async function applyRiderLocationEvent(shell, map, mapboxgl, event) {
         };
     }
 
-    renderMarkers(shell, map, mapboxgl, shell._likhaeCurrentMarkers || []);
-    drawOrderRoutes(map, mapboxgl, shell._likhaeCurrentMarkers || [], shell);
-    await drawPersistedRoutes(map, shell._likhaeCurrentMarkers || [], shell, shell.dataset.mapToken?.trim() || '');
+    renderMarkers(shell, map, maplibregl, shell._likhaeCurrentMarkers || []);
+    drawOrderRoutes(map, maplibregl, shell._likhaeCurrentMarkers || [], shell);
+    await drawPersistedRoutes(map, shell._likhaeCurrentMarkers || [], shell, shell.dataset.geoapifyKey?.trim() || '');
     updateStatus(shell, fresh
         ? event?.local_device_gps
             ? 'Road route updated from fresh Rider device GPS. Saving live location…'
@@ -1215,7 +1250,7 @@ async function applyRiderLocationEvent(shell, map, mapboxgl, event) {
     return true;
 }
 
-function bindDeviceRiderLocation(shell, map, mapboxgl) {
+function bindDeviceRiderLocation(shell, map, maplibregl) {
     if (shell._likhaeSavedLocationBound) return;
     shell._likhaeSavedLocationBound = true;
 
@@ -1229,7 +1264,7 @@ function bindDeviceRiderLocation(shell, map, mapboxgl) {
         // This event is emitted only after the existing protected endpoint
         // returns success. It is therefore real, accepted Rider device GPS,
         // never the local-only "Use my location" marker.
-        applyRiderLocationEvent(shell, map, mapboxgl, {
+        applyRiderLocationEvent(shell, map, maplibregl, {
             shipment_id: marker.shipment_id,
             assignment_id: assignmentId,
             latitude: detail.latitude,
@@ -1245,7 +1280,7 @@ function bindDeviceRiderLocation(shell, map, mapboxgl) {
     window.addEventListener('likhae:rider-location-saved', (event) => applyDeviceFix(event, 'saved'));
 }
 
-async function pollTracking(shell, map, mapboxgl, { fallback = false } = {}) {
+async function pollTracking(shell, map, maplibregl, { fallback = false } = {}) {
     const endpoints = shell._likhaeTrackingEndpoints || [];
     if (!endpoints.length) return;
     if (shell._likhaeTrackingPollPromise) return shell._likhaeTrackingPollPromise;
@@ -1262,7 +1297,7 @@ async function pollTracking(shell, map, mapboxgl, { fallback = false } = {}) {
             const valid = payloads.filter(Boolean);
             if (!valid.length) return;
             const mergedMarkers = valid.flatMap((payload) => payload.markers || []);
-            await refreshTracking(shell, map, mapboxgl, {
+            await refreshTracking(shell, map, maplibregl, {
                 markers: [...new Map(mergedMarkers.map((marker) => [marker.id, marker])).values()],
                 tracking: valid[0].tracking || {},
             });
@@ -1294,7 +1329,7 @@ function setRealtimeConnectionState(shell, state) {
         : 'Realtime tracking is reconnecting; polling fallback is active.', !connected);
 }
 
-function syncPollingFallback(shell, map, mapboxgl) {
+function syncPollingFallback(shell, map, maplibregl) {
     const connected = shell._likhaeRealtimeConnectionState === 'connected';
     const orderRoute = shell.dataset.mapOrderRoute === 'true';
     if (connected && !orderRoute) {
@@ -1312,9 +1347,9 @@ function syncPollingFallback(shell, map, mapboxgl) {
         && shell._likhaeTrackingTimerMode === mode) return;
 
     if (shell._likhaeTrackingTimer) window.clearInterval(shell._likhaeTrackingTimer);
-    pollTracking(shell, map, mapboxgl, { fallback: !connected });
+    pollTracking(shell, map, maplibregl, { fallback: !connected });
     shell._likhaeTrackingTimer = window.setInterval(
-        () => pollTracking(shell, map, mapboxgl, { fallback: !connected }),
+        () => pollTracking(shell, map, maplibregl, { fallback: !connected }),
         intervalMs,
     );
     shell._likhaeTrackingTimerIntervalMs = intervalMs;
@@ -1329,7 +1364,7 @@ function leaveEchoChannels(shell) {
     shell._likhaeEchoChannels = null;
 }
 
-function connectLiveTracking(shell, map, mapboxgl) {
+function connectLiveTracking(shell, map, maplibregl) {
     if (shell.dataset.mapLive !== 'true' || !shell._likhaeTrackingChannels?.length) return;
 
     const subscribe = () => {
@@ -1343,25 +1378,25 @@ function connectLiveTracking(shell, map, mapboxgl) {
                 .listen('.rider.location.updated', (event) => {
                     shell._likhaeRealtimeNotice = '';
                     shell._likhaeRealtimeNoticeError = false;
-                    applyRiderLocationEvent(shell, map, mapboxgl, event)
+                    applyRiderLocationEvent(shell, map, maplibregl, event)
                         .finally(() => {
                             if (shell._likhaeRealtimeConnectionState !== 'connected') {
-                                pollTracking(shell, map, mapboxgl, { fallback: true });
+                                pollTracking(shell, map, maplibregl, { fallback: true });
                             }
                         });
                 })
                 .listen('.shipment.tracking.updated', () => {
                     shell._likhaeRealtimeNotice = '';
                     shell._likhaeRealtimeNoticeError = false;
-                    pollTracking(shell, map, mapboxgl);
+                    pollTracking(shell, map, maplibregl);
                 }));
             const connectionState = window.Echo?.connector?.pusher?.connection?.state;
             setRealtimeConnectionState(shell, connectionState === 'connected' ? 'connected' : 'connecting');
-            syncPollingFallback(shell, map, mapboxgl);
+            syncPollingFallback(shell, map, maplibregl);
         } catch {
             leaveEchoChannels(shell);
             setRealtimeConnectionState(shell, 'unavailable');
-            syncPollingFallback(shell, map, mapboxgl);
+            syncPollingFallback(shell, map, maplibregl);
         }
     };
 
@@ -1376,16 +1411,16 @@ function connectLiveTracking(shell, map, mapboxgl) {
                 shell._likhaeRealtimeNoticeError = false;
                 leaveEchoChannels(shell);
                 subscribe();
-                syncPollingFallback(shell, map, mapboxgl);
+                syncPollingFallback(shell, map, maplibregl);
                 return;
             }
 
             leaveEchoChannels(shell);
             setRealtimeConnectionState(shell, states.current || 'unavailable');
-            syncPollingFallback(shell, map, mapboxgl);
+            syncPollingFallback(shell, map, maplibregl);
         });
         setRealtimeConnectionState(shell, connection.state === 'connected' ? 'connected' : 'connecting');
-        syncPollingFallback(shell, map, mapboxgl);
+        syncPollingFallback(shell, map, maplibregl);
     };
 
     bindConnection();
@@ -1393,17 +1428,16 @@ function connectLiveTracking(shell, map, mapboxgl) {
     shell._likhaeEchoRetryTimer = window.setInterval(() => {
         if (!window.Echo) {
             setRealtimeConnectionState(shell, 'unavailable');
-            syncPollingFallback(shell, map, mapboxgl);
+            syncPollingFallback(shell, map, maplibregl);
             return;
         }
         bindConnection();
         subscribe();
     }, 2000);
-    syncPollingFallback(shell, map, mapboxgl);
+    syncPollingFallback(shell, map, maplibregl);
 }
 
-function initMap(shell, mapboxgl, { fallback = false } = {}) {
-    const token = shell.dataset.mapToken;
+function initMap(shell, maplibregl) {
     const canvas = shell.querySelector('[data-map-canvas]');
     if (!canvas) {
         updateStatus(shell, 'The map canvas is missing from this page.', true);
@@ -1413,42 +1447,38 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
     const markers = parseJson(shell.dataset.mapMarkers || '[]', []);
     const center = parseJson(shell.dataset.mapCenter || '[121,14.6]', [121, 14.6]);
     const zoom = Number(shell.dataset.mapZoom || 10);
-    shell.dataset.mapFallback = fallback ? 'true' : 'false';
-    if (token) mapboxgl.accessToken = token;
+    const apiKey = shell.dataset.geoapifyKey?.trim() || '';
+    shell._likhaeMapNotice = apiKey
+        ? ''
+        : 'Road routes, route-progress colors, and ETA need GEOAPIFY_API_KEY. The OpenStreetMap-based map and saved pins still work.';
 
-    const map = new mapboxgl.Map({
+    const map = new maplibregl.Map({
         container: canvas,
-        style: fallback ? OPENFREEMAP_STYLE : (shell.dataset.mapStyle || 'mapbox://styles/mapbox/streets-v12'),
+        style: shell.dataset.mapStyle || OPENFREEMAP_STYLE,
         ...(shell.dataset.mapProjection ? { projection: shell.dataset.mapProjection } : {}),
         center,
         zoom,
-        attributionControl: true,
+        attributionControl: {
+            customAttribution: apiKey ? '<a href="https://www.geoapify.com/" target="_blank" rel="noopener">Routing &amp; geocoding by Geoapify</a>' : '',
+        },
     });
     let mapLoaded = false;
     map.on('error', (event) => {
         if (mapLoaded) return;
         const status = Number(event?.error?.status || event?.error?.statusCode);
-        if (!fallback && (status === 401 || status === 403) && !shell._likhaeMapFallbackStarted) {
-            shell._likhaeMapFallbackStarted = true;
-            map.remove();
-            loadMapLibre()
-                .then((maplibregl) => initMap(shell, maplibregl, { fallback: true }))
-                .catch(() => updateStatus(shell, 'Mapbox access was rejected and the open map service is unavailable. Check your connection or Mapbox token.', true));
-            return;
-        }
         updateStatus(shell, status === 401 || status === 403
-            ? 'Map access was rejected. Check the Mapbox public token and its URL restrictions.'
+            ? 'Open map tiles were rejected. Check the OpenFreeMap style URL or connection.'
             : 'Map tiles could not be loaded. Check the map provider connection and style URL.', true);
     });
-    map.addControl(new mapboxgl.NavigationControl({ showCompass: true }), 'top-right');
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
 
     shell._likhaeCurrentMarkers = markers;
     shell._likhaeTrackingEndpoints = [...new Set(markers.map((marker) => marker.tracking_endpoint).filter(Boolean))];
     shell._likhaeTrackingChannels = [...new Set(markers.map((marker) => marker.tracking_channel).filter(Boolean))];
-    renderMarkers(shell, map, mapboxgl, markers, true);
+    renderMarkers(shell, map, maplibregl, markers, true);
 
     shell.querySelector('[data-map-fullscreen]')?.addEventListener('click', () => toggleFullscreen(shell, map));
-    addUserLocation(shell, map, mapboxgl, markers);
+    addUserLocation(shell, map, maplibregl, markers);
     map.on('load', () => {
         mapLoaded = true;
         const pinFormId = shell.dataset.mapPinForm;
@@ -1469,7 +1499,7 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
                 markerElement.className = 'lk-map-marker';
                 markerElement.dataset.kind = 'destination';
                 markerElement.setAttribute('aria-label', 'Selected delivery pin');
-                shell._likhaeSelectedPinMarker = new mapboxgl.Marker({ element: markerElement, anchor: 'bottom' })
+                shell._likhaeSelectedPinMarker = new maplibregl.Marker({ element: markerElement, anchor: 'bottom' })
                     .setLngLat([lng, lat])
                     .addTo(map);
                 if (saveButton) saveButton.disabled = false;
@@ -1477,16 +1507,14 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
                 updateStatus(shell, 'Exact pin selected. Review its position and confirm it below.');
             });
         }
-        drawPersistedRoutes(map, markers, shell, token?.trim() || '');
-        drawOrderRoutes(map, mapboxgl, markers, shell);
+        drawPersistedRoutes(map, markers, shell, apiKey);
+        drawOrderRoutes(map, maplibregl, markers, shell);
         configureRiderLocationUpdates(shell);
-        bindDeviceRiderLocation(shell, map, mapboxgl);
-        updateStatus(shell, fallback
-            ? token?.trim()
-                ? `${markers.length ? `${markers.length} saved location${markers.length === 1 ? '' : 's'} shown` : 'Map is ready'} on OpenFreeMap. Driving routes use Mapbox Directions.`
-                : `${markers.length ? `${markers.length} saved location${markers.length === 1 ? '' : 's'} shown` : 'Map is ready'} on OpenFreeMap. Add a Mapbox public token to enable driving route previews.`
-            : markers.length ? `${markers.length} location${markers.length === 1 ? '' : 's'} loaded.` : 'No saved coordinates yet.');
-        connectLiveTracking(shell, map, mapboxgl);
+        bindDeviceRiderLocation(shell, map, maplibregl);
+        updateStatus(shell, apiKey
+            ? `${markers.length ? `${markers.length} saved location${markers.length === 1 ? '' : 's'} shown` : 'Map is ready'} on OpenFreeMap. Road routes and ETA use Geoapify.`
+            : `${markers.length ? `${markers.length} saved location${markers.length === 1 ? '' : 's'} shown` : 'Map is ready'} on OpenFreeMap. Add a Geoapify API key to enable address search, road routes, and ETA.`);
+        connectLiveTracking(shell, map, maplibregl);
         if (shell.dataset.mapNavigation === 'true') {
             shell._likhaeNavigationTimer = window.setInterval(() => {
                 if (shell._likhaeNavigationSnapshot?.route) {
@@ -1494,7 +1522,7 @@ function initMap(shell, mapboxgl, { fallback = false } = {}) {
                 }
             }, 1000);
         }
-        startLiveDeviceNavigation(shell, map, mapboxgl, markers);
+        startLiveDeviceNavigation(shell, map, maplibregl, markers);
     });
 }
 
@@ -1503,19 +1531,9 @@ function bootMaps() {
     if (!shells.length) return;
 
     shells.forEach((shell) => {
-        const fallback = !shell.dataset.mapToken?.trim();
-        const renderer = fallback ? loadMapLibre() : loadMapbox();
-        renderer
-            .then((mapboxgl) => initMap(shell, mapboxgl, { fallback }))
-            .catch(() => {
-                if (fallback) {
-                    updateStatus(shell, 'The open map service is unavailable right now. Check your connection and reload the page.', true);
-                    return;
-                }
-                loadMapLibre()
-                    .then((maplibregl) => initMap(shell, maplibregl, { fallback: true }))
-                    .catch(() => updateStatus(shell, 'Mapbox and the open map service could not be loaded. Check your connection and reload the page.', true));
-            });
+        loadMapLibre()
+            .then((maplibregl) => initMap(shell, maplibregl))
+            .catch(() => updateStatus(shell, 'The OpenStreetMap-based map could not be loaded. Check your connection and reload the page.', true));
     });
 
     document.addEventListener('keydown', (event) => {

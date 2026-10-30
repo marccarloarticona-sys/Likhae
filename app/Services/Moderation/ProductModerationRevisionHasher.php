@@ -8,6 +8,11 @@ use Throwable;
 
 class ProductModerationRevisionHasher
 {
+    private ?object $memoizedRequest = null;
+
+    /** @var array<string, string> */
+    private array $imageHashMemo = [];
+
     public function hash(Product $product): string
     {
         $product->loadMissing([
@@ -65,18 +70,35 @@ class ProductModerationRevisionHasher
         if ($path === '' || str_contains($path, '..') || str_starts_with($path, '/')) {
             return 'invalid';
         }
+
+        // Product image paths are immutable in the seller upload flow. Reuse
+        // their hashes within one web request so pre-save, post-save, and queue
+        // checks do not reread the same files. Queue workers must hash afresh.
+        if (app()->runningInConsole()) {
+            $this->imageHashMemo = [];
+        } else {
+            $request = app('request');
+            if ($this->memoizedRequest !== $request) {
+                $this->memoizedRequest = $request;
+                $this->imageHashMemo = [];
+            }
+        }
+        if (isset($this->imageHashMemo[$path])) {
+            return $this->imageHashMemo[$path];
+        }
+
         try {
             $stream = Storage::disk('public')->readStream($path);
             if (! is_resource($stream)) {
-                return 'missing';
+                return $this->imageHashMemo[$path] = 'missing';
             }
             $hash = hash_init('sha256');
             hash_update_stream($hash, $stream);
             fclose($stream);
 
-            return hash_final($hash);
+            return $this->imageHashMemo[$path] = hash_final($hash);
         } catch (Throwable) {
-            return 'unavailable';
+            return $this->imageHashMemo[$path] = 'unavailable';
         }
     }
 }

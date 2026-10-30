@@ -4200,6 +4200,7 @@ html.dark .ad-compliance-response { background: #1E1A17; }
 .ad-user-page-head p { color: var(--ad-muted); font-size: 12px; }
 .ad-user-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 7px; color: var(--ad-muted); font-size: 10px; }
 .ad-user-summary-line .ad-status { font-size: 9px; }
+.ad-user-update-link { display: inline-block; margin-top: 5px; color: var(--ad-warning); font-size: 9px; font-weight: 700; text-decoration: underline; }
 .ad-user-details-page > .ad-card > .ad-card-head { min-height: 68px; padding-inline: 20px; }
 .ad-user-details-page > .ad-card > .ad-card-head h2 { font-size: 15px; }
 .ad-user-details-page > .ad-card > .ad-card-head p { font-size: 10px; }
@@ -4207,6 +4208,14 @@ html.dark .ad-compliance-response { background: #1E1A17; }
 .ad-user-meta > div { min-width: 0; min-height: 61px; gap: 5px; padding: 11px 12px; border: 1px solid var(--ad-border); border-radius: 10px; background: rgba(251,247,242,.72); }
 .ad-user-meta dt { color: var(--ad-muted); font-size: 9px; font-weight: 500; }
 .ad-user-meta dd { overflow-wrap: anywhere; color: var(--ad-text); font-size: 11px; font-weight: 600; line-height: 1.45; }
+.ad-user-verification-table { min-width: 880px; }
+.ad-user-verification-table td { vertical-align: top; }
+.ad-user-document-links { display: flex; gap: 10px; margin-top: 6px; }
+.ad-user-document-links a { color: var(--ad-blue); font-size: 9px; font-weight: 700; text-decoration: underline; }
+.ad-user-document-reason { color: var(--ad-danger) !important; }
+.ad-user-verification-actions { display: grid; gap: 7px; min-width: 190px; }
+.ad-user-verification-actions form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ad-user-verification-actions input[type="text"] { flex: 1 1 100%; min-width: 0; min-height: 34px; padding: 6px 8px; border: 1px solid var(--ad-border); border-radius: 8px; font-size: 9px; }
 .ad-user-details-page .ad-card-body > h3 { margin: 22px 0 12px; font-size: 13px; }
 .ad-user-access-card .ad-card-body > p { max-width: 760px; margin: 0 0 16px; color: var(--ad-muted); font-size: 11px; line-height: 1.65; }
 .ad-user-control-form { display: grid; max-width: 760px; gap: 14px; }

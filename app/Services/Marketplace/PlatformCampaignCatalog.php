@@ -59,8 +59,9 @@ class PlatformCampaignCatalog
         $redemptionCounts = VoucherRedemptionCounter::countsFor($campaigns);
 
         return $campaigns
-            ->filter(fn (Voucher $campaign): bool => $campaign->usage_limit === null
-                || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit)
+            ->filter(fn (Voucher $campaign): bool => ! $campaign->requiresReview()
+                && ($campaign->usage_limit === null
+                    || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit))
             ->filter(fn (Voucher $campaign): bool => app(PlatformCampaignBudgetService::class)->selectable($campaign))
             ->values();
     }

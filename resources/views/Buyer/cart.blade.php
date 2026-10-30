@@ -103,6 +103,10 @@
                 )
             ),
 
+            'flash_sale_active' => ! $restricted && data_get($variant, 'active_flash_sale_price') !== null,
+            'flash_sale_remaining' => $restricted ? 0 : max(0, (int) data_get($variant, 'flash_sale_remaining', 0)),
+            'flash_sale_ends_at' => $restricted ? null : data_get($product, 'flash_sale_ends_at')?->toIso8601String(),
+
             'image' => $imageUrl,
         ];
     });
@@ -253,6 +257,7 @@
         data-cart-checkout
     >
         <div class="min-w-0 space-y-5">
+            <x-buyer.seller-promotions :promotions="$cartPromotions ?? collect()" />
             {{-- Cart items --}}
             <section class="space-y-4" aria-label="Shopping cart items">
                 <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-white px-4 py-4 shadow-sm sm:px-5">
@@ -378,6 +383,10 @@
                                             <p class="mt-1 text-[11px] text-stone-400">
                                                 Variant: {{ $item['variant'] }}
                                             </p>
+                                            @if($item['flash_sale_active'] && $item['flash_sale_remaining'] > 0)
+                                                <p class="mt-1 text-[10px] font-semibold text-rose-800">Flash Sale · {{ number_format($item['flash_sale_remaining']) }} promotional units left</p>
+                                                @if($item['flash_sale_ends_at'])<time class="block text-[10px] text-rose-700" data-flash-sale-countdown datetime="{{ $item['flash_sale_ends_at'] }}">Sale ends {{ \Illuminate\Support\Carbon::parse($item['flash_sale_ends_at'])->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
+                                            @endif
                                         </div>
 
                                         <button

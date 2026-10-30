@@ -28,8 +28,9 @@
 
 <aside id="seller-sidebar" class="sl-sidebar" data-sl-sidebar aria-label="Seller Center navigation">
     <div class="sl-sidebar-head">
-        <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle aria-label="Collapse sidebar" aria-expanded="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle aria-controls="seller-sidebar" aria-label="Collapse sidebar" aria-expanded="true">
+            <svg class="sl-sidebar-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <svg class="sl-sidebar-close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
         </button>
         <a href="{{ route('seller.dashboard') }}" class="sl-brand" aria-label="LIKHAE Seller Center">
             <x-shared.likhae-logo context="Seller Center" class="likhae-logo--sidebar" />
@@ -93,7 +94,7 @@
             </a>
             <a href="{{ route('seller.reports') }}" class="sl-nav-link {{ $active === 'reports' ? 'is-active' : '' }}" data-title="Reports" @if($active === 'reports') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('reports') !!}</span>
-                <span class="sl-nav-text">Reports</span>
+                <span class="sl-nav-text">Analytics &amp; Reports</span>
             </a>
             <a href="{{ route('seller.store', ['tab' => 'settings']) }}" class="sl-nav-link {{ $active === 'store' ? 'is-active' : '' }}" data-title="Store Settings" @if($active === 'store') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('store') !!}</span>

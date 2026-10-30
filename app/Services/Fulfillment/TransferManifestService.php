@@ -3,6 +3,7 @@
 namespace App\Services\Fulfillment;
 
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
 use App\Models\Logistics\ShipmentEvent;
 use App\Models\Logistics\TransferManifest;
@@ -134,12 +135,15 @@ final class TransferManifestService
         User $actor,
         TransferManifest $manifest,
         TransferManifestItem $item,
-        string $weightKg,
+        ?string $weightKg,
         ?string $volumeLiters,
     ): TransferManifestItem {
         $this->assertReady();
-        $weight = $this->normalizeMeasurement($weightKg, 9999999.999);
+        $weight = filled($weightKg) ? $this->normalizeMeasurement($weightKg, 9999999.999) : null;
         $volume = filled($volumeLiters) ? $this->normalizeMeasurement($volumeLiters, 999999999.999) : null;
+        if ($weight === null && $volume === null) {
+            throw new RuntimeException('Record a parcel weight or volume, or skip this optional measurement.');
+        }
 
         return DB::transaction(function () use ($actor, $manifest, $item, $weight, $volume): TransferManifestItem {
             $manifest = TransferManifest::query()->whereKey($manifest->id)->lockForUpdate()->firstOrFail();
@@ -165,23 +169,32 @@ final class TransferManifestService
 
             $beforeWeight = $shipment->parcel_weight_kg;
             $beforeVolume = $shipment->parcel_volume_liters;
-            if ((string) $beforeWeight === $weight && ($beforeVolume === null ? null : (string) $beforeVolume) === $volume) {
+            if (($weight === null || (string) $beforeWeight === $weight)
+                && ($volume === null || (string) $beforeVolume === $volume)) {
                 return $item;
             }
-            $shipment->update(['parcel_weight_kg' => $weight, 'parcel_volume_liters' => $volume]);
+            $measurements = [];
+            if ($weight !== null) {
+                $measurements['parcel_weight_kg'] = $weight;
+            }
+            if ($volume !== null) {
+                $measurements['parcel_volume_liters'] = $volume;
+            }
+            $shipment->update($measurements);
 
             if ($manifest->assigned_driver_rider_profile_id) {
                 $manifest->load('items.transferLeg.shipment', 'assignedDriver.user');
                 $this->assertManifestCapacity($manifest, null, true);
             }
 
-            $volumeNote = $volume === null ? 'volume not recorded' : 'volume '.$volume.' L';
+            $weightNote = $weight === null ? 'weight unchanged' : 'measured packed weight '.$weight.' kg';
+            $volumeNote = $volume === null ? 'volume unchanged' : 'volume '.$volume.' L';
             ShipmentEvent::query()->create([
                 'shipment_id' => $shipment->id,
                 'status' => $shipment->current_status,
                 'actor_user_id' => $actor->id,
                 'logistics_center_id' => $manifest->origin_logistics_center_id,
-                'notes' => 'Origin hub recorded measured packed weight '.$weight.' kg and '.$volumeNote.' for draft manifest '.$manifest->manifest_number.'.',
+                'notes' => 'Origin hub recorded '.$weightNote.' and '.$volumeNote.' for draft manifest '.$manifest->manifest_number.'.',
                 'occurred_at' => now(),
             ]);
 
@@ -215,11 +228,12 @@ final class TransferManifestService
         $this->assertReady();
 
         return DB::transaction(function () use ($actor, $manifest): TransferManifest {
-            $locked = TransferManifest::query()->whereKey($manifest->id)->with('items.transferLeg.shipment')->lockForUpdate()->firstOrFail();
+            $locked = TransferManifest::query()->whereKey($manifest->id)->with('items.transferLeg.shipment.orderItem.productVariant')->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $locked->origin_logistics_center_id);
             if ($locked->status !== TransferManifest::DRAFT) {
                 throw new RuntimeException('Only a draft manifest can be sealed.');
             }
+            $this->fillMissingParcelWeightsFromProduct($locked, $actor);
             $this->assertManifestIntegrity($locked);
             $locked->update([
                 'status' => TransferManifest::SEALED,
@@ -552,6 +566,49 @@ final class TransferManifestService
         }
         $driver = $manifest->assignedDriver ?: RiderProfile::query()->with('user')->findOrFail($manifest->assigned_driver_rider_profile_id);
         $this->assertManifestCapacity($manifest, $driver);
+    }
+
+    private function fillMissingParcelWeightsFromProduct(TransferManifest $manifest, User $actor): void
+    {
+        foreach ($manifest->items as $item) {
+            $leg = $item->transferLeg;
+            $shipment = $leg?->shipment;
+            if (! $shipment) {
+                continue;
+            }
+
+            $shipment = Shipment::query()
+                ->whereKey($shipment->id)
+                ->with('orderItem.productVariant')
+                ->lockForUpdate()
+                ->firstOrFail();
+            $leg->setRelation('shipment', $shipment);
+
+            $savedWeight = $shipment->parcel_weight_kg;
+            if (is_numeric($savedWeight) && is_finite((float) $savedWeight) && (float) $savedWeight > 0) {
+                continue;
+            }
+
+            $unitWeight = $shipment->orderItem?->productVariant?->weight_kg;
+            $quantity = (int) ($shipment->orderItem?->quantity ?? 0);
+            $estimate = is_numeric($unitWeight) && is_finite((float) $unitWeight) && (float) $unitWeight > 0 && $quantity > 0
+                ? round((float) $unitWeight * $quantity, 3, PHP_ROUND_HALF_UP)
+                : 0;
+            if ($estimate <= 0 || $estimate > 9999999.999) {
+                throw new RuntimeException('A parcel is missing its packed weight and its product has no usable per-item weight. Record a packed weight during seller preparation before sealing.');
+            }
+
+            $formattedEstimate = number_format($estimate, 3, '.', '');
+            $shipment->update(['parcel_weight_kg' => $formattedEstimate]);
+            ShipmentEvent::query()->create([
+                'shipment_id' => $shipment->id,
+                'status' => $shipment->current_status,
+                'actor_user_id' => $actor->id,
+                'logistics_center_id' => $manifest->origin_logistics_center_id,
+                'notes' => 'Origin hub estimated parcel weight as '.$unitWeight.' kg per item × '.$quantity.' items = '.$formattedEstimate.' kg for manifest '.$manifest->manifest_number.'. Packaging weight is not included.',
+                'occurred_at' => now(),
+            ]);
+        }
     }
 
     private function assertManifestCapacity(TransferManifest $manifest, ?RiderProfile $driver = null, bool $allowMissingWeights = false): void

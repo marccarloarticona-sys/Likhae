@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\BuyerVoucherClaim;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\Voucher;
@@ -64,6 +65,28 @@ class BuyerVoucherClaimTest extends TestCase
             ->assertSee($voucher->code)
             ->assertSee('Collected')
             ->assertDontSee(route('buyer.vouchers.claim', $voucher), escape: false);
+    }
+
+    public function test_homepage_voucher_claim_returns_json_without_reloading_rewards(): void
+    {
+        $voucher = $this->voucher(['code' => 'AJAXHOMECLAIM']);
+
+        $this->actingAs($this->buyer)
+            ->postJson(route('buyer.vouchers.claim', $voucher))
+            ->assertOk()
+            ->assertJsonPath('claimed', true)
+            ->assertJsonPath('message', 'Voucher collected. Checkout will recheck its availability and order eligibility.');
+
+        $this->assertDatabaseHas('buyer_voucher_claims', [
+            'buyer_user_id' => $this->buyer->id,
+            'voucher_id' => $voucher->id,
+        ]);
+
+        $this->actingAs($this->buyer)
+            ->postJson(route('buyer.vouchers.claim', $voucher))
+            ->assertOk()
+            ->assertJsonPath('claimed', true);
+        $this->assertDatabaseCount('buyer_voucher_claims', 1);
     }
 
     public function test_unavailable_seller_vouchers_cannot_be_claimed(): void
@@ -228,6 +251,105 @@ class BuyerVoucherClaimTest extends TestCase
         } catch (QueryException) {
             $this->assertDatabaseCount('buyer_voucher_claims', 1);
         }
+    }
+
+    public function test_follower_reward_is_claimable_and_redeemable_only_while_following_the_store(): void
+    {
+        $voucher = $this->voucher([
+            'code' => 'FOLLOWERREWARD10',
+            'visibility' => 'FOLLOWERS',
+        ]);
+        $claimService = app(\App\Services\Marketplace\BuyerVoucherClaimService::class);
+
+        $this->assertFalse($claimService->claimableSellerVouchers($this->buyer)->contains('id', $voucher->id));
+        $this->actingAs($this->buyer)
+            ->from(route('buyer.rewards'))
+            ->post(route('buyer.vouchers.claim', $voucher))
+            ->assertRedirect(route('buyer.rewards'))
+            ->assertSessionHasErrors('voucher');
+
+        SellerFollower::query()->create([
+            'buyer_user_id' => $this->buyer->id,
+            'seller_profile_id' => $this->sellerId,
+        ]);
+        $this->assertTrue($claimService->claimableSellerVouchers($this->buyer)->contains('id', $voucher->id));
+        $this->get(route('buyer.shop', ['seller' => $this->sellerId]))->assertOk()->assertSee('Collect a store voucher');
+        $this->get(route('buyer.product-details', ['slug' => 'sample-handmade-tote']))
+            ->assertOk()
+            ->assertSee('Store vouchers for this product')
+            ->assertSee($voucher->name)
+            ->assertSee('Collect voucher');
+        $this->actingAs($this->buyer)->post(route('buyer.vouchers.claim', $voucher))->assertRedirect();
+
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $variant = ProductVariant::query()->where('product_id', $product->id)->where('is_active', true)->firstOrFail();
+        $item = app(CartService::class)->add($this->buyer, $product, (int) $variant->id, 1);
+        $preview = app(CheckoutService::class)->preview(
+            collect([$item]),
+            ['seller' => [$this->sellerId => $voucher->code]],
+            $this->buyer,
+        );
+        $this->assertGreaterThan(0, $preview['groups'][$this->sellerId]['seller_voucher_discount']);
+
+        SellerFollower::query()->where('buyer_user_id', $this->buyer->id)->where('seller_profile_id', $this->sellerId)->delete();
+        try {
+            app(CheckoutService::class)->preview(
+                collect([$item]),
+                ['seller' => [$this->sellerId => $voucher->code]],
+                $this->buyer,
+            );
+            $this->fail('A buyer who unfollowed a store cannot use its follower voucher.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('Follow this store to use its follower reward.', (string) $exception->errors()['seller_voucher_codes.'.$this->sellerId][0]);
+        }
+    }
+
+    public function test_invalid_legacy_percentage_is_hidden_from_claims_and_rejected_at_checkout(): void
+    {
+        $voucher = $this->voucher([
+            'code' => 'LEGACY500OFF',
+            'discount_type' => 'PERCENT',
+            'discount_value' => 500,
+            'requires_review' => false,
+        ]);
+        $this->assertTrue($voucher->requiresReview());
+        $this->assertFalse(app(\App\Services\Marketplace\BuyerVoucherClaimService::class)
+            ->claimableSellerVouchers($this->buyer)->contains('id', $voucher->id));
+
+        $this->actingAs($this->buyer)
+            ->get(route('buyer.rewards'))
+            ->assertOk()
+            ->assertDontSee('LEGACY500OFF')
+            ->assertDontSee('500% off');
+        $this->actingAs($this->buyer)
+            ->from(route('buyer.rewards'))
+            ->post(route('buyer.vouchers.claim', $voucher))
+            ->assertRedirect(route('buyer.rewards'))
+            ->assertSessionHasErrors('voucher');
+
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $this->buyer->id, 'voucher_id' => $voucher->id]);
+        $product = Product::query()->where('slug', 'sample-handmade-tote')->firstOrFail();
+        $variant = ProductVariant::query()->where('product_id', $product->id)->where('is_active', true)->firstOrFail();
+        $item = app(CartService::class)->add($this->buyer, $product, (int) $variant->id, 1);
+        try {
+            app(CheckoutService::class)->preview(collect([$item]), ['seller' => [$this->sellerId => $voucher->code]], $this->buyer);
+            $this->fail('An invalid legacy voucher cannot be redeemed.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('under review', (string) $exception->errors()['seller_voucher_codes.'.$this->sellerId][0]);
+        }
+
+        $voucherReviewMigration = require base_path('database/migrations/2026_10_29_000300_add_voucher_review_flags.php');
+        $voucherReviewMigration->up();
+        $voucherReviewMigration->up();
+        $this->assertDatabaseHas('vouchers', [
+            'id' => $voucher->id,
+            'is_active' => false,
+            'requires_review' => true,
+        ]);
+        $this->assertDatabaseHas('buyer_voucher_claims', [
+            'buyer_user_id' => $this->buyer->id,
+            'voucher_id' => $voucher->id,
+        ]);
     }
 
     private function voucher(array $overrides = []): Voucher

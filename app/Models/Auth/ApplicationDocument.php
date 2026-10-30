@@ -8,6 +8,34 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ApplicationDocument extends Model
 {
+    public const UPLOAD_FIELDS = [
+        'valid_id' => 'VALID_ID',
+        'business_permit' => 'BUSINESS_PERMIT',
+        'dti_certificate' => 'DTI_CERTIFICATE',
+        'sec_certificate' => 'SEC_CERTIFICATE',
+        'bir_form_2303' => 'BIR_FORM_2303',
+        'or_cr' => 'VEHICLE_OR_CR',
+        'drivers_license' => 'DRIVERS_LICENSE',
+    ];
+
+    public const SELLER_UPLOAD_FIELDS = [
+        'valid_id' => 'VALID_ID',
+        'business_permit' => 'BUSINESS_PERMIT',
+        'dti_certificate' => 'DTI_CERTIFICATE',
+        'sec_certificate' => 'SEC_CERTIFICATE',
+        'bir_form_2303' => 'BIR_FORM_2303',
+    ];
+
+    public const DOCUMENT_LABELS = [
+        'VALID_ID' => 'Valid Government ID',
+        'BUSINESS_PERMIT' => 'Business Permit',
+        'DTI_CERTIFICATE' => 'DTI Certificate',
+        'SEC_CERTIFICATE' => 'SEC Certificate',
+        'BIR_FORM_2303' => 'BIR Form 2303',
+        'VEHICLE_OR_CR' => 'Vehicle OR / CR',
+        'DRIVERS_LICENSE' => "Driver's License",
+    ];
+
     protected $fillable = [
         'registration_application_id',
         'document_type',

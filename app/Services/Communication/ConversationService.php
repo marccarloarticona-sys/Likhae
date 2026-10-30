@@ -90,6 +90,61 @@ class ConversationService
             ->map(fn ($count): int => (int) $count);
     }
 
+    /** @return array{items: array<int, array{id: int, name: string, initial: string, preview: string, time: string, unread_count: int}>, unread_count: int} */
+    public function headerPreviewFor(User $user, int $limit = 6): array
+    {
+        $conversations = $this->listFor($user, false, max(1, min($limit, 20)));
+        $conversations->load([
+            'participantRecords' => fn ($query) => $query->whereNull('left_at')->with('user'),
+        ]);
+        $unreadCounts = $this->unreadCountsFor($user, $conversations);
+
+        $items = $conversations->map(function (Conversation $conversation) use ($user, $unreadCounts): array {
+            $names = $conversation->participantRecords
+                ->pluck('user')
+                ->filter(fn ($participant): bool => $participant && (int) $participant->id !== (int) $user->id)
+                ->pluck('name')
+                ->filter()
+                ->unique()
+                ->values();
+            $name = $names->take(2)->implode(', ');
+            if ($names->count() > 2) {
+                $name .= ' +'.($names->count() - 2);
+            }
+            $name = $name !== '' ? $name : 'LIKHAE Support';
+            $latestMessage = $conversation->latestMessage;
+            $messageAt = $latestMessage?->sent_at ?? $latestMessage?->created_at ?? $conversation->updated_at;
+
+            return [
+                'id' => (int) $conversation->id,
+                'name' => $name,
+                'initial' => mb_strtoupper(mb_substr($name, 0, 1)),
+                'preview' => \Illuminate\Support\Str::limit($this->messagePreviewFor($latestMessage), 100),
+                'time' => $messageAt?->diffForHumans() ?? 'Just now',
+                'unread_count' => (int) $unreadCounts->get($conversation->id, 0),
+            ];
+        })->values()->all();
+
+        $unreadCount = Message::query()
+            ->join('conversation_participants as unread_participants', function ($join) use ($user): void {
+                $join->on('unread_participants.conversation_id', '=', 'messages.conversation_id')
+                    ->where('unread_participants.user_id', '=', $user->id)
+                    ->whereNull('unread_participants.left_at');
+            })
+            ->whereNull('messages.deleted_at')
+            ->where(function ($query) use ($user): void {
+                $query->whereNull('messages.sender_user_id')
+                    ->orWhere('messages.sender_user_id', '<>', $user->id);
+            })
+            ->where(function ($query): void {
+                $query->whereNull('unread_participants.last_read_at')
+                    ->orWhereColumn('messages.sent_at', '>', 'unread_participants.last_read_at');
+            })
+            ->count('messages.id');
+
+        return ['items' => $items, 'unread_count' => (int) $unreadCount];
+    }
+
     /** Load conversation summaries plus only the selected thread's recent messages. */
     public function workspaceThreads(User $user, ?int $selectedConversationId = null): Collection
     {
@@ -249,10 +304,10 @@ class ConversationService
             return $message;
         });
 
-        app(SmartMessagingService::class)->markHumanReply(
-            Conversation::query()->findOrFail($message->conversation_id),
-            $sender,
-        );
+        $smartMessaging = app(SmartMessagingService::class);
+        $sentConversation = Conversation::query()->findOrFail($message->conversation_id);
+        $smartMessaging->markHumanReply($sentConversation, $sender);
+        $smartMessaging->notifyMessageActivity($sentConversation, $sender, $message);
 
         $broadcast = function () use ($message, $sender, $recipientUserId): void {
             try {
@@ -355,8 +410,11 @@ class ConversationService
     public function avatarUrlFor(User $user): string
     {
         $user->loadMissing('sellerProfile');
-        $path = trim((string) ($user->profile_photo_path ?: $user->sellerProfile?->avatar_path));
-        $fallback = asset('images/defaults/profile-avatar.svg');
+        $isSeller = $user->isAccountType('seller');
+        $path = trim((string) ($isSeller
+            ? $user->sellerProfile?->avatar_path
+            : $user->profile_photo_path));
+        $fallback = asset($isSeller ? 'images/defaults/store-logo.svg' : 'images/defaults/profile-avatar.svg');
         if ($path === '' || preg_match('~^[a-z][a-z0-9+.-]*:|^[/\\\\]|[?#]|(^|[/\\\\])\\.\\.?([/\\\\]|$)~i', $path)) {
             return $fallback;
         }
