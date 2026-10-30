@@ -307,7 +307,8 @@ class RiderController extends Controller
                     ->where('entry_type', 'RIDER_PAYOUT')
                     ->whereIn('idempotency_key', $pageParticipantIds->map(fn (int $id): string => 'rider-payout-'.$id))
                     ->get(['metadata'])
-                    ->filter(fn (FinancialLedgerEntry $entry): bool => (bool) data_get($entry->metadata, 'is_simulated'))
+                    ->filter(fn (FinancialLedgerEntry $entry): bool => (bool) data_get($entry->metadata, 'is_simulated')
+                        || str_starts_with((string) data_get($entry->metadata, 'payout_external_reference'), 'SIM-'))
                     ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
                     ->all()
                 : [];
@@ -327,7 +328,9 @@ class RiderController extends Controller
                     'delivery_role' => str($participant->participant_role)->replace('_', ' ')->headline(),
                     'assignment_status' => str($assignment?->status ?? 'ASSIGNMENT UNAVAILABLE')->replace('_', ' ')->headline(),
                     'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
-                    'status' => str($participant->status)->headline(),
+                    'status' => in_array((int) $participant->id, $simulatedPayoutParticipantIds, true)
+                        ? 'SIMULATED — NOT PAID'
+                        : str($participant->status)->headline(),
                 ];
             });
             $earningsTotal = (float) (clone $filteredParticipants)->sum('share_amount');
@@ -337,6 +340,8 @@ class RiderController extends Controller
                 ->where('entry_type', 'RIDER_PAYOUT')
                 ->where('metadata->rider_profile_id', $rider->id)
                 ->whereNotNull('paid_at')
+                ->whereNotNull('metadata->payout_external_reference')
+                ->whereNotNull('metadata->payout_proof_path')
                 ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
                 ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
             $poolSummary = [
@@ -346,8 +351,10 @@ class RiderController extends Controller
                 'available' => (float) $eligiblePayoutParticipants->sum('share_amount'),
                 'requested' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_REQUESTED')->sum('share_amount'),
                 'awaiting_ack' => (float) (clone $realRiderPayouts)->where('status', 'PAYOUT_PENDING_ACK')->sum('amount'),
-                'paid' => (float) (clone $realRiderPayouts)->where('status', 'PAID')->sum('amount'),
-                'paid_out' => (float) (clone $realRiderPayouts)->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])->sum('amount'),
+                'paid' => (float) (clone $realRiderPayouts)->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')->sum('amount'),
+                'paid_out' => (float) (clone $realRiderPayouts)
+                    ->where(fn ($query) => $query->where('status', 'PAYOUT_PENDING_ACK')->orWhere(fn ($paid) => $paid->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')))
+                    ->sum('amount'),
             ];
         } else {
             $legacyBase = $rider->earnings();

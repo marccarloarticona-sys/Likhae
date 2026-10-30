@@ -9,6 +9,7 @@ use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Support\FinancialRules;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -51,7 +52,7 @@ class RemittanceService
 
         return DB::transaction(function () use ($actor, $rider, $ids, $submittedAmount, $notes): RiderRemittance {
             $lockedRider = RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail();
-            $collections = CodCollection::query()->whereIn('id', $ids)->lockForUpdate()->get();
+            $collections = CodCollection::query()->with('shipment')->whereIn('id', $ids)->lockForUpdate()->get();
             if ($collections->count() !== count($ids)) {
                 throw new RuntimeException('One or more COD collections no longer exist.');
             }
@@ -66,6 +67,10 @@ class RemittanceService
                 throw new RuntimeException('This parcel already has a remittance with a different amount.');
             }
             foreach ($collections as $collection) {
+                $destinationCenterId = $collection->shipment?->destination_logistics_center_id ?: $collection->shipment?->logistics_center_id;
+                if (! $destinationCenterId || (int) $collection->logistics_center_id !== (int) $destinationCenterId) {
+                    throw new RuntimeException('COD must be handed to the parcel destination logistics center.');
+                }
                 if ((int) $collection->rider_profile_id !== (int) $lockedRider->id) {
                     throw new RuntimeException('This COD collection is assigned to a different rider.');
                 }
@@ -83,8 +88,14 @@ class RemittanceService
                 }
             }
 
-            $expectedCents = $collections->sum(fn (CodCollection $collection): int => FinancialRules::cents($collection->collected_amount));
+            // The obligation is the checkout COD snapshot, never the amount
+            // entered by the Rider. A short/incorrect declaration must not
+            // reduce what Logistics is expected to receive.
+            $expectedCents = $collections->sum(fn (CodCollection $collection): int => FinancialRules::cents($collection->expected_amount));
             $submittedCents = FinancialRules::cents($submittedAmount);
+            if ($submittedCents < 0) {
+                throw new RuntimeException('A cash handoff amount cannot be negative.');
+            }
             $remittance = RiderRemittance::query()->create([
                 'rider_profile_id' => $lockedRider->id,
                 'logistics_center_id' => $lockedRider->logistics_center_id,
@@ -131,6 +142,7 @@ class RemittanceService
         return DB::transaction(function () use ($actor, $remittance, $verifiedAmount, $notes): RiderRemittance {
             $remittance = RiderRemittance::query()->with('riderProfile.user')->whereKey($remittance->id)->lockForUpdate()->firstOrFail();
             $this->assertAuthorizedCenterActor($actor, (int) $remittance->logistics_center_id, 'verify');
+            $this->assertDestinationHandoff($remittance);
             if ((int) $remittance->riderProfile?->user_id === (int) $actor->id) {
                 throw new RuntimeException('A rider cannot verify their own remittance.');
             }
@@ -144,11 +156,15 @@ class RemittanceService
             if ($remittance->status !== RiderRemittance::SUBMITTED) {
                 throw new RuntimeException('Only submitted remittances can be verified.');
             }
+            $verifiedCents = FinancialRules::cents($verifiedAmount);
+            if ($verifiedCents < 0) {
+                throw new RuntimeException('Verified cash received cannot be negative.');
+            }
 
             $remittance->update([
-                'verified_amount' => FinancialRules::amount(FinancialRules::cents($verifiedAmount)),
+                'verified_amount' => FinancialRules::amount($verifiedCents),
                 'discrepancy_amount' => FinancialRules::amount(abs(
-                    FinancialRules::cents($verifiedAmount) - FinancialRules::cents($remittance->expected_amount),
+                    $verifiedCents - FinancialRules::cents($remittance->expected_amount),
                 )),
                 'status' => RiderRemittance::VERIFIED,
                 'verified_at' => now(),
@@ -183,6 +199,7 @@ class RemittanceService
         return DB::transaction(function () use ($actor, $remittance, $notes): RiderRemittance {
             $remittance = RiderRemittance::query()->with('riderProfile.user')->whereKey($remittance->id)->lockForUpdate()->firstOrFail();
             $this->assertAuthorizedCenterActor($actor, (int) $remittance->logistics_center_id, 'reconcile');
+            $this->assertDestinationHandoff($remittance);
             if (in_array($remittance->status, [RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY], true)) {
                 return $remittance;
             }
@@ -190,12 +207,25 @@ class RemittanceService
                 throw new RuntimeException('Verify the physical cash before reconciling the remittance.');
             }
 
-            $difference = FinancialRules::cents($remittance->verified_amount) - FinancialRules::cents($remittance->expected_amount);
+            $expectedCents = FinancialRules::cents($remittance->expected_amount);
+            $submittedDifference = FinancialRules::cents($remittance->submitted_amount) - $expectedCents;
+            $verifiedDifference = FinancialRules::cents($remittance->verified_amount) - $expectedCents;
+            $cleanHandoff = $submittedDifference === 0 && $verifiedDifference === 0;
             $remittance->update([
-                'status' => $difference === 0 ? RiderRemittance::RECONCILED : RiderRemittance::DISCREPANCY,
-                'discrepancy_amount' => FinancialRules::amount(abs($difference)),
+                'status' => $cleanHandoff ? RiderRemittance::RECONCILED : RiderRemittance::DISCREPANCY,
+                'discrepancy_amount' => FinancialRules::amount(max(abs($submittedDifference), abs($verifiedDifference))),
                 'notes' => $notes ?: $remittance->notes,
             ]);
+            if ($cleanHandoff) {
+                foreach ($remittance->items as $item) {
+                    $item->codCollection?->update([
+                        'confirmed_by_user_id' => $actor->id,
+                        'status' => $item->codCollection->status === CodCollection::REMITTED_DISCREPANCY
+                            ? CodCollection::REMITTED_DISCREPANCY
+                            : CodCollection::REMITTED,
+                    ]);
+                }
+            }
             FinanceAuditEvent::query()->create([
                 'event_type' => $remittance->status === RiderRemittance::RECONCILED ? 'RIDER_HANDOFF_RECONCILED' : 'RIDER_HANDOFF_DISCREPANCY',
                 'auditable_type' => RiderRemittance::class,
@@ -212,23 +242,43 @@ class RemittanceService
                     'reconciled_at' => now()->toIso8601String(),
                     'discrepancy_amount' => $remittance->discrepancy_amount,
                 ]),
-                'notes' => $difference === 0 ? 'Expected and verified cash matched.' : 'Expected and verified cash differ; discrepancy remains open.',
+                'notes' => $cleanHandoff ? 'Rider declaration, expected COD, and verified cash matched.' : 'The Rider declaration or verified cash differs from full COD; discrepancy remains open.',
             ]);
+            if ($cleanHandoff) {
+                $this->postRiderToLogisticsLedgerTransfer($remittance, $actor);
+            }
 
             return $remittance->refresh();
         });
     }
 
-    public function resolveDiscrepancy(User $actor, RiderRemittance $remittance, string|int|float $finalReceivedAmount, string $resolution): RiderRemittance
+    public function resolveDiscrepancy(
+        User $actor,
+        RiderRemittance $remittance,
+        string|int|float $finalReceivedAmount,
+        string $resolution,
+        ?string $evidencePath = null,
+    ): RiderRemittance
     {
         if (trim($resolution) === '') {
             throw new RuntimeException('A resolution note is required.');
         }
+        if (! is_string($evidencePath)
+            || ! str_starts_with($evidencePath, 'cod-cash-evidence/')
+            || ! Storage::disk('local')->exists($evidencePath)) {
+            throw new RuntimeException('Upload actual cash evidence before resolving this discrepancy.');
+        }
 
-        return DB::transaction(function () use ($actor, $remittance, $finalReceivedAmount, $resolution): RiderRemittance {
+        return DB::transaction(function () use ($actor, $remittance, $finalReceivedAmount, $resolution, $evidencePath): RiderRemittance {
             $locked = RiderRemittance::query()->with('riderProfile.user', 'logisticsCenter', 'items.codCollection.shipment', 'items.codCollection.order')
                 ->whereKey($remittance->id)->lockForUpdate()->firstOrFail();
-            $this->assertAuthorizedCenterActor($actor, (int) $locked->logistics_center_id, 'resolve');
+            if (! $actor->isActive() || ! $actor->isAccountType(User::TYPE_ADMIN)) {
+                throw new RuntimeException('Only an active Admin account may independently resolve a Rider cash discrepancy.');
+            }
+            $this->assertDestinationHandoff($locked);
+            if ((int) $locked->verified_by_user_id === (int) $actor->id) {
+                throw new RuntimeException('The account that first verified the cash cannot independently resolve its discrepancy.');
+            }
             $priorResolution = FinanceAuditEvent::query()
                 ->where('event_type', 'RIDER_HANDOFF_DISCREPANCY_RESOLVED')
                 ->where('auditable_type', RiderRemittance::class)
@@ -247,19 +297,34 @@ class RemittanceService
             if ($receivedCents !== $expectedCents) {
                 throw new RuntimeException('The final reconciled amount must equal the remittance expected amount.');
             }
-            $before = ['status' => $locked->status, 'verified_amount' => $locked->verified_amount, 'discrepancy_amount' => $locked->discrepancy_amount];
+            $before = [
+                'status' => $locked->status,
+                'submitted_amount' => $locked->submitted_amount,
+                'verified_amount' => $locked->verified_amount,
+                'discrepancy_amount' => $locked->discrepancy_amount,
+            ];
             $locked->update([
                 'status' => RiderRemittance::RECONCILED,
                 'verified_amount' => FinancialRules::amount($receivedCents),
                 'discrepancy_amount' => '0.00',
                 'notes' => trim($resolution),
             ]);
+            foreach ($locked->items as $item) {
+                $collection = $item->codCollection;
+                if (! $collection) {
+                    continue;
+                }
+                $collection->update([
+                    'status' => FinancialRules::cents($collection->collected_amount) === FinancialRules::cents($collection->expected_amount)
+                        ? CodCollection::REMITTED
+                        : CodCollection::REMITTED_DISCREPANCY,
+                ]);
+            }
             FinanceAuditEvent::query()->create([
                 'event_type' => 'RIDER_HANDOFF_DISCREPANCY_RESOLVED',
                 'auditable_type' => RiderRemittance::class,
                 'auditable_id' => $locked->id,
                 'actor_user_id' => $actor->id,
-                'before_state' => $before,
                 'after_state' => $this->handoffReceipt($locked, [
                     'receipt_reference' => 'RCPT-'.$locked->remittance_reference,
                     'confirmation_status' => RiderRemittance::RECONCILED,
@@ -270,12 +335,64 @@ class RemittanceService
                     'resolved_at' => now()->toIso8601String(),
                     'discrepancy_amount' => '0.00',
                     'discrepancy_resolution' => trim($resolution),
+                    'resolution_evidence_path' => $evidencePath,
                 ]),
-                'notes' => trim($resolution),
+                'before_state' => $before,
+                'notes' => 'Admin independently reviewed the actual cash evidence and resolved the Rider handoff discrepancy: '.trim($resolution),
             ]);
+            $this->postRiderToLogisticsLedgerTransfer($locked, $actor);
 
             return $locked->refresh();
         });
+    }
+
+    private function assertDestinationHandoff(RiderRemittance $remittance): void
+    {
+        $remittance->loadMissing('items.codCollection.shipment');
+        if ($remittance->items->isEmpty()) {
+            throw new RuntimeException('The remittance has no parcel collection to verify.');
+        }
+        foreach ($remittance->items as $item) {
+            $collection = $item->codCollection;
+            $destinationId = $collection?->shipment?->destination_logistics_center_id ?: $collection?->shipment?->logistics_center_id;
+            if (! $destinationId || (int) $destinationId !== (int) $remittance->logistics_center_id
+                || (int) $collection?->logistics_center_id !== (int) $destinationId) {
+                throw new RuntimeException('Only the destination logistics center may receive this parcel COD.');
+            }
+        }
+    }
+
+    private function postRiderToLogisticsLedgerTransfer(RiderRemittance $remittance, User $actor): void
+    {
+        if (! $this->schema->step7Ready()) {
+            return;
+        }
+        $remittance->loadMissing('items.codCollection');
+        $collections = $remittance->items->map(fn ($item) => $item->codCollection)->filter()->values();
+        $singleCollection = $collections->count() === 1 ? $collections->first() : null;
+        app(FinancialLedgerTransferService::class)->postPair(
+            'rider-logistics-remittance-'.$remittance->id,
+            'RIDER_LOGISTICS_COD_HANDOFF',
+            FinancialRules::cents($remittance->verified_amount),
+            'RIDER_COD_CASH',
+            'LOGISTICS_COD_CASH',
+            $actor,
+            [
+                'remittance_id' => $remittance->id,
+                'remittance_reference' => $remittance->remittance_reference,
+                'cod_collection_ids' => $collections->pluck('id')->all(),
+                'amount_expected' => $remittance->expected_amount,
+                'amount_submitted' => $remittance->submitted_amount,
+                'amount_verified' => $remittance->verified_amount,
+                'sender' => ['role' => 'RIDER', 'rider_profile_id' => $remittance->rider_profile_id],
+                'recipient' => ['role' => 'LOGISTICS', 'logistics_center_id' => $remittance->logistics_center_id],
+                'verification_status' => $remittance->status,
+            ],
+            $singleCollection?->shipment?->financialAllocation?->id,
+            $singleCollection?->shipment_id,
+            $singleCollection?->seller_order_id,
+            $singleCollection?->order_id,
+        );
     }
 
     public function uniqueReference(): string
@@ -322,7 +439,7 @@ class RemittanceService
                 'order_reference' => $remittanceItem->codCollection?->order?->order_number,
                 'collection_id' => $remittanceItem->cod_collection_id,
                 'collection_reference' => $remittanceItem->codCollection?->collection_reference,
-                'amount_expected' => $remittanceItem->codCollection?->collected_amount,
+                'amount_expected' => $remittanceItem->codCollection?->expected_amount,
                 'buyer_cod_expected_amount' => $remittanceItem->codCollection?->expected_amount,
                 'buyer_amount_collected' => $remittanceItem->codCollection?->collected_amount,
                 'buyer_collection_status' => $remittanceItem->codCollection?->status,

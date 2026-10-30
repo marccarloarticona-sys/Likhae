@@ -23,6 +23,7 @@ use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
+use App\Services\Fulfillment\SellerPickupAutoDispatchService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
@@ -77,11 +78,17 @@ class DispatchController extends Controller
         return view('logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
     }
 
-    public function pickups(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): View
+    public function pickups(
+        Request $request,
+        LogisticsSchemaReadiness $schema,
+        RiderAssignmentOfferExpiryService $offers,
+        SellerPickupAutoDispatchService $autoDispatch,
+    ): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
         $offers->expireDuePickupOffers(logisticsCenterId: (int) $center->id);
+        $autoDispatch->retryForCenter($request->user(), $center);
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -112,6 +119,9 @@ class DispatchController extends Controller
             ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->where('is_online', true)
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
+            ->whereNotNull('availability_latitude')
+            ->whereNotNull('availability_longitude')
+            ->where('availability_location_updated_at', '>=', now()->subMinutes(15))
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
             ->whereHas('user', fn ($query) => $query
@@ -130,17 +140,29 @@ class DispatchController extends Controller
                 $seller = $sellerRequests->first()?->shipment?->sellerOrder?->sellerProfile;
                 $firstShipment = $sellerRequests->first()?->shipment;
                 $area = $firstShipment ? $workflow->sellerPickupServiceArea($firstShipment, $center) : null;
+                $address = $seller?->businessAddress;
+                $eligibleRiders = $address && is_numeric($address->latitude) && is_numeric($address->longitude)
+                    ? $riders->filter(fn (RiderProfile $rider) => (int) $rider->active_assignments_count === 0)
+                        ->map(function (RiderProfile $rider) use ($address): RiderProfile {
+                            $rider->setAttribute('seller_distance_km', $this->distanceKm(
+                                (float) $address->latitude,
+                                (float) $address->longitude,
+                                (float) $rider->availability_latitude,
+                                (float) $rider->availability_longitude,
+                            ));
+
+                            return $rider;
+                        })
+                        ->sortBy('seller_distance_km')
+                        ->values()
+                    : collect();
 
                 return [
                     'seller' => $seller,
                     'area' => $area,
                     'pickup_requests' => $sellerRequests->keyBy('shipment_id'),
                     'shipments' => $sellerRequests->map(fn ($pickup) => $pickup->shipment)->filter()->values(),
-                    'eligible_riders' => $firstShipment
-                        ? $riders->filter(fn (RiderProfile $rider) =>
-                            LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
-                            && $workflow->riderCoversSellerPickupArea($firstShipment, $rider))->values()
-                        : collect(),
+                    'eligible_riders' => $eligibleRiders,
                 ];
             })
             ->filter(fn (array $group): bool => $group['seller'] !== null)
@@ -148,9 +170,16 @@ class DispatchController extends Controller
 
         $sellerPickupRequests = $schema->sellerPickupRequestsReady()
             ? SellerPickupRequest::query()
-                ->whereHas('memberships.shipment', function ($query) use ($center): void {
-                    $query->where('logistics_center_id', $center->id)
-                        ->orWhereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id));
+                ->whereHas('memberships.shipment')
+                ->where(function ($query) use ($center): void {
+                    $query->whereHas('riderLocalTrip', fn ($trip) => $trip->where('logistics_center_id', $center->id))
+                        ->orWhere(function ($unassigned) use ($center): void {
+                            $unassigned->whereNull('rider_local_trip_id')
+                                ->whereHas('memberships.shipment', function ($shipment) use ($center): void {
+                                    $shipment->where('logistics_center_id', $center->id)
+                                        ->orWhereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id));
+                                });
+                        });
                 })
                 ->with([
                     'sellerProfile.user',
@@ -165,13 +194,26 @@ class DispatchController extends Controller
                 ->limit(100)
                 ->get()
             : collect();
-        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $workflow): void {
+        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders): void {
             $shipments = $pickupRequest->memberships->map(fn ($membership) => $membership->shipment)->filter();
             $count = $shipments->count();
-            $pickupRequest->setAttribute('eligible_riders', $riders->filter(fn (RiderProfile $rider): bool =>
-                $count > 0
-                && LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
-                && $shipments->every(fn (Shipment $shipment): bool => $workflow->riderCoversSellerPickupArea($shipment, $rider)))->values());
+            $address = $pickupRequest->pickupAddress;
+            $eligibleRiders = $count > 0 && $address && is_numeric($address->latitude) && is_numeric($address->longitude)
+                ? $riders->filter(fn (RiderProfile $rider): bool => (int) $rider->active_assignments_count === 0)
+                    ->map(function (RiderProfile $rider) use ($address): RiderProfile {
+                        $rider->setAttribute('seller_distance_km', $this->distanceKm(
+                            (float) $address->latitude,
+                            (float) $address->longitude,
+                            (float) $rider->availability_latitude,
+                            (float) $rider->availability_longitude,
+                        ));
+
+                        return $rider;
+                    })
+                    ->sortBy('seller_distance_km')
+                    ->values()
+                : collect();
+            $pickupRequest->setAttribute('eligible_riders', $eligibleRiders);
             $pickupRequest->setAttribute('progress_payload', app(SellerPickupRequestService::class)
                 ->progress($pickupRequest, (int) $pickupRequest->seller_profile_id));
         });
@@ -199,6 +241,7 @@ class DispatchController extends Controller
             $eligible = $canReassign
                 ? $riders->filter(fn (RiderProfile $candidate): bool =>
                     (int) $candidate->id !== (int) $batch->rider_profile_id
+                    && (int) $candidate->active_assignments_count === 0
                     && LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) >= $items->count()
                     && $items->every(fn ($item): bool => $workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $candidate)))->values()
                 : collect();
@@ -838,7 +881,15 @@ class DispatchController extends Controller
         ]);
 
         try {
-            $result = $batches->createPartial($request->user(), $center, (int) $data['rider_profile_id'], $data['shipment_ids']);
+            $result = $batches->createPartial(
+                $request->user(),
+                $center,
+                (int) $data['rider_profile_id'],
+                $data['shipment_ids'],
+                null,
+                true,
+                'Logistics selected an available local rider for this seller pickup batch.',
+            );
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
@@ -883,7 +934,14 @@ class DispatchController extends Controller
         ]);
 
         try {
-            $assigned = $pickupRequests->assign($request->user(), $center, (int) $pickupRequest->id, (int) $data['rider_profile_id']);
+            $assigned = $pickupRequests->assign(
+                $request->user(),
+                $center,
+                (int) $pickupRequest->id,
+                (int) $data['rider_profile_id'],
+                true,
+                'Logistics selected an available local rider for this seller pickup request.',
+            );
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
@@ -910,71 +968,19 @@ class DispatchController extends Controller
         return back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' rejected. Parcel history was retained.');
     }
 
-    public function autoAssignPickup(Request $request, Shipment $shipment, SellerPickupBatchService $batches, ShipmentWorkflowService $workflow): RedirectResponse
+    public function autoAssignPickup(Request $request, Shipment $shipment, SellerPickupAutoDispatchService $autoDispatch): RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
         $this->ensureShipmentBelongsToCenter($shipment, $center);
 
-        $pickup = $shipment->pickupRequests()->whereIn('status', ['PENDING', 'APPROVED'])->latest()->firstOrFail();
-        if (str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:')) {
-            return back()->withErrors(['rider_profile_id' => 'Seller drop-off parcels are received at the center and cannot be auto-assigned for pickup.']);
-        }
-
-        $shipment->loadMissing('sellerOrder.sellerProfile.businessAddress');
-        $sellerAddress = $shipment->sellerOrder?->sellerProfile?->businessAddress;
-        if (! $sellerAddress || ! is_numeric($sellerAddress->latitude) || ! is_numeric($sellerAddress->longitude)) {
-            return back()->withErrors(['rider_profile_id' => 'Auto-assignment needs a confirmed map pin for the seller pickup address.']);
-        }
-
-        $rider = RiderProfile::query()
-            ->where('logistics_center_id', $center->id)
-            ->whereIn('status', ['ACTIVE', 'WARNED'])
-            ->where('is_online', true)
-            ->whereNotNull('availability_latitude')
-            ->whereNotNull('availability_longitude')
-            ->where('availability_location_updated_at', '>=', now()->subMinutes(15))
-            ->whereIn('vehicle_type', RiderVehicleType::localValues())
-            ->whereNotNull('approved_parcel_capacity')
-            ->where('approved_parcel_capacity', '>', 0)
-            ->whereHas('user', fn ($query) => $query
-                ->where('account_type', \App\Models\User::TYPE_RIDER)
-                ->where('status', \App\Models\User::STATUS_ACTIVE))
-            ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
-                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
-            ->with(['user', 'areaAssignments.serviceArea.locations'])
-            ->get()
-            ->filter(fn (RiderProfile $candidate): bool =>
-                LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) > 0
-                && $workflow->riderCoversSellerPickupArea($shipment, $candidate))
-            ->map(function (RiderProfile $candidate) use ($sellerAddress): RiderProfile {
-                $candidate->setAttribute('seller_distance_km', $this->distanceKm(
-                    (float) $sellerAddress->latitude,
-                    (float) $sellerAddress->longitude,
-                    (float) $candidate->availability_latitude,
-                    (float) $candidate->availability_longitude,
-                ));
-
-                return $candidate;
-            })
-            ->sortBy(fn (RiderProfile $candidate): string => sprintf('%012.6f-%03d-%012d',
-                (float) $candidate->seller_distance_km,
-                (int) $candidate->active_assignments_count,
-                (int) $candidate->id,
-            ))
-            ->first();
-
-        if (! $rider) {
-            return back()->withErrors(['rider_profile_id' => 'No online rider with a recent location covers this pickup area and has an available job slot.']);
-        }
-
         try {
-            $trip = $batches->create($request->user(), $center, (int) $rider->id, [$shipment->id]);
+            $trip = $autoDispatch->assignNearest($request->user(), $center, $shipment);
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Pickup auto-assigned to '.$rider->user?->name.' in batch #P-'.$trip->id.'.');
+        return back()->with('status', 'Pickup auto-assigned to '.$trip->rider?->user?->name.' in batch #P-'.$trip->id.'. The nearest available rider receives a 15-minute response window.');
     }
 
     public function approvePickup(Request $request, PickupRequest $pickupRequest, ShipmentWorkflowService $workflow): RedirectResponse

@@ -23,7 +23,7 @@
     <div class="ad-finance-guide-heading"><span class="ad-overline">Payout workflow</span><h2 id="finance-payout-guide-title">How to pay a seller or Logistics partner</h2><p>Recipient payout details are saved from their account pages. This page tracks authorization, transfer references, and receipt acknowledgment.</p></div>
     <ol class="ad-finance-guide-steps">
         <li><span>1</span><div><strong>Check the destination</strong><p>Confirm the saved GCash, Maya, or bank details in the payout queue.</p></div></li>
-        <li><span>2</span><div><strong>Authorize the eligible amount</strong><p>Approve a seller request or a Logistics share after its parcel prerequisites are met.</p></div></li>
+        <li><span>2</span><div><strong>Authorize the eligible amount</strong><p>Approve seller payouts or release gross delivery charges to Logistics after the full COD remittance is verified.</p></div></li>
         <li><span>3</span><div><strong>Transfer and attach the receipt</strong><p>After sending funds outside Likhae, enter the external reference and proof. The recipient can review the receipt and confirm arrival.</p></div></li>
     </ol>
 </section>
@@ -32,10 +32,10 @@
     <div class="ad-card ad-card-body">
         <div class="ad-card-head"><div><span class="ad-overline">Admin payout overview</span><h2>Recipient payout balances</h2><p>Follow each amount from available, through request and transfer, to recipient confirmation.</p></div></div>
         <div class="ad-finance-grid ad-finance-grid--four">
-            <div class="ad-finance-metric ad-finance-metric--available"><small>Available to request</small><h3>PHP {{ number_format($financialTotals['available_payouts'], 2) }}</h3></div>
+            <div class="ad-finance-metric ad-finance-metric--available"><small>Available to request</small><h3>PHP {{ number_format($financialTotals['available_payouts'], 2) }}</h3><span>Seller on hold until the parent order is completed: PHP {{ number_format($financialTotals['seller_on_hold'], 2) }}</span></div>
             <div class="ad-finance-metric ad-finance-metric--requested"><small>Requested by recipients</small><h3>PHP {{ number_format($financialTotals['requested_payouts'], 2) }}</h3></div>
             <div class="ad-finance-metric ad-finance-metric--awaiting"><small>Awaiting recipient confirmation</small><h3>PHP {{ number_format($financialTotals['awaiting_payout_ack'], 2) }}</h3></div>
-            <div class="ad-finance-metric ad-finance-metric--paid"><small>Confirmed paid</small><h3>PHP {{ number_format($financialTotals['paid_payouts'], 2) }}</h3></div>
+            <div class="ad-finance-metric ad-finance-metric--paid"><small>Confirmed Admin transfers</small><h3>PHP {{ number_format($financialTotals['paid_payouts'], 2) }}</h3></div>
         </div>
     </div>
     <div class="ad-card ad-card-body ad-finance-overview-breakdown">
@@ -44,10 +44,11 @@
             <div class="ad-finance-grid ad-finance-grid--five">
                 <div><small>Expected from buyers</small><h3>PHP {{ number_format($financialTotals['expected_cod'], 2) }}</h3></div>
                 <div><small>Collected</small><h3>PHP {{ number_format($financialTotals['cash_collected'], 2) }}</h3></div>
-                <div><small>Submitted to Admin</small><h3>PHP {{ number_format($financialTotals['cash_submitted'], 2) }}</h3></div>
-                <div><small>Verified by Admin</small><h3>PHP {{ number_format($financialTotals['cash_verified'], 2) }}</h3></div>
+                <div><small>Submitted by Riders</small><h3>PHP {{ number_format($financialTotals['cash_submitted'], 2) }}</h3></div>
+                <div><small>Verified by Logistics</small><h3>PHP {{ number_format($financialTotals['cash_verified'], 2) }}</h3></div>
                 <div class="ad-finance-metric ad-finance-metric--attention"><small>Unresolved seller settlements</small><h3>{{ number_format($financialTotals['unresolved_settlements']) }}</h3><span>Needs review</span></div>
             </div>
+            <p class="ad-note">Full COD verified as received by Admin: PHP {{ number_format($financialTotals['admin_cod_received'], 2) }}. Delivery earnings remain separate from COD cash.</p>
         </section>
         <section class="ad-finance-metric-group" aria-labelledby="finance-allocation-title">
             <header class="ad-finance-metric-group__head"><div><span class="ad-overline">Parcel allocation</span><h3 id="finance-allocation-title">How proceeds are allocated</h3></div><p>Breakdown across the platform, Seller, Logistics, and Rider.</p></header>
@@ -136,6 +137,7 @@
         <div class="ad-table-wrap"><table class="ad-table ad-finance-table--seller-payouts"><thead><tr><th>Seller</th><th>Order / parcel</th><th>Product / fee</th><th>Seller amount</th><th>Payment destination</th><th>Status</th><th>Payout receipt / acknowledgment</th><th>Action</th></tr></thead><tbody>
         @forelse($sellerSettlements as $settlement)
             @php($sellerPayoutType = \App\Support\PayoutAccountDetails::typeFor($settlement->sellerProfile))
+            @php($sellerShipmentReceived = $settlement->allocation?->shipment?->current_status === 'COMPLETED')
             <tr>
                 <td>{{ $settlement->sellerProfile?->business_name }}</td>
                 <td>{{ $settlement->sellerOrder?->seller_order_number }}<br>{{ $settlement->allocation?->shipment?->tracking_number ?? 'Historical order settlement' }}</td>
@@ -145,7 +147,7 @@
                 <td>{{ str($settlement->payout_status)->replace('_', ' ')->headline() }}@if($settlement->payout_failure_reason)<br><small>{{ $settlement->payout_failure_reason }}</small>@endif</td>
                         <td>{{ $settlement->settlement_reference }}<br>{{ $settlement->payout_method }} {{ $settlement->payout_external_reference }}<br>@if(\Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))<strong>Legacy demo entry — no transfer proof</strong><br>@elseif($settlement->payout_proof_path)<a href="{{ route('admin.finance.seller-settlements.proof', $settlement) }}">View transfer proof</a><br>@endif{{ $settlement->paid_at?->format('M d, Y g:i A') ?? '' }}<br>{{ $settlement->seller_acknowledged_at?->format('M d, Y g:i A') ?? 'Awaiting seller acknowledgment' }}</td>
                 <td>
-                    @if(in_array($settlement->payout_status, ['PENDING', 'PAYOUT_REQUESTED', 'FAILED'], true) && $settlement->seller_payable !== null)
+                    @if((in_array($settlement->payout_status, ['AVAILABLE', 'PAYOUT_REQUESTED', 'FAILED'], true) || ($settlement->payout_status === 'PENDING' && $sellerShipmentReceived)) && $settlement->seller_payable !== null)
                         <form method="POST" action="{{ route('admin.finance.seller-settlements.authorize', $settlement) }}" data-confirm-title="Authorize parcel payout?" data-confirm-message="Authorize PHP {{ number_format((float) $settlement->seller_payable, 2) }} to {{ $settlement->sellerProfile?->business_name }} for parcel {{ $settlement->allocation?->shipment?->tracking_number ?? '—' }}?" data-confirm-label="Authorize payout">
                             @csrf<button class="ad-btn ad-btn-secondary">{{ $settlement->payout_status === 'FAILED' ? 'Retry authorization' : ($settlement->payout_status === 'PAYOUT_REQUESTED' ? 'Approve request' : 'Authorize') }}</button>
                         </form>
@@ -171,6 +173,8 @@
                         <form method="POST" action="{{ route('admin.finance.seller-settlements.fail', $settlement) }}" class="mt-2 grid gap-1">
                             @csrf<input name="reason" maxlength="2000" placeholder="Failure / dispute reason" required><button class="ad-btn ad-btn-secondary">Record failure</button>
                         </form>
+                    @elseif(in_array($settlement->payout_status, ['ON_HOLD', 'PENDING'], true))
+                        <span>On hold until Buyer receipt or automatic confirmation.</span>
                     @else — @endif
                 </td>
             </tr>
@@ -184,9 +188,30 @@
 
 @if($parcelSettlementReady && $productProceeds)
     <section id="finance-settlements" class="ad-finance-section" aria-labelledby="finance-settlements-title">
-    <header class="ad-finance-section__head"><div><span class="ad-overline">Admin settlement review</span><h2 id="finance-settlements-title">COD and parcel settlements</h2><p>Verify incoming parcel proceeds and resolve buyer collection differences with an auditable note.</p></div></header>
+    <header class="ad-finance-section__head"><div><span class="ad-overline">Admin settlement review</span><h2 id="finance-settlements-title">COD and parcel settlements</h2><p>Verify incoming cash and resolve discrepancies only with evidence and a reviewer different from the first verifier.</p></div></header>
+    @if($riderRemittanceDiscrepancies)
     <div class="ad-card" style="margin-top:16px">
-        <div class="ad-card-head"><div><span class="ad-overline">Logistics to Admin receipt</span><h2>Product proceeds awaiting Admin</h2><p>Expected amount includes product proceeds plus the Logistics share of shipping. The Rider share is paid separately by Logistics.</p></div></div>
+        <div class="ad-card-head"><div><span class="ad-overline">Rider to Logistics discrepancies</span><h2>Independent cash review</h2><p>Compare the Rider declaration and Logistics cash count. Submit actual cash evidence; the first Logistics verifier cannot resolve the discrepancy.</p></div></div>
+        <div class="ad-table-wrap"><table class="ad-table ad-finance-table--cod"><thead><tr><th>Receipt / parcel</th><th>Rider / Logistics</th><th>Expected COD</th><th>Rider declared</th><th>Logistics counted</th><th>Action</th></tr></thead><tbody>
+        @forelse($riderRemittanceDiscrepancies as $remittance)
+            @php($remittanceItem = $remittance->items->first())
+            @php($remittanceCollection = $remittanceItem?->codCollection)
+            <tr>
+                <td>{{ $remittance->remittance_reference }}<br>{{ $remittanceCollection?->shipment?->tracking_number ?? 'Parcel unavailable' }}</td>
+                <td>{{ $remittance->riderProfile?->user?->name ?? 'Rider' }}<br>{{ $remittance->logisticsCenter?->business_name ?? 'Logistics center' }}</td>
+                <td>PHP {{ number_format((float) $remittance->expected_amount, 2) }}</td>
+                <td>PHP {{ number_format((float) $remittance->submitted_amount, 2) }}</td>
+                <td>{{ $remittance->verified_amount === null ? 'Awaiting count' : 'PHP '.number_format((float) $remittance->verified_amount, 2) }}</td>
+                <td><form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.rider-remittances.resolve', $remittance) }}" class="grid gap-1" data-confirm-title="Resolve Rider cash discrepancy?" data-confirm-message="Verify the final full COD amount and attach actual cash evidence for independent review." data-confirm-label="Resolve discrepancy">
+                    @csrf<input name="final_received_amount" type="number" min="0" step="0.01" value="{{ number_format((float) $remittance->expected_amount, 2, '.', '') }}" required><input name="resolution" maxlength="2000" placeholder="Resolution notes" required><input type="file" name="evidence_file" accept="image/jpeg,image/png,application/pdf" required><button class="ad-btn ad-btn-secondary">Review and resolve</button>
+                </form></td>
+            </tr>
+        @empty<tr><td colspan="6">No Rider to Logistics cash discrepancies are awaiting review.</td></tr>@endforelse
+        </tbody></table></div>{{ $riderRemittanceDiscrepancies->links() }}
+    </div>
+    @endif
+    <div class="ad-card" style="margin-top:16px">
+        <div class="ad-card-head"><div><span class="ad-overline">Logistics to Admin receipt</span><h2>Full COD awaiting Admin</h2><p>Verify the full amount collected from the buyer, including all delivery charges. Neither the Logistics nor Rider share is deducted from this remittance.</p></div></div>
         <div class="ad-table-wrap"><table class="ad-table ad-finance-table--proceeds"><thead><tr><th>Receipt / parcel</th><th>Order</th><th>Sender</th><th>Expected</th><th>Submitted</th><th>Received</th><th>Discrepancy</th><th>Action</th></tr></thead><tbody>
         @forelse($productProceeds as $entry)
             @php($receipt = (array) $entry->metadata)
@@ -200,12 +225,12 @@
                 <td>PHP {{ number_format((float) ($receipt['discrepancy_amount'] ?? 0), 2) }}<br>{{ str($entry->status)->headline() }}</td>
                 <td>
                     @if($entry->status === 'SUBMITTED')
-                        <form method="POST" action="{{ route('admin.finance.product-proceeds.acknowledge', $entry) }}" class="grid gap-1" data-confirm-title="Record product proceeds received?" data-confirm-message="Enter the actual amount received. An amount mismatch will remain an open discrepancy." data-confirm-label="Confirm receipt">
+                        <form method="POST" action="{{ route('admin.finance.product-proceeds.acknowledge', $entry) }}" class="grid gap-1" data-confirm-title="Record full COD received?" data-confirm-message="Enter the actual amount received. It must match the full COD remitted; an amount mismatch remains an open discrepancy." data-confirm-label="Confirm full COD">
                             @csrf<input name="received_amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required><input name="notes" maxlength="1000" placeholder="Receipt notes"><button class="ad-btn ad-btn-primary">Acknowledge</button>
                         </form>
                     @elseif($entry->status === 'DISCREPANCY')
-                        <form method="POST" action="{{ route('admin.finance.product-proceeds.resolve', $entry) }}" class="grid gap-1" data-confirm-title="Resolve proceeds discrepancy?" data-confirm-message="Confirm the final received amount equals product proceeds plus the Logistics shipping share and document the resolution." data-confirm-label="Resolve discrepancy">
-                            @csrf<input name="final_received_amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required><input name="resolution" maxlength="2000" placeholder="Resolution notes" required><button class="ad-btn ad-btn-secondary">Resolve</button>
+                        <form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.product-proceeds.resolve', $entry) }}" class="grid gap-1" data-confirm-title="Resolve COD discrepancy?" data-confirm-message="Confirm the final received amount equals the full buyer COD and attach actual cash evidence. A different Admin must resolve the discrepancy." data-confirm-label="Resolve discrepancy">
+                            @csrf<input name="final_received_amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required><input name="resolution" maxlength="2000" placeholder="Resolution notes" required><input type="file" name="evidence_file" accept="image/jpeg,image/png,application/pdf" required><button class="ad-btn ad-btn-secondary">Resolve</button>
                         </form>
                     @endif
                 </td>
@@ -224,8 +249,8 @@
                 <td>PHP {{ number_format((float) $collection->expected_amount, 2) }}</td>
                 <td>PHP {{ number_format((float) $collection->collected_amount, 2) }}</td>
                 <td>PHP {{ number_format(abs((float) $collection->expected_amount - (float) $collection->collected_amount), 2) }}</td>
-                <td><form method="POST" action="{{ route('admin.finance.cod-collections.resolve', $collection) }}" class="grid gap-1" data-confirm-title="Resolve buyer COD discrepancy?" data-confirm-message="This records that the parcel collection has been reconciled to the expected amount. Provide a resolution reason." data-confirm-label="Resolve COD discrepancy">
-                    @csrf<input name="resolution" maxlength="2000" required placeholder="Resolution notes"><button class="ad-btn ad-btn-secondary">Resolve</button>
+                <td><form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.cod-collections.resolve', $collection) }}" class="grid gap-1" data-confirm-title="Resolve buyer COD discrepancy?" data-confirm-message="Confirm the full COD reached Logistics, attach cash evidence, and document why the Buyer amount was corrected." data-confirm-label="Resolve COD discrepancy">
+                    @csrf<input name="resolution" maxlength="2000" required placeholder="Resolution notes"><input type="file" name="evidence_file" accept="image/jpeg,image/png,application/pdf" required><button class="ad-btn ad-btn-secondary">Resolve</button>
                 </form></td>
             </tr>
         @empty<tr><td colspan="6">No buyer COD discrepancies are awaiting resolution.</td></tr>@endforelse
@@ -234,13 +259,24 @@
 
     </section>
     <section id="finance-logistics" class="ad-finance-section" aria-labelledby="finance-logistics-title">
-    <header class="ad-finance-section__head"><div><span class="ad-overline">Logistics finance</span><h2 id="finance-logistics-title">Logistics payouts and receipts</h2><p>Release eligible shipping shares and track each transfer until Logistics confirms receipt.</p></div></header>
+    <header class="ad-finance-section__head"><div><span class="ad-overline">Logistics finance</span><h2 id="finance-logistics-title">Logistics payouts and receipts</h2><p>After full COD is verified, release all delivery charges to Logistics. The gross transfer includes the Rider's pass-through share.</p></div></header>
+
+    @php($activeLogisticsRoute = request()->query('logistics_route') === 'inter' ? 'inter' : 'single')
+    <nav aria-label="Logistics payout routes" class="flex flex-wrap gap-2" style="margin-top:16px">
+        <a class="ad-btn {{ $activeLogisticsRoute === 'single' ? 'ad-btn-primary' : 'ad-btn-secondary' }}" @if($activeLogisticsRoute === 'single') aria-current="page" @endif href="{{ route('admin.finance', array_merge(request()->except(['logistics_route', 'logistics_payouts_page', 'logistics_payout_receipts_page']), ['logistics_route' => 'single'])) }}#finance-logistics">Single-Hub</a>
+        <a class="ad-btn {{ $activeLogisticsRoute === 'inter' ? 'ad-btn-primary' : 'ad-btn-secondary' }}" @if($activeLogisticsRoute === 'inter') aria-current="page" @endif href="{{ route('admin.finance', array_merge(request()->except(['logistics_route', 'logistics_payouts_page', 'logistics_payout_receipts_page']), ['logistics_route' => 'inter'])) }}#finance-logistics">Inter-Hub</a>
+    </nav>
 
     @if($logisticsPayouts)
         <div class="ad-card" style="margin-top:16px">
-            <div class="ad-card-head"><div><span class="ad-overline">Logistics shipping share</span><h2>Logistics payouts ready</h2><p>These shipping shares are payable after Admin acknowledges the COD proceeds. The payout destination is saved in the Logistics account settings.</p></div></div>
-            <div class="ad-table-wrap"><table class="ad-table ad-finance-table--logistics"><thead><tr><th>Logistics</th><th>Parcel / order</th><th>Share</th><th>Status</th><th>Action</th></tr></thead><tbody>
+            <div class="ad-card-head"><div><span class="ad-overline">Delivery charge release</span><h2>Logistics transfers ready</h2><p>After full COD verification, release each route allocation. Single-Hub transfers include the Rider reserve; Inter-Hub pays Origin's 30% and Destination's 70%, including the reserved Rider pool.</p></div></div>
+            <div class="ad-table-wrap"><table class="ad-table ad-finance-table--logistics"><thead><tr><th>Logistics</th><th>Parcel / order</th><th>Split and gross transfer</th><th>Status</th><th>Action</th></tr></thead><tbody>
                 @forelse($logisticsPayouts as $pool)
+                    @php($payoutBreakdown = $pool->payoutBreakdown())
+                    @php($grossDeliveryAmount = $payoutBreakdown['transfer_cents'] / 100)
+                    @php($riderPassThrough = $payoutBreakdown['rider_reserve_cents'] / 100)
+                    @php($deliverySplit = \App\Services\Finance\DeliveryEarningsBreakdown::forShipment($pool->shipment, $pool->allocation))
+                    @php($parcelAmounts = $pool->shipment?->orderItem && $pool->shipment?->sellerOrder ? \App\Support\OrderItemParcelAmount::forItem($pool->shipment->sellerOrder, $pool->shipment->orderItem) : null)
                     <tr>
                         <td>{{ $pool->logisticsCenter?->business_name ?? 'Logistics center' }}
                             @if($payoutDestinationReady && $pool->logisticsCenter?->payout_account_number)
@@ -250,12 +286,12 @@
                                 <br><small>Saved payout details unavailable until the migration is installed.</small>
                             @endif
                         </td>
-                        <td>{{ $pool->shipment?->tracking_number ?? 'Parcel' }}<br>{{ $pool->shipment?->sellerOrder?->order?->order_number ?? 'Order' }}</td>
-                        <td>PHP {{ number_format((float) $pool->total_amount, 2) }}</td>
+                        <td>{{ $pool->shipment?->tracking_number ?? 'Parcel' }}<br>{{ $pool->shipment?->sellerOrder?->order?->order_number ?? 'Order' }}<br><small>Origin: {{ $pool->shipment?->originLogisticsCenter?->business_name ?? '—' }} · Destination: {{ $pool->shipment?->destinationLogisticsCenter?->business_name ?? $pool->logisticsCenter?->business_name ?? '—' }}</small></td>
+                        <td>Regional shipping PHP {{ number_format((float) $pool->allocation->shipping_fee, 2) }}<br>Additional Care PHP {{ number_format((float) ($pool->allocation->protection_amount ?? 0), 2) }}<br>Shipping voucher {{ $parcelAmounts ? 'PHP '.number_format($parcelAmounts['shipping_discount'], 2) : 'unavailable' }}<br><strong>Commission base PHP {{ number_format($deliverySplit['total_cents'] / 100, 2) }}</strong><br><small>@if((int) ($pool->shipment?->orderItem?->funding_snapshot_version ?? 0) === 1)Platform-funded shipping vouchers fund the delivery charge.@else Historical discount funding may require review. @endif</small><br>{{ $payoutBreakdown['role'] }} Logistics: PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }} ({{ $deliverySplit['total_cents'] ? number_format(100 * $payoutBreakdown['net_share_cents'] / $deliverySplit['total_cents'], 2) : '0.00' }}%)<br>Rider pool: PHP {{ number_format($deliverySplit['rider_cents'] / 100, 2) }} ({{ $deliverySplit['total_cents'] ? number_format(100 * $deliverySplit['rider_cents'] / $deliverySplit['total_cents'], 2) : '0.00' }}%)<br>Rider reserve PHP {{ number_format($riderPassThrough, 2) }}<br><strong>Transfer PHP {{ number_format($grossDeliveryAmount, 2) }}</strong></td>
                         <td>{{ str($pool->status)->replace('_', ' ')->headline() }}</td>
-                        <td>@if($pool->logisticsCenter && $payoutDestinationReady && $pool->logisticsCenter->payout_account_number)<form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.logistics-pools.pay', $pool) }}" class="grid gap-1" data-confirm-title="Record Logistics payout?" data-confirm-message="After transferring funds outside Likhae, record the external reference and attach proof. Logistics can then confirm receipt." data-confirm-label="Record transfer">
+                        <td>@if($pool->logisticsCenter && $payoutDestinationReady && $pool->logisticsCenter->payout_account_number)<form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.logistics-pools.pay', $pool) }}" class="grid gap-1" data-confirm-title="Release full delivery charges to Logistics?" data-confirm-message="Transfer PHP {{ number_format($grossDeliveryAmount, 2) }}. This includes PHP {{ number_format($riderPassThrough, 2) }} for Logistics to pay the Rider." data-confirm-label="Record full transfer">
                             @csrf
-                            <input name="amount" type="number" min="0" step="0.01" value="{{ number_format((float) $pool->total_amount, 2, '.', '') }}" required>
+                            <input name="amount" type="number" min="0" step="0.01" value="{{ number_format($grossDeliveryAmount, 2, '.', '') }}" required>
                             <small>Destination: {{ $pool->logisticsCenter->payout_method }} · {{ $pool->logisticsCenter->payout_account_name }} · {{ \App\Support\PayoutAccountDetails::typeLabel($logisticsPayoutType ?? \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter)) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($pool->logisticsCenter->payout_account_number, $logisticsPayoutType ?? \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter)) }}</small>
                             <input name="payout_external_reference" maxlength="150" placeholder="External transfer reference" required>
                             <input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" required aria-label="Upload payout proof">
@@ -274,7 +310,15 @@
         <div class="ad-table-wrap"><table class="ad-table ad-finance-table--receipts"><thead><tr><th>Logistics / parcel</th><th>Amount</th><th>Channel</th><th>Transfer reference</th><th>Status</th><th>Proof</th></tr></thead><tbody>
             @forelse($logisticsPayoutReceipts as $entry)
                 @php($payout = (array) $entry->metadata)
-                <tr><td>Logistics #{{ $payout['logistics_center_id'] ?? '—' }}<br>{{ $entry->shipment?->tracking_number ?? 'Parcel' }}</td><td>PHP {{ number_format((float) $entry->amount, 2) }}</td><td>{{ $payout['payout_method'] ?? '' }}</td><td>{{ $payout['payout_external_reference'] ?? '—' }}<br>{{ $payout['paid_at'] ?? '' }}</td><td>{{ str($entry->status)->replace('_', ' ')->headline() }}@if($entry->status === 'PAYOUT_PENDING_ACK')<br>Awaiting recipient confirmation @endif</td><td>@if(!empty($payout['payout_proof_path']))<a href="{{ route('admin.finance.logistics-payouts.proof', $entry) }}">View proof</a>@elseif($payout['is_simulated'] ?? false)<small>Legacy demo entry — no transfer proof</small> @else — @endif</td></tr>
+                @php($legacySimulation = ($payout['is_simulated'] ?? false) || \Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
+                <tr><td>Logistics #{{ $payout['logistics_center_id'] ?? '—' }}<br>{{ $entry->shipment?->tracking_number ?? 'Parcel' }}</td><td>PHP {{ number_format((float) $entry->amount, 2) }}@if(isset($payout['logistics_net_share'], $payout['rider_pass_through']))<br><small>Logistics PHP {{ number_format((float) $payout['logistics_net_share'], 2) }} · Rider PHP {{ number_format((float) $payout['rider_pass_through'], 2) }}</small>@endif</td><td>{{ $payout['payout_method'] ?? '' }}</td><td>{{ $payout['payout_external_reference'] ?? '—' }}<br>{{ $payout['paid_at'] ?? '' }}</td><td>@if($legacySimulation)<strong>SIMULATED — NOT PAID</strong>@else{{ str($entry->status)->replace('_', ' ')->headline() }}@endif @if($entry->status === 'PAYOUT_PENDING_ACK' && !$legacySimulation)<br>Awaiting recipient confirmation @endif
+                    @if($legacySimulation && in_array($entry->status, ['PAYOUT_PENDING_ACK', 'PAID'], true) && !empty($payout['logistics_pool_id']))
+                        <form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.logistics-pools.pay', $payout['logistics_pool_id']) }}" class="mt-2 grid gap-1">@csrf<input name="amount" type="number" min="0" step="0.01" value="{{ number_format((float) ($payout['amount_expected'] ?? $entry->amount), 2, '.', '') }}" required><input name="payout_external_reference" maxlength="150" placeholder="New transaction reference" required><input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" required aria-label="Upload real transfer proof"><button class="ad-btn ad-btn-primary">Replace with real transfer</button></form>
+                    @endif
+                    @if($entry->status === 'PAYOUT_PENDING_ACK' && !($payout['is_simulated'] ?? false) && !\Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
+                        <form method="POST" action="{{ route('admin.finance.logistics-payouts.fail', $entry) }}" class="mt-2 grid gap-1">@csrf<input name="reason" maxlength="2000" required placeholder="Verified transfer failure reason"><button class="ad-btn ad-btn-secondary">Record failed transfer</button></form>
+                    @endif
+                </td><td>@if(!empty($payout['payout_proof_path']) && !$legacySimulation)<a href="{{ route('admin.finance.logistics-payouts.proof', $entry) }}">View proof</a>@elseif($legacySimulation)<small>Legacy demo entry — no transfer proof</small> @else — @endif</td></tr>
             @empty<tr><td colspan="6">No Logistics payout receipts have been recorded.</td></tr>@endforelse
         </tbody></table></div>{{ $logisticsPayoutReceipts->links() }}
     </div>

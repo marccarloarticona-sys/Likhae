@@ -61,6 +61,9 @@ class CodCollectionService
         if ($assignment->assignment_type !== RiderAssignment::TYPE_DELIVERY) {
             throw new RuntimeException('Only the final-mile delivery rider may collect COD.');
         }
+        if ((int) $assignment->shipment_id !== (int) $shipment->id) {
+            throw new RuntimeException('The delivery assignment does not belong to this parcel.');
+        }
         $assignment->loadMissing('riderProfile');
         $shipment->loadMissing('sellerOrder.order');
 
@@ -96,6 +99,11 @@ class CodCollectionService
         if ($assignment->assignment_type !== RiderAssignment::TYPE_DELIVERY) {
             throw new RuntimeException('Only the assigned final-mile delivery rider may collect COD.');
         }
+        if ((int) $assignment->shipment_id !== (int) $shipment->id
+            || ! $actor->isActive() || ! $actor->isAccountType(User::TYPE_RIDER)
+            || (int) $assignment->riderProfile?->user_id !== (int) $actor->id) {
+            throw new RuntimeException('Only the active assigned delivery rider may record this parcel collection.');
+        }
         if ($shipment->current_status !== 'OUT_FOR_DELIVERY') {
             throw new RuntimeException('COD may only be collected during a successful final-mile delivery.');
         }
@@ -123,6 +131,9 @@ class CodCollectionService
             $actualCents = array_key_exists('collected_amount', $payload) && $payload['collected_amount'] !== null
                 ? FinancialRules::cents($payload['collected_amount'])
                 : $expectedCents;
+            if ($actualCents < 0) {
+                throw new RuntimeException('Collected COD cannot be negative.');
+            }
             $status = $actualCents === $expectedCents ? CodCollection::COLLECTED : CodCollection::DISCREPANCY;
             $reference = trim((string) ($payload['collection_reference'] ?? ''));
             if ($reference === '') {

@@ -11,7 +11,7 @@
     }
     @endphp
 <main class="label {{ $pageBreak ? 'page-break' : '' }}">
-    <header class="head"><div><div class="brand">LIKHAE</div><div>Marketplace Parcel Waybill</div></div><div><strong>Order</strong><br>{{ $sellerOrder->seller_order_number }}<br><small>{{ $sellerOrder->order?->order_number }}</small></div></header>
+    <header class="head"><div><img class="brand-logo" src="{{ asset('images/likhae-logo-black-text.png') }}" alt="LIKHAE" width="194" height="42"><div>Marketplace Parcel Waybill</div></div><div><strong>Order</strong><br>{{ $sellerOrder->seller_order_number }}<br><small>{{ $sellerOrder->order?->order_number }}</small></div></header>
     <div class="tracking">{{ $shipment->tracking_number }}</div>
     <x-shared.waybill-barcode :tracking="$shipment->tracking_number" />
     <section class="grid">

@@ -39,6 +39,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password as PasswordRule;
@@ -905,6 +906,9 @@ class BuyerApiController extends Controller
                 'conversation_id' => (string) $conversation->id,
                 'seller_id' => $other?->id,
                 'seller_name' => $seller?->business_name ?: $other?->name ?: 'LIKHAE User',
+                'seller_is_online' => $other && $other->isActive()
+                    && (bool) data_get($other->notification_preferences, 'show_online_status', true)
+                    && Cache::store('database')->has('message-presence:user:'.$other->id),
                 'slug' => 'conversation-'.$conversation->id,
                 'last_message' => $conversation->latestMessage?->body ?? '',
                 'time' => $conversation->latestMessage?->sent_at?->toIso8601String(),

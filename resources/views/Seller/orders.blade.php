@@ -64,7 +64,9 @@
                         'ready-for-pickup' => (($order['pickup_status'] ?? '') === 'Pickup scheduled')
                             ? ['Keep parcels ready for the assigned pickup rider.', 'Pickup rider']
                             : ['Assign a pickup rider to collect the ready parcels.', 'Logistics'],
-                        'shipping' => ['Deliver the parcel and record proof or an attempt outcome.', 'Delivery rider'],
+                        'shipping' => ($order['buyer_receipt_pending'] ?? false)
+                            ? ['Delivery is complete. The Buyer must confirm receipt before the order is completed.', 'Buyer']
+                            : ['Deliver the parcel and record proof or an attempt outcome.', 'Delivery rider'],
                         'delivered' => ['Confirm receipt, or wait for the Buyer to confirm.', 'Buyer'],
                         'returns' => ['Review the return or refund request linked to this order.', 'Seller'],
                         'completed', 'cancelled' => ['No further fulfillment action is required.', 'No action pending'],

@@ -1,7 +1,7 @@
 @extends('layouts.seller.app')
 @section('title', 'Wallet & payouts')
 @section('active', 'payouts')
-@section('subtitle', 'Only Admin-recorded payouts count toward your paid-out balance. Review unpaid proceeds and confirm receipts here.')
+@section('subtitle', 'Seller proceeds stay on hold until Order Received is confirmed or automatic confirmation completes, and the parent order status is Completed. Review your balance and confirm verified transfers here.')
 
 @section('content')
 <div class="sl-page lk-wallet-page">
@@ -14,7 +14,8 @@
     @if($ready)
         <section class="sl-card lk-wallet-metrics" aria-label="Payout balance summary">
             <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Paid-out balance</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['paid_out'], 2) }}</strong><small>₱{{ number_format((float) $payoutBalances['awaiting_ack'], 2) }} awaiting receipt confirmation · ₱{{ number_format((float) $payoutBalances['paid'], 2) }} confirmed</small></article>
-            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · available to request</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['available'], 2) }}</strong></article>
+            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">On hold · parent order not completed</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['on_hold'], 2) }}</strong></article>
+            <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · available to request</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['available'], 2) }}</strong>@if((float) $payoutBalances['refund_debt'] > 0)<small>Unapplied approved refund balance: ₱{{ number_format((float) $payoutBalances['refund_debt'], 2) }}</small>@endif</article>
             <article class="lk-wallet-metric"><span class="lk-wallet-metric__label">Unpaid · requested from Admin</span><strong class="lk-wallet-metric__value">₱{{ number_format((float) $payoutBalances['requested'], 2) }}</strong></article>
         </section>
     @endif
@@ -45,6 +46,7 @@
                     <tbody>
                     @forelse($settlements as $settlement)
                         @php($isSimulatedPayout = \Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))
+                        @php($shipmentReceived = $settlement->allocation?->shipment?->current_status === 'COMPLETED')
                         <tr>
                             <td><strong>{{ $settlement->settlement_reference ?: 'Pending' }}</strong><br>{{ str($settlement->payout_status)->replace('_', ' ')->headline() }}
                                 @if($settlement->payout_failure_reason)<br><small class="text-red-700">Failure: {{ $settlement->payout_failure_reason }}</small>@endif
@@ -59,7 +61,7 @@
                             <td>{{ $settlement->payout_method }}<br><small>{{ $settlement->payout_external_reference }}</small>@if($isSimulatedPayout)<br><small class="text-amber-700">Legacy demo record — no transfer proof</small>@elseif($settlement->payout_proof_path)<br><a href="{{ route('seller.settlements.payout-proof', $settlement) }}" class="underline">View transfer proof</a>@endif</td>
                             <td>{{ $settlement->paid_at?->format('M d, Y g:i A') ?: '—' }}@if($settlement->seller_acknowledged_at)<br><small>Receipt confirmed {{ $settlement->seller_acknowledged_at->format('M d, Y g:i A') }}</small>@elseif($settlement->payout_status === 'PAYOUT_PENDING_ACK')<br><small>Awaiting acknowledgment</small>@endif</td>
                             <td>
-                                @if(in_array($settlement->payout_status, ['PENDING', 'FAILED'], true) && $settlement->seller_payable !== null && (float) $settlement->seller_payable > 0 && $payoutDestinationSaved)
+                                @if((in_array($settlement->payout_status, ['AVAILABLE', 'FAILED'], true) || ($settlement->payout_status === 'PENDING' && $shipmentReceived)) && $settlement->seller_payable !== null && (float) $settlement->seller_payable > 0 && $payoutDestinationSaved)
                                     <form method="POST" action="{{ route('seller.settlements.request-payout', $settlement) }}" data-confirm-title="Request this payout?" data-confirm-message="Send a payout request for ₱{{ number_format((float) $settlement->seller_payable, 2) }} for parcel {{ $settlement->allocation?->shipment?->tracking_number }} to Admin for review." data-confirm-label="Request payout">
                                         @csrf<button class="sl-btn sl-btn-primary">Request payout</button>
                                     </form>
@@ -80,6 +82,8 @@
                                     @endif
                                 @elseif($settlement->payout_status === 'PAID')
                                     <span>Received</span>
+                                @elseif(in_array($settlement->payout_status, ['ON_HOLD', 'PENDING'], true))
+                                    <span>On hold until Order Received and parent order completion</span>
                                 @else — @endif
                             </td>
                         </tr>

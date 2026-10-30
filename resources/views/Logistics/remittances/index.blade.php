@@ -72,12 +72,7 @@
                             <button class="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">Reconcile receipt</button>
                         </form>
                     @elseif($remittance->status === 'DISCREPANCY')
-                        <form method="POST" action="{{ route('logistics.remittances.resolve', $remittance) }}" class="mt-3 flex flex-wrap gap-2" data-confirm-title="Resolve this cash discrepancy?" data-confirm-message="Confirm the final cash received equals the expected amount and explain how the difference was resolved." data-confirm-label="Resolve discrepancy">
-                            @csrf
-                            <label class="grid gap-1 text-[10px] font-semibold">Final cash received<input name="final_received_amount" type="number" min="0" step="0.01" value="{{ number_format((float) $remittance->expected_amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
-                            <label class="grid min-w-56 flex-1 gap-1 text-[10px] font-semibold">Resolution notes<input name="resolution" maxlength="2000" required placeholder="Explain the discrepancy resolution" class="rounded-lg border border-line px-3 py-2"></label>
-                            <button class="self-end rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">Resolve</button>
-                        </form>
+                        <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] font-semibold text-amber-900">This discrepancy is locked for independent Admin review. The original Logistics verification cannot resolve its own discrepancy.</p>
                     @endif
                 </article>
             @empty
@@ -90,22 +85,23 @@
     <div id="panel-cod-proceeds" role="tabpanel" aria-labelledby="tab-cod-proceeds" tabindex="0" data-remittance-panel="cod-proceeds" @if($activeTab !== 'cod-proceeds') hidden @endif>
     @if($parcelSettlementReady)
         <section class="rounded-xl border border-line bg-surface p-6">
-            <h2 class="font-display text-xl font-semibold text-ink">COD proceeds and Logistics share to Admin</h2>
-            <p class="mt-1 text-[11px] text-muted">This handoff is product proceeds plus the Logistics share of shipping. The Rider share is paid separately by Logistics. Submit after the Rider cash receipt is reconciled.</p>
+            <h2 class="font-display text-xl font-semibold text-ink">Full COD remittance to Admin</h2>
+            <p class="mt-1 text-[11px] text-muted">Remit the entire COD collected from the buyer, including all delivery charges. Do not deduct either the Logistics share or the Rider share. Submit after Logistics has verified and reconciled the Rider's full cash handoff.</p>
             <div class="mt-4 grid gap-4">
                 @forelse($productProceeds as $entry)
                     @php($parcel = $entry->shipment)
+                    @php($fullCodAmount = $entry->status === 'PENDING' ? (float) ($parcel?->codCollection?->collected_amount ?? $parcel?->codCollection?->expected_amount ?? $entry->amount) : (float) $entry->amount)
                     <article class="rounded-lg border border-line p-4">
                         <div class="flex flex-wrap justify-between gap-3 text-[10px]"><strong>{{ $entry->metadata['receipt_reference'] ?? 'Parcel '.$parcel?->tracking_number }} Â· {{ $parcel?->sellerOrder?->order?->order_number ?? 'Order unavailable' }}</strong><span>{{ str($entry->status)->replace('_', ' ')->headline() }}</span></div>
                         <dl class="mt-3 grid gap-2 text-[10px] sm:grid-cols-3">
-                            <div><dt class="text-muted">Amount to Admin</dt><dd class="font-semibold">PHP {{ number_format((float) $entry->amount, 2) }}</dd><small>Product PHP {{ number_format((float) $entry->allocation?->product_amount, 2) }} + Logistics shipping share PHP {{ number_format((float) $entry->allocation?->logistics_allocation, 2) }}</small></div>
+                            <div><dt class="text-muted">Full COD to Admin</dt><dd class="font-semibold">PHP {{ number_format($fullCodAmount, 2) }}</dd><small>Includes full product and delivery charges. Shipping split is recorded separately after Admin verifies receipt.</small></div>
                             <div><dt class="text-muted">Parcel</dt><dd class="font-semibold">{{ $parcel?->tracking_number ?? 'Unavailable' }}</dd></div>
-                            <div><dt class="text-muted">Rider shipping share paid by Logistics</dt><dd class="font-semibold">PHP {{ number_format((float) $entry->allocation?->rider_allocation, 2) }}</dd></div>
+                            <div><dt class="text-muted">Delivery charge split after remittance</dt><dd class="font-semibold">Logistics PHP {{ number_format((float) $entry->allocation?->logistics_allocation, 2) }} · Rider PHP {{ number_format((float) $entry->allocation?->rider_allocation, 2) }}</dd></div>
                         </dl>
                         @if($entry->status === 'PENDING')
-                            <form method="POST" action="{{ route('logistics.product-proceeds.submit', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2" data-confirm-title="Remit product proceeds to Admin?" data-confirm-message="Record the product proceeds handoff for this parcel. Shipping remains settled in the separate rider and Logistics pools." data-confirm-label="Submit handoff">
+                            <form method="POST" action="{{ route('logistics.product-proceeds.submit', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2" data-confirm-title="Remit full COD to Admin?" data-confirm-message="Record the full buyer COD handoff. Do not deduct Logistics or Rider delivery shares." data-confirm-label="Submit full COD">
                                 @csrf
-                                <label class="grid gap-1 text-[10px] font-semibold">Amount handed over<input name="amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <label class="grid gap-1 text-[10px] font-semibold">Full COD handed over<input name="amount" type="number" min="0" step="0.01" value="{{ number_format($fullCodAmount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
                                 <label class="grid gap-1 text-[10px] font-semibold">Handoff method<select name="handoff_method" class="rounded-lg border border-line px-3 py-2"><option value="Manual cash handoff">Manual cash handoff</option><option value="Online">Online</option></select></label>
                                 <label class="grid gap-1 text-[10px] font-semibold">Transfer reference<input name="handoff_external_reference" maxlength="150" class="rounded-lg border border-line px-3 py-2"></label>
                                 <label class="grid min-w-56 flex-1 gap-1 text-[10px] font-semibold">Notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
@@ -127,26 +123,39 @@
     <div id="panel-payouts" role="tabpanel" aria-labelledby="tab-payouts" tabindex="0" data-remittance-panel="payouts" @if($activeTab !== 'payouts') hidden @endif>
     @if($parcelSettlementReady)
         <section id="rider-payout-requests" class="rounded-xl border border-line bg-surface p-6">
-            <h2 class="font-display text-xl font-semibold text-ink">Rider payout requests</h2>
-            <p class="mt-1 text-[11px] text-muted">Record the exact allocated Rider share. Manual payouts require a transfer reference and proof. Online channels are demo only; no money is transferred.</p>
+            <h2 class="font-display text-xl font-semibold text-ink">Rider payout records</h2>
+            <p class="mt-1 text-[11px] text-muted">After Admin sends and Logistics confirms the full delivery charges, record the Rider's exact allocated share. Buyer order-received confirmation is not required. Only an actual manual transfer with a transaction reference and saved proof can be confirmed as Paid; online demo channels cannot be recorded as transfers.</p>
             <div class="mt-4 grid gap-4">
                 @forelse($riderPayoutRequests as $entry)
                     @php($payout = (array) $entry->metadata)
                     @php($riderProfile = $riderPayoutParticipants->get((int) ($payout['participant_id'] ?? 0))?->riderProfile)
+                    @php($legacySimulation = ($payout['is_simulated'] ?? false) || \Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
                     <article class="rounded-lg border border-line p-4">
                         <div class="flex flex-wrap justify-between gap-3 text-[10px]"><strong>{{ $payout['payout_reference'] ?? 'Rider request' }} · {{ $entry->shipment?->tracking_number ?? 'Parcel' }}</strong><span>{{ $entry->actor?->name ?? 'Rider' }} · PHP {{ number_format((float) $entry->amount, 2) }}</span></div>
                         <p class="mt-2 text-[10px] text-muted">Payout to: {{ $riderProfile?->payout_method ?? 'Details not saved' }}@if($riderProfile?->payout_bank_name) · {{ $riderProfile->payout_bank_name }}@endif · {{ $riderProfile?->payout_account_name ?? '—' }} · {{ $riderProfile?->payout_account_number ?? '—' }}</p>
-                        @if($payout['is_simulated'] ?? false)<p class="mt-2 text-[10px] font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred.</p>@endif
-                        @php($riderPayoutMethod = old('payout_method', $riderProfile?->payout_method))
-                        <form method="POST" enctype="multipart/form-data" action="{{ route('logistics.remittances.rider-payouts.record', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2" data-rider-payout-form>
-                            @csrf
-                            <label class="grid gap-1 text-[10px] font-semibold">Amount<input name="amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
-                            <label class="grid gap-1 text-[10px] font-semibold">Method<select name="payout_method" required class="rounded-lg border border-line px-3 py-2" data-rider-payout-method><option value="">Select payout method</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Manual', 'Other'] as $method)<option value="{{ $method }}" @selected($riderPayoutMethod === $method)>{{ $method }}{{ $method !== 'Manual' ? ' (simulated)' : '' }}</option>@endforeach</select></label>
-                            <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold" data-rider-payout-reference-field>Manual transfer reference<input name="payout_external_reference" maxlength="150" class="rounded-lg border border-line px-3 py-2" data-rider-payout-reference></label>
-                            <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold" data-rider-payout-proof-field>Transfer proof (required for Manual payout)<input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" class="rounded-lg border border-line px-3 py-2" data-rider-payout-proof></label>
-                            <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold">Notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
-                            <button class="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">Record / simulate payout</button>
-                        </form>
+                        @if($entry->status === 'PAID' && !$legacySimulation)
+                            <p class="mt-2 text-[10px] font-semibold text-emerald-700">Rider confirmed receipt {{ $payout['acknowledged_at'] ?? '' }}. Transfer {{ $payout['payout_external_reference'] ?? '' }}</p>
+                        @elseif($entry->status === 'PAYOUT_PENDING_ACK' && !$legacySimulation)
+                            <p class="mt-2 text-[10px] text-muted">Transfer {{ $payout['payout_external_reference'] ?? '' }} is awaiting the Rider's receipt confirmation.</p>
+                            <form method="POST" action="{{ route('logistics.remittances.rider-payouts.fail', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2">
+                                @csrf
+                                <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold">Verified failure reason<input name="reason" maxlength="2000" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <button class="rounded-lg border border-red-200 px-3 py-2 text-[10px] font-semibold text-red-700">Record failed transfer</button>
+                            </form>
+                        @else
+                            @if($legacySimulation)<p class="mt-2 text-[10px] font-semibold text-amber-700">Legacy demo only — no money was transferred. Replace it with an actual manual transfer and proof.</p>@endif
+                            @if(!empty($payout['last_failed_attempt']['failure_reason']))<p class="mt-2 text-[10px] font-semibold text-red-700">Last transfer failed: {{ $payout['last_failed_attempt']['failure_reason'] }}</p>@endif
+                            @php($riderPayoutMethod = 'Manual')
+                            <form method="POST" enctype="multipart/form-data" action="{{ route('logistics.remittances.rider-payouts.record', $entry) }}" class="mt-3 flex flex-wrap items-end gap-2" data-rider-payout-form>
+                                @csrf
+                                <label class="grid gap-1 text-[10px] font-semibold">Amount<input name="amount" type="number" min="0" step="0.01" value="{{ number_format((float) $entry->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <label class="grid gap-1 text-[10px] font-semibold">Method<select name="payout_method" required class="rounded-lg border border-line px-3 py-2" data-rider-payout-method><option value="Manual" selected>Manual transfer with proof</option><option value="GCash" disabled>GCash (demo only)</option><option value="Maya" disabled>Maya (demo only)</option><option value="Bank Transfer" disabled>Bank Transfer (demo only)</option><option value="Other" disabled>Other (demo only)</option></select></label>
+                                <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold" data-rider-payout-reference-field>Manual transfer reference<input name="payout_external_reference" maxlength="150" required class="rounded-lg border border-line px-3 py-2" data-rider-payout-reference></label>
+                                <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold" data-rider-payout-proof-field>Transfer proof<input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" required class="rounded-lg border border-line px-3 py-2" data-rider-payout-proof></label>
+                                <label class="grid min-w-48 flex-1 gap-1 text-[10px] font-semibold">Notes<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
+                                <button class="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-white">{{ $legacySimulation ? 'Replace with verified transfer' : 'Record verified transfer' }}</button>
+                            </form>
+                        @endif
                     </article>
                 @empty
                     <p class="text-[10px] text-muted">No Rider payout requests are waiting for this center.</p>

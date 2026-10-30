@@ -10,6 +10,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\User;
 use App\Support\FinancialRules;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -41,8 +42,50 @@ class ProductProceedsService
                 throw new RuntimeException('The rider handoff must be reconciled and the buyer COD discrepancy resolved before product proceeds can move to Admin.');
             }
 
+            $fullCodCents = FinancialRules::cents($collection->expected_amount);
+            $destinationId = $locked->shipment->destination_logistics_center_id ?: $locked->shipment->logistics_center_id;
+            if (! $destinationId || (int) $collection->logistics_center_id !== (int) $destinationId
+                || (int) $riderRemittance->logistics_center_id !== (int) $destinationId
+                || $collection->collected_amount === null
+                || FinancialRules::cents($collection->collected_amount) !== $fullCodCents
+                || $riderRemittance->verified_amount === null
+                || FinancialRules::cents($riderRemittance->expected_amount) !== $fullCodCents
+                || FinancialRules::cents($riderRemittance->verified_amount) !== $fullCodCents) {
+                throw new RuntimeException('The verified Rider remittance must equal the full COD collected for this parcel.');
+            }
+
             $metadata = (array) $locked->metadata;
+            if ($locked->status === 'PENDING'
+                && ($metadata['amount_submitted'] ?? null) === null
+                && (FinancialRules::cents($locked->amount) !== $fullCodCents
+                    || ($metadata['remittance_scope'] ?? null) !== 'FULL_COD'
+                    || ($metadata['rider_shipping_share_included'] ?? false) !== true)) {
+                $before = ['amount' => $locked->amount, 'metadata' => $metadata];
+                $metadata = array_merge($metadata, [
+                    'amount_expected' => FinancialRules::amount($fullCodCents),
+                    'remittance_scope' => 'FULL_COD',
+                    'product_amount' => $locked->allocation->product_amount,
+                    'shipping_fee' => $locked->allocation->shipping_fee,
+                    'additional_care_amount' => $locked->allocation->protection_amount ?? '0.00',
+                    'logistics_shipping_share' => $locked->allocation->logistics_allocation,
+                    'rider_shipping_share' => $locked->allocation->rider_allocation,
+                    'rider_shipping_share_included' => true,
+                ]);
+                $locked->update(['amount' => FinancialRules::amount($fullCodCents), 'metadata' => $metadata]);
+                FinanceAuditEvent::query()->create([
+                    'event_type' => 'PENDING_COD_REMITTANCE_EXPECTATION_UPDATED',
+                    'auditable_type' => FinancialLedgerEntry::class,
+                    'auditable_id' => $locked->id,
+                    'actor_user_id' => $actor->id,
+                    'before_state' => $before,
+                    'after_state' => ['amount' => $locked->amount, 'metadata' => $metadata],
+                    'notes' => 'Pending unsubmitted Admin remittance updated to the full collected COD amount; no remittance has yet been submitted.',
+                ]);
+            }
             $submittedCents = FinancialRules::cents($amount);
+            if ($submittedCents < 0) {
+                throw new RuntimeException('The Admin cash remittance cannot be negative.');
+            }
             $expectedCents = FinancialRules::cents($locked->amount);
             if ($locked->status === 'SUBMITTED') {
                 if (FinancialRules::cents($metadata['amount_submitted'] ?? 0) === $submittedCents) {
@@ -85,7 +128,7 @@ class ProductProceedsService
         $this->assertActiveRole($actor, User::TYPE_ADMIN);
 
         return DB::transaction(function () use ($actor, $entry, $receivedAmount, $notes): FinancialLedgerEntry {
-            $locked = FinancialLedgerEntry::query()->with(['shipment.sellerOrder.order', 'allocation'])
+            $locked = FinancialLedgerEntry::query()->with(['shipment.sellerOrder.order', 'shipment.codCollection.remittanceItem.remittance', 'allocation'])
                 ->whereKey($entry->id)->lockForUpdate()->firstOrFail();
             if ($locked->entry_type === 'PRODUCT_PROCEEDS_REMITTANCE' && in_array($locked->status, ['RECEIVED', 'DISCREPANCY'], true)) {
                 $receipt = (array) $locked->metadata;
@@ -99,13 +142,20 @@ class ProductProceedsService
                 throw new RuntimeException('Only a submitted parcel proceeds handoff can be acknowledged.');
             }
             $metadata = (array) $locked->metadata;
+            $fullCodCents = $this->assertDestinationHandoff($locked);
             $receivedCents = FinancialRules::cents($receivedAmount);
+            if ($receivedCents < 0) {
+                throw new RuntimeException('Cash received cannot be negative.');
+            }
             $expectedCents = FinancialRules::cents($locked->amount);
-            $status = $receivedCents === $expectedCents ? 'RECEIVED' : 'DISCREPANCY';
+            $submittedCents = FinancialRules::cents($metadata['amount_submitted'] ?? 0);
+            $cleanReceipt = $expectedCents === $fullCodCents && $receivedCents === $fullCodCents && $submittedCents === $fullCodCents;
+            $status = $cleanReceipt ? 'RECEIVED' : 'DISCREPANCY';
             $before = ['status' => $locked->status, 'metadata' => $metadata];
             $metadata = array_merge($metadata, [
                 'amount_received' => FinancialRules::amount($receivedCents),
-                'discrepancy_amount' => FinancialRules::amount(abs($receivedCents - $expectedCents)),
+                'full_cod_expected' => FinancialRules::amount($fullCodCents),
+                'discrepancy_amount' => FinancialRules::amount(max(abs($receivedCents - $fullCodCents), abs($submittedCents - $fullCodCents), abs($expectedCents - $fullCodCents))),
                 'confirmation_status' => $status,
                 'acknowledged_by_user_id' => $actor->id,
                 'acknowledged_at' => now()->toIso8601String(),
@@ -114,19 +164,46 @@ class ProductProceedsService
             ]);
             $locked->update(['status' => $status, 'metadata' => $metadata]);
             $this->audit($status === 'RECEIVED' ? 'ADMIN_ACKNOWLEDGED_PRODUCT_PROCEEDS' : 'ADMIN_RECORDED_PRODUCT_PROCEEDS_DISCREPANCY', $locked, $actor, $before, $metadata, $notes);
+            if ($cleanReceipt) {
+                app(FinancialLedgerTransferService::class)->postCounterpart(
+                    $locked,
+                    'ADMIN_COD_CASH',
+                    'CREDIT',
+                    'LOGISTICS_ADMIN_COD_HANDOFF',
+                    $actor,
+                    [
+                        'amount_expected' => FinancialRules::amount($expectedCents),
+                        'amount_submitted' => FinancialRules::amount($submittedCents),
+                        'amount_received' => FinancialRules::amount($receivedCents),
+                        'sender' => data_get($metadata, 'sender'),
+                        'recipient' => ['role' => 'ADMIN'],
+                    ],
+                );
+            }
 
             return $locked->refresh();
         });
     }
 
-    public function resolveAdminDiscrepancy(User $actor, FinancialLedgerEntry $entry, string|int|float $finalReceivedAmount, string $resolution): FinancialLedgerEntry
+    public function resolveAdminDiscrepancy(
+        User $actor,
+        FinancialLedgerEntry $entry,
+        string|int|float $finalReceivedAmount,
+        string $resolution,
+        ?string $evidencePath = null,
+    ): FinancialLedgerEntry
     {
         $this->assertActiveRole($actor, User::TYPE_ADMIN);
         if (trim($resolution) === '') {
             throw new RuntimeException('A resolution note is required.');
         }
+        if (! is_string($evidencePath)
+            || ! str_starts_with($evidencePath, 'cod-cash-evidence/')
+            || ! Storage::disk('local')->exists($evidencePath)) {
+            throw new RuntimeException('Upload actual cash evidence before resolving this discrepancy.');
+        }
 
-        return DB::transaction(function () use ($actor, $entry, $finalReceivedAmount, $resolution): FinancialLedgerEntry {
+        return DB::transaction(function () use ($actor, $entry, $finalReceivedAmount, $resolution, $evidencePath): FinancialLedgerEntry {
             $locked = FinancialLedgerEntry::query()->whereKey($entry->id)->lockForUpdate()->firstOrFail();
             $current = (array) $locked->metadata;
             if ($locked->entry_type === 'PRODUCT_PROCEEDS_REMITTANCE' && $locked->status === 'RECEIVED'
@@ -138,34 +215,68 @@ class ProductProceedsService
             if ($locked->entry_type !== 'PRODUCT_PROCEEDS_REMITTANCE' || $locked->status !== 'DISCREPANCY') {
                 throw new RuntimeException('Only an open product proceeds discrepancy can be resolved.');
             }
+            $fullCodCents = $this->assertDestinationHandoff($locked);
+            if ((int) data_get($current, 'acknowledged_by_user_id') === (int) $actor->id) {
+                throw new RuntimeException('The Admin who first verified this receipt cannot independently resolve its discrepancy.');
+            }
             $expectedCents = FinancialRules::cents($locked->amount);
             $receivedCents = FinancialRules::cents($finalReceivedAmount);
-            if ($receivedCents !== $expectedCents) {
-                throw new RuntimeException('The final reconciled amount must equal product proceeds plus the Logistics shipping share.');
+            if ($expectedCents !== $fullCodCents || $receivedCents !== $fullCodCents) {
+                throw new RuntimeException('The final reconciled amount must equal the full buyer COD, including all delivery charges.');
             }
             $before = ['status' => $locked->status, 'metadata' => $locked->metadata];
             $metadata = array_merge((array) $locked->metadata, [
                 'amount_received' => FinancialRules::amount($receivedCents),
                 'discrepancy_amount' => '0.00',
                 'confirmation_status' => 'RECEIVED',
-                'discrepancy_resolution' => ['resolved_by_user_id' => $actor->id, 'resolved_at' => now()->toIso8601String(), 'resolution' => trim($resolution)],
+                'discrepancy_resolution' => [
+                    'resolved_by_user_id' => $actor->id,
+                    'resolved_at' => now()->toIso8601String(),
+                    'resolution' => trim($resolution),
+                    'evidence_path' => $evidencePath,
+                ],
                 'resolution_notes' => trim($resolution),
             ]);
             $locked->update(['status' => 'RECEIVED', 'metadata' => $metadata]);
             $this->audit('ADMIN_RESOLVED_PRODUCT_PROCEEDS_DISCREPANCY', $locked, $actor, $before, $metadata, $resolution);
+            app(FinancialLedgerTransferService::class)->postCounterpart(
+                $locked,
+                'ADMIN_COD_CASH',
+                'CREDIT',
+                'LOGISTICS_ADMIN_COD_HANDOFF',
+                $actor,
+                [
+                    'amount_expected' => FinancialRules::amount($expectedCents),
+                    'amount_received' => FinancialRules::amount($receivedCents),
+                    'resolution' => trim($resolution),
+                    'evidence_path' => $evidencePath,
+                    'sender' => data_get($metadata, 'sender'),
+                    'recipient' => ['role' => 'ADMIN'],
+                ],
+            );
 
             return $locked->refresh();
         });
     }
 
-    public function resolveBuyerCollectionDiscrepancy(User $actor, CodCollection $collection, string $resolution): CodCollection
+    public function resolveBuyerCollectionDiscrepancy(
+        User $actor,
+        CodCollection $collection,
+        string $resolution,
+        ?string $evidencePath = null,
+    ): CodCollection
     {
         $this->assertActiveRole($actor, User::TYPE_ADMIN);
         if (trim($resolution) === '') {
             throw new RuntimeException('A resolution note is required.');
         }
+        if (! is_string($evidencePath)
+            || ! str_starts_with($evidencePath, 'cod-cash-evidence/')
+            || ! Storage::disk('local')->exists($evidencePath)) {
+            throw new RuntimeException('Upload actual cash evidence before resolving this discrepancy.');
+        }
 
-        return DB::transaction(function () use ($actor, $collection, $resolution): CodCollection {
+        return DB::transaction(function () use ($actor, $collection, $resolution, $evidencePath): CodCollection {
             $locked = CodCollection::query()->with(['shipment', 'order'])
                 ->whereKey($collection->id)->lockForUpdate()->firstOrFail();
             $priorResolution = FinanceAuditEvent::query()
@@ -179,13 +290,20 @@ class ProductProceedsService
                 return $locked;
             }
             $remittance = RiderRemittance::query()->whereIn('id', DB::table('rider_remittance_items')->where('cod_collection_id', $locked->id)->select('rider_remittance_id'))->first();
-            if ($locked->status !== CodCollection::REMITTED_DISCREPANCY || $remittance?->status !== RiderRemittance::RECONCILED) {
-                throw new RuntimeException('The rider handoff must be reconciled before resolving a buyer collection discrepancy.');
+            if ($locked->status !== CodCollection::REMITTED_DISCREPANCY
+                || $remittance?->status !== RiderRemittance::RECONCILED
+                || FinancialRules::cents($remittance->expected_amount) !== FinancialRules::cents($locked->expected_amount)
+                || FinancialRules::cents($remittance->verified_amount) !== FinancialRules::cents($locked->expected_amount)) {
+                throw new RuntimeException('The full server-calculated COD must be verified at Logistics before resolving a buyer collection discrepancy.');
             }
             $shipment = $locked->shipment;
             $expectedCents = FinancialRules::cents($locked->expected_amount);
             $before = ['status' => $locked->status, 'collected_amount' => $locked->collected_amount];
-            $locked->update(['status' => CodCollection::REMITTED, 'collected_amount' => FinancialRules::amount($expectedCents)]);
+            $locked->update([
+                'status' => CodCollection::REMITTED,
+                'collected_amount' => FinancialRules::amount($expectedCents),
+                'evidence_path' => $evidencePath,
+            ]);
             $ledger = FinancialLedgerEntry::query()->where('shipment_id', $shipment->id)->where('entry_type', 'COD_COLLECTED')->first();
             if ($ledger) {
                 $ledger->update(['amount' => FinancialRules::amount($expectedCents), 'status' => 'POSTED', 'metadata' => array_merge((array) $ledger->metadata, [
@@ -206,10 +324,33 @@ class ProductProceedsService
                 'resolved_by_user_id' => $actor->id,
                 'resolved_at' => now()->toIso8601String(),
                 'discrepancy_resolution' => trim($resolution),
+                'resolution_evidence_path' => $evidencePath,
             ], $resolution);
 
             return $locked->refresh();
         });
+    }
+
+    private function assertDestinationHandoff(FinancialLedgerEntry $entry): int
+    {
+        $entry->loadMissing('shipment.codCollection.remittanceItem.remittance');
+        $shipment = $entry->shipment;
+        $collection = $shipment?->codCollection;
+        $remittance = $collection?->remittanceItem?->remittance;
+        $destinationId = $shipment?->destination_logistics_center_id ?: $shipment?->logistics_center_id;
+        $fullCodCents = $collection ? FinancialRules::cents($collection->expected_amount) : -1;
+        if (! $destinationId || ! $collection || $collection->status !== CodCollection::REMITTED
+            || $collection->collected_amount === null || FinancialRules::cents($collection->collected_amount) !== $fullCodCents
+            || (int) $collection->logistics_center_id !== (int) $destinationId
+            || ! $remittance || $remittance->status !== RiderRemittance::RECONCILED || $remittance->verified_amount === null
+            || (int) $remittance->logistics_center_id !== (int) $destinationId
+            || FinancialRules::cents($remittance->expected_amount) !== $fullCodCents
+            || FinancialRules::cents($remittance->verified_amount) !== $fullCodCents
+            || (int) data_get($entry->metadata, 'sender.logistics_center_id') !== (int) $destinationId) {
+            throw new RuntimeException('The full Rider COD must be reconciled at Destination Logistics before Admin verifies the handoff.');
+        }
+
+        return $fullCodCents;
     }
 
     private function assertActiveRole(User $actor, string $role): void

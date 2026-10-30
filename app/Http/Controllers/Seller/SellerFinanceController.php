@@ -17,11 +17,21 @@ use RuntimeException;
 
 class SellerFinanceController extends Controller
 {
-    public function index(Request $request, FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations): View
+    public function index(Request $request, FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations, SellerSettlementService $service): View
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
         $ready = $schema->parcelSettlementReady();
+        if ($ready) {
+            $service->applyRefundDebtToUnpaidSettlements((int) $seller->id);
+            SellerSettlement::query()
+                ->where('seller_profile_id', $seller->id)
+                ->whereIn('payout_status', ['ON_HOLD', 'PENDING'])
+                ->whereHas('allocation.shipment', fn ($query) => $query->where('current_status', 'COMPLETED'))
+                ->with('allocation.shipment')
+                ->get()
+                ->each(fn (SellerSettlement $settlement) => $service->releaseForShipment($settlement->allocation->shipment));
+        }
         $settlements = $ready
             ? SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
@@ -31,15 +41,18 @@ class SellerFinanceController extends Controller
 
         $payoutBalances = [
             'available' => 0.0,
+            'on_hold' => 0.0,
+            'refund_debt' => 0.0,
             'requested' => 0.0,
             'awaiting_ack' => 0.0,
             'paid_out' => 0.0,
             'paid' => 0.0,
         ];
         if ($ready) {
+            $payoutBalances['refund_debt'] = $service->unappliedSellerRefundDebtCents((int) $seller->id) / 100;
             $eligibleSettlements = SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
-                ->whereIn('payout_status', ['PENDING', 'FAILED'])
+                ->whereIn('payout_status', ['AVAILABLE', 'FAILED'])
                 ->whereNotNull('seller_payable')
                 ->where('seller_payable', '>', 0);
             $payoutBalances['available'] = (float) (clone $eligibleSettlements)
@@ -51,19 +64,25 @@ class SellerFinanceController extends Controller
                         ->where(fn ($status) => $status->where('proceeds.status', '<>', 'RECEIVED')->orWhereNull('proceeds.status'));
                 })
                 ->sum('seller_payable');
+            $payoutBalances['on_hold'] = (float) SellerSettlement::query()
+                ->where('seller_profile_id', $seller->id)->whereIn('payout_status', ['ON_HOLD', 'PENDING'])->sum('outstanding_balance');
             $payoutBalances['requested'] = (float) SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
             $recordedPayouts = fn () => SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
                 ->whereIn('payout_status', ['PAYOUT_PENDING_ACK', 'PAID'])
                 ->whereNotNull('paid_at')
-                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'));
+                ->whereNotNull('payout_external_reference')
+                ->whereNotNull('payout_proof_path')
+                ->where('payout_external_reference', 'not like', 'SIM-%');
             $payoutBalances['awaiting_ack'] = (float) SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_PENDING_ACK')->whereNotNull('paid_at')
-                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'))->sum('payout_amount');
+                ->whereNotNull('payout_external_reference')->whereNotNull('payout_proof_path')
+                ->where('payout_external_reference', 'not like', 'SIM-%')->sum('payout_amount');
             $payoutBalances['paid'] = (float) SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAID')->whereNotNull('paid_at')
-                ->where(fn ($query) => $query->whereNull('payout_external_reference')->orWhere('payout_external_reference', 'not like', 'SIM-%'))->sum('payout_amount');
+                ->whereNotNull('seller_acknowledged_at')->whereNotNull('payout_external_reference')->whereNotNull('payout_proof_path')
+                ->where('payout_external_reference', 'not like', 'SIM-%')->sum('payout_amount');
             $payoutBalances['paid_out'] = (float) $recordedPayouts()->sum('payout_amount');
         }
 

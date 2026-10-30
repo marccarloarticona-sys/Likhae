@@ -110,9 +110,16 @@ final class SellerPickupRequestService
         });
     }
 
-    public function assign(User $actor, LogisticsCenter $center, int $requestId, int $riderProfileId): SellerPickupRequest
+    public function assign(
+        User $actor,
+        LogisticsCenter $center,
+        int $requestId,
+        int $riderProfileId,
+        bool $automaticDispatch = false,
+        ?string $coverageOverrideReason = null,
+    ): SellerPickupRequest
     {
-        return DB::transaction(function () use ($actor, $center, $requestId, $riderProfileId): SellerPickupRequest {
+        return DB::transaction(function () use ($actor, $center, $requestId, $riderProfileId, $automaticDispatch, $coverageOverrideReason): SellerPickupRequest {
             $this->assertCenterActor($actor, $center);
             $pickupRequest = SellerPickupRequest::query()
                 ->whereKey($requestId)
@@ -138,6 +145,8 @@ final class SellerPickupRequestService
                 $riderProfileId,
                 $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all(),
                 (int) $pickupRequest->id,
+                $automaticDispatch,
+                $coverageOverrideReason,
             );
             $trip = $result['trip'];
 

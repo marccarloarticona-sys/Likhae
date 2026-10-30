@@ -61,7 +61,7 @@
 
     @if($payoutDestinationSaved && ($eligiblePayoutParticipants ?? collect())->isNotEmpty())
         <section class="lk-wallet-panel">
-            <header class="lk-wallet-panel__head"><h2>Request a payout from Logistics</h2><p class="lk-wallet-panel__description">These shares are available after Logistics reconciles the Rider cash handoff. Select the parcels to request.</p></header>
+            <header class="lk-wallet-panel__head"><h2>Request a payout from Logistics</h2><p class="lk-wallet-panel__description">These shares unlock after Logistics reconciles your full COD handoff and confirms receipt of Admin's full delivery-charge transfer. Buyer order-received confirmation is not required. Select the parcels to request.</p></header>
             <form method="POST" action="{{ route('rider.earnings.payout-requests.store') }}" class="mt-4 grid gap-3">
                 @csrf
                 @foreach($eligiblePayoutParticipants as $participant)
@@ -80,7 +80,7 @@
 
     @if(($riderPayoutReceipts ?? collect())->isNotEmpty())
         <section class="lk-wallet-panel">
-            <header class="lk-wallet-panel__head"><h2>Payout receipts awaiting your confirmation</h2></header>
+            <header class="lk-wallet-panel__head"><h2>Rider payout receipts</h2><p class="lk-wallet-panel__description">Review pending transfers and your confirmed payout history.</p></header>
             <div class="mt-3 grid gap-3">
                 @foreach($riderPayoutReceipts as $receipt)
                     @php($payout = (array) $receipt->metadata)
@@ -88,13 +88,20 @@
                         <div class="flex flex-wrap justify-between gap-3"><strong>{{ $payout['payout_receipt_reference'] ?? $payout['payout_reference'] ?? 'Rider payout' }} · {{ $receipt->shipment?->tracking_number ?? 'Parcel' }}</strong><span>PHP {{ number_format((float) $receipt->amount, 2) }}</span></div>
                         <p class="mt-2 text-muted">{{ $payout['payout_method'] ?? 'Payment method unavailable' }} {{ $payout['payout_external_reference'] ?? '' }} · Sent {{ $payout['paid_at'] ?? '' }}</p>
                         @if(!empty($payout['payout_proof_path']))<a href="{{ route('rider.earnings.payout-proof', $receipt) }}" class="mt-2 inline-block text-xs font-semibold underline">View transfer proof</a>@endif
-                        @if($payout['is_simulated'] ?? false)<p class="mt-2 font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred.</p>@endif
-                        <form method="POST" action="{{ route('rider.earnings.payouts.acknowledge', $receipt) }}" class="mt-3 flex flex-wrap items-end gap-2">
-                            @csrf
-                            <label class="grid gap-1 font-semibold">{{ ($payout['is_simulated'] ?? false) ? 'Demo amount' : 'Amount received' }}<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $receipt->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
-                            <label class="grid min-w-48 flex-1 gap-1 font-semibold">Receipt note<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
-                            <button class="rounded-lg bg-primary px-3 py-2 font-semibold text-white">{{ ($payout['is_simulated'] ?? false) ? 'Acknowledge demo record' : 'Confirm receipt' }}</button>
-                        </form>
+                        @if(($payout['is_simulated'] ?? false) || \Illuminate\Support\Str::startsWith((string) ($payout['payout_external_reference'] ?? ''), 'SIM-'))
+                            <p class="mt-2 font-semibold text-amber-700">SIMULATED DEMO ONLY — no money was transferred. This record cannot be confirmed as Paid; Logistics must replace it with an actual transfer and proof.</p>
+                        @else
+                            @if($receipt->status === 'PAID')
+                                <p class="mt-2 font-semibold text-emerald-700">Receipt confirmed {{ $payout['acknowledged_at'] ?? '' }}</p>
+                            @else
+                            <form method="POST" action="{{ route('rider.earnings.payouts.acknowledge', $receipt) }}" class="mt-3 flex flex-wrap items-end gap-2">
+                                @csrf
+                                <label class="grid gap-1 font-semibold">Amount received<input name="amount_received" type="number" min="0" step="0.01" value="{{ number_format((float) $receipt->amount, 2, '.', '') }}" required class="rounded-lg border border-line px-3 py-2"></label>
+                                <label class="grid min-w-48 flex-1 gap-1 font-semibold">Receipt note<input name="notes" maxlength="1000" class="rounded-lg border border-line px-3 py-2"></label>
+                                <button class="rounded-lg bg-primary px-3 py-2 font-semibold text-white">Confirm receipt</button>
+                            </form>
+                            @endif
+                        @endif
                     </article>
                 @endforeach
             </div>

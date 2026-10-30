@@ -574,15 +574,27 @@ class ShipmentWorkflowService
                 );
 
                 $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter);
-                if (! $pickupArea) {
+                if (! $pickupArea && ! $allowPickupAreaOverride) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
 
-                $pickupArea->loadMissing('logisticsCenter');
-                if ((int) $rider->logistics_center_id !== (int) $pickupArea->logistics_center_id) {
+                $pickupArea?->loadMissing('logisticsCenter');
+                $rider->loadMissing('logisticsCenter.address');
+                $pickupCenter = $pickupArea?->logisticsCenter ?? $rider->logisticsCenter;
+                $sellerAddress = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+                if (! $pickupCenter
+                    || (int) $rider->logistics_center_id !== (int) $pickupCenter->id
+                    || ! $sellerAddress
+                    || ! $this->localRiderEligibility->centerCoversMunicipality(
+                        $pickupCenter,
+                        (string) $sellerAddress->province_code,
+                        (string) $sellerAddress->municipality_code,
+                    )) {
                     throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
                 }
-                $this->localRiderEligibility->assertRiderCanCoverArea($pickupArea->logisticsCenter, $rider, $pickupArea);
+                if ($pickupArea) {
+                    $this->localRiderEligibility->assertRiderCanCoverArea($pickupCenter, $rider, $pickupArea);
+                }
 
                 if (! $this->riderCoversSellerPickupArea($shipment, $rider)
                     && ! $allowPickupAreaOverride) {
@@ -1562,6 +1574,11 @@ class ShipmentWorkflowService
         }
         $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'complete delivery');
         $this->requireShipmentStatus($shipment, ['OUT_FOR_DELIVERY'], 'complete delivery');
+
+        $scannedCode = trim((string) ($payload['scanned_code'] ?? ''));
+        if ($scannedCode !== '' && ! hash_equals($shipment->tracking_number, $scannedCode)) {
+            throw ValidationException::withMessages(['scanned_code' => 'The scanned parcel code does not match the shipment tracking number.']);
+        }
 
         $proofPath = trim((string) ($payload['proof_path'] ?? ''));
         if ($proofPath === '') {

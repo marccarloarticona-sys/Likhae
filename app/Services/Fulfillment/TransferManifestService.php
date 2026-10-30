@@ -334,7 +334,7 @@ final class TransferManifestService
     {
         // Kept as a compatibility entry point; departure belongs to the
         // assigned rider and is enforced by driverStart().
-        return $this->driverStart($actor, $manifest);
+        return $this->driverStart($actor, $manifest, $scannedCodes, $scanMethod);
     }
 
     public function driverAccept(User $actor, TransferManifest $manifest): TransferManifest
@@ -391,11 +391,11 @@ final class TransferManifestService
         });
     }
 
-    public function driverStart(User $actor, TransferManifest $manifest): TransferManifest
+    public function driverStart(User $actor, TransferManifest $manifest, array $scannedCodes = [], string $scanMethod = 'MANUAL'): TransferManifest
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $manifest): TransferManifest {
+        return DB::transaction(function () use ($actor, $manifest, $scannedCodes, $scanMethod): TransferManifest {
             $locked = TransferManifest::query()->whereKey($manifest->id)->with('assignedDriver.user', 'items.transferLeg.shipment')->lockForUpdate()->firstOrFail();
             $this->assertAssignedDriver($actor, $locked);
             if ($locked->status === TransferManifest::IN_TRANSIT) {
@@ -408,6 +408,9 @@ final class TransferManifestService
                 throw new RuntimeException('The assigned driver must accept the manifest before starting transport.');
             }
             $this->assertManifestCapacity($locked, $locked->assignedDriver);
+            if ($scannedCodes !== []) {
+                $this->assertScannedCodes($locked, $scannedCodes);
+            }
             if ($locked->items->isEmpty() || $locked->items->contains(
                 fn (TransferManifestItem $item): bool => $item->status !== TransferManifestItem::EXPECTED
                     || $item->transferLeg?->status !== ShipmentTransferLeg::RELEASED,
@@ -416,7 +419,13 @@ final class TransferManifestService
             }
 
             foreach ($locked->items as $item) {
-                $this->transfers->depart($item->transferLeg, $actor);
+                $scannedCode = $scannedCodes[$item->id] ?? null;
+                $this->transfers->depart(
+                    $item->transferLeg,
+                    $actor,
+                    $scannedCode === null ? null : (string) $scannedCode,
+                    $scanMethod,
+                );
             }
             $locked->update(['status' => TransferManifest::IN_TRANSIT, 'departed_at' => now()]);
 

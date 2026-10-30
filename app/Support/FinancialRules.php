@@ -119,7 +119,7 @@ final class FinancialRules
         $commission = self::commissionCents($original, $commissionRate);
         $shipping = self::cents($shippingFee);
         $additionalCare = max(0, self::cents($additionalCareFee));
-        $deliveryEarnings = $shipping + $additionalCare;
+        $deliveryEarnings = self::deliveryEarningsCents($shippingFee, $additionalCareFee);
         $allocation = self::shippingAllocationCents($deliveryEarnings, $riderPoolPercentage);
         if ($fundingSnapshot === null) {
             // Historical combined discounts do not identify who funded them.
@@ -159,6 +159,22 @@ final class FinancialRules
     public static function shippingAllocation(string|int|float $shippingFee, string|int|float $riderPoolPercentage): array
     {
         return self::shippingAllocationCents(self::cents($shippingFee), $riderPoolPercentage);
+    }
+
+    public static function deliveryEarningsCents(
+        string|int|float|null $shippingFee,
+        string|int|float|null $additionalCareFee = 0,
+    ): int {
+        return self::cents($shippingFee) + max(0, self::cents($additionalCareFee));
+    }
+
+    /** @return array{0:int,1:int,2:int} Rider 60%, Origin 30%, Destination 10%. */
+    public static function interHubDeliverySplitCents(int $deliveryEarningsCents): array
+    {
+        $split = self::shippingAllocationCents($deliveryEarningsCents, self::DEFAULT_RIDER_POOL_PERCENTAGE);
+        [$origin, $destination] = self::allocateCents($split['logistics_cents'], [30, 10]);
+
+        return [$split['rider_cents'], $origin, $destination];
     }
 
     /** @return array{rider_cents:int, logistics_cents:int} */

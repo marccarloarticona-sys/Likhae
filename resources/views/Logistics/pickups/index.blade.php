@@ -7,7 +7,7 @@
     <header>
         <p class="text-xs font-bold uppercase text-primary">First-mile operations</p>
         <h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Queue</h1>
-        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address. Riders can hold up to 3 active parcel jobs; oversized selections are assigned up to capacity and the remaining parcels stay in the queue.</p>
+        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address. Only online local riders with a recent GPS location and no active jobs appear here. Auto-assign offers the pickup to the nearest idle rider. The rider has 15 minutes to accept; if the offer expires, it moves to the next nearest idle rider. Rider service-area assignment is not required for this GPS-based pickup dispatch.</p>
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -65,11 +65,11 @@
                     <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf
-                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online rider · excess parcels stay in a new request
+                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online idle rider · nearest first; excess parcels stay in a new request
                                 <select name="rider_profile_id" required class="min-h-11 border border-line bg-white px-3 text-sm text-ink" @disabled($pickupRequest->eligible_riders->isEmpty())>
-                                    <option value="">{{ $pickupRequest->eligible_riders->isEmpty() ? 'No eligible Rider with sufficient capacity' : 'Select a local Rider' }}</option>
+                                    <option value="">{{ $pickupRequest->eligible_riders->isEmpty() ? 'No idle online rider with a recent location' : 'Select an idle local Rider' }}</option>
                                     @foreach($pickupRequest->eligible_riders as $rider)
-                                        <option value="{{ $rider->id }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · up to {{ min($requestParcels->count(), \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} of {{ $requestParcels->count() }} parcel(s)</option>
+                                        <option value="{{ $rider->id }}">{{ $rider->user?->name }} · {{ number_format((float) $rider->seller_distance_km, 1) }} km · {{ str($rider->vehicle_type)->headline() }} · up to {{ min($requestParcels->count(), \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} of {{ $requestParcels->count() }} parcel(s)</option>
                                     @endforeach
                                 </select>
                             </label>
@@ -123,21 +123,21 @@
                         </div>
 
                         <div class="grid gap-3 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                            <label class="grid gap-1 text-xs font-semibold text-muted">Eligible local rider
+                            <label class="grid gap-1 text-xs font-semibold text-muted">Available idle local rider · nearest first
                                 <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
-                                    <option value="">{{ $eligibleRiders->isEmpty() ? 'No eligible rider assigned to this pickup barangay' : 'Select motorcycle or tricycle rider' }}</option>
+                                    <option value="">{{ $eligibleRiders->isEmpty() ? 'No nearby online rider with a recent location and no active job' : 'Select an idle motorcycle or tricycle rider' }}</option>
                                     @foreach($eligibleRiders as $rider)
-                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }}">{{ $rider->user?->name }} · {{ str($rider->vehicle_type)->headline() }} · {{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} parcel(s) available</option>
+                                        <option value="{{ $rider->id }}" data-capacity="{{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }}">{{ $rider->user?->name }} · {{ number_format((float) $rider->seller_distance_km, 1) }} km · {{ str($rider->vehicle_type)->headline() }} · {{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} parcel(s) available</option>
                                     @endforeach
                                 </select>
                             </label>
                             <button type="submit" disabled data-pickup-submit class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Assign Selected Parcels</button>
                         </div>
-                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected · up to 10 per batch. If selected parcels exceed the rider's remaining 3-job limit, the first eligible parcels are assigned and the rest remain waiting.</p>
+                        <p class="text-xs text-muted"><span data-pickup-selected>0</span> selected · up to 10 parcels per batch. The selected rider must have no other active assignments; any parcels beyond the rider's approved batch capacity stay waiting.</p>
                     </form>
                     <div class="mt-3 flex flex-wrap gap-2">
                         @foreach($shipments as $shipment)
-                            <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}" data-confirm-title="Assign pickup to rider?" data-confirm-message="Assign {{ $shipment->tracking_number }} to an eligible rider for seller pickup?" data-confirm-label="Assign pickup">@csrf<button class="border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign {{ $shipment->tracking_number }}</button></form>
+                            <form method="POST" action="{{ route('logistics.pickups.auto-assign', $shipment) }}" data-confirm-title="Offer pickup to nearest idle rider?" data-confirm-message="Offer {{ $shipment->tracking_number }} to the nearest online local rider with a recent location and no active assignment. They have 15 minutes to accept; an expired offer moves to the next idle rider." data-confirm-label="Offer pickup">@csrf<button class="border border-primary px-3 py-2 text-xs font-semibold text-primary">Auto-assign {{ $shipment->tracking_number }}</button></form>
                         @endforeach
                     </div>
                     @else
@@ -170,11 +170,11 @@
                         <form method="POST" action="{{ route('logistics.pickups.batches.reassign', $batch) }}" class="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-end" data-confirm-title="Reassign pickup batch?" data-confirm-message="Every parcel in this batch is still uncollected. The current rider's jobs will be cancelled and the selected online rider will need to accept the batch." data-confirm-label="Reassign batch">
                             @csrf
                             @method('PATCH')
-                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Reassign to an online eligible rider
+                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Reassign to an idle online rider
                                 <select name="rider_profile_id" required class="min-h-10 border border-line bg-white px-3 text-sm text-ink">
                                     <option value="">Select another rider</option>
                                     @foreach($batch->reassignable_riders as $candidate)
-                                        <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · {{ $candidate->active_assignments_count }} active parcel assignment(s) · {{ \App\Support\LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) }} capacity remaining</option>
+                                        <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · idle · capacity {{ $candidate->approved_parcel_capacity }} parcels</option>
                                     @endforeach
                                 </select>
                             </label>

@@ -18,22 +18,21 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
-use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Support\RiderVehicleType;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 use RuntimeException;
 
 class RiderApiController extends Controller
 {
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->localRider($request);
-        $offers->expireDuePickupOffers((int) $rider->id);
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $deliveries = (clone $assignments)->delivery();
         $pendingPickupCount = $schema->sellerPickupBatchesReady()
@@ -82,14 +81,12 @@ class RiderApiController extends Controller
         return $this->paginated($rows, fn (RiderAssignment $assignment): array => $this->assignmentPayload($assignment), ['stats' => $stats]);
     }
 
-    public function pickups(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
+    public function pickups(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->localRider($request);
         if (! $schema->sellerPickupBatchesReady()) {
             return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
         }
-
-        $offers->expireDuePickupOffers((int) $rider->id);
 
         $query = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
@@ -262,10 +259,11 @@ class RiderApiController extends Controller
             return $this->paginated($rows, fn (RiderEarningPoolParticipant $participant): array => [
                 'date' => $participant->created_at?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
-                'amount' => $participant->share_amount === null ? 0.0 : (float) $participant->share_amount,
+                'amount' => $participant->share_amount === null ? null : (float) $participant->share_amount,
                 'status' => str($participant->status)->headline()->toString(),
             ], [
                 'total' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->sum('share_amount'),
+                'rider' => ['name' => $rider->user?->name ?? ''],
                 'notice' => 'Rider pool shares remain pending until an authorized allocation and payout decision; COD remittance is separate.',
             ]);
         }
@@ -277,7 +275,7 @@ class RiderApiController extends Controller
             'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
             'amount' => (float) $earning->amount,
             'status' => str($earning->status)->headline()->toString(),
-        ], ['total' => (float) $rider->earnings()->sum('amount'), 'notice' => 'Recorded earnings from completed pickup and delivery assignments.']);
+        ], ['total' => (float) $rider->earnings()->sum('amount'), 'rider' => ['name' => $rider->user?->name ?? ''], 'notice' => 'Recorded earnings from completed pickup and delivery assignments.']);
     }
 
     public function remittances(Request $request, RemittanceService $service, FinanceSchemaReadiness $schema): JsonResponse
@@ -306,7 +304,7 @@ class RiderApiController extends Controller
                     'status' => $remittance->status,
                     'expected_amount' => (float) $remittance->expected_amount,
                     'submitted_amount' => (float) $remittance->submitted_amount,
-                    'verified_amount' => (float) $remittance->verified_amount,
+                    'verified_amount' => $remittance->verified_amount === null ? null : (float) $remittance->verified_amount,
                 ])->values(),
                 'meta' => ['current_page' => $history->currentPage(), 'last_page' => $history->lastPage(), 'total' => $history->total()],
             ],
@@ -315,9 +313,10 @@ class RiderApiController extends Controller
 
     public function submitRemittance(Request $request, RemittanceService $service): JsonResponse
     {
+        $this->rider($request);
         $data = $request->validate([
-            'collection_ids' => ['required', 'array', 'min:1'],
-            'collection_ids.*' => ['required', 'integer'],
+            'collection_ids' => ['required', 'array', 'size:1'],
+            'collection_ids.*' => ['required', 'integer', 'distinct'],
             'submitted_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
@@ -411,6 +410,9 @@ class RiderApiController extends Controller
                 'conversation_id' => (string) $conversation->id,
                 'buyer_id' => (string) ($other?->id ?? ''),
                 'buyer_name' => $other?->name ?? 'LIKHAE User',
+                'buyer_is_online' => $other && $other->isActive()
+                    && (bool) data_get($other->notification_preferences, 'show_online_status', true)
+                    && Cache::store('database')->has('message-presence:user:'.$other->id),
                 'order_id' => $conversation->order?->order_number,
                 'tracking_code' => $shipment?->tracking_number,
                 'last_message' => $conversation->latestMessage?->body ?? '',

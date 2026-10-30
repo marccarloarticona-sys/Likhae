@@ -6,11 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Finance\SellerSettlement;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\CodCollection;
+use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\LogisticsEarningPool;
+use App\Models\Finance\RiderRemittance;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\FinancialAllocationService;
 use App\Services\Finance\ProductProceedsService;
+use App\Services\Finance\RemittanceService;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\SellerSettlementService;
 use Illuminate\Http\RedirectResponse;
@@ -62,6 +65,18 @@ class AdminFinanceController extends Controller
         }
 
         return back()->with('status', 'Manual Logistics payout recorded with its transfer reference and proof. The Logistics center can confirm receipt.');
+    }
+
+    public function failLogisticsPayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $service): RedirectResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'max:2000']]);
+        try {
+            $service->markLogisticsPayoutFailed($request->user(), $entry, $data['reason']);
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages(['reason' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Failed Logistics transfer recorded. The payout remains requested and can be sent again.');
     }
 
     public function authorizeSellerSettlement(Request $request, SellerSettlement $settlement, SellerSettlementService $service): RedirectResponse
@@ -146,11 +161,26 @@ class AdminFinanceController extends Controller
 
     public function resolveProductProceeds(Request $request, FinancialLedgerEntry $entry, ProductProceedsService $service): RedirectResponse
     {
-        $data = $request->validate(['final_received_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'], 'resolution' => ['required', 'string', 'max:2000']]);
+        $data = $request->validate([
+            'final_received_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
+            'resolution' => ['required', 'string', 'max:2000'],
+            'evidence_file' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+        ]);
+        $evidencePath = $data['evidence_file']->store('cod-cash-evidence', 'local');
+        if (! $evidencePath) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['evidence_file' => 'The cash evidence could not be saved. Please retry.']);
+        }
         try {
-            $service->resolveAdminDiscrepancy($request->user(), $entry, $data['final_received_amount'], $data['resolution']);
+            $resolved = $service->resolveAdminDiscrepancy($request->user(), $entry, $data['final_received_amount'], $data['resolution'], $evidencePath);
+            if (data_get($resolved->metadata, 'discrepancy_resolution.evidence_path') !== $evidencePath) {
+                Storage::disk('local')->delete($evidencePath);
+            }
         } catch (RuntimeException $exception) {
+            Storage::disk('local')->delete($evidencePath);
             throw \Illuminate\Validation\ValidationException::withMessages(['resolution' => $exception->getMessage()]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($evidencePath);
+            throw $exception;
         }
 
         return back()->with('status', 'Product proceeds discrepancy resolution recorded.');
@@ -158,16 +188,64 @@ class AdminFinanceController extends Controller
 
     public function resolveBuyerCodDiscrepancy(Request $request, CodCollection $collection, ProductProceedsService $service, FinancialAllocationService $allocations): RedirectResponse
     {
-        $data = $request->validate(['resolution' => ['required', 'string', 'max:2000']]);
+        $data = $request->validate([
+            'resolution' => ['required', 'string', 'max:2000'],
+            'evidence_file' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+        ]);
+        $evidencePath = $data['evidence_file']->store('cod-cash-evidence', 'local');
+        if (! $evidencePath) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['evidence_file' => 'The cash evidence could not be saved. Please retry.']);
+        }
         try {
-            $resolved = $service->resolveBuyerCollectionDiscrepancy($request->user(), $collection, $data['resolution']);
-            if ($resolved->shipment) {
-                $allocations->initializeForShipment($resolved->shipment->refresh());
-            }
+            $resolved = $service->resolveBuyerCollectionDiscrepancy($request->user(), $collection, $data['resolution'], $evidencePath);
         } catch (RuntimeException $exception) {
+            Storage::disk('local')->delete($evidencePath);
             throw \Illuminate\Validation\ValidationException::withMessages(['resolution' => $exception->getMessage()]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($evidencePath);
+            throw $exception;
+        }
+        if ($resolved->evidence_path !== $evidencePath) {
+            Storage::disk('local')->delete($evidencePath);
+        }
+        if ($resolved->shipment) {
+            $allocations->initializeForShipment($resolved->shipment->refresh());
         }
 
         return back()->with('status', 'Buyer COD discrepancy resolution recorded for this parcel.');
+    }
+
+    public function resolveRiderRemittance(Request $request, RiderRemittance $remittance, RemittanceService $service): RedirectResponse
+    {
+        $data = $request->validate([
+            'final_received_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
+            'resolution' => ['required', 'string', 'max:2000'],
+            'evidence_file' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+        ]);
+        $evidencePath = $data['evidence_file']->store('cod-cash-evidence', 'local');
+        if (! $evidencePath) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['evidence_file' => 'The cash evidence could not be saved. Please retry.']);
+        }
+        try {
+            $resolved = $service->resolveDiscrepancy(
+                $request->user(), $remittance, $data['final_received_amount'], $data['resolution'], $evidencePath,
+            );
+        } catch (RuntimeException $exception) {
+            Storage::disk('local')->delete($evidencePath);
+            throw \Illuminate\Validation\ValidationException::withMessages(['resolution' => $exception->getMessage()]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($evidencePath);
+            throw $exception;
+        }
+        $resolutionAudit = FinanceAuditEvent::query()
+            ->where('event_type', 'RIDER_HANDOFF_DISCREPANCY_RESOLVED')
+            ->where('auditable_type', RiderRemittance::class)
+            ->where('auditable_id', $resolved->id)
+            ->latest('id')->first();
+        if (data_get($resolutionAudit?->after_state, 'resolution_evidence_path') !== $evidencePath) {
+            Storage::disk('local')->delete($evidencePath);
+        }
+
+        return back()->with('status', 'Rider cash discrepancy independently reviewed with evidence.');
     }
 }

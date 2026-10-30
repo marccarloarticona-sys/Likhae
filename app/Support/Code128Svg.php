@@ -20,7 +20,7 @@ class Code128Svg
         '114131', '311141', '411131', '211412', '211214', '211232', '2331112',
     ];
 
-    public static function render(string $value, int $moduleWidth = 2, int $height = 64): string
+    public static function render(string $value, int $moduleWidth = 3, int $height = 88): string
     {
         if ($value === '' || preg_match('/[^\x20-\x7E]/', $value)) {
             throw new InvalidArgumentException('Code 128-B supports printable ASCII characters only.');
@@ -36,7 +36,7 @@ class Code128Svg
         $codes[] = $checksum % 103;
         $codes[] = 106;
 
-        $quietZone = 10;
+        $quietZone = 12;
         $moduleCount = ($quietZone * 2) + array_sum(array_map(
             fn (int $code): int => array_sum(array_map('intval', str_split(self::PATTERNS[$code]))),
             $codes,
@@ -55,6 +55,6 @@ class Code128Svg
             }
         }
 
-        return '<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Code 128 barcode" viewBox="0 0 '.$width.' '.$height.'" width="'.$width.'" height="'.$height.'" style="display:block;width:100%;max-width:'.$width.'px;height:auto;background:#fff" preserveAspectRatio="xMidYMid meet" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><g fill="#000">'.$bars.'</g></svg>';
+        return '<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Code 128 barcode" viewBox="0 0 '.$width.' '.$height.'" width="'.$width.'" height="'.$height.'" style="display:block;width:100%;max-width:100%;height:auto;background:#fff" preserveAspectRatio="xMidYMid meet" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="#fff"/><g fill="#000">'.$bars.'</g></svg>';
     }
 }

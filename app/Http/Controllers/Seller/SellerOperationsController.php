@@ -91,7 +91,7 @@ class SellerOperationsController extends Controller
             }
             $settlementSummary = [
                 'schema_ready' => true,
-                'pending' => (float) (clone $settlements)->whereIn('payout_status', ['PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
+                'pending' => (float) (clone $settlements)->whereIn('payout_status', ['ON_HOLD', 'PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED'])->sum('outstanding_balance'),
                 'authorized' => (float) (clone $settlements)->where('payout_status', 'AUTHORIZED')->sum('seller_payable'),
                 'awaiting_ack' => (float) (clone $recordedPayouts)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount'),
                 'paid' => (float) (clone $recordedPayouts)->where('payout_status', 'PAID')->sum('payout_amount'),
@@ -568,12 +568,12 @@ class SellerOperationsController extends Controller
                 COALESCE(SUM(discount_amount), 0) as discounts,
                 COALESCE(SUM(seller_payable), 0) as seller_payable,
                 COALESCE(SUM(CASE WHEN payout_status = 'PAID' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as settled_payouts,
-                COALESCE(SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED') THEN outstanding_balance ELSE 0 END), 0) as pending_balance,
+                COALESCE(SUM(CASE WHEN payout_status IN ('ON_HOLD', 'PENDING', 'PAYOUT_REQUESTED', 'REVIEW_REQUIRED') THEN outstanding_balance ELSE 0 END), 0) as pending_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'AUTHORIZED' THEN seller_payable ELSE 0 END), 0) as authorized_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'PAYOUT_PENDING_ACK' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as awaiting_ack_balance,
                 COALESCE(SUM(CASE WHEN payout_status = 'PAID' AND paid_at IS NOT NULL{$payoutReferenceGuard} THEN payout_amount ELSE 0 END), 0) as paid_balance,
                 COALESCE(SUM(CASE WHEN payout_status != 'PAID' THEN outstanding_balance ELSE 0 END), 0) as outstanding_balance,
-                SUM(CASE WHEN payout_status IN ('PENDING', 'PAYOUT_REQUESTED', 'AUTHORIZED', 'REVIEW_REQUIRED', 'PAYOUT_PENDING_ACK') THEN 1 ELSE 0 END) as pending_settlement,
+                SUM(CASE WHEN payout_status IN ('ON_HOLD', 'PENDING', 'PAYOUT_REQUESTED', 'AUTHORIZED', 'REVIEW_REQUIRED', 'PAYOUT_PENDING_ACK') THEN 1 ELSE 0 END) as pending_settlement,
                 SUM(CASE WHEN payout_status = 'REVIEW_REQUIRED' THEN 1 ELSE 0 END) as review_required_count
                 SQL)->first();
             $settlementSummary = [

@@ -168,6 +168,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/wallet/payouts/{entry}/proof', [PayoutProofController::class, 'logistics'])->whereNumber('entry')->name('wallet.payout-proof');
         Route::post('/wallet/payouts/{entry}/report-issue', [LogisticsRemittanceController::class, 'reportPayoutIssue'])->whereNumber('entry')->middleware('throttle:5,1')->name('wallet.payout-report-issue');
         Route::post('/remittances/rider-payouts/{entry}/record', [LogisticsRemittanceController::class, 'recordRiderPayout'])->whereNumber('entry')->name('remittances.rider-payouts.record');
+        Route::post('/remittances/rider-payouts/{entry}/fail', [LogisticsRemittanceController::class, 'failRiderPayout'])->whereNumber('entry')->name('remittances.rider-payouts.fail');
         Route::post('/remittances/logistics-payouts/{entry}/acknowledge', [LogisticsRemittanceController::class, 'acknowledgeLogisticsPayout'])->whereNumber('entry')->name('remittances.logistics-payouts.acknowledge');
         Route::post('/remittances/{remittance}/verify', [LogisticsRemittanceController::class, 'verify'])->name('remittances.verify');
         Route::post('/remittances/{remittance}/reconcile', [LogisticsRemittanceController::class, 'reconcile'])->name('remittances.reconcile');
