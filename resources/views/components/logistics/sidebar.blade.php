@@ -196,9 +196,9 @@
             </a>
             <a href="{{ route('logistics.remittances') }}"
                class="sl-nav-link {{ $active === 'remittances' ? 'is-active' : '' }}"
-               data-title="COD Remittances">
+               data-title="Finance">
                 <span class="sl-nav-icon">{!! $icon('reports') !!}</span>
-                <span class="sl-nav-text">COD Remittances</span>
+                <span class="sl-nav-text">Finance</span>
             </a>
             <a href="{{ route('logistics.shipping-rate') }}"
                class="sl-nav-link {{ $active === 'shipping-rate' ? 'is-active' : '' }}"
