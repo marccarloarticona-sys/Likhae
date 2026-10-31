@@ -18,22 +18,21 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
 use App\Services\Maps\RiderLocationService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
-use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Support\RiderVehicleType;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 use RuntimeException;
 
 class RiderApiController extends Controller
 {
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->localRider($request);
-        $offers->expireDuePickupOffers((int) $rider->id);
         $assignments = RiderAssignment::query()->where('rider_profile_id', $rider->id);
         $deliveries = (clone $assignments)->delivery();
         $pendingPickupCount = $schema->sellerPickupBatchesReady()
@@ -82,20 +81,23 @@ class RiderApiController extends Controller
         return $this->paginated($rows, fn (RiderAssignment $assignment): array => $this->assignmentPayload($assignment), ['stats' => $stats]);
     }
 
-    public function pickups(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): JsonResponse
+    public function pickups(Request $request, LogisticsSchemaReadiness $schema): JsonResponse
     {
         $rider = $this->localRider($request);
         if (! $schema->sellerPickupBatchesReady()) {
             return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
         }
 
-        $offers->expireDuePickupOffers((int) $rider->id);
+        $pickupRelations = ['seller.businessAddress', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items'];
+        if ($schema->sellerPickupRequestsReady()) {
+            $pickupRelations[] = 'sellerPickupRequest.pickupAddress';
+        }
 
         $query = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
             ->whereNotNull('seller_profile_id')
             ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])
-            ->with(['seller.businessAddress', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items']);
+            ->with($pickupRelations);
         $rows = $query->paginate($this->perPage($request));
         $statsQuery = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)->whereNotNull('seller_profile_id');
@@ -262,10 +264,11 @@ class RiderApiController extends Controller
             return $this->paginated($rows, fn (RiderEarningPoolParticipant $participant): array => [
                 'date' => $participant->created_at?->format('M d, Y') ?? 'Date unavailable',
                 'reference' => $participant->pool?->shipment?->tracking_number ?? 'Pool #'.$participant->rider_earning_pool_id,
-                'amount' => $participant->share_amount === null ? 0.0 : (float) $participant->share_amount,
+                'amount' => $participant->share_amount === null ? null : (float) $participant->share_amount,
                 'status' => str($participant->status)->headline()->toString(),
             ], [
                 'total' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->sum('share_amount'),
+                'rider' => ['name' => $rider->user?->name ?? ''],
                 'notice' => 'Rider pool shares remain pending until an authorized allocation and payout decision; COD remittance is separate.',
             ]);
         }
@@ -277,7 +280,7 @@ class RiderApiController extends Controller
             'reference' => $earning->riderAssignment?->shipment?->tracking_number ?? 'Assignment #'.$earning->rider_assignment_id,
             'amount' => (float) $earning->amount,
             'status' => str($earning->status)->headline()->toString(),
-        ], ['total' => (float) $rider->earnings()->sum('amount'), 'notice' => 'Recorded earnings from completed pickup and delivery assignments.']);
+        ], ['total' => (float) $rider->earnings()->sum('amount'), 'rider' => ['name' => $rider->user?->name ?? ''], 'notice' => 'Recorded earnings from completed pickup and delivery assignments.']);
     }
 
     public function remittances(Request $request, RemittanceService $service, FinanceSchemaReadiness $schema): JsonResponse
@@ -306,7 +309,7 @@ class RiderApiController extends Controller
                     'status' => $remittance->status,
                     'expected_amount' => (float) $remittance->expected_amount,
                     'submitted_amount' => (float) $remittance->submitted_amount,
-                    'verified_amount' => (float) $remittance->verified_amount,
+                    'verified_amount' => $remittance->verified_amount === null ? null : (float) $remittance->verified_amount,
                 ])->values(),
                 'meta' => ['current_page' => $history->currentPage(), 'last_page' => $history->lastPage(), 'total' => $history->total()],
             ],
@@ -315,9 +318,10 @@ class RiderApiController extends Controller
 
     public function submitRemittance(Request $request, RemittanceService $service): JsonResponse
     {
+        $this->rider($request);
         $data = $request->validate([
-            'collection_ids' => ['required', 'array', 'min:1'],
-            'collection_ids.*' => ['required', 'integer'],
+            'collection_ids' => ['required', 'array', 'size:1'],
+            'collection_ids.*' => ['required', 'integer', 'distinct'],
             'submitted_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
@@ -411,6 +415,9 @@ class RiderApiController extends Controller
                 'conversation_id' => (string) $conversation->id,
                 'buyer_id' => (string) ($other?->id ?? ''),
                 'buyer_name' => $other?->name ?? 'LIKHAE User',
+                'buyer_is_online' => $other && $other->isActive()
+                    && (bool) data_get($other->notification_preferences, 'show_online_status', true)
+                    && Cache::store('database')->has('message-presence:user:'.$other->id),
                 'order_id' => $conversation->order?->order_number,
                 'tracking_code' => $shipment?->tracking_number,
                 'last_message' => $conversation->latestMessage?->body ?? '',
@@ -485,7 +492,7 @@ class RiderApiController extends Controller
     {
         abort_unless($request->user()?->isAccountType(User::TYPE_RIDER), 403, 'Rider access is required.');
         $rider = $request->user()->riderProfile;
-        abort_unless($rider && $rider->status === 'ACTIVE', 403, 'An active rider profile is required.');
+        abort_unless($rider && in_array($rider->status, ['ACTIVE', 'WARNED'], true), 403, 'An active rider profile is required.');
         return $rider;
     }
 
@@ -520,6 +527,9 @@ class RiderApiController extends Controller
 
     private function pickupBatchPayload(RiderLocalTrip $trip): array
     {
+        $pickupRequest = $trip->relationLoaded('sellerPickupRequest') ? $trip->sellerPickupRequest : null;
+        $pickupAddress = $pickupRequest?->pickupAddress ?? $trip->seller?->businessAddress;
+        $centerAddress = $trip->logisticsCenter?->address;
         $items = $trip->items->map(function (RiderLocalTripItem $item): array {
             $assignment = $item->riderAssignment;
             $shipment = $assignment?->shipment;
@@ -541,9 +551,13 @@ class RiderApiController extends Controller
             'batch_number' => 'P-'.$trip->id,
             'status' => $trip->status,
             'seller' => $trip->seller?->business_name,
-            'pickup_address' => $trip->seller?->businessAddress?->formatted(),
+            'pickup_address' => $pickupAddress?->formatted(),
+            'seller_latitude' => $pickupAddress?->latitude,
+            'seller_longitude' => $pickupAddress?->longitude,
             'logistics_center' => $trip->logisticsCenter?->business_name,
-            'destination_address' => $trip->logisticsCenter?->address?->formatted(),
+            'destination_address' => $centerAddress?->formatted(),
+            'logistics_center_latitude' => $centerAddress?->latitude,
+            'logistics_center_longitude' => $centerAddress?->longitude,
             'parcel_count' => $items->count(),
             'approved_capacity' => $trip->approved_parcel_capacity,
             'collected_count' => $collected,

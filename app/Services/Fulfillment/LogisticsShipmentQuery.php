@@ -4,7 +4,6 @@ namespace App\Services\Fulfillment;
 
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
-use App\Models\Logistics\ShipmentTransferLeg;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -14,7 +13,7 @@ use Illuminate\Validation\Rule;
  * One row per shipment, including item-level parcels. COMPLETED stays delivered;
  * RETURNED stays failed. PLACED, CONFIRMED and PREPARING are pre-logistics
  * stages; a cancelled seller order is excluded from operational counts.
- * A manifest/leg grants visibility but is never another parcel row.
+ * Current operational ownership and transfer history are separate scopes.
  */
 final class LogisticsShipmentQuery
 {
@@ -49,7 +48,7 @@ final class LogisticsShipmentQuery
         return $filters;
     }
 
-    public function visibleTo(LogisticsCenter $center): Builder
+    public function assignedTo(LogisticsCenter $center): Builder
     {
         return Shipment::query()->where(function (Builder $query) use ($center): void {
             $query->where('logistics_center_id', $center->id)
@@ -57,22 +56,26 @@ final class LogisticsShipmentQuery
                     ->whereNull('logistics_center_id')
                     ->whereHas('serviceArea', fn (Builder $area) => $area
                         ->where('logistics_center_id', $center->id)));
-
-            if (app(LogisticsSchemaReadiness::class)->automaticRoutingReady()) {
-                // Transfer legs grant both hubs an operations history. A cancelled
-                // leg alone does not grant access; manifests are never counted as parcels.
-                $query->orWhereHas('transferLegs', fn (Builder $leg) => $leg
-                    ->where('status', '!=', ShipmentTransferLeg::CANCELLED)
-                    ->where(fn (Builder $hubs) => $hubs
-                        ->where('origin_logistics_center_id', $center->id)
-                        ->orWhere('destination_logistics_center_id', $center->id)));
-            }
         });
+    }
+
+    /** Historical transfer membership grants history access, not parcel custody. */
+    public function transferHistoryFor(LogisticsCenter $center): Builder
+    {
+        if (! app(LogisticsSchemaReadiness::class)->automaticRoutingReady()) {
+            return Shipment::query()->whereRaw('1 = 0');
+        }
+
+        return Shipment::query()->whereHas('transferLegs', fn (Builder $leg) => $leg
+            ->where('status', '!=', 'CANCELLED')
+            ->where(fn (Builder $hubs) => $hubs
+                ->where('origin_logistics_center_id', $center->id)
+                ->orWhere('destination_logistics_center_id', $center->id)));
     }
 
     public function operationalFor(LogisticsCenter $center): Builder
     {
-        return $this->visibleTo($center)
+        return $this->assignedTo($center)
             ->whereHas('sellerOrder', fn (Builder $order) => $order->where('status', '!=', 'CANCELLED'));
     }
 

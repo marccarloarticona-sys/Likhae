@@ -59,7 +59,7 @@
                             @elseif($receivedAtCenter)
                                 <span class="text-sm font-semibold text-green-700">✓ Received at Sorting Center</span>
                             @else
-                                <span class="text-sm font-semibold text-amber-700">Intake requires PICKED_UP</span>
+                                <span class="text-sm font-semibold text-amber-700">Intake blocked · review {{ str($shipment?->current_status)->headline() }} status</span>
                             @endif
                         </div>
                     @endforeach
@@ -104,7 +104,7 @@ document.querySelectorAll('[data-batch-scan-input]').forEach((input) => {
 });
 
 document.addEventListener('parcel-scanner:success', (event) => {
-    const { tracking } = event.detail || {};
+    const { tracking, current_status: currentStatus = '' } = event.detail || {};
     if (!tracking) return;
 
     const row = [...document.querySelectorAll('[data-receive-row]')]
@@ -114,7 +114,10 @@ document.addEventListener('parcel-scanner:success', (event) => {
         const status = row.querySelector('[data-receive-status]');
         if (status) {
             status.className = 'mt-1 text-xs font-semibold text-green-700';
-            status.textContent = 'Received at Sorting Center';
+            const statusLabel = String(currentStatus).toLowerCase().replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+            status.textContent = currentStatus && currentStatus !== 'AT_SORTING_CENTER'
+                ? `Received at Sorting Center · Current status: ${statusLabel}`
+                : 'Received at Sorting Center';
         }
         row.querySelector('[data-receive-form]')?.remove();
 

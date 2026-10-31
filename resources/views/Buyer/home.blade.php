@@ -855,6 +855,38 @@
         background: var(--lk-border-strong);
     }
 
+    .lk-home-page .lk-recommendation-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .lk-home-page .lk-recommendation-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .lk-home-page .lk-recommendation-controls[hidden] {
+        display: none;
+    }
+
+    .lk-home-page .lk-recommendation-pause {
+        border: 0;
+        background: transparent;
+        color: var(--lk-brown);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 7px 4px;
+    }
+
+    .lk-home-page [data-recommendation-loop].is-looping {
+        scroll-snap-type: none;
+        scroll-behavior: auto;
+    }
+
     /* Buyer Home editorial storefront. Keep these rules inside the main page content. */
     .lk-home-page {
         --lk-home-ivory: #fbf8f3;
@@ -2349,18 +2381,27 @@
                 </p>
             </div>
 
-            <a
-                href="{{ route('buyer.products', ['sort' => 'best-rated']) }}"
-                class="lk-text-link"
-            >
-                See All
-                <span aria-hidden="true">→</span>
-            </a>
+            <div class="lk-recommendation-actions">
+                @if ($recommendedProducts->count() > 1)
+                    <div class="lk-recommendation-controls" data-recommendation-controls role="group" aria-label="Recommended product controls" hidden>
+                        <button type="button" class="lk-home-category-arrow" data-recommendation-previous aria-controls="recommended-products-scroll" aria-label="Previous recommended products">&#8592;</button>
+                        <button type="button" class="lk-home-category-arrow" data-recommendation-next aria-controls="recommended-products-scroll" aria-label="Next recommended products">&#8594;</button>
+                        <button type="button" class="lk-recommendation-pause" data-recommendation-pause aria-controls="recommended-products-scroll" aria-pressed="false">Pause</button>
+                    </div>
+                @endif
+                <a
+                    href="{{ route('buyer.products', ['sort' => 'best-rated']) }}"
+                    class="lk-text-link"
+                >
+                    See All
+                    <span aria-hidden="true">→</span>
+                </a>
+            </div>
         </div>
 
         @if ($recommendedProducts->isNotEmpty())
-            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Recommended products" tabindex="0">
-                @foreach ($recommendedProducts->take(4) as $product)
+            <div id="recommended-products-scroll" class="lk-product-grid lk-home-product-carousel" data-recommendation-loop role="region" aria-label="Recommended products" tabindex="0">
+                @foreach ($recommendedProducts as $product)
                     <x-buyer.product-card :product="$product" home />
                 @endforeach
             </div>
@@ -2390,6 +2431,130 @@
 @push('scripts')
 <script>
     (() => {
+        const row = document.querySelector('[data-recommendation-loop]');
+        const controls = document.querySelector('[data-recommendation-controls]');
+        const originalCards = row ? Array.from(row.children) : [];
+
+        if (row && controls && originalCards.length > 1) {
+            const pauseButton = controls.querySelector('[data-recommendation-pause]');
+            const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+            let paused = reducedMotion.matches;
+            let pointerDown = false;
+            let hovered = false;
+            let interactionUntil = 0;
+            let groupCount = 0;
+            let groupWidth = 0;
+            let lastFrame = 0;
+            let fractionalMovement = 0;
+            let visible = true;
+            let resizeTimer;
+
+            const setPauseLabel = () => {
+                pauseButton.textContent = paused ? 'Play' : 'Pause';
+                pauseButton.setAttribute('aria-pressed', String(paused));
+                pauseButton.setAttribute('aria-label', paused ? 'Play automatic scrolling' : 'Pause automatic scrolling');
+            };
+            const copyCard = (card) => {
+                const copy = card.cloneNode(true);
+                copy.dataset.recommendationCopy = '';
+                copy.setAttribute('aria-hidden', 'true');
+                copy.querySelectorAll('a, button, input, select, textarea, [tabindex]').forEach((element) => {
+                    element.setAttribute('tabindex', '-1');
+                });
+                return copy;
+            };
+            const measure = () => {
+                const start = row.children[groupCount];
+                const next = row.children[groupCount * 2];
+                groupWidth = start && next ? next.offsetLeft - start.offsetLeft : 0;
+            };
+            const buildLoop = () => {
+                row.querySelectorAll('[data-recommendation-copy]').forEach((copy) => copy.remove());
+                const step = originalCards[0].getBoundingClientRect().width + (parseFloat(getComputedStyle(row).columnGap) || 0);
+                if (!step || !row.clientWidth) return;
+                const repeats = Math.max(1, Math.ceil(row.clientWidth / (step * originalCards.length)) + 1);
+                groupCount = repeats * originalCards.length;
+                const before = document.createDocumentFragment();
+                const after = document.createDocumentFragment();
+                const newCopies = [];
+                const addCopies = (target, count) => {
+                    for (let repeat = 0; repeat < count; repeat++) {
+                        originalCards.forEach((card) => {
+                            const copy = copyCard(card);
+                            newCopies.push(copy);
+                            target.appendChild(copy);
+                        });
+                    }
+                };
+                addCopies(before, repeats);
+                addCopies(after, repeats - 1);
+                addCopies(after, repeats);
+                row.prepend(before);
+                row.append(after);
+                row.classList.add('is-looping');
+                measure();
+                row.scrollLeft = groupWidth;
+                controls.hidden = false;
+                // The buyer script binds new cards through this event after initial page load.
+                if (document.readyState !== 'loading') {
+                    newCopies.forEach((copy) => document.dispatchEvent(new CustomEvent('catalog:results-updated', { detail: { root: copy } })));
+                }
+            };
+            const normalizeScroll = () => {
+                if (!groupWidth) return;
+                if (row.scrollLeft < groupWidth || row.scrollLeft >= groupWidth * 2) {
+                    row.scrollLeft = groupWidth + (((row.scrollLeft - groupWidth) % groupWidth) + groupWidth) % groupWidth;
+                }
+            };
+            const deferAuto = () => { interactionUntil = performance.now() + 4000; };
+            const move = (direction) => {
+                deferAuto();
+                const step = originalCards[0].getBoundingClientRect().width + (parseFloat(getComputedStyle(row).columnGap) || 0);
+                row.scrollBy({ left: direction * step, behavior: 'auto' });
+            };
+
+            buildLoop();
+            setPauseLabel();
+            row.addEventListener('scroll', normalizeScroll, { passive: true });
+            row.addEventListener('pointerenter', () => { hovered = true; });
+            row.addEventListener('pointerleave', () => { hovered = false; });
+            row.addEventListener('pointerdown', () => { pointerDown = true; deferAuto(); });
+            window.addEventListener('pointerup', () => { if (pointerDown) { pointerDown = false; deferAuto(); } });
+            window.addEventListener('pointercancel', () => { if (pointerDown) { pointerDown = false; deferAuto(); } });
+            row.addEventListener('wheel', deferAuto, { passive: true });
+            row.addEventListener('keydown', deferAuto);
+            controls.querySelector('[data-recommendation-previous]').addEventListener('click', () => move(-1));
+            controls.querySelector('[data-recommendation-next]').addEventListener('click', () => move(1));
+            pauseButton.addEventListener('click', () => { paused = !paused; setPauseLabel(); });
+            reducedMotion.addEventListener('change', (event) => { if (event.matches) { paused = true; setPauseLabel(); } });
+            if ('IntersectionObserver' in window) {
+                new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; }).observe(row);
+            }
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => {
+                    measure();
+                    if (groupWidth <= row.clientWidth) buildLoop();
+                    else normalizeScroll();
+                    deferAuto();
+                }, 150);
+            });
+            const animate = (now) => {
+                if (lastFrame && visible && !paused && !hovered && !pointerDown && !row.contains(document.activeElement)
+                    && !controls.contains(document.activeElement) && !document.hidden && now >= interactionUntil) {
+                    fractionalMovement += Math.min(now - lastFrame, 50) * 0.03;
+                    const pixels = Math.floor(fractionalMovement);
+                    if (pixels) {
+                        row.scrollLeft += pixels;
+                        fractionalMovement -= pixels;
+                    }
+                }
+                lastFrame = now;
+                requestAnimationFrame(animate);
+            };
+            requestAnimationFrame(animate);
+        }
+
         document.querySelectorAll('[data-category-carousel]').forEach((carousel) => {
             const pages = Array.from(carousel.querySelectorAll('[data-category-page]'));
             const dots = Array.from(carousel.querySelectorAll('[data-category-dot]'));

@@ -47,6 +47,12 @@ Schedule::command('likhae:expire-rider-assignment-offers')
     ->withoutOverlapping()
     ->onSuccess($recordSchedulerHeartbeat('likhae:expire-rider-assignment-offers', 'success'))
     ->onFailure($recordSchedulerHeartbeat('likhae:expire-rider-assignment-offers', 'failure'));
+Schedule::command('likhae:warn-overdue-rider-cod-remittances')
+    ->everyMinute()
+    ->timezone('Asia/Manila')
+    ->withoutOverlapping()
+    ->onSuccess($recordSchedulerHeartbeat('likhae:warn-overdue-rider-cod-remittances', 'success'))
+    ->onFailure($recordSchedulerHeartbeat('likhae:warn-overdue-rider-cod-remittances', 'failure'));
 Schedule::command('likhae:expire-account-suspensions')
     ->everyMinute()
     ->timezone('Asia/Manila')

@@ -17,6 +17,7 @@ use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\ReturnRefundWorkflowService;
 use App\Services\Finance\PlatformCampaignBudgetService;
+use App\Services\Finance\SellerSettlementService;
 use App\Support\FinancialRules;
 use App\Support\OrderItemParcelAmount;
 use Illuminate\Support\Facades\DB;
@@ -253,6 +254,10 @@ class CashRefundWorkflowService
                     ],
                 ],
             );
+        }
+
+        if (FinancialRules::cents($entries[0]['amount']) > 0 && $sellerRequest->seller_profile_id) {
+            app(SellerSettlementService::class)->applyRefundDebtToUnpaidSettlements((int) $sellerRequest->seller_profile_id, $actor);
         }
 
         $this->recordDeliveryFeeReversals($obligation, $sellerRequest, $sellerOrder, $allocation, $allocationShipmentId, $actor);

@@ -82,7 +82,6 @@
                 @if(($sidebarCounts['pickups'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['pickups'] }}</span>@endif
             </a>
         </div>
-
         <div class="sl-nav-section">
             <span class="sl-nav-label">Deliveries</span>
 
@@ -125,6 +124,7 @@
         </div>
         @endif
 
+        @unless($canUseHubTransfers)
         <div class="sl-nav-section">
             <span class="sl-nav-label">Wallet</span>
 
@@ -142,6 +142,7 @@
                 <span class="sl-nav-text">COD Remittances</span>
             </a>
         </div>
+        @endunless
 
         <div class="sl-nav-section">
             <span class="sl-nav-label">Account</span>

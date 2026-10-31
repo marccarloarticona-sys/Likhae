@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
 use App\Models\User;
+use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -94,7 +95,11 @@ class LogisticsApiController extends Controller
         ]);
     }
 
-    public function receiveScan(Request $request, ShipmentWorkflowService $workflow): JsonResponse
+    public function receiveScan(
+        Request $request,
+        ShipmentWorkflowService $workflow,
+        LocalRiderTripService $localTrips,
+    ): JsonResponse
     {
         $center = $this->center($request);
         $data = $request->validate([
@@ -121,6 +126,10 @@ class LogisticsApiController extends Controller
                 'message' => $exception->getMessage(),
             ], 422);
         }
+
+        // Reconcile the seller pickup batch after center intake. This also
+        // repairs batches left en route by earlier API versions on retry scans.
+        $localTrips->syncPickupIntake($received);
 
         return response()->json([
             'success' => true,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Rider;
 use App\Http\Controllers\Controller;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\RemittanceService;
+use App\Support\RiderVehicleType;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -13,10 +14,13 @@ use RuntimeException;
 
 class RiderRemittanceController extends Controller
 {
-    public function index(Request $request, RemittanceService $remittances, FinanceSchemaReadiness $schema): View
+    public function index(Request $request, RemittanceService $remittances, FinanceSchemaReadiness $schema): View|RedirectResponse
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
+        if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
+            return redirect()->route('rider.dashboard')->with('status', 'Interhub drivers do not remit parcel COD. Timekeeping and payroll are on your Dashboard.');
+        }
         $schemaReady = $schema->step6Ready();
         $history = $schemaReady
             ? $rider->remittances()->with(['items.codCollection.shipment', 'items.codCollection.order'])->latest()->paginate(15)
@@ -37,6 +41,15 @@ class RiderRemittanceController extends Controller
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
+        abort_unless(! RiderVehicleType::isInterLogistics($rider->vehicle_type), 403, 'Interhub drivers do not remit parcel COD.');
+        $submittedAmount = $request->input('submitted_amount');
+        if (is_string($submittedAmount) && str_contains($submittedAmount, ',')) {
+            $submittedAmount = trim($submittedAmount);
+            if (preg_match('/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/D', $submittedAmount)) {
+                $request->merge(['submitted_amount' => str_replace(',', '', $submittedAmount)]);
+            }
+        }
+
         $data = $request->validate([
             'collection_ids' => ['required', 'array', 'min:1'],
             'collection_ids.*' => ['required', 'integer'],
@@ -47,9 +60,12 @@ class RiderRemittanceController extends Controller
         try {
             $remittances->submit($request->user(), $data['collection_ids'], $data['submitted_amount'], $data['notes'] ?? null);
         } catch (RuntimeException $exception) {
-            throw \Illuminate\Validation\ValidationException::withMessages(['collection_ids' => $exception->getMessage()]);
+            $field = str_starts_with($exception->getMessage(), 'The submitted cash must equal the selected COD due total')
+                ? 'submitted_amount'
+                : 'collection_ids';
+            throw \Illuminate\Validation\ValidationException::withMessages([$field => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Parcel remittance submitted. Your destination logistics center must acknowledge the received amount.');
+        return back()->with('status', 'Selected parcel remittances submitted. Your destination logistics center must acknowledge the received amount.');
     }
 }

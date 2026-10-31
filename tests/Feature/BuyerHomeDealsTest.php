@@ -20,6 +20,24 @@ class BuyerHomeDealsTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_recommendations_render_all_available_cards_and_loop_controls(): void
+    {
+        $buyer = $this->seededBuyer();
+        for ($index = 1; $index <= 11; $index++) {
+            $this->product('Recommendation '.$index, 'none', 0, 100, 3);
+        }
+
+        $response = $this->actingAs($buyer)->get(route('buyer.home'))->assertOk();
+        $document = new \DOMDocument;
+        @$document->loadHTML($response->getContent());
+        $xpath = new \DOMXPath($document);
+        $this->assertSame(8, $xpath->query('//*[@data-recommendation-loop]/article[@data-product-card]')->length);
+        $this->assertSame(1, $xpath->query('//*[@data-recommendation-previous]')->length);
+        $this->assertSame(1, $xpath->query('//*[@data-recommendation-next]')->length);
+        $this->assertSame(1, $xpath->query('//*[@data-recommendation-pause]')->length);
+        $this->assertSame(8, $xpath->query('//*[@data-recommendation-loop]/article//form[@data-cart-add-form]')->length);
+    }
+
     public function test_home_shows_available_discounted_products_and_no_fake_countdown(): void
     {
         $buyer = $this->seededBuyer();

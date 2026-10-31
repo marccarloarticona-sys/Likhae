@@ -119,16 +119,22 @@ class RiderTransferApiController extends Controller
         LogisticsSchemaReadiness $schema,
         TransferManifestService $service,
     ): JsonResponse {
+        $data = $request->validate([
+            'scanned_codes' => ['required', 'array', 'min:1', 'max:100'],
+            'scanned_codes.*' => ['required', 'string', 'max:150'],
+            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+        ]);
         $rider = $this->interLogisticsRider($request);
         if (! $schema->transferReady()) {
             return $this->schemaUnavailable();
         }
 
         try {
-            // The origin hub records and releases parcel scans before the rider can depart.
             $result = $service->driverStart(
                 $request->user(),
                 $this->assignedManifest($rider, $manifest),
+                $data['scanned_codes'],
+                strtoupper((string) ($data['scan_method'] ?? 'MANUAL')),
             );
         } catch (RuntimeException $exception) {
             return $this->workflowError($exception);
@@ -151,7 +157,7 @@ class RiderTransferApiController extends Controller
         $rider = $user->riderProfile;
         abort_unless(
             $rider instanceof RiderProfile
-                && $rider->status === 'ACTIVE'
+                && in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 && RiderVehicleType::isInterLogistics($rider->vehicle_type),
             403,
             'An active inter-logistics rider vehicle is required.',

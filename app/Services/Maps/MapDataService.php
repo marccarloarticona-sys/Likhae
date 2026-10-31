@@ -2,6 +2,7 @@
 
 namespace App\Services\Maps;
 
+use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
@@ -19,7 +20,7 @@ class MapDataService
      * shipment destination. No viewer receives a different user's shipment
      * coordinates through this service.
      */
-    public function forShipment(?Shipment $shipment, bool $includeDestination = true, bool $includeSeller = false, ?User $viewer = null): array
+    public function forShipment(?Shipment $shipment, bool $includeDestination = true, bool $includeSeller = false, ?User $viewer = null, ?Address $pickupAddress = null): array
     {
         if (! $shipment) {
             return [];
@@ -55,7 +56,7 @@ class MapDataService
         }
 
         if ($includeSeller) {
-            $marker = $this->addressMarker($shipment->sellerOrder?->sellerProfile?->businessAddress, 'seller-'.$shipment->id, 'Seller pickup address');
+            $marker = $this->addressMarker($pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress, 'seller-'.$shipment->id, 'Seller pickup address');
             if ($marker) {
                 $marker['kind'] = 'seller';
                 $marker['target_kind'] = 'seller';
@@ -229,7 +230,8 @@ class MapDataService
         if ($viewer->isAccountType(User::TYPE_LOGISTICS)) {
             $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
 
-            return (int) $center?->owner_user_id === (int) $viewer->id;
+            return (int) $center?->owner_user_id === (int) $viewer->id
+                && (int) $assignment->riderProfile?->logistics_center_id === (int) $center?->id;
         }
 
         return false;
@@ -531,7 +533,8 @@ class MapDataService
 
         if ($viewer->isAccountType('LOGISTICS')) {
             $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
-            return (int) $center?->owner_user_id === (int) $viewer->id;
+            return (int) $center?->owner_user_id === (int) $viewer->id
+                && (int) $assignment->riderProfile?->logistics_center_id === (int) $center?->id;
         }
 
         return false;

@@ -39,6 +39,7 @@ final class FinanceSchemaReadiness
         foreach ([
             'payout_method', 'payout_external_reference', 'payout_failure_reason', 'payout_failed_at',
             'payout_failed_by_user_id', 'seller_acknowledged_at', 'seller_acknowledged_by_user_id',
+            'payout_proof_path', 'payout_proof_name',
         ] as $column) {
             if (! Schema::hasColumn('seller_settlements', $column)) {
                 return false;
@@ -55,6 +56,20 @@ final class FinanceSchemaReadiness
         }
 
         return true;
+    }
+
+    public function multiHubLogisticsPoolsReady(): bool
+    {
+        if (! Schema::hasTable('logistics_earning_pools')) {
+            return false;
+        }
+
+        $indexes = collect(Schema::getIndexes('logistics_earning_pools'));
+
+        return $indexes->contains(fn (array $index): bool => $index['unique']
+                && $index['columns'] === ['shipment_financial_allocation_id', 'logistics_center_id'])
+            && ! $indexes->contains(fn (array $index): bool => $index['unique'] && $index['columns'] === ['shipment_id'])
+            && ! $indexes->contains(fn (array $index): bool => $index['unique'] && $index['columns'] === ['shipment_financial_allocation_id']);
     }
 
     public function sellerPayoutProofReady(): bool

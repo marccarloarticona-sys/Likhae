@@ -18,6 +18,7 @@ class CodCollection extends Model
     public const COLLECTED = 'COLLECTED';
     public const FAILED = 'FAILED';
     public const REMITTED = 'REMITTED';
+    public const REMITTED_RIDER_TOPUP = 'REMITTED_RIDER_TOPUP';
     public const REMITTED_DISCREPANCY = 'REMITTED_DISCREPANCY';
     public const DISCREPANCY = 'DISCREPANCY';
     public const VOID = 'VOID';

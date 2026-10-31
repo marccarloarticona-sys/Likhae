@@ -44,23 +44,29 @@
         @endif
     </section>
 
-    @if($manifest->status === 'IN_TRANSIT')
+    @if(in_array($manifest->status, ['RELEASED', 'IN_TRANSIT'], true))
         <section class="rounded-xl border border-line bg-surface p-5">
-            <h2 class="text-base font-semibold text-ink">Live route to destination hub</h2>
-            <p class="mt-1 text-sm text-muted">Your device location updates on this map while this page stays open. Allow location access to see your position and the receiving hub.</p>
-            @if($mapMarkers)
-                <x-shared.mapbox
-                    :markers="$mapMarkers"
-                    title="Driver location and destination"
-                    height="340px"
-                    user-location-target="destination"
-                    :rider-gps="true"
-                    :live-device-gps="true"
-                    :navigation="true"
-                />
+            <h2 class="text-base font-semibold text-ink">Your location to destination route</h2>
+            @if($manifest->status === 'RELEASED')
+                <p class="mt-1 text-sm text-muted">Allow device location access to see your exact current GPS position and the route to {{ $manifest->destinationLogisticsCenter?->business_name }} before starting the transfer.</p>
             @else
-                <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The destination hub has no saved map pin yet. Ask Logistics to add coordinates to the hub address.</p>
+                <p class="mt-1 text-sm text-muted">Your exact live GPS position is the route starting point. Keep this page open and allow device location access while traveling to {{ $manifest->destinationLogisticsCenter?->business_name }}.</p>
             @endif
+            <x-shared.mapbox
+                :markers="$mapMarkers"
+                title="Your live GPS position and destination hub"
+                height="340px"
+                user-location-target="destination"
+                :allow-user-location="false"
+                :rider-gps="true"
+                :live-device-gps="true"
+                :live-tracking="$manifest->status === 'IN_TRANSIT'"
+                :navigation="true"
+                :order-route="false"
+            />
+            @unless($mapRouteReady)
+                <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The receiving hub needs saved map coordinates before a route can be calculated. Your live GPS position can still appear on the map.</p>
+            @endunless
         </section>
     @endif
 

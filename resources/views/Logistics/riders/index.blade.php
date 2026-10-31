@@ -78,7 +78,7 @@
                         <span class="mt-1 block text-[8px] text-muted">{{ $rider->completed_deliveries_today_count }} deliveries completed today</span>
                         <span class="mt-1 block text-[8px] {{ $rider->is_online ? 'text-emerald-700' : 'text-muted' }}">{{ $rider->is_online ? 'Online and available' : 'Offline' }}</span>
                     @elseif($rider->vehicleRole() === 'INTER_LOGISTICS')
-                        <span class="mt-1 block text-[8px] text-muted">Approved capacity: {{ $rider->approved_parcel_capacity ?? '—' }} parcels · {{ $rider->approved_weight_capacity_kg ?? '—' }} kg · {{ $rider->approved_volume_capacity_liters ?? '—' }} L</span>
+                        <span class="mt-1 block text-[8px] text-muted">Approved capacity: {{ $rider->approved_parcel_capacity ?? '—' }} parcels · {{ $rider->approved_weight_capacity_kg ?? '—' }} kg</span>
                     @endif
                     @if(($rider->pending_profile_update_count ?? 0) > 0)
                         <span class="mt-2 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[8px] font-semibold text-amber-900">{{ $rider->pending_profile_update_count }} profile update{{ $rider->pending_profile_update_count === 1 ? '' : 's' }} awaiting review</span>

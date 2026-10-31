@@ -117,8 +117,8 @@
                         <input type="hidden" name="action" value="delivery_success">
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             Cash received from buyer
-                            <input type="number" name="collected_amount" min="0" step="0.01" value="{{ old('collected_amount') }}" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-cash-input>
-                            <small class="font-normal text-muted">Enter the actual cash received. The server compares it with the authoritative COD amount; do not deduct rider earnings.</small>
+                            <input type="text" name="collected_amount" inputmode="decimal" autocomplete="off" placeholder="{{ number_format((float) $parcel['cod_expected'], 2) }}" value="{{ old('collected_amount') }}" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-cash-input>
+                            <small class="font-normal text-muted">Enter the actual cash received. Thousands separators and two decimal places are formatted for you. The server compares the numeric amount with the COD due; do not deduct rider earnings.</small>
                         </label>
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             Proof of delivery photo
@@ -195,7 +195,47 @@
         let confirmedDelivery = false;
         let previewUrl = null;
 
+        const formatCashInput = (complete = false) => {
+            if (!cashInput) return;
+            const original = cashInput.value;
+            const caret = cashInput.selectionStart ?? original.length;
+            const logicalCaret = original.slice(0, caret).replaceAll(',', '').replace(/[^\d.]/g, '').length;
+            let raw = original.replaceAll(',', '').replace(/[^\d.]/g, '');
+            const decimalIndex = raw.indexOf('.');
+            if (decimalIndex >= 0) {
+                raw = raw.slice(0, decimalIndex + 1) + raw.slice(decimalIndex + 1).replaceAll('.', '');
+            }
+            if (raw.startsWith('.')) raw = `0${raw}`;
+
+            let hasDecimal = raw.includes('.');
+            let [whole, fraction = ''] = raw.split('.');
+            whole ||= hasDecimal ? '0' : '';
+            fraction = fraction.slice(0, 2);
+            if (complete && raw) {
+                hasDecimal = true;
+                fraction = fraction.padEnd(2, '0');
+            }
+
+            const groupedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            const formatted = `${groupedWhole}${hasDecimal ? `.${fraction}` : ''}`;
+            cashInput.value = formatted;
+
+            if (document.activeElement === cashInput && typeof cashInput.setSelectionRange === 'function') {
+                let position = 0;
+                let logicalPosition = 0;
+                while (position < formatted.length && logicalPosition < logicalCaret) {
+                    if (formatted[position] !== ',') logicalPosition++;
+                    position++;
+                }
+                cashInput.setSelectionRange(position, position);
+            }
+        };
+
         if (!form || !input || !status || !submit) return;
+
+        cashInput?.addEventListener('input', () => formatCashInput());
+        cashInput?.addEventListener('blur', () => formatCashInput(true));
+        formatCashInput(true);
 
         const setStatus = (message, isError = false) => {
             status.textContent = message;
@@ -410,7 +450,10 @@
                 }
                 return;
             }
-            if (confirmedCash) confirmedCash.textContent = `₱${Number(cashInput.value || 0).toFixed(2)}`;
+            if (confirmedCash) {
+                const numericCash = Number((cashInput?.value || '').replaceAll(',', '') || 0);
+                confirmedCash.textContent = `₱${numericCash.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            }
             if (confirmedProof) confirmedProof.textContent = input.files.length ? input.files[0].name : 'Not attached';
             confirmDialog.showModal();
         });

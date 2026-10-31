@@ -8,6 +8,7 @@ use App\Models\Buyer\Order;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentEvent;
 use App\Models\User;
+use App\Services\Finance\SellerSettlementService;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Schema;
 
 class BuyerOrderActionService
 {
+    public function __construct(private readonly SellerSettlementService $sellerSettlements) {}
+
     public const ACTIVE_DISPUTE_STATUSES = ['OPEN', 'UNDER_REVIEW'];
 
     public const AUTOMATIC_RECEIPT_NOTE = 'Order automatically confirmed received after 3 days without Buyer confirmation.';
@@ -77,7 +80,7 @@ class BuyerOrderActionService
             ? $order->returnRefundRequests->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED'])
             : collect();
         $activeCase = $activeDispute ?: $activeRequest;
-        $confirmableShipmentIds = $this->confirmableShipmentIdsFor($order, $shipments, $activeDisputes, $activeRequests);
+        $confirmableShipmentIds = $this->confirmableShipmentIdsFor($order, $shipments);
         $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
         $canCancel = in_array($order->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true)
             && $activeSellerOrders->isNotEmpty()
@@ -95,12 +98,11 @@ class BuyerOrderActionService
             'active_dispute' => $activeCase,
             'latest_request' => $latestRequest,
             'confirmable_shipment_ids' => $confirmableShipmentIds,
-            'can_confirm_received' => $order->status === 'PROCESSING' && $allAwaitingReceipt && ! $activeCase,
+            'can_confirm_received' => $order->status === 'PROCESSING' && $allAwaitingReceipt,
             'can_auto_confirm_received' => $order->status === 'PROCESSING'
                 && $allDeliveredWithTimestamps
                 && $autoConfirmAt instanceof CarbonInterface
-                && now()->greaterThanOrEqualTo($autoConfirmAt)
-                && ! $activeCase,
+                && now()->greaterThanOrEqualTo($autoConfirmAt),
             'can_request_return' => $returnRefundStorageReady
                 && in_array($order->status, ['PROCESSING', 'COMPLETED'], true)
                 && $allDelivered
@@ -128,19 +130,7 @@ class BuyerOrderActionService
             $order->loadMissing('returnRefundRequests.items', 'returnRefundRequests.sellerRequests.items');
         }
 
-        $activeDisputes = $order->disputes
-            ->where('type', 'RETURN_REFUND')
-            ->whereIn('status', self::ACTIVE_DISPUTE_STATUSES);
-        $activeRequests = $returnRefundStorageReady
-            ? $order->returnRefundRequests->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED'])
-            : collect();
-
-        return $this->confirmableShipmentIdsFor(
-            $order,
-            $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments),
-            $activeDisputes,
-            $activeRequests,
-        );
+        return $this->confirmableShipmentIdsFor($order, $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments));
     }
 
     public function confirmReceipt(Order $order, User $buyer, bool $returnRefundStorageReady = true): bool
@@ -153,15 +143,21 @@ class BuyerOrderActionService
             $locked->load('sellerOrders.shipments.events', 'disputes');
 
             if ($locked->status === 'COMPLETED') {
-                return $locked->sellerOrders->isNotEmpty()
+                $completed = $locked->sellerOrders->isNotEmpty()
                     && $locked->sellerOrders->every(fn ($sellerOrder): bool =>
                         $sellerOrder->status === 'COMPLETED'
                         && $sellerOrder->shipments->isNotEmpty()
                         && $sellerOrder->shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED'));
+                if ($completed) {
+                    $locked->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments)
+                        ->each(fn (Shipment $shipment) => $this->sellerSettlements->releaseForShipment($shipment, $buyer));
+                }
+
+                return $completed;
             }
 
             $state = $this->state($locked, $returnRefundStorageReady);
-            if ($state['active_dispute'] || ! $state['can_confirm_received']) {
+            if (! $state['can_confirm_received']) {
                 return false;
             }
 
@@ -192,6 +188,7 @@ class BuyerOrderActionService
                 return false;
             }
             if ($lockedShipment->current_status === 'COMPLETED') {
+                $this->sellerSettlements->releaseForShipment($lockedShipment, $buyer);
                 return true;
             }
             if ($lockedOrder->status !== 'PROCESSING') {
@@ -221,6 +218,7 @@ class BuyerOrderActionService
                 $sellerOrder->update(['status' => 'COMPLETED']);
             }
             $this->completeOrderIfEveryShipmentReceived($lockedOrder, $completedAt);
+            $this->releaseCompletedOrderSettlements($lockedOrder, $buyer);
 
             return true;
         }, attempts: 3);
@@ -235,11 +233,17 @@ class BuyerOrderActionService
         $order->loadMissing('sellerOrders.shipments.events');
 
         if ($order->status === 'COMPLETED') {
-            return $order->sellerOrders->isNotEmpty()
+            $completed = $order->sellerOrders->isNotEmpty()
                 && $order->sellerOrders->every(fn ($sellerOrder): bool =>
                     $sellerOrder->status === 'COMPLETED'
                     && $sellerOrder->shipments->isNotEmpty()
                     && $sellerOrder->shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED'));
+            if ($completed) {
+                $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments)
+                    ->each(fn (Shipment $shipment) => $this->sellerSettlements->releaseForShipment($shipment, $actor));
+            }
+
+            return $completed;
         }
 
         if ($order->status !== 'PROCESSING' || $order->sellerOrders->isEmpty()
@@ -258,6 +262,7 @@ class BuyerOrderActionService
             $sellerOrder->update(['status' => 'COMPLETED']);
             foreach ($sellerOrder->shipments as $shipment) {
                 if ($shipment->current_status === 'COMPLETED') {
+                    $this->sellerSettlements->releaseForShipment($shipment, $actor);
                     continue;
                 }
                 $shipment->update(['current_status' => 'COMPLETED']);
@@ -273,6 +278,7 @@ class BuyerOrderActionService
                 }
 
                 event(ShipmentTrackingUpdated::fromShipment($shipment));
+                $this->sellerSettlements->releaseForShipment($shipment, $actor);
             }
         }
 
@@ -291,35 +297,11 @@ class BuyerOrderActionService
         return true;
     }
 
-    private function shipmentHasActiveCase(Shipment $shipment, Collection $activeDisputes, Collection $activeRequests): bool
-    {
-        if ($activeDisputes->contains(fn ($dispute): bool => $dispute->shipment_id
-            ? (int) $dispute->shipment_id === (int) $shipment->id
-            : ($dispute->seller_order_id
-                ? (int) $dispute->seller_order_id === (int) $shipment->seller_order_id
-                : true))) {
-            return true;
-        }
-
-        foreach ($activeRequests as $request) {
-            $requestItemIds = $request->items->pluck('order_item_id')
-                ->merge($request->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->items->pluck('order_item_id')))
-                ->filter()
-                ->map(fn ($id): int => (int) $id);
-            if ($requestItemIds->isEmpty() || $requestItemIds->contains((int) $shipment->order_item_id)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function confirmableShipmentIdsFor(Order $order, Collection $shipments, Collection $activeDisputes, Collection $activeRequests): array
+    private function confirmableShipmentIdsFor(Order $order, Collection $shipments): array
     {
         return $shipments
             ->filter(fn (Shipment $shipment): bool => $order->status === 'PROCESSING'
-                && $shipment->current_status === 'DELIVERED'
-                && ! $this->shipmentHasActiveCase($shipment, $activeDisputes, $activeRequests))
+                && $shipment->current_status === 'DELIVERED')
             ->pluck('id')
             ->map(fn ($id): int => (int) $id)
             ->values()
@@ -344,5 +326,16 @@ class BuyerOrderActionService
         if ($order->status !== 'COMPLETED') {
             $order->update(['status' => 'COMPLETED', 'completed_at' => $completedAt]);
         }
+    }
+
+    private function releaseCompletedOrderSettlements(Order $order, ?User $actor): void
+    {
+        $order->load('sellerOrders.shipments');
+        if ($order->status !== 'COMPLETED') {
+            return;
+        }
+
+        $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments)
+            ->each(fn (Shipment $shipment) => $this->sellerSettlements->releaseForShipment($shipment, $actor));
     }
 }

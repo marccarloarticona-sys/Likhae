@@ -8,7 +8,6 @@ use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
-use App\Models\Buyer\SellerFollower;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -1720,27 +1719,6 @@ class CheckoutService
             || ($voucher->usage_limit !== null && $voucher->seller_orders_count >= $voucher->usage_limit)
             || ($buyer && $voucher->per_user_limit !== null && $voucher->buyer_uses_count >= $voucher->per_user_limit)) {
             return null;
-        }
-
-        if ($voucher->requiresReview()) {
-            throw ValidationException::withMessages([
-                $errorKey => 'This voucher is under review and cannot be used.',
-            ]);
-        }
-
-        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS') {
-            $isFollowing = $buyer !== null
-                && Schema::hasTable('seller_followers')
-                && SellerFollower::query()
-                    ->where('buyer_user_id', $buyer->id)
-                    ->where('seller_profile_id', $sellerId)
-                    ->exists();
-
-            if (! $isFollowing) {
-                throw ValidationException::withMessages([
-                    $errorKey => 'Follow this store to use its follower reward.',
-                ]);
-            }
         }
 
         $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $items);

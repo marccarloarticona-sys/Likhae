@@ -8,6 +8,7 @@ use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderEarningPool;
+use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\SellerSettlement;
 use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Finance\CodCollection;
@@ -28,6 +29,13 @@ class FinancialAllocationService
     public function initializeForShipment(Shipment $shipment): ?ShipmentFinancialAllocation
     {
         if (! $this->schema->step7Ready() || ! $this->schema->originalPriceSnapshotReady()) {
+            return null;
+        }
+
+        if ($this->isInterHubShipment($shipment)
+            && (! $this->schema->parcelSettlementReady() || ! $this->schema->multiHubLogisticsPoolsReady())) {
+            // Keep the parcel out of payable finance until the additive
+            // allocation-per-center index migration is installed.
             return null;
         }
 
@@ -58,9 +66,9 @@ class FinancialAllocationService
         }
 
         $collection = $shipment->codCollection;
-        if (! $collection || ! in_array($collection->status, [CodCollection::COLLECTED, CodCollection::REMITTED], true)) {
-            // A delivery with a cash discrepancy or no collection proof may
-            // complete operationally, but it cannot create a payable snapshot.
+        if (! $collection || ! in_array($collection->status, [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP], true)) {
+            // An uncovered buyer collection discrepancy or missing collection
+            // proof cannot create a payable snapshot.
             return null;
         }
 
@@ -70,6 +78,18 @@ class FinancialAllocationService
                 ['seller_order_id' => $sellerOrder->id, 'order_id' => $sellerOrder->order_id]
                     + $this->parcelAttributes($shipment, $sellerOrder, $item),
             );
+            if (! $allocation->wasRecentlyCreated) {
+                $savedCenters = $allocation->logisticsPools()->pluck('logistics_center_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+                $destination = (int) ($shipment->destination_logistics_center_id ?: $shipment->logistics_center_id ?: 0);
+                $routeCenters = $this->isInterHubShipment($shipment)
+                    ? [(int) $shipment->origin_logistics_center_id, $destination]
+                    : [$destination];
+                sort($routeCenters);
+                if ($savedCenters !== [] && $savedCenters !== $routeCenters) {
+                    // Route changes cannot retroactively create or move historical shares.
+                    return $allocation;
+                }
+            }
             $this->provisionParcelSettlementRows($allocation, $shipment, $sellerOrder, $collection);
 
             return $allocation->refresh();
@@ -154,12 +174,7 @@ class FinancialAllocationService
     /** @return array<string, string|null> */
     private function attributes(Shipment $shipment, $sellerOrder, $items): array
     {
-        $rateVersion = null;
-        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
-            $sellerOrder->loadMissing('shippingRateVersion');
-            $rateVersion = $sellerOrder->shippingRateVersion;
-        }
-        $riderPoolPercentage = $rateVersion?->rider_pool_percentage ?? ShippingRatePolicyService::DEFAULT_RIDER_PERCENTAGE;
+        $riderPoolPercentage = FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE;
         $combinedDiscount = FinancialRules::amount(
             FinancialRules::cents($sellerOrder->voucher_discount)
             + FinancialRules::cents($sellerOrder->reward_points_discount ?? 0),
@@ -245,11 +260,6 @@ class FinancialAllocationService
     {
         $parcelAmounts = OrderItemParcelAmount::forItem($sellerOrder, $item);
         $riderPoolPercentage = FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE;
-        if (Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
-            $sellerOrder->loadMissing('shippingRateVersion');
-            $riderPoolPercentage = $sellerOrder->shippingRateVersion?->rider_pool_percentage
-                ?? FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE;
-        }
         $calculation = FinancialRules::allocation(
             [[
                 'original_unit_price' => $item->original_unit_price,
@@ -330,39 +340,7 @@ class FinancialAllocationService
             'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
             'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
         ];
-        $existingParticipants = $pool->participants()->get();
-        $allocatedRoles = $existingParticipants
-            ->filter(fn ($participant): bool => $participant->share_amount !== null && FinancialRules::cents($participant->share_amount) > 0)
-            ->pluck('participant_role')->unique()->all();
-        $pendingRidersByRole = $completedRidersByRole;
-        foreach ($allocatedRoles as $role) {
-            $pendingRidersByRole[$role] = [];
-        }
-        $distribution = FinancialRules::riderLegDistribution(
-            FinancialRules::cents((string) ($pool->unresolved_share_amount ?? $pool->total_amount)),
-            $pendingRidersByRole,
-            $weights,
-        );
-
-        foreach ($distribution['participants'] as $participantData) {
-            $assignmentId = $representativeAssignments[$participantData['participant_role']][$participantData['rider_profile_id']] ?? null;
-            $participant = $pool->participants()->firstOrNew([
-                'rider_profile_id' => $participantData['rider_profile_id'],
-                'participant_role' => $participantData['participant_role'],
-            ]);
-            if (! $participant->exists
-                || ($participant->share_amount === null && $participant->status === 'PENDING')) {
-                $participant->forceFill([
-                    'rider_assignment_id' => $assignmentId,
-                    'share_amount' => FinancialRules::amount($participantData['share_cents']),
-                    'status' => 'PENDING',
-                ])->save();
-            }
-        }
-
-        $pool->forceFill([
-            'unresolved_share_amount' => FinancialRules::amount($distribution['unresolved_cents']),
-        ])->save();
+        $this->syncRiderPoolParticipants($pool, $completedRidersByRole, $representativeAssignments, $weights);
     }
 
     private function allocateCompletedRiderLegsForParcel(RiderEarningPool $pool, Shipment $shipment, $sellerOrder): void
@@ -398,36 +376,117 @@ class FinancialAllocationService
             'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
             'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
         ];
-        $existingParticipants = $pool->participants()->get();
-        $allocatedRoles = $existingParticipants
-            ->filter(fn ($participant): bool => $participant->share_amount !== null && FinancialRules::cents($participant->share_amount) > 0)
-            ->pluck('participant_role')->unique()->all();
-        $pendingRidersByRole = $completedRidersByRole;
-        foreach ($allocatedRoles as $role) {
-            $pendingRidersByRole[$role] = [];
-        }
-        $distribution = FinancialRules::riderLegDistribution(
-            FinancialRules::cents((string) ($pool->unresolved_share_amount ?? $pool->total_amount)),
-            $pendingRidersByRole,
-            $weights,
-        );
+        $this->syncRiderPoolParticipants($pool, $completedRidersByRole, $representativeAssignments, $weights);
+    }
 
-        foreach ($distribution['participants'] as $participantData) {
-            $assignmentId = $representativeAssignments[$participantData['participant_role']][$participantData['rider_profile_id']] ?? null;
-            $participant = $pool->participants()->firstOrNew([
-                'rider_profile_id' => $participantData['rider_profile_id'],
-                'participant_role' => $participantData['participant_role'],
-            ]);
-            if (! $participant->exists || ($participant->share_amount === null && $participant->status === 'PENDING')) {
-                $participant->forceFill([
-                    'rider_assignment_id' => $assignmentId,
-                    'share_amount' => FinancialRules::amount($participantData['share_cents']),
-                    'status' => 'PENDING',
-                ])->save();
+    /**
+     * Keep the saved pool balanced while refreshing unpaid allocations to the
+     * current fixed shipping-fee shares. Submitted or paid payout records are
+     * immutable here and are handled only by the explicit reconciliation.
+     *
+     * @param array{PICKUP:list<int>,HUB_TO_HUB:list<int>,DELIVERY:list<int>} $completedRidersByRole
+     * @param array<string,array<int,int>> $representativeAssignments
+     * @param array{PICKUP:int,HUB_TO_HUB:int,DELIVERY:int} $weights
+     */
+    private function syncRiderPoolParticipants(
+        RiderEarningPool $pool,
+        array $completedRidersByRole,
+        array $representativeAssignments,
+        array $weights,
+    ): void {
+        DB::transaction(function () use ($pool, $completedRidersByRole, $representativeAssignments, $weights): void {
+            $lockedPool = RiderEarningPool::query()->whereKey($pool->id)->lockForUpdate()->firstOrFail();
+            $lockedPool->loadMissing('allocation');
+            $shippingCents = FinancialRules::cents($lockedPool->allocation?->shipping_fee ?? 0);
+            $careCents = max(0, FinancialRules::cents($lockedPool->allocation?->protection_amount ?? 0));
+
+            if ($lockedPool->allocation) {
+                $distribution = FinancialRules::riderPoolRoleDistribution(
+                    FinancialRules::shippingAllocationCents($shippingCents, FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE)['rider_cents'],
+                    FinancialRules::shippingAllocationCents($careCents, FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE)['rider_cents'],
+                    $completedRidersByRole,
+                    $weights,
+                );
+            } else {
+                // Keep old pool rows operable when they predate the allocation
+                // snapshot, using their saved unresolved balance and weights.
+                $distribution = FinancialRules::riderLegDistribution(
+                    FinancialRules::cents((string) ($lockedPool->unresolved_share_amount ?? $lockedPool->total_amount)),
+                    $completedRidersByRole,
+                    $weights,
+                );
             }
-        }
 
-        $pool->forceFill(['unresolved_share_amount' => FinancialRules::amount($distribution['unresolved_cents'])])->save();
+            $targetByKey = [];
+            foreach ($distribution['participants'] as $share) {
+                $key = $share['participant_role'].':'.$share['rider_profile_id'];
+                $targetByKey[$key] = $share;
+            }
+
+            $participants = $lockedPool->participants()->lockForUpdate()->get();
+            $existingByKey = [];
+            foreach ($participants as $participant) {
+                $key = $participant->participant_role.':'.$participant->rider_profile_id;
+                $existingByKey[$key] = $participant;
+                if ($participant->status !== 'PENDING') {
+                    continue;
+                }
+                $target = $targetByKey[$key] ?? null;
+                $targetCents = (int) ($target['share_cents'] ?? 0);
+                $assignmentId = $target
+                    ? ($representativeAssignments[$participant->participant_role][$participant->rider_profile_id] ?? null)
+                    : null;
+                if (FinancialRules::cents($participant->share_amount ?? 0) !== $targetCents
+                    || (int) ($participant->rider_assignment_id ?? 0) !== (int) ($assignmentId ?? 0)) {
+                    $before = [
+                        'share_amount' => $participant->share_amount,
+                        'participant_role' => $participant->participant_role,
+                        'rider_assignment_id' => $participant->rider_assignment_id,
+                        'status' => $participant->status,
+                    ];
+                    $participant->forceFill([
+                        'rider_assignment_id' => $assignmentId,
+                        'share_amount' => FinancialRules::amount($targetCents),
+                    ])->save();
+                    FinanceAuditEvent::query()->create([
+                        'event_type' => 'RIDER_SHIPPING_ALLOCATION_RECONCILED',
+                        'auditable_type' => RiderEarningPoolParticipant::class,
+                        'auditable_id' => $participant->id,
+                        'actor_user_id' => null,
+                        'before_state' => $before,
+                        'after_state' => [
+                            'share_amount' => FinancialRules::amount($targetCents),
+                            'participant_role' => $participant->participant_role,
+                            'rider_assignment_id' => $assignmentId,
+                            'status' => $participant->status,
+                        ],
+                        'notes' => 'Unpaid Rider share recalculated using the fixed 20% pickup / 40% delivery shipping-fee split. Additional Care follows the existing saved allocation weights.',
+                    ]);
+                }
+            }
+
+            foreach ($targetByKey as $key => $share) {
+                if (isset($existingByKey[$key])) {
+                    continue;
+                }
+                $role = $share['participant_role'];
+                $riderId = $share['rider_profile_id'];
+                $lockedPool->participants()->create([
+                    'rider_profile_id' => $riderId,
+                    'rider_assignment_id' => $representativeAssignments[$role][$riderId] ?? null,
+                    'participant_role' => $role,
+                    'share_amount' => FinancialRules::amount($share['share_cents']),
+                    'status' => 'PENDING',
+                ]);
+            }
+
+            $allocatedCents = $lockedPool->participants()->get()->sum(
+                fn (RiderEarningPoolParticipant $participant): int => FinancialRules::cents($participant->share_amount ?? 0),
+            );
+            $poolTotalCents = FinancialRules::cents($lockedPool->total_amount);
+            $unresolvedCents = max(0, $poolTotalCents - $allocatedCents);
+            $lockedPool->forceFill(['unresolved_share_amount' => FinancialRules::amount($unresolvedCents)])->save();
+        }, 3);
     }
 
     private function provisionParcelSettlementRows(
@@ -456,7 +515,7 @@ class FinancialAllocationService
                 'seller_payable' => $allocation->seller_payable,
                 'payout_amount' => 0,
                 'outstanding_balance' => $sellerPayableForReview,
-                'payout_status' => $allocation->seller_payable === null ? 'REVIEW_REQUIRED' : 'PENDING',
+                'payout_status' => $allocation->seller_payable === null ? 'REVIEW_REQUIRED' : 'ON_HOLD',
             ],
         );
 
@@ -474,16 +533,22 @@ class FinancialAllocationService
             ])->save();
         }
 
-        LogisticsEarningPool::query()->firstOrCreate(
-            ['shipment_financial_allocation_id' => $allocation->id],
-            [
-                'shipment_id' => $shipment->id,
-                'logistics_center_id' => $centerId,
-                'total_amount' => $allocation->logistics_allocation,
-                'unresolved_share_amount' => $allocation->logistics_allocation,
-                'status' => 'PENDING',
-            ],
-        );
+        $logisticsShares = $this->logisticsSharesForShipment($shipment, $allocation);
+        foreach ($logisticsShares as $share) {
+            $pool = LogisticsEarningPool::query()->firstOrCreate(
+                [
+                    'shipment_financial_allocation_id' => $allocation->id,
+                    'logistics_center_id' => $share['center_id'],
+                ],
+                [
+                    'shipment_id' => $shipment->id,
+                    'total_amount' => FinancialRules::amount($share['net_share_cents']),
+                    'unresolved_share_amount' => FinancialRules::amount($share['net_share_cents']),
+                    'status' => 'PENDING',
+                ],
+            );
+            $share['pool_id'] = $pool->id;
+        }
         RiderEarningPool::query()->firstOrCreate(
             ['shipment_financial_allocation_id' => $allocation->id],
             [
@@ -498,10 +563,24 @@ class FinancialAllocationService
         $entries = [
             ['account_type' => 'SELLER', 'entry_type' => 'PRODUCT_REVENUE', 'direction' => 'CREDIT', 'amount' => $allocation->seller_payable ?? 0, 'key' => 'seller-product-'.$allocation->id],
             ['account_type' => 'PLATFORM', 'entry_type' => 'PLATFORM_COMMISSION', 'direction' => 'CREDIT', 'amount' => $allocation->platform_commission, 'key' => 'platform-commission-'.$allocation->id],
-            ['account_type' => 'LOGISTICS', 'entry_type' => 'LOGISTICS_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->logistics_allocation, 'key' => 'logistics-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'LOGISTICS')],
             ['account_type' => 'RIDER', 'entry_type' => 'RIDER_ALLOCATION', 'direction' => 'CREDIT', 'amount' => $allocation->rider_allocation, 'key' => 'rider-allocation-'.$allocation->id, 'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'RIDER')],
             ['account_type' => 'CASH_CONTROL', 'entry_type' => 'COD_EXPECTED', 'direction' => 'DEBIT', 'amount' => $collection->expected_amount, 'key' => 'cod-expected-'.$allocation->id],
         ];
+        foreach ($logisticsShares as $share) {
+            $entries[] = [
+                'account_type' => 'LOGISTICS',
+                'entry_type' => 'LOGISTICS_ALLOCATION',
+                'direction' => 'CREDIT',
+                'amount' => FinancialRules::amount($share['net_share_cents']),
+                'key' => $this->logisticsAllocationKey($allocation, $share['center_id'], count($logisticsShares) > 1),
+                'metadata' => $this->deliveryEarningsLedgerMetadata($allocation, 'LOGISTICS') + [
+                    'logistics_center_id' => $share['center_id'],
+                    'route_role' => $share['role'],
+                    'rider_reserve_amount' => FinancialRules::amount($share['rider_reserve_cents']),
+                    'transfer_amount' => FinancialRules::amount($share['transfer_cents']),
+                ],
+            ];
+        }
         foreach ($entries as $entry) {
             FinancialLedgerEntry::query()->firstOrCreate(
                 ['idempotency_key' => $entry['key']],
@@ -514,7 +593,7 @@ class FinancialAllocationService
                     'entry_type' => $entry['entry_type'],
                     'direction' => $entry['direction'],
                     'amount' => $entry['amount'],
-                    'status' => $reviewStatus,
+                    'status' => $entry['entry_type'] === 'PRODUCT_REVENUE' && $reviewStatus === 'PENDING' ? 'ON_HOLD' : $reviewStatus,
                     'posted_at' => now(),
                     'metadata' => $entry['metadata'] ?? null,
                 ],
@@ -527,7 +606,11 @@ class FinancialAllocationService
             ->whereNull('shipment_financial_allocation_id')
             ->update(['shipment_financial_allocation_id' => $allocation->id]);
 
-        FinancialLedgerEntry::query()->firstOrCreate(
+        $fullCodCents = FinancialRules::cents($collection->status === CodCollection::REMITTED_RIDER_TOPUP
+            ? $collection->expected_amount
+            : ($collection->collected_amount ?? $collection->expected_amount));
+        $fullCodAmount = FinancialRules::amount($fullCodCents);
+        $proceedsEntry = FinancialLedgerEntry::query()->firstOrCreate(
             ['idempotency_key' => 'product-proceeds-remittance-'.$allocation->id],
             [
                 'shipment_financial_allocation_id' => $allocation->id,
@@ -537,22 +620,20 @@ class FinancialAllocationService
                 'account_type' => 'LOGISTICS',
                 'entry_type' => 'PRODUCT_PROCEEDS_REMITTANCE',
                 'direction' => 'DEBIT',
-                'amount' => FinancialRules::amount(
-                    FinancialRules::cents($allocation->product_amount)
-                    + FinancialRules::cents($allocation->logistics_allocation),
-                ),
+                'amount' => $fullCodAmount,
                 'status' => 'PENDING',
                 'posted_at' => now(),
                 'metadata' => [
                     'receipt_reference' => null,
                     'currency' => $allocation->currency ?: 'PHP',
-                    'amount_expected' => FinancialRules::amount(
-                        FinancialRules::cents($allocation->product_amount)
-                        + FinancialRules::cents($allocation->logistics_allocation),
-                    ),
+                    'amount_expected' => $fullCodAmount,
+                    'remittance_scope' => 'FULL_COD',
                     'product_amount' => $allocation->product_amount,
+                    'shipping_fee' => $allocation->shipping_fee,
+                    'additional_care_amount' => $allocation->protection_amount ?? '0.00',
                     'logistics_shipping_share' => $allocation->logistics_allocation,
                     'rider_shipping_share' => $allocation->rider_allocation,
+                    'rider_shipping_share_included' => true,
                     'amount_submitted' => null,
                     'amount_received' => null,
                     'discrepancy_amount' => null,
@@ -561,6 +642,34 @@ class FinancialAllocationService
                 ],
             ],
         );
+
+        $proceedsMetadata = (array) $proceedsEntry->metadata;
+        if ($proceedsEntry->status === 'PENDING'
+            && ($proceedsMetadata['amount_submitted'] ?? null) === null
+            && (FinancialRules::cents($proceedsEntry->amount) !== $fullCodCents
+                || ($proceedsMetadata['remittance_scope'] ?? null) !== 'FULL_COD'
+                || ($proceedsMetadata['rider_shipping_share_included'] ?? false) !== true)) {
+            $before = ['amount' => $proceedsEntry->amount, 'metadata' => $proceedsMetadata];
+            $proceedsMetadata = array_merge($proceedsMetadata, [
+                'amount_expected' => $fullCodAmount,
+                'remittance_scope' => 'FULL_COD',
+                'product_amount' => $allocation->product_amount,
+                'shipping_fee' => $allocation->shipping_fee,
+                'additional_care_amount' => $allocation->protection_amount ?? '0.00',
+                'logistics_shipping_share' => $allocation->logistics_allocation,
+                'rider_shipping_share' => $allocation->rider_allocation,
+                'rider_shipping_share_included' => true,
+            ]);
+            $proceedsEntry->update(['amount' => $fullCodAmount, 'metadata' => $proceedsMetadata]);
+            FinanceAuditEvent::query()->create([
+                'event_type' => 'PENDING_COD_REMITTANCE_EXPECTATION_UPDATED',
+                'auditable_type' => FinancialLedgerEntry::class,
+                'auditable_id' => $proceedsEntry->id,
+                'before_state' => $before,
+                'after_state' => ['amount' => $fullCodAmount, 'metadata' => $proceedsMetadata],
+                'notes' => 'Updated an unsubmitted Logistics-to-Admin remittance to the full collected COD amount; no delivery earnings were deducted.',
+            ]);
+        }
 
         FinanceAuditEvent::query()->firstOrCreate(
             [
@@ -599,7 +708,7 @@ class FinancialAllocationService
                 'seller_payable' => $allocation->seller_payable,
                 'payout_amount' => 0,
                 'outstanding_balance' => $sellerPayable,
-                'payout_status' => $allocation->seller_payable === null ? 'REVIEW_REQUIRED' : 'PENDING',
+                'payout_status' => $allocation->seller_payable === null ? 'REVIEW_REQUIRED' : 'ON_HOLD',
             ],
         );
         CommissionTransaction::query()->firstOrCreate(
@@ -655,7 +764,7 @@ class FinancialAllocationService
                     'entry_type' => $entry['entry_type'],
                     'direction' => $entry['direction'],
                     'amount' => $entry['amount'],
-                    'status' => 'PENDING',
+                    'status' => $entry['entry_type'] === 'PRODUCT_REVENUE' ? 'ON_HOLD' : 'PENDING',
                     'posted_at' => now(),
                     'metadata' => $entry['metadata'] ?? null,
                 ],
@@ -685,8 +794,59 @@ class FinancialAllocationService
             'earning_recipient' => $recipient,
             'base_shipping_fee' => FinancialRules::amount($baseShippingCents),
             'additional_care_amount' => FinancialRules::amount($additionalCareCents),
-            'combined_delivery_earnings' => FinancialRules::amount($baseShippingCents + $additionalCareCents),
+            'combined_delivery_earnings' => FinancialRules::amount(FinancialRules::deliveryEarningsCents(
+                $allocation->shipping_fee,
+                $allocation->protection_amount ?? 0,
+            )),
         ];
+    }
+
+    /** @return list<array{center_id:int,role:string,net_share_cents:int,transfer_cents:int,rider_reserve_cents:int}> */
+    private function logisticsSharesForShipment(Shipment $shipment, ShipmentFinancialAllocation $allocation): array
+    {
+        $destinationId = (int) ($shipment->destination_logistics_center_id ?: $shipment->logistics_center_id ?: 0);
+        if (! $destinationId) {
+            throw new RuntimeException('A logistics center is required before creating a parcel earning pool.');
+        }
+
+        if (! $this->isInterHubShipment($shipment)) {
+            $breakdown = DeliveryEarningsBreakdown::forLogisticsCenter($shipment, $allocation, $destinationId);
+
+            return [[
+                'center_id' => $destinationId,
+                'role' => $breakdown['role'],
+                'net_share_cents' => $breakdown['net_share_cents'],
+                'transfer_cents' => $breakdown['transfer_cents'],
+                'rider_reserve_cents' => $breakdown['rider_reserve_cents'],
+            ]];
+        }
+
+        if (! $this->schema->multiHubLogisticsPoolsReady()) {
+            throw new RuntimeException('Inter-Hub wallet allocation is unavailable until its additive finance migration is installed.');
+        }
+
+        $originId = (int) $shipment->origin_logistics_center_id;
+        $origin = DeliveryEarningsBreakdown::forLogisticsCenter($shipment, $allocation, $originId);
+        $destination = DeliveryEarningsBreakdown::forLogisticsCenter($shipment, $allocation, $destinationId);
+
+        return [
+            ['center_id' => $originId, 'role' => $origin['role'], 'net_share_cents' => $origin['net_share_cents'], 'transfer_cents' => $origin['transfer_cents'], 'rider_reserve_cents' => $origin['rider_reserve_cents']],
+            ['center_id' => $destinationId, 'role' => $destination['role'], 'net_share_cents' => $destination['net_share_cents'], 'transfer_cents' => $destination['transfer_cents'], 'rider_reserve_cents' => $destination['rider_reserve_cents']],
+        ];
+    }
+
+    private function isInterHubShipment(Shipment $shipment): bool
+    {
+        return filled($shipment->origin_logistics_center_id)
+            && filled($shipment->destination_logistics_center_id)
+            && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id;
+    }
+
+    private function logisticsAllocationKey(ShipmentFinancialAllocation $allocation, int $centerId, bool $multiCenter): string
+    {
+        return $multiCenter
+            ? 'logistics-allocation-'.$allocation->id.'-'.$centerId
+            : 'logistics-allocation-'.$allocation->id;
     }
 
     private function commissionRateFor($sellerOrder): float

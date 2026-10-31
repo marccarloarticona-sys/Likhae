@@ -165,7 +165,7 @@ class LogisticsDashboardAcceptanceTest extends TestCase
         $destinationDashboard = $this->actingAs($destinationUser)->get(route('logistics.dashboard'))->assertOk();
         $otherDashboard = $this->actingAs($otherUser)->get(route('logistics.dashboard'))->assertOk();
         $this->assertSame(['pending' => 10, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $originDashboard->viewData('counts'));
-        $this->assertSame(['pending' => 5, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $destinationDashboard->viewData('counts'));
+        $this->assertSame(['pending' => 5, 'in_transit' => 0, 'delivered' => 0, 'failed' => 0], $destinationDashboard->viewData('counts'));
         $this->assertSame(['pending' => 0, 'in_transit' => 1, 'delivered' => 0, 'failed' => 0], $otherDashboard->viewData('counts'));
         $this->assertSame(1, $originDashboard->viewData('operational')['outgoing']);
         $this->assertSame(1, $destinationDashboard->viewData('operational')['incoming']);
@@ -177,14 +177,17 @@ class LogisticsDashboardAcceptanceTest extends TestCase
             }
         }
         $this->actingAs($originUser)->get(route('logistics.parcels.show', $unrelated))->assertForbidden();
+        $this->actingAs($originUser)->get(route('logistics.parcels.show', $transferred))->assertOk();
+        $this->actingAs($destinationUser)->get(route('logistics.parcels.show', $transferred))->assertForbidden();
         $this->actingAs($otherUser)->get(route('logistics.parcels.show', $transferred))->assertForbidden();
         $this->actingAs($originUser)->get(route('logistics.parcels', ['status' => 'in_transit', 'company_id' => $other->id]))->assertForbidden();
         $this->actingAs($originUser)->get(route('logistics.dashboard', ['hub_id' => $other->id]))->assertForbidden();
 
         $transferred->update(['logistics_center_id' => $destination->id]);
-        $this->actingAs($originUser)->get(route('logistics.parcels.show', $transferred))->assertOk();
+        $this->actingAs($originUser)->get(route('logistics.parcels.show', $transferred))->assertForbidden();
         $this->actingAs($destinationUser)->get(route('logistics.parcels.show', $transferred))->assertOk();
-        $this->assertSame(1, $this->actingAs($originUser)->get(route('logistics.parcels', ['status' => 'in_transit']))->assertOk()->viewData('shipments')->total());
+        $this->assertSame(0, $this->actingAs($originUser)->get(route('logistics.parcels', ['status' => 'in_transit']))->assertOk()->viewData('shipments')->total());
+        $this->assertSame(1, $this->actingAs($destinationUser)->get(route('logistics.parcels', ['status' => 'in_transit']))->assertOk()->viewData('shipments')->total());
     }
 
     public function test_dashboard_shows_center_scoped_rider_and_cod_reconciliation_totals(): void

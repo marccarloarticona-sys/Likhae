@@ -11,6 +11,8 @@ use App\Support\PhilippineAddressValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Hash;
+use App\Services\Account\ProfilePhotoService;
 use Illuminate\Validation\Rule;
 
 class RiderVehicleProfileController extends Controller
@@ -19,6 +21,7 @@ class RiderVehicleProfileController extends Controller
     {
         $rider = $this->rider($request)->load(['user', 'logisticsCenter', 'areaAssignments.serviceArea']);
         $user = $rider->user;
+        $address = $user->addresses()->orderByDesc('is_default')->latest()->first();
 
         return response()->json(['success' => true, 'data' => [
             'user' => [
@@ -43,6 +46,7 @@ class RiderVehicleProfileController extends Controller
                 'vehicle_type' => $rider->vehicle_type,
                 'plate_number' => $rider->plate_number,
                 'status' => $rider->status,
+                'is_online' => (bool) $rider->is_online,
                 'primary_role' => 'Rider',
                 'logistics_center' => $rider->logisticsCenter?->business_name,
                 'service_areas' => $rider->areaAssignments
@@ -51,7 +55,43 @@ class RiderVehicleProfileController extends Controller
                     ->filter()
                     ->values(),
             ],
+            'residential_address' => $address ? $address->only([
+                'id', 'region_code', 'region_name', 'province_code', 'province_name',
+                'municipality_code', 'municipality_name', 'barangay_code', 'barangay_name',
+                'postal_code', 'house_number', 'street_address', 'landmark', 'latitude', 'longitude',
+            ]) : null,
         ]]);
+    }
+
+    public function updateProfile(Request $request, ProfilePhotoService $photos): JsonResponse
+    {
+        $user = $this->rider($request)->user;
+        // Match the rider web account: registered identity/email require review.
+        $data = $request->validate([
+            'first_name' => ['sometimes', Rule::in([$user->first_name])],
+            'last_name' => ['sometimes', Rule::in([$user->last_name])],
+            'email' => ['sometimes', Rule::in([$user->email])],
+            'contact_number' => ['required', 'string', 'max:30', Rule::unique('users', 'contact_number')->ignore($user->id)],
+            'profile_photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+        $user->update(['contact_number' => $data['contact_number']]);
+        if ($request->hasFile('profile_photo')) {
+            $photos->replace($user, $request->file('profile_photo'));
+        }
+
+        return $this->profile($request);
+    }
+
+    public function updatePassword(Request $request): JsonResponse
+    {
+        $user = $this->rider($request)->user;
+        $data = $request->validate([
+            'current_password' => ['required', 'current_password'],
+            'password' => ['required', 'string', 'min:8', 'max:72', 'confirmed'],
+        ]);
+        $user->update(['password' => Hash::make($data['password'])]);
+
+        return response()->json(['success' => true, 'message' => 'Password updated.']);
     }
 
     public function updatePlateNumber(Request $request): JsonResponse

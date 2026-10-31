@@ -93,7 +93,9 @@ async function submitScannerForm(form, scanner = form.closest('[data-parcel-scan
 
         const resultUrl = response.url && response.url !== window.location.href ? response.url : '';
         const succeeded = response.ok;
-        const message = succeeded ? 'Scan complete. Open the matching parcel result.' : 'The scan could not be completed. Check the code and try again.';
+        const message = succeeded
+            ? 'Scan complete. Open the matching parcel result.'
+            : `The scan could not be completed (HTTP ${response.status}). Refresh the page and try again.`;
         showMessage(scanner, form, message, succeeded ? (resultUrl || url.href) : '');
         document.dispatchEvent(new CustomEvent(succeeded ? 'parcel-scanner:success' : 'parcel-scanner:error', {
             detail: { success: succeeded, message, form, scanner, open_url: resultUrl || url.href, ok: succeeded },

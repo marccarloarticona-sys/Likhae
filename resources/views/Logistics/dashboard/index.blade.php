@@ -56,6 +56,55 @@
         @endif
     </header>
 
+    <section class="rounded-xl border border-line bg-surface p-5 shadow-sm" aria-labelledby="interhub-timekeeping-heading" data-interhub-qr-panel>
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div><span class="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Interhub payroll</span><h2 id="interhub-timekeeping-heading" class="mt-1 text-base font-semibold text-ink">Driver Time In / Time Out</h2><p class="mt-1 text-xs text-muted">Drivers are identified by their QR. Time In or Time Out is automatic, even without a container assignment. Each code expires after 20 seconds.</p></div>
+            <a href="{{ route('logistics.remittances', ['tab' => 'interhub-payouts']) }}" class="inline-flex min-h-10 items-center rounded-lg border border-line px-4 text-xs font-semibold text-ink">Rates and payroll</a>
+        </div>
+        @if(! $timekeepingReady)
+            <p class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Apply the new Interhub timekeeping migration to enable this panel.</p>
+        @else
+            <div class="mt-4">
+                <div class="inline-flex rounded-lg border border-line bg-page-secondary p-1" role="group" aria-label="Interhub attendance view">
+                    <button type="button" data-attendance-mode-button="qr" aria-pressed="true" class="min-h-9 rounded-md bg-primary px-4 text-xs font-semibold text-white">Show QR</button>
+                    <button type="button" data-attendance-mode-button="scanner" aria-pressed="false" class="min-h-9 rounded-md px-4 text-xs font-semibold text-ink">Switch to scanner</button>
+                </div>
+                <div class="mt-4">
+                    <div data-attendance-mode-panel="qr" aria-label="Logistics attendance QR">
+                    <div class="flex w-full max-w-2xl flex-col gap-4 rounded-lg border border-line bg-page-secondary p-4 sm:flex-row sm:items-center">
+                        <img data-attendance-qr data-qr-base="{{ route('logistics.interhub-attendance.qr') }}" alt="Rotating Logistics attendance QR" class="hidden h-52 w-52 shrink-0 self-center border border-line bg-white p-2 sm:h-56 sm:w-56">
+                        <div class="min-w-0"><strong data-attendance-countdown class="block text-sm text-ink">Logistics QR · refreshes every 20 seconds</strong><p data-attendance-qr-status class="mt-1 text-xs font-semibold text-muted" aria-live="polite">Loading the Logistics attendance QR…</p><p class="mt-2 text-[11px] text-muted">Each driver may scan the current center QR once. Their next scan automatically clocks them out. Or scan the driver’s personal QR here.</p></div>
+                    </div>
+                    </div>
+                    <div data-attendance-mode-panel="scanner" aria-label="Scan the Interhub driver's QR" hidden>
+                        <div data-attendance-qr-scanner data-scan-url="{{ route('logistics.interhub-attendance.scan') }}" class="rounded-lg border border-line p-4">
+                            <h3 class="text-sm font-semibold text-ink">Scan the driver’s QR</h3><p class="mt-1 text-xs text-muted">The QR identifies the driver and this center. Assignment is optional.</p>
+                            <div class="relative mt-3 overflow-hidden border border-line bg-black"><video data-attendance-video class="hidden aspect-video w-full object-cover" playsinline muted></video><div data-attendance-placeholder class="flex aspect-video items-center justify-center px-4 text-center text-xs text-white">Camera is off.</div></div>
+                            <div class="mt-2 flex gap-2"><button type="button" data-attendance-start class="min-h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-white">Start Camera</button><button type="button" data-attendance-stop class="hidden min-h-10 rounded-lg border border-line px-4 text-xs font-semibold text-ink">Stop</button></div>
+                            <p data-attendance-message class="mt-2 min-h-5 text-xs font-semibold text-muted" aria-live="polite"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div data-attendance-active-list data-active-url="{{ route('logistics.interhub-attendance.active') }}" class="mt-5 border-t border-line pt-4">
+                <div class="flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-sm font-semibold text-ink">Today’s attendance</h3><span class="text-xs text-muted">Regular daily target: 8 hours</span></div>
+                <div data-active-cards class="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    @forelse($interhubAttendanceRoster as $attendance)
+                        <article class="rounded-lg border border-line bg-page-secondary p-3 text-xs"><div class="flex items-center justify-between gap-2"><strong>{{ $attendance['driver_name'] }}</strong><span class="font-bold {{ $attendance['status'] === 'ABSENT' ? 'text-red-700' : ($attendance['status'] === 'ON SHIFT' ? 'text-primary' : 'text-emerald-700') }}">{{ $attendance['status'] }}</span></div><p class="mt-1 text-muted">{{ $attendance['hours'] }}h / 8h · {{ $attendance['clock_in_at'] ? 'Time In '.$attendance['clock_in_at'] : 'No Time In recorded today' }}</p><p class="mt-1 text-muted">{{ $attendance['manifest'] ?? 'No container assignment' }}</p><p class="mt-1 font-semibold text-ink">Estimated today: ₱{{ number_format($attendance['pay_estimate'], 2) }}{{ $attendance['worked_minutes'] >= 480 ? ' · daily target reached' : '' }}</p></article>
+                    @empty
+                        <p class="text-xs text-muted">No active Interhub driver profiles at this center.</p>
+                    @endforelse
+                </div>
+            </div>
+        @endif
+    </section>
+    @if($timekeepingReady)
+        <script>document.addEventListener('DOMContentLoaded',()=>{const buttons=[...document.querySelectorAll('[data-attendance-mode-button]')],panels=[...document.querySelectorAll('[data-attendance-mode-panel]')];const show=(mode)=>{for(const button of buttons){const selected=button.dataset.attendanceModeButton===mode;button.setAttribute('aria-pressed',selected?'true':'false');button.classList.toggle('bg-primary',selected);button.classList.toggle('text-white',selected);button.classList.toggle('text-ink',!selected);}for(const panel of panels){panel.hidden=panel.dataset.attendanceModePanel!==mode;}if(mode!=='scanner'){const stop=document.querySelector('[data-attendance-qr-scanner] [data-attendance-stop]');if(stop&&!stop.classList.contains('hidden'))stop.click();}};for(const button of buttons)button.addEventListener('click',()=>show(button.dataset.attendanceModeButton));show('qr');});</script>
+        <script>document.addEventListener('DOMContentLoaded',()=>{const img=document.querySelector('[data-attendance-qr]'),status=document.querySelector('[data-attendance-qr-status]'),base=img?.dataset.qrBase;if(!img||!status||!base)return;const refresh=async()=>{status.textContent='Issuing a fresh attendance QR…';try{const response=await fetch(base+'?t='+Date.now(),{credentials:'same-origin',headers:{Accept:'application/json'}});const payload=await response.json();if(!response.ok||payload.success===false)throw new Error(payload.message||'Could not issue the Logistics QR.');img.src=payload.qr_data_uri;img.classList.remove('hidden');status.textContent='Ready to scan · refreshes automatically every 20 seconds.';}catch(error){img.classList.add('hidden');status.textContent=error.message||'Could not issue the Logistics QR.';}};void refresh();setInterval(()=>void refresh(),19500);});</script>
+        <script>document.addEventListener('DOMContentLoaded',()=>{const panel=document.querySelector('[data-attendance-active-list]'),cards=panel?.querySelector('[data-active-cards]');if(!panel||!cards)return;const refresh=async()=>{try{const response=await fetch(panel.dataset.activeUrl,{credentials:'same-origin',headers:{Accept:'application/json'}});if(!response.ok)return;const payload=await response.json();if(payload.success!==true)return;cards.replaceChildren();for(const entry of payload.attendance){const card=document.createElement('article');card.className='rounded-lg border border-line bg-page-secondary p-3 text-xs';const header=document.createElement('div');header.className='flex items-center justify-between gap-2';const name=document.createElement('strong');name.textContent=entry.driver_name;const badge=document.createElement('span');badge.className='font-bold '+(entry.status==='ABSENT'?'text-red-700':entry.status==='ON SHIFT'?'text-primary':'text-emerald-700');badge.textContent=entry.status;header.append(name,badge);const hours=document.createElement('p');hours.className='mt-1 text-muted';hours.textContent=entry.hours+'h / 8h · '+(entry.clock_in_at?'Time In '+entry.clock_in_at:'No Time In recorded today');const manifest=document.createElement('p');manifest.className='mt-1 text-muted';manifest.textContent=entry.manifest||'No container assignment';const pay=document.createElement('p');pay.className='mt-1 font-semibold text-ink';pay.textContent='Estimated today: ₱'+Number(entry.pay_estimate).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2})+(entry.worked_minutes>=480?' · daily target reached':'');card.append(header,hours,manifest,pay);cards.append(card);}if(!payload.attendance.length){const empty=document.createElement('p');empty.className='text-xs text-muted';empty.textContent='No active Interhub driver profiles at this center.';cards.append(empty);}}catch{}};void refresh();setInterval(refresh,20000);});</script>
+        @push('scripts') @vite('resources/js/shared/interhub-attendance.js') @endpush
+    @endif
+
     <section aria-labelledby="shipment-stats-heading">
         <div class="mb-3 flex items-baseline justify-between gap-3">
             <h2 id="shipment-stats-heading" class="text-lg font-semibold text-ink">Shipment Statistics</h2>

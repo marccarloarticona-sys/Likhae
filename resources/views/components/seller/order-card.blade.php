@@ -40,7 +40,7 @@
         </section>
     @endif
     @if(data_get($order, 'pickup_progress_total', 0) > 0)
-        <p class="mt-2 text-sm text-muted">Pickup progress: {{ data_get($order, 'pickup_progress_collected') }}/{{ data_get($order, 'pickup_progress_total') }} parcels collected · {{ data_get($order, 'pickup_rider') ?: 'Waiting for rider assignment' }}</p>
+        <p class="mt-2 text-sm text-muted">Seller pickup: {{ data_get($order, 'pickup_progress_collected') }}/{{ data_get($order, 'pickup_progress_total') }} parcels collected · {{ data_get($order, 'pickup_rider') ?: 'Waiting for rider assignment' }}</p>
     @endif
     <footer class="sl-order-card-actions">
         <a href="{{ route('seller.orders',['mode'=>'show','order'=>$id]) }}" class="sl-btn sl-btn-ghost sl-btn-sm">View Details</a>

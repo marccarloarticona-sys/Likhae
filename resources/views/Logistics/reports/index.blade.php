@@ -113,6 +113,7 @@
                             <th class="px-3 py-3 font-semibold">Additional Care</th>
                             <th class="px-3 py-3 font-semibold">Combined delivery</th>
                             <th class="px-3 py-3 font-semibold">Logistics share</th>
+                            <th class="px-3 py-3 font-semibold">Rider pass-through</th>
                             <th class="px-3 py-3 font-semibold">Admin commission</th>
                             <th class="px-3 py-3 font-semibold">Rider / area</th>
                         </tr>
@@ -132,16 +133,17 @@
                                 <td class="px-3 py-3">{{ $transaction['additional_care'] !== '' ? 'PHP '.number_format((float) $transaction['additional_care'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['delivery_earnings'] !== '' ? 'PHP '.number_format((float) $transaction['delivery_earnings'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['logistics_share'] !== '' ? 'PHP '.number_format((float) $transaction['logistics_share'], 2) : '—' }}</td>
+                                <td class="px-3 py-3">{{ $transaction['rider_pass_through'] !== '' ? 'PHP '.number_format((float) $transaction['rider_pass_through'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['admin_product_commission'] !== '' ? 'PHP '.number_format((float) $transaction['admin_product_commission'], 2) : '—' }}</td>
                                 <td class="px-3 py-3">{{ $transaction['rider'] ?: '—' }}<span class="mt-1 block text-muted">{{ $transaction['area'] ?: '—' }}</span></td>
                             </tr>
                         @empty
-                            <tr><td colspan="10" class="px-3 py-8 text-center text-muted">No financial transactions match these filters.</td></tr>
+                            <tr><td colspan="11" class="px-3 py-8 text-center text-muted">No financial transactions match these filters.</td></tr>
                         @endforelse
                     </tbody>
                 </table>
             </div>
-            <p class="text-xs text-muted">Base shipping, Additional Care, combined delivery earnings, Logistics share, and Admin product commission appear on each parcel’s allocation entry. Proceeds handoffs and payouts are separate transactions and are not added into those allocation totals.</p>
+            <p class="text-xs text-muted">Allocation entries show the delivery charge split. Admin payout entries show the gross transfer, Logistics net share, and Rider pass-through separately.</p>
             {{ $financialTransactions->links() }}
         @endunless
     </section>

@@ -42,7 +42,23 @@ class CartService
 
     public function add(User $buyer, Product $product, int $variantId, int $quantity): CartItem
     {
-        return DB::transaction(function () use ($buyer, $product, $variantId, $quantity): CartItem {
+        return $this->upsertQuantity($buyer, $product, $variantId, $quantity, replaceExisting: false);
+    }
+
+    /** Persist exactly the requested quantity for a Buy Now checkout. */
+    public function setForCheckout(User $buyer, Product $product, int $variantId, int $quantity): CartItem
+    {
+        return $this->upsertQuantity($buyer, $product, $variantId, $quantity, replaceExisting: true);
+    }
+
+    private function upsertQuantity(
+        User $buyer,
+        Product $product,
+        int $variantId,
+        int $quantity,
+        bool $replaceExisting,
+    ): CartItem {
+        return DB::transaction(function () use ($buyer, $product, $variantId, $quantity, $replaceExisting): CartItem {
             $cart = $this->activeCart($buyer);
             $lockedCarts = Cart::query()
                 ->where('buyer_user_id', $buyer->id)
@@ -88,6 +104,7 @@ class CartService
             $existingProductQuantity = $this->purchaseLimits->cartQuantity(
                 $buyer,
                 (int) $lockedProduct->id,
+                $replaceExisting && $item->exists ? (int) $item->id : null,
                 lockForUpdate: true,
             );
             $this->purchaseLimits->assertWithinLimit(
@@ -99,7 +116,7 @@ class CartService
                 lockHistoricalRows: true,
             );
 
-            $newQuantity = (int) $item->quantity + $quantity;
+            $newQuantity = $replaceExisting ? $quantity : (int) $item->quantity + $quantity;
             if ($newQuantity > $variant->stock) {
                 throw ValidationException::withMessages([
                     'quantity' => 'Your cart quantity exceeds available stock.',

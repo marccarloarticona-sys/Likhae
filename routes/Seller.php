@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Seller\SellerAccountController;
+use App\Http\Controllers\Seller\SellerPickupAddressController;
 use App\Http\Controllers\Seller\SellerComplianceController;
 use App\Http\Controllers\Seller\SellerEngagementController;
 use App\Http\Controllers\Seller\SellerOperationsController;
@@ -155,6 +156,14 @@ Route::prefix('seller')
         Route::put('/account/profile', [SellerAccountController::class, 'updateProfile'])
             ->middleware('throttle:10,1')->name('account.profile');
         Route::put('/account/business', [SellerAccountController::class, 'updateBusiness'])->name('account.business');
+        Route::post('/account/pickup-addresses', [SellerPickupAddressController::class, 'store'])
+            ->middleware('throttle:10,1')->name('account.pickup-addresses.store');
+        Route::put('/account/pickup-addresses/{address}', [SellerPickupAddressController::class, 'update'])
+            ->whereNumber('address')->middleware('throttle:10,1')->name('account.pickup-addresses.update');
+        Route::post('/account/pickup-addresses/{address}/default', [SellerPickupAddressController::class, 'setDefault'])
+            ->whereNumber('address')->name('account.pickup-addresses.default');
+        Route::delete('/account/pickup-addresses/{address}', [SellerPickupAddressController::class, 'destroy'])
+            ->whereNumber('address')->name('account.pickup-addresses.destroy');
         Route::post('/account/verification-documents', [SellerAccountController::class, 'requestDocumentUpdate'])
             ->middleware('throttle:5,1')->name('account.verification-documents.store');
         Route::put('/account/password', [SellerAccountController::class, 'updatePassword'])->name('account.password');

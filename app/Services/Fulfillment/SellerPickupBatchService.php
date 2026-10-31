@@ -45,6 +45,7 @@ final class SellerPickupBatchService
         bool $coverageOverride = false,
         ?string $coverageOverrideReason = null,
         ?int $sellerPickupRequestId = null,
+        bool $automaticDispatch = false,
     ): RiderLocalTrip
     {
         $ids = array_map('intval', $shipmentIds);
@@ -59,8 +60,18 @@ final class SellerPickupBatchService
             throw new RuntimeException('A seller pickup assignment can contain no more than 10 parcels.');
         }
 
-        return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $count, $coverageOverride, $coverageOverrideReason, $sellerPickupRequestId): RiderLocalTrip {
+        return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $count, $coverageOverride, $coverageOverrideReason, $sellerPickupRequestId, $automaticDispatch): RiderLocalTrip {
             $this->assertCenterActor($actor, $center);
+            $linkedPickupRequest = $sellerPickupRequestId === null
+                ? null
+                : SellerPickupRequest::query()
+                    ->whereKey($sellerPickupRequestId)
+                    ->with('pickupAddress')
+                    ->lockForUpdate()
+                    ->firstOrFail();
+            if ($linkedPickupRequest && $linkedPickupRequest->status !== 'REQUESTED') {
+                throw new RuntimeException('Only a requested Seller pickup can be assigned.');
+            }
             $rider = RiderProfile::query()
                 ->with(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations'])
                 ->whereKey($riderProfileId)
@@ -84,6 +95,9 @@ final class SellerPickupBatchService
                 ? null
                 : (int) $rider->approved_parcel_capacity);
             $activeAssignments = $rider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
+            if ($activeAssignments > 0) {
+                throw new RuntimeException('Only riders with no active assignments can receive a seller pickup job.');
+            }
             LocalTripCapacityRules::assertCanAssign(
                 (int) $activeAssignments,
                 $count,
@@ -109,8 +123,12 @@ final class SellerPickupBatchService
                 ->whereKey($sellerIds->first())
                 ->lockForUpdate()
                 ->firstOrFail();
-            if (! $seller->businessAddress) {
-                throw new RuntimeException('The seller must have a registered business pickup address.');
+            if ($linkedPickupRequest && (int) $linkedPickupRequest->seller_profile_id !== (int) $seller->id) {
+                throw new RuntimeException('The selected parcels do not belong to the Seller pickup request.');
+            }
+            $pickupAddress = $linkedPickupRequest?->pickupAddress ?? $seller->businessAddress;
+            if (! $pickupAddress || (int) $pickupAddress->user_id !== (int) $seller->user_id) {
+                throw new RuntimeException('The Seller must have a valid pickup address saved to their account.');
             }
 
             $pickupArea = null;
@@ -137,23 +155,35 @@ final class SellerPickupBatchService
                     throw new RuntimeException('Every selected parcel must be assigned to this logistics center or its authorized route.');
                 }
 
-                $area = $this->workflow->sellerPickupServiceArea($shipment, $center);
-                if (! $area || (int) $area->logistics_center_id !== (int) $center->id) {
-                    throw new RuntimeException('The seller pickup address is not covered by this logistics center.');
+                $area = $this->workflow->sellerPickupServiceArea($shipment, $center, $pickupAddress);
+                if ($area && (int) $area->logistics_center_id !== (int) $center->id) {
+                    throw new RuntimeException('The seller pickup address is covered by a different logistics center.');
+                }
+                if ($automaticDispatch && ! $area) {
+                    $coverageOverride = true;
+                    $coverageOverrideReason ??= 'Nearest eligible online local rider selected by recent GPS location; no service area is configured for the seller pickup address.';
+                }
+                if (! $area && ! $coverageOverride) {
+                    throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
                 if ($pickupArea && (int) $pickupArea->id !== (int) $area->id) {
                     throw new RuntimeException('All parcels in a seller pickup batch must use the same pickup address and service area.');
                 }
                 $pickupArea = $area;
 
-                if (! $this->workflow->riderCoversSellerPickupArea($shipment, $rider) && ! $coverageOverride) {
+                $riderCoversArea = $this->workflow->riderCoversSellerPickupArea($shipment, $rider, $pickupAddress);
+                if ($automaticDispatch && ! $riderCoversArea) {
+                    $coverageOverride = true;
+                    $coverageOverrideReason ??= 'Nearest eligible online local rider selected by recent GPS location; the rider was not required to have a pickup service-area assignment.';
+                }
+                if (! $riderCoversArea && ! $coverageOverride) {
                     throw new RuntimeException('The rider must be an active local rider assigned to the seller pickup barangay.');
                 }
-                if ($coverageOverride && $this->workflow->riderCoversSellerPickupArea($shipment, $rider) === false) {
+                if ($coverageOverride && ! $riderCoversArea && ! $automaticDispatch) {
                     if (blank(trim((string) $coverageOverrideReason))) {
                         throw new RuntimeException('A reason is required for a pickup coverage override.');
                     }
-                    $hasCoveredRider = RiderProfile::query()
+                    $hasCoveredRider = $area && RiderProfile::query()
                         ->where('logistics_center_id', $center->id)
                         ->whereIn('status', ['ACTIVE', 'WARNED'])
                         ->whereIn('vehicle_type', RiderVehicleType::localValues())
@@ -194,11 +224,16 @@ final class SellerPickupBatchService
                 $pickupRequestByShipment[$shipment->id] = $pickupRequest;
             }
 
-            if (! $pickupArea) {
-                throw new RuntimeException('The seller pickup service area is unavailable.');
-            }
-
-            $trip = $this->trips->createTrip($actor, $rider, $pickupArea, RiderLocalTrip::TYPE_PICKUP, $seller);
+            $trip = $this->trips->createTrip(
+                $actor,
+                $rider,
+                $pickupArea,
+                RiderLocalTrip::TYPE_PICKUP,
+                $seller,
+                false,
+                $coverageOverride,
+                $linkedPickupRequest ? $pickupAddress : null,
+            );
             foreach ($shipments as $shipment) {
                 $assignment = $this->workflow->assignRider(
                     $shipment,
@@ -207,8 +242,12 @@ final class SellerPickupBatchService
                     $actor,
                     $coverageOverride,
                     $coverageOverrideReason,
+                    false,
+                    null,
+                    false,
+                    $linkedPickupRequest ? $pickupAddress : null,
                 );
-                $this->trips->addAssignment($actor, $trip, $assignment);
+                $this->trips->addAssignment($actor, $trip, $assignment, false, $coverageOverride, $linkedPickupRequest ? $pickupAddress : null);
 
                 $pickupRequest = $pickupRequestByShipment[$shipment->id];
                 if ($pickupRequest->status === 'PENDING') {
@@ -223,8 +262,36 @@ final class SellerPickupBatchService
         });
     }
 
+    /** @param list<int> $shipmentIds */
+    public function createAutomatically(
+        User $actor,
+        LogisticsCenter $center,
+        int $riderProfileId,
+        array $shipmentIds,
+        ?int $sellerPickupRequestId = null,
+    ): RiderLocalTrip {
+        return $this->create(
+            $actor,
+            $center,
+            $riderProfileId,
+            $shipmentIds,
+            false,
+            null,
+            $sellerPickupRequestId,
+            true,
+        );
+    }
+
     /** @param list<int> $shipmentIds @return array{trip: RiderLocalTrip, assigned_ids: list<int>, skipped_ids: list<int>} */
-    public function createPartial(User $actor, LogisticsCenter $center, int $riderProfileId, array $shipmentIds, ?int $sellerPickupRequestId = null): array
+    public function createPartial(
+        User $actor,
+        LogisticsCenter $center,
+        int $riderProfileId,
+        array $shipmentIds,
+        ?int $sellerPickupRequestId = null,
+        bool $automaticDispatch = false,
+        ?string $coverageOverrideReason = null,
+    ): array
     {
         $ids = array_values(array_map('intval', $shipmentIds));
         if ($ids === [] || count($ids) !== count(array_unique($ids))) {
@@ -234,7 +301,7 @@ final class SellerPickupBatchService
             throw new RuntimeException('A seller pickup assignment can contain no more than 10 parcels.');
         }
 
-        return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $sellerPickupRequestId): array {
+        return DB::transaction(function () use ($actor, $center, $riderProfileId, $ids, $sellerPickupRequestId, $automaticDispatch, $coverageOverrideReason): array {
             $rider = RiderProfile::query()->whereKey($riderProfileId)->lockForUpdate()->firstOrFail();
             if ((int) $rider->logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('Select a rider assigned to this logistics center.');
@@ -251,7 +318,7 @@ final class SellerPickupBatchService
             }
 
             $assignedIds = array_slice($ids, 0, $assignCount);
-            $trip = $this->create($actor, $center, $riderProfileId, $assignedIds, false, null, $sellerPickupRequestId);
+            $trip = $this->create($actor, $center, $riderProfileId, $assignedIds, false, $coverageOverrideReason, $sellerPickupRequestId, $automaticDispatch);
 
             return [
                 'trip' => $trip,
@@ -303,6 +370,9 @@ final class SellerPickupBatchService
                 throw new RuntimeException('Choose an active, online local rider assigned to this logistics center.');
             }
             $activeJobs = $newRider->assignments()->whereIn('status', self::ACTIVE_ASSIGNMENT_STATUSES)->count();
+            if ($activeJobs > 0) {
+                throw new RuntimeException('Choose an idle rider with no active assignments to receive this pickup batch.');
+            }
             LocalTripCapacityRules::assertCanAssign(
                 (int) $activeJobs,
                 $items->count(),
@@ -310,11 +380,13 @@ final class SellerPickupBatchService
             );
 
             $seller = $trip->seller;
+            $trip->loadMissing('sellerPickupRequest.pickupAddress');
+            $pickupAddress = $trip->sellerPickupRequest?->pickupAddress;
             $firstShipment = $items->first()->riderAssignment->shipment;
-            if (! $seller || ! $firstShipment || $items->contains(fn ($item): bool => ! $this->workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $newRider))) {
+            if (! $seller || ! $firstShipment || $items->contains(fn ($item): bool => ! $this->workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $newRider, $pickupAddress))) {
                 throw new RuntimeException('The selected rider is not assigned to the seller pickup area for every parcel in this batch.');
             }
-            $area = $this->workflow->sellerPickupServiceArea($firstShipment, $center);
+            $area = $this->workflow->sellerPickupServiceArea($firstShipment, $center, $pickupAddress);
             if (! $area) {
                 throw new RuntimeException('The seller pickup service area is unavailable.');
             }
@@ -324,15 +396,26 @@ final class SellerPickupBatchService
                 'cancelled_at' => now(),
                 'exception_notes' => 'Pickup batch reassigned before collection.',
             ]);
-            $replacementTrip = $this->trips->createTrip($actor, $newRider, $area, RiderLocalTrip::TYPE_PICKUP, $seller);
+            $replacementTrip = $this->trips->createTrip($actor, $newRider, $area, RiderLocalTrip::TYPE_PICKUP, $seller, false, false, $pickupAddress);
             foreach ($items as $item) {
                 $oldAssignment = $item->riderAssignment;
-                $newAssignment = $this->workflow->assignRider($oldAssignment->shipment, $newRider, RiderAssignment::TYPE_PICKUP, $actor);
+                $newAssignment = $this->workflow->assignRider(
+                    $oldAssignment->shipment,
+                    $newRider,
+                    RiderAssignment::TYPE_PICKUP,
+                    $actor,
+                    false,
+                    null,
+                    false,
+                    null,
+                    false,
+                    $pickupAddress,
+                );
                 $item->update([
                     'status' => RiderLocalTripItem::CANCELLED,
                     'failure_reason' => 'Pickup batch reassigned to another rider before collection.',
                 ]);
-                $this->trips->addAssignment($actor, $replacementTrip, $newAssignment);
+                $this->trips->addAssignment($actor, $replacementTrip, $newAssignment, false, false, $pickupAddress);
                 $this->notifications->riderAssignmentStatusChanged($oldAssignment->refresh());
                 $this->notifications->riderAssignmentCreated($newAssignment);
             }
@@ -517,7 +600,7 @@ final class SellerPickupBatchService
     {
         $trip = RiderLocalTrip::query()
             ->whereKey($trip->id)
-            ->with(['rider.user', 'seller.businessAddress', 'items.riderAssignment.shipment.sellerOrder'])
+            ->with(['rider.user', 'seller.businessAddress', 'sellerPickupRequest.pickupAddress', 'items.riderAssignment.shipment.sellerOrder'])
             ->lockForUpdate()
             ->firstOrFail();
         if ($trip->trip_type !== RiderLocalTrip::TYPE_PICKUP || (int) $trip->seller_profile_id < 1) {

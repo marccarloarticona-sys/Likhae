@@ -27,6 +27,7 @@ use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
 use App\Services\Maps\MapDataService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\InterhubTimekeepingService;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
@@ -105,11 +106,14 @@ class RiderController extends Controller
             : back()->with('status', 'Your dispatch location was updated.');
     }
 
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): View|RedirectResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers, InterhubTimekeepingService $interhubTimekeeping): View|RedirectResponse
     {
         $rider = $this->rider($request);
         if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
-            return redirect()->route('rider.transfers');
+            return view('rider.interhub.dashboard', [
+                'rider' => $rider->loadMissing('logisticsCenter.address', 'user'),
+                ...$interhubTimekeeping->driverDashboardData($rider),
+            ]);
         }
         abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
         $offers->expireDuePickupOffers((int) $rider->id);
@@ -275,9 +279,12 @@ class RiderController extends Controller
         return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'deliveryTrip', 'mapMarkers', 'returnHandoffPending'));
     }
 
-    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View
+    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View|RedirectResponse
     {
         $rider = $this->rider($request);
+        if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
+            return redirect()->route('rider.dashboard')->with('status', 'Interhub pay is managed through timekeeping and payroll on your Dashboard.');
+        }
         $financeSchema = app(FinanceSchemaReadiness::class);
         $filters = $this->dateRange($request);
         $from = filled($filters['from']) ? \Illuminate\Support\Carbon::parse($filters['from'])->startOfDay() : null;
@@ -307,7 +314,8 @@ class RiderController extends Controller
                     ->where('entry_type', 'RIDER_PAYOUT')
                     ->whereIn('idempotency_key', $pageParticipantIds->map(fn (int $id): string => 'rider-payout-'.$id))
                     ->get(['metadata'])
-                    ->filter(fn (FinancialLedgerEntry $entry): bool => (bool) data_get($entry->metadata, 'is_simulated'))
+                    ->filter(fn (FinancialLedgerEntry $entry): bool => (bool) data_get($entry->metadata, 'is_simulated')
+                        || str_starts_with((string) data_get($entry->metadata, 'payout_external_reference'), 'SIM-'))
                     ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
                     ->all()
                 : [];
@@ -327,7 +335,9 @@ class RiderController extends Controller
                     'delivery_role' => str($participant->participant_role)->replace('_', ' ')->headline(),
                     'assignment_status' => str($assignment?->status ?? 'ASSIGNMENT UNAVAILABLE')->replace('_', ' ')->headline(),
                     'amount' => $participant->share_amount === null ? 'Pending allocation' : 'PHP '.number_format((float) $participant->share_amount, 2),
-                    'status' => str($participant->status)->headline(),
+                    'status' => in_array((int) $participant->id, $simulatedPayoutParticipantIds, true)
+                        ? 'SIMULATED — NOT PAID'
+                        : str($participant->status)->headline(),
                 ];
             });
             $earningsTotal = (float) (clone $filteredParticipants)->sum('share_amount');
@@ -337,6 +347,8 @@ class RiderController extends Controller
                 ->where('entry_type', 'RIDER_PAYOUT')
                 ->where('metadata->rider_profile_id', $rider->id)
                 ->whereNotNull('paid_at')
+                ->whereNotNull('metadata->payout_external_reference')
+                ->whereNotNull('metadata->payout_proof_path')
                 ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
                 ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
             $poolSummary = [
@@ -346,8 +358,10 @@ class RiderController extends Controller
                 'available' => (float) $eligiblePayoutParticipants->sum('share_amount'),
                 'requested' => (float) RiderEarningPoolParticipant::query()->where('rider_profile_id', $rider->id)->where('status', 'PAYOUT_REQUESTED')->sum('share_amount'),
                 'awaiting_ack' => (float) (clone $realRiderPayouts)->where('status', 'PAYOUT_PENDING_ACK')->sum('amount'),
-                'paid' => (float) (clone $realRiderPayouts)->where('status', 'PAID')->sum('amount'),
-                'paid_out' => (float) (clone $realRiderPayouts)->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])->sum('amount'),
+                'paid' => (float) (clone $realRiderPayouts)->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')->sum('amount'),
+                'paid_out' => (float) (clone $realRiderPayouts)
+                    ->where(fn ($query) => $query->where('status', 'PAYOUT_PENDING_ACK')->orWhere(fn ($paid) => $paid->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')))
+                    ->sum('amount'),
             ];
         } else {
             $legacyBase = $rider->earnings();
@@ -752,8 +766,8 @@ class RiderController extends Controller
         $remittances = $rider->remittances();
 
         return [
-            'cod_collected' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])->sum('collected_amount'),
-            'unremitted_cash' => (float) (clone $collections)->where('status', CodCollection::COLLECTED)->whereDoesntHave('remittanceItem')->sum('expected_amount'),
+            'cod_collected' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])->sum('collected_amount'),
+            'unremitted_cash' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::DISCREPANCY])->whereDoesntHave('remittanceItem')->sum('expected_amount'),
             'remittances_submitted' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('submitted_amount'),
             'verified_cash' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('verified_amount'),
             'discrepancies' => (int) (clone $remittances)->where('status', RiderRemittance::DISCREPANCY)->count(),

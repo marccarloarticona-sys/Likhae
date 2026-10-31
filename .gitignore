@@ -21,6 +21,7 @@
 /public/storage
 /storage/*.key
 /storage/pail
+/storage/app/private/finance-reconciliation/
 /vendor
 _ide_helper.php
 Homestead.json

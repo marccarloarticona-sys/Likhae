@@ -50,6 +50,7 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Finance\PlatformCampaignBudgetService;
+use App\Support\FinancialRules;
 use App\Support\PayoutDestinationInput;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -470,6 +471,7 @@ class AdminOperationsController extends Controller
             'cash_collected' => 0.0,
             'cash_submitted' => 0.0,
             'cash_verified' => 0.0,
+            'admin_cod_received' => 0.0,
             'platform_commission' => 0.0,
             'seller_payable' => 0.0,
             'logistics_allocation' => 0.0,
@@ -481,6 +483,7 @@ class AdminOperationsController extends Controller
             'refund_adjustments' => 0.0,
             'unresolved_settlements' => 0,
             'available_payouts' => 0.0,
+            'seller_on_hold' => 0.0,
             'requested_payouts' => 0.0,
             'awaiting_payout_ack' => 0.0,
             'paid_payouts' => 0.0,
@@ -501,13 +504,14 @@ class AdminOperationsController extends Controller
         $sellerSettlements = null;
         $productProceeds = null;
         $codDiscrepancies = null;
+        $riderRemittanceDiscrepancies = null;
         $logisticsPayouts = null;
         $logisticsPayoutReceipts = null;
         $sellerPayoutSellers = collect();
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
-                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])
                 ->sum('collected_amount');
             $financialTotals['cash_submitted'] = (float) RiderRemittance::query()
                 ->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])
@@ -515,6 +519,10 @@ class AdminOperationsController extends Controller
             $financialTotals['cash_verified'] = (float) RiderRemittance::query()
                 ->whereIn('status', [RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])
                 ->sum('verified_amount');
+            $financialTotals['admin_cod_received'] = (float) FinancialLedgerEntry::query()
+                ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
+                ->where('status', 'RECEIVED')
+                ->sum('amount');
             $financialTotals['platform_commission'] = (float) ShipmentFinancialAllocation::query()->sum('platform_commission');
             $financialTotals['seller_payable'] = (float) ShipmentFinancialAllocation::query()->sum('seller_payable');
             $financialTotals['logistics_allocation'] = (float) ShipmentFinancialAllocation::query()->sum('logistics_allocation');
@@ -590,8 +598,9 @@ class AdminOperationsController extends Controller
                     });
             }
             $financialTotals['unresolved_settlements'] = SellerSettlement::query()->where('payout_status', 'REVIEW_REQUIRED')->count();
+            $financialTotals['seller_on_hold'] = (float) SellerSettlement::query()->whereIn('payout_status', ['ON_HOLD', 'PENDING'])->sum('outstanding_balance');
             $availableSeller = SellerSettlement::query()
-                ->whereIn('payout_status', ['PENDING', 'FAILED'])
+                ->whereIn('payout_status', ['AVAILABLE', 'FAILED'])
                 ->whereNotNull('seller_payable')
                 ->where('seller_payable', '>', 0)
                 ->whereNotExists(function ($query): void {
@@ -603,8 +612,14 @@ class AdminOperationsController extends Controller
                 });
             $financialTotals['available_payouts'] = (float) (clone $availableSeller)->sum('seller_payable');
             $financialTotals['requested_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
-            $financialTotals['awaiting_payout_ack'] = (float) SellerSettlement::query()->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount');
-            $financialTotals['paid_payouts'] = (float) SellerSettlement::query()->where('payout_status', 'PAID')->sum('payout_amount');
+            if ($schema->sellerPayoutProofReady()) {
+                $realSellerPayouts = SellerSettlement::query()
+                    ->whereNotNull('payout_external_reference')
+                    ->whereNotNull('payout_proof_path')
+                    ->where('payout_external_reference', 'not like', 'SIM-%');
+                $financialTotals['awaiting_payout_ack'] = (float) (clone $realSellerPayouts)->where('payout_status', 'PAYOUT_PENDING_ACK')->sum('payout_amount');
+                $financialTotals['paid_payouts'] = (float) (clone $realSellerPayouts)->where('payout_status', 'PAID')->whereNotNull('seller_acknowledged_at')->sum('payout_amount');
+            }
             $sellerPayoutSellers = SellerProfile::query()
                 ->whereIn('id', SellerSettlement::query()->select('seller_profile_id')->distinct())
                 ->orderBy('business_name')
@@ -638,32 +653,97 @@ class AdminOperationsController extends Controller
                     ->where('status', CodCollection::REMITTED_DISCREPANCY)
                     ->with(['shipment', 'order', 'sellerOrder', 'remittanceItem.remittance'])
                     ->latest()->paginate(15, ['*'], 'cod_discrepancies_page');
+                $riderRemittanceDiscrepancies = RiderRemittance::query()
+                    ->where('status', RiderRemittance::DISCREPANCY)
+                    ->with(['riderProfile.user', 'logisticsCenter', 'items.codCollection.shipment', 'items.codCollection.order'])
+                    ->latest()->paginate(15, ['*'], 'rider_remittance_discrepancies_page');
                 $receivedAllocationIds = FinancialLedgerEntry::query()
-                    ->select('shipment_financial_allocation_id')
+                    ->select('financial_ledger_entries.shipment_financial_allocation_id')
                     ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
-                    ->where('status', 'RECEIVED');
-                $financialTotals['available_payouts'] += (float) LogisticsEarningPool::query()
+                    ->where('status', 'RECEIVED')
+                    ->whereExists(function ($collection): void {
+                        $collection->selectRaw('1')
+                            ->from('cod_collections')
+                            ->whereColumn('cod_collections.shipment_id', 'financial_ledger_entries.shipment_id')
+                            ->whereIn('cod_collections.status', [CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP])
+                            ->whereColumn('cod_collections.expected_amount', 'financial_ledger_entries.amount')
+                            ->whereExists(function ($handoff): void {
+                                $handoff->selectRaw('1')
+                                    ->from('rider_remittance_items')
+                                    ->join('rider_remittances', 'rider_remittances.id', '=', 'rider_remittance_items.rider_remittance_id')
+                                    ->whereColumn('rider_remittance_items.cod_collection_id', 'cod_collections.id')
+                                    ->where('rider_remittances.status', RiderRemittance::RECONCILED)
+                                    ->whereColumn('rider_remittances.expected_amount', 'rider_remittances.verified_amount');
+                            });
+                    });
+                $availableLogisticsPools = LogisticsEarningPool::query()
                     ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
                     ->whereIn('status', ['PENDING', 'APPROVED'])
-                    ->sum('total_amount');
-                $financialTotals['requested_payouts'] += (float) LogisticsEarningPool::query()->where('status', 'PAYOUT_REQUESTED')->sum('total_amount');
-                $financialTotals['awaiting_payout_ack'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAYOUT_PENDING_ACK')->sum('amount');
-                $financialTotals['paid_payouts'] += (float) FinancialLedgerEntry::query()->where('entry_type', 'LOGISTICS_PAYOUT')->where('status', 'PAID')->sum('amount');
-                $financialTotals['paid_payouts'] += (float) RiderEarningPoolParticipant::query()->where('status', 'PAID')->sum('share_amount');
-                $logisticsPayouts = LogisticsEarningPool::query()
+                    ->with(['allocation', 'shipment'])
+                    ->get();
+                $financialTotals['available_payouts'] += $availableLogisticsPools->sum(fn (LogisticsEarningPool $pool): float =>
+                    $pool->payoutBreakdown()['transfer_cents'] / 100
+                );
+                $requestedLogisticsPools = LogisticsEarningPool::query()
                     ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
-                    ->where('total_amount', '>', 0)
-                    ->whereIn('status', ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'])
-                    ->with(['logisticsCenter', 'shipment.sellerOrder.order', 'allocation'])
-                    ->orderByRaw("CASE WHEN status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
-                    ->latest()
-                    ->paginate(15, ['*'], 'logistics_payouts_page');
+                    ->where('status', 'PAYOUT_REQUESTED')
+                    ->with(['allocation', 'shipment'])
+                    ->get();
+                $financialTotals['requested_payouts'] += $requestedLogisticsPools->sum(fn (LogisticsEarningPool $pool): float =>
+                    $pool->payoutBreakdown()['transfer_cents'] / 100
+                );
+                $realLogisticsPayouts = fn () => FinancialLedgerEntry::query()
+                    ->where('entry_type', 'LOGISTICS_PAYOUT')
+                    ->whereNotNull('metadata->payout_proof_path')
+                    ->whereNotNull('metadata->payout_external_reference')
+                    ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
+                    ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
+                $financialTotals['awaiting_payout_ack'] += (float) $realLogisticsPayouts()->where('status', 'PAYOUT_PENDING_ACK')->sum('amount');
+                $financialTotals['paid_payouts'] += (float) $realLogisticsPayouts()->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')->sum('amount');
+                $logisticsRoute = $request->query('logistics_route') === 'inter' ? 'inter' : 'single';
+                $routeColumnsReady = Schema::hasColumn('shipments', 'origin_logistics_center_id')
+                    && Schema::hasColumn('shipments', 'destination_logistics_center_id');
+                $routeFilter = function ($query) use ($logisticsRoute, $routeColumnsReady): void {
+                    if (! $routeColumnsReady) {
+                        if ($logisticsRoute === 'inter') {
+                            $query->whereRaw('1 = 0');
+                        }
+                        return;
+                    }
+                    if ($logisticsRoute === 'inter') {
+                        $query->whereNotNull('origin_logistics_center_id')->whereNotNull('destination_logistics_center_id')
+                            ->whereColumn('origin_logistics_center_id', '<>', 'destination_logistics_center_id');
+                    } else {
+                        $query->where(fn ($route) => $route->whereNull('origin_logistics_center_id')
+                            ->orWhereNull('destination_logistics_center_id')
+                            ->orWhereColumn('origin_logistics_center_id', '=', 'destination_logistics_center_id'));
+                    }
+                };
+                $eligibleLogisticsPayoutStatuses = ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'];
+                $logisticsPayouts = ShipmentFinancialAllocation::query()
+                    ->whereIn('id', $receivedAllocationIds)
+                    ->whereHas('logisticsPools', function ($pools) use ($eligibleLogisticsPayoutStatuses, $routeFilter): void {
+                        $pools->whereIn('status', $eligibleLogisticsPayoutStatuses)
+                            ->whereHas('shipment', $routeFilter);
+                    })
+                    ->with([
+                        'shipment.sellerOrder.order',
+                        'shipment.sellerOrder.items',
+                        'shipment.orderItem',
+                        'shipment.logisticsCenter',
+                        'shipment.originLogisticsCenter',
+                        'shipment.destinationLogisticsCenter',
+                        'logisticsPools' => fn ($pools) => $pools->with(['logisticsCenter', 'shipment', 'allocation']),
+                    ])
+                    ->latest('id')
+                    ->paginate(15, ['*'], 'logistics_payouts_page')->withQueryString();
                 $logisticsPayoutReceipts = FinancialLedgerEntry::query()
                     ->where('entry_type', 'LOGISTICS_PAYOUT')
                     ->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])
+                    ->whereHas('shipment', $routeFilter)
                     ->with(['shipment.sellerOrder.order'])
                     ->latest('paid_at')
-                    ->paginate(15, ['*'], 'logistics_payout_receipts_page');
+                    ->paginate(15, ['*'], 'logistics_payout_receipts_page')->withQueryString();
             }
         }
 
@@ -677,6 +757,7 @@ class AdminOperationsController extends Controller
             'logisticsPayouts' => $logisticsPayouts,
             'logisticsPayoutReceipts' => $logisticsPayoutReceipts,
             'codDiscrepancies' => $codDiscrepancies,
+            'riderRemittanceDiscrepancies' => $riderRemittanceDiscrepancies,
             'parcelSettlementReady' => $schema->parcelSettlementReady(),
             'payoutProofReady' => $schema->sellerPayoutProofReady(),
             'payoutDestinationReady' => $destinations->readyFor('seller_profiles') && $destinations->readyFor('logistics_centers'),

@@ -434,6 +434,16 @@
             content: "";
         }
 
+        .rider-availability-error {
+            margin: 12px 24px 0;
+            padding: 10px 14px;
+            border: 1px solid #e9b8ae;
+            border-radius: 10px;
+            background: #fff2ef;
+            color: #8a3026;
+            font-size: 12px;
+        }
+
         .rider-content {
             width: 100%;
             padding: 24px 24px 34px;
@@ -756,55 +766,39 @@
     @if($availabilityRider && $availabilityRider->is_online && \App\Support\RiderVehicleType::isLocalBarangay($availabilityRider->vehicle_type))
         <script>
             (() => {
-                if (!navigator.geolocation) return;
+                const showLocationStatus = (message) => {
+                    document.querySelectorAll('[data-rider-location-status]').forEach((element) => { element.textContent = message; });
+                };
+                if (!navigator.geolocation) {
+                    showLocationStatus('Location is unavailable. Enable location for nearby assignments.');
+                    return;
+                }
                 const endpoint = @json(route('rider.availability.location.update'));
                 const token = document.querySelector('meta[name="csrf-token"]')?.content;
                 let lastSentAt = 0;
+                let sending = false;
                 navigator.geolocation.watchPosition((position) => {
-                    if (Date.now() - lastSentAt < 60000) return;
-                    lastSentAt = Date.now();
+                    if (sending || Date.now() - lastSentAt < 60000) return;
+                    sending = true;
                     fetch(endpoint, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': token},
                         body: JSON.stringify({latitude: position.coords.latitude, longitude: position.coords.longitude}),
                         credentials: 'same-origin',
-                    }).catch(() => {});
-                }, () => {}, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
+                    }).then((response) => {
+                        if (!response.ok) throw new Error('Location update failed');
+                        lastSentAt = Date.now();
+                        document.querySelectorAll('[data-rider-availability-summary]').forEach((element) => { element.textContent = 'Available for new jobs'; });
+                        showLocationStatus('');
+                    }).catch(() => {
+                        showLocationStatus('Location could not be updated. Check your connection and try again.');
+                    }).finally(() => { sending = false; });
+                }, () => {
+                    showLocationStatus('Location was not shared. Enable location for nearby assignments.');
+                }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
             })();
         </script>
     @endif
-    <script>
-        (() => {
-            document.querySelectorAll('[data-rider-availability-form]').forEach((form) => {
-                const online = form.querySelector('input[name="is_online"]');
-                const latitude = form.querySelector('[data-availability-latitude]');
-                const longitude = form.querySelector('[data-availability-longitude]');
-                const message = form.querySelector('[data-availability-message]');
-                let locationReady = false;
-                form.addEventListener('submit', (event) => {
-                    if (online.value !== '1' || locationReady) return;
-                    event.preventDefault();
-                    if (!navigator.geolocation) {
-                        message.textContent = 'Location is unavailable. You can still go online; nearby automatic dispatch may be limited.';
-                        locationReady = true;
-                        form.requestSubmit();
-                        return;
-                    }
-                    message.textContent = 'Getting your location…';
-                    navigator.geolocation.getCurrentPosition((position) => {
-                        latitude.value = position.coords.latitude;
-                        longitude.value = position.coords.longitude;
-                        locationReady = true;
-                        form.requestSubmit();
-                    }, () => {
-                        message.textContent = 'Location was not shared. You can still go online, but nearby automatic dispatch may be limited.';
-                        locationReady = true;
-                        form.requestSubmit();
-                    }, {enableHighAccuracy: true, maximumAge: 30000, timeout: 15000});
-                });
-            });
-        })();
-    </script>
 </body>
 
 </html>

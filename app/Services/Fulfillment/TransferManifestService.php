@@ -10,6 +10,7 @@ use App\Models\Logistics\TransferManifest;
 use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
+use App\Support\ParcelWeightEstimator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -65,7 +66,7 @@ final class TransferManifestService
     {
         return RiderProfile::query()
             ->where('rider_profiles.logistics_center_id', $centerId)
-            ->where('rider_profiles.status', 'ACTIVE')
+            ->whereIn('rider_profiles.status', ['ACTIVE', 'WARNED'])
             ->whereNotNull('rider_profiles.approved_by_user_id')
             ->whereNotNull('rider_profiles.approved_at')
             ->whereIn('rider_profiles.vehicle_type', \App\Support\RiderVehicleType::interLogisticsValues())
@@ -73,8 +74,6 @@ final class TransferManifestService
             ->where('rider_profiles.approved_parcel_capacity', '>', 0)
             ->whereNotNull('rider_profiles.approved_weight_capacity_kg')
             ->where('rider_profiles.approved_weight_capacity_kg', '>', 0)
-            ->whereNotNull('rider_profiles.approved_volume_capacity_liters')
-            ->where('rider_profiles.approved_volume_capacity_liters', '>', 0)
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', User::TYPE_RIDER)
                 ->where('status', User::STATUS_ACTIVE))
@@ -131,25 +130,20 @@ final class TransferManifestService
         });
     }
 
-    public function recordItemMeasurements(
+    public function recordItemWeight(
         User $actor,
         TransferManifest $manifest,
         TransferManifestItem $item,
-        ?string $weightKg,
-        ?string $volumeLiters,
+        string $weightKg,
     ): TransferManifestItem {
         $this->assertReady();
-        $weight = filled($weightKg) ? $this->normalizeMeasurement($weightKg, 9999999.999) : null;
-        $volume = filled($volumeLiters) ? $this->normalizeMeasurement($volumeLiters, 999999999.999) : null;
-        if ($weight === null && $volume === null) {
-            throw new RuntimeException('Record a parcel weight or volume, or skip this optional measurement.');
-        }
+        $weight = $this->normalizeWeight($weightKg);
 
-        return DB::transaction(function () use ($actor, $manifest, $item, $weight, $volume): TransferManifestItem {
+        return DB::transaction(function () use ($actor, $manifest, $item, $weight): TransferManifestItem {
             $manifest = TransferManifest::query()->whereKey($manifest->id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $manifest->origin_logistics_center_id);
             if ($manifest->status !== TransferManifest::DRAFT) {
-                throw new RuntimeException('Parcel measurements can only be recorded on a draft manifest.');
+                throw new RuntimeException('Parcel weights can only be recorded on a draft manifest.');
             }
 
             $item = TransferManifestItem::query()->whereKey($item->id)->where('manifest_id', $manifest->id)
@@ -168,33 +162,22 @@ final class TransferManifestService
             }
 
             $beforeWeight = $shipment->parcel_weight_kg;
-            $beforeVolume = $shipment->parcel_volume_liters;
-            if (($weight === null || (string) $beforeWeight === $weight)
-                && ($volume === null || (string) $beforeVolume === $volume)) {
+            if ((string) $beforeWeight === $weight) {
                 return $item;
             }
-            $measurements = [];
-            if ($weight !== null) {
-                $measurements['parcel_weight_kg'] = $weight;
-            }
-            if ($volume !== null) {
-                $measurements['parcel_volume_liters'] = $volume;
-            }
-            $shipment->update($measurements);
+            $shipment->update(['parcel_weight_kg' => $weight]);
 
             if ($manifest->assigned_driver_rider_profile_id) {
-                $manifest->load('items.transferLeg.shipment', 'assignedDriver.user');
+                $manifest->load('items.transferLeg.shipment.orderItem.productVariant', 'assignedDriver.user');
                 $this->assertManifestCapacity($manifest, null, true);
             }
 
-            $weightNote = $weight === null ? 'weight unchanged' : 'measured packed weight '.$weight.' kg';
-            $volumeNote = $volume === null ? 'volume unchanged' : 'volume '.$volume.' L';
             ShipmentEvent::query()->create([
                 'shipment_id' => $shipment->id,
                 'status' => $shipment->current_status,
                 'actor_user_id' => $actor->id,
                 'logistics_center_id' => $manifest->origin_logistics_center_id,
-                'notes' => 'Origin hub recorded '.$weightNote.' and '.$volumeNote.' for draft manifest '.$manifest->manifest_number.'.',
+                'notes' => 'Origin hub recorded packed parcel weight '.$weight.' kg for draft manifest '.$manifest->manifest_number.'.',
                 'occurred_at' => now(),
             ]);
 
@@ -202,12 +185,12 @@ final class TransferManifestService
         });
     }
 
-    private function normalizeMeasurement(string $value, float $maximum): string
+    private function normalizeWeight(string $value): string
     {
         $value = trim($value);
         if (! preg_match('/^\d+(?:\.\d{1,3})?$/D', $value)
-            || (float) $value <= 0 || (float) $value > $maximum) {
-            throw new RuntimeException('Enter a positive measured value with at most three decimal places.');
+            || (float) $value <= 0 || (float) $value > 9999999.999) {
+            throw new RuntimeException('Enter a positive packed weight in kilograms with at most three decimal places.');
         }
 
         return number_format((float) $value, 3, '.', '');
@@ -334,7 +317,7 @@ final class TransferManifestService
     {
         // Kept as a compatibility entry point; departure belongs to the
         // assigned rider and is enforced by driverStart().
-        return $this->driverStart($actor, $manifest);
+        return $this->driverStart($actor, $manifest, $scannedCodes, $scanMethod);
     }
 
     public function driverAccept(User $actor, TransferManifest $manifest): TransferManifest
@@ -391,11 +374,11 @@ final class TransferManifestService
         });
     }
 
-    public function driverStart(User $actor, TransferManifest $manifest): TransferManifest
+    public function driverStart(User $actor, TransferManifest $manifest, array $scannedCodes = [], string $scanMethod = 'MANUAL'): TransferManifest
     {
         $this->assertReady();
 
-        return DB::transaction(function () use ($actor, $manifest): TransferManifest {
+        return DB::transaction(function () use ($actor, $manifest, $scannedCodes, $scanMethod): TransferManifest {
             $locked = TransferManifest::query()->whereKey($manifest->id)->with('assignedDriver.user', 'items.transferLeg.shipment')->lockForUpdate()->firstOrFail();
             $this->assertAssignedDriver($actor, $locked);
             if ($locked->status === TransferManifest::IN_TRANSIT) {
@@ -408,6 +391,9 @@ final class TransferManifestService
                 throw new RuntimeException('The assigned driver must accept the manifest before starting transport.');
             }
             $this->assertManifestCapacity($locked, $locked->assignedDriver);
+            if ($scannedCodes !== []) {
+                $this->assertScannedCodes($locked, $scannedCodes);
+            }
             if ($locked->items->isEmpty() || $locked->items->contains(
                 fn (TransferManifestItem $item): bool => $item->status !== TransferManifestItem::EXPECTED
                     || $item->transferLeg?->status !== ShipmentTransferLeg::RELEASED,
@@ -416,7 +402,13 @@ final class TransferManifestService
             }
 
             foreach ($locked->items as $item) {
-                $this->transfers->depart($item->transferLeg, $actor);
+                $scannedCode = $scannedCodes[$item->id] ?? null;
+                $this->transfers->depart(
+                    $item->transferLeg,
+                    $actor,
+                    $scannedCode === null ? null : (string) $scannedCode,
+                    $scanMethod,
+                );
             }
             $locked->update(['status' => TransferManifest::IN_TRANSIT, 'departed_at' => now()]);
 
@@ -584,18 +576,15 @@ final class TransferManifestService
                 ->firstOrFail();
             $leg->setRelation('shipment', $shipment);
 
-            $savedWeight = $shipment->parcel_weight_kg;
-            if (is_numeric($savedWeight) && is_finite((float) $savedWeight) && (float) $savedWeight > 0) {
+            if (ParcelWeightEstimator::recordedWeight($shipment) !== null) {
                 continue;
             }
 
             $unitWeight = $shipment->orderItem?->productVariant?->weight_kg;
             $quantity = (int) ($shipment->orderItem?->quantity ?? 0);
-            $estimate = is_numeric($unitWeight) && is_finite((float) $unitWeight) && (float) $unitWeight > 0 && $quantity > 0
-                ? round((float) $unitWeight * $quantity, 3, PHP_ROUND_HALF_UP)
-                : 0;
-            if ($estimate <= 0 || $estimate > 9999999.999) {
-                throw new RuntimeException('A parcel is missing its packed weight and its product has no usable per-item weight. Record a packed weight during seller preparation before sealing.');
+            $estimate = ParcelWeightEstimator::productEstimate($shipment);
+            if ($estimate === null) {
+                throw new RuntimeException('A parcel is missing its packed weight and its product has no usable per-item weight. Record a packed weight before sealing.');
             }
 
             $formattedEstimate = number_format($estimate, 3, '.', '');
@@ -616,10 +605,14 @@ final class TransferManifestService
         $driver ??= $manifest->assignedDriver ?: RiderProfile::query()->with('user')->findOrFail($manifest->assigned_driver_rider_profile_id);
         $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
         $this->assertDriverAvailable($driver, (int) $manifest->id);
-        $rows = $manifest->items->map(fn (TransferManifestItem $item): array => [
-            'weight_kg' => $item->transferLeg?->shipment?->parcel_weight_kg,
-            'volume_liters' => $item->transferLeg?->shipment?->parcel_volume_liters,
-        ]);
+        $rows = $manifest->items->map(function (TransferManifestItem $item): array {
+            $shipment = $item->transferLeg?->shipment;
+
+            return [
+                'weight_kg' => ParcelWeightEstimator::recordedWeight($shipment)
+                    ?? ParcelWeightEstimator::productEstimate($shipment),
+            ];
+        });
         $this->capacity->assertCapacity($driver, $rows, $allowMissingWeights);
     }
 
@@ -634,7 +627,7 @@ final class TransferManifestService
         $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
         $this->assertDriverAvailable($driver, (int) $manifest->id);
 
-        $manifest->load('items.transferLeg.shipment');
+        $manifest->load('items.transferLeg.shipment.orderItem.productVariant');
         $manifest->setRelation('assignedDriver', $driver);
         $this->assertManifestCapacity($manifest, $driver, true);
         $manifest->update(['assigned_driver_rider_profile_id' => $driver->id]);
@@ -645,7 +638,7 @@ final class TransferManifestService
     private function assertEligibleDriver(RiderProfile $driver, int $originCenterId): void
     {
         if ((int) $driver->logistics_center_id !== $originCenterId
-            || $driver->status !== 'ACTIVE'
+            || ! in_array($driver->status, ['ACTIVE', 'WARNED'], true)
             || ! $driver->approved_by_user_id
             || ! $driver->approved_at
             || $driver->user?->account_type !== User::TYPE_RIDER

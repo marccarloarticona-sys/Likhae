@@ -11,6 +11,7 @@ use App\Http\Controllers\Rider\RiderReturnWorkflowController;
 use App\Http\Controllers\Rider\RiderShipmentController;
 use App\Http\Controllers\Rider\RiderTripController;
 use App\Http\Controllers\Rider\RiderTransferController;
+use App\Http\Controllers\Logistics\InterhubTimekeepingController;
 use App\Http\Controllers\WorkspaceAiController;
 use App\Http\Controllers\WorkspaceSettingsController;
 use App\Http\Middleware\EnsureWorkspaceRole;
@@ -80,6 +81,9 @@ Route::prefix('rider')
         });
 
         Route::middleware('rider.operational:INTER_LOGISTICS')->group(function (): void {
+            Route::get('/attendance/qr', [InterhubTimekeepingController::class, 'driverQr'])->name('attendance.qr');
+            Route::post('/attendance/scan', [InterhubTimekeepingController::class, 'scanByDriver'])->middleware('throttle:30,1')->name('attendance.scan');
+            Route::get('/attendance/payroll-items/{item}/proof', [InterhubTimekeepingController::class, 'driverProof'])->whereNumber('item')->name('attendance.payroll-items.proof');
             Route::get('/transfers', [RiderTransferController::class, 'index'])->name('transfers');
             Route::get('/transfers/{manifest}', [RiderTransferController::class, 'show'])->name('transfers.show');
             Route::post('/transfers/{manifest}/accept', [RiderTransferController::class, 'accept'])->name('transfers.accept');

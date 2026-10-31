@@ -38,7 +38,7 @@ class ShipmentPolicy
                 && $center->status === 'ACTIVE'
                 && $center->approved_by_user_id !== null
                 && $center->approved_at !== null
-                && app(LogisticsShipmentQuery::class)->visibleTo($center)->whereKey($shipment->id)->exists();
+                && app(LogisticsShipmentQuery::class)->operationalFor($center)->whereKey($shipment->id)->exists();
         }
 
         if ($user->isAccountType(User::TYPE_RIDER)) {

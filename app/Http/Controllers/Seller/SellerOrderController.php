@@ -389,6 +389,16 @@ class SellerOrderController extends Controller
         $pickupIrreversible = $assignments->contains(fn ($candidate): bool => $candidate->assignment_type === 'PICKUP'
             && in_array($candidate->status, ['IN_PROGRESS', 'COMPLETED'], true));
         $codCollected = $codCollections->contains(fn ($collection): bool => in_array($collection->status, ['COLLECTED', 'REMITTED', 'DISCREPANCY'], true));
+        $allParcelsDelivered = $shipments->isNotEmpty()
+            && $shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true));
+        $allParcelsReceived = $shipments->isNotEmpty()
+            && $shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED');
+        $buyerReceiptPending = $allParcelsDelivered
+            && ! $allParcelsReceived
+            && $order->status !== 'COMPLETED';
+        $orderDisplayStatus = $buyerReceiptPending
+            ? 'Delivered, awaiting buyer receipt'
+            : ($allParcelsReceived ? 'Completed' : str($order->status)->replace('_', ' ')->title()->toString());
 
         return [
             'id' => $order->seller_order_number,
@@ -461,8 +471,9 @@ class SellerOrderController extends Controller
             'pickup_collected_at' => $pickupAssignment?->completed_at,
             'pickup_hub' => $pickupBatch?->logisticsCenter?->business_name ?? $shipments->first()?->logisticsCenter?->business_name,
             'shipping_address' => $address?->formatted() ?? 'Address unavailable',
-            'status' => str($order->status)->replace('_', ' ')->title()->toString(),
+            'status' => $orderDisplayStatus,
             'status_key' => $this->statusKey($order->status),
+            'buyer_receipt_pending' => $buyerReceiptPending,
             'delivery' => $shipments->first(),
             'map_markers' => app(MapDataService::class)->forShipments($shipments, includeSeller: true),
         ];

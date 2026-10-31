@@ -35,9 +35,11 @@ final class SellerPickupRequestService
             $seller = $this->sellerFor($actor);
             $address = Address::query()->whereKey($pickupAddressId)->lockForUpdate()->first();
             if (! $address
-                || (int) $seller->business_address_id !== (int) $address->id
                 || (int) $address->user_id !== (int) $seller->user_id) {
-                throw new RuntimeException('Choose the pickup address registered to your Seller business.');
+                throw new RuntimeException('Choose a pickup address saved to your Seller account.');
+            }
+            if (! is_numeric($address->latitude) || ! is_numeric($address->longitude)) {
+                throw new RuntimeException('Confirm the map pin for this pickup address before requesting a Rider.');
             }
 
             $shipments = Shipment::query()
@@ -110,9 +112,16 @@ final class SellerPickupRequestService
         });
     }
 
-    public function assign(User $actor, LogisticsCenter $center, int $requestId, int $riderProfileId): SellerPickupRequest
+    public function assign(
+        User $actor,
+        LogisticsCenter $center,
+        int $requestId,
+        int $riderProfileId,
+        bool $automaticDispatch = false,
+        ?string $coverageOverrideReason = null,
+    ): SellerPickupRequest
     {
-        return DB::transaction(function () use ($actor, $center, $requestId, $riderProfileId): SellerPickupRequest {
+        return DB::transaction(function () use ($actor, $center, $requestId, $riderProfileId, $automaticDispatch, $coverageOverrideReason): SellerPickupRequest {
             $this->assertCenterActor($actor, $center);
             $pickupRequest = SellerPickupRequest::query()
                 ->whereKey($requestId)
@@ -128,8 +137,9 @@ final class SellerPickupRequestService
             if ($count < 1 || $count > 10 || $memberships->contains(fn ($membership): bool => $membership->active_slot !== true)) {
                 throw new RuntimeException('This Seller pickup request no longer has 1 to 10 active parcels.');
             }
-            if ((int) $pickupRequest->pickup_address_id !== (int) $pickupRequest->sellerProfile?->business_address_id) {
-                throw new RuntimeException('The registered Seller pickup address changed. Review the request before assignment.');
+            if (! $pickupRequest->pickupAddress
+                || (int) $pickupRequest->pickupAddress->user_id !== (int) $pickupRequest->sellerProfile?->user_id) {
+                throw new RuntimeException('The saved pickup address is no longer available to this Seller. Review the request before assignment.');
             }
 
             $result = $this->batches->createPartial(
@@ -138,6 +148,8 @@ final class SellerPickupRequestService
                 $riderProfileId,
                 $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all(),
                 (int) $pickupRequest->id,
+                $automaticDispatch,
+                $coverageOverrideReason,
             );
             $trip = $result['trip'];
 

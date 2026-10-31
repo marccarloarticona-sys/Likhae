@@ -62,7 +62,7 @@ class LogisticsPortalController extends Controller
         private readonly LocalRiderEligibilityService $localRiderEligibility,
     ) {}
 
-    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery): View
+    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery, InterhubTimekeepingController $interhubTimekeeping): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
@@ -152,7 +152,7 @@ class LogisticsPortalController extends Controller
             $finance['rider_cod_obligations'] = (float) CodCollection::query()->where('logistics_center_id', $center->id)->whereIn('status', ['COLLECTED', 'REMITTED', 'DISCREPANCY'])->sum('expected_amount');
             $collections = CodCollection::query()->where('logistics_center_id', $center->id);
             $finance['cod_collected'] = (float) (clone $collections)
-                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_DISCREPANCY, CodCollection::DISCREPANCY])
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::REMITTED_DISCREPANCY, CodCollection::DISCREPANCY])
                 ->sum('collected_amount');
             $finance['cod_awaiting_remittance'] = (float) (clone $collections)
                 ->whereIn('status', [CodCollection::COLLECTED, CodCollection::DISCREPANCY])
@@ -164,7 +164,7 @@ class LogisticsPortalController extends Controller
         if (app(FinanceSchemaReadiness::class)->step7Ready()) {
             $pools = LogisticsEarningPool::query()->where('logistics_center_id', $center->id);
             $finance['logistics_pool'] = (float) (clone $pools)->sum('total_amount');
-            $finance['pending_settlement'] = (float) (clone $pools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('unresolved_share_amount');
+            $finance['pending_settlement'] = (float) (clone $pools)->whereIn('status', ['PENDING', 'APPROVED', 'REVIEW_REQUIRED'])->sum('unresolved_share_amount');
         }
 
         return view('logistics.dashboard.index', [
@@ -172,6 +172,7 @@ class LogisticsPortalController extends Controller
             'filters' => $filters,
             ...$shipmentData,
             'financeSummary' => $finance,
+            ...$interhubTimekeeping->logisticsData($request),
         ]);
     }
 
@@ -494,13 +495,11 @@ class LogisticsPortalController extends Controller
         $data = $request->validate([
             'approved_parcel_capacity' => ['nullable', 'integer', 'min:1', 'max:100'],
             'approved_weight_capacity_kg' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
-            'approved_volume_capacity_liters' => ['nullable', 'numeric', 'gt:0', 'max:1000000'],
         ]);
         if (in_array($rider->vehicleRole(), [\App\Support\RiderVehicleType::ROLE_INTER_LOGISTICS], true)
             && (blank($data['approved_parcel_capacity'] ?? null)
-                || blank($data['approved_weight_capacity_kg'] ?? null)
-                || blank($data['approved_volume_capacity_liters'] ?? null))) {
-            return back()->withErrors(['capacity' => 'Inter-logistics riders require all three approved capacity values.'])->withInput();
+                || blank($data['approved_weight_capacity_kg'] ?? null))) {
+            return back()->withErrors(['capacity' => 'Inter-logistics riders require approved parcel and weight capacities.'])->withInput();
         }
         if ($rider->vehicleRole() === \App\Support\RiderVehicleType::ROLE_LOCAL_BARANGAY
             && (int) ($data['approved_parcel_capacity'] ?? 0) > 10) {
@@ -516,7 +515,6 @@ class LogisticsPortalController extends Controller
             RiderProfile::query()->whereKey($rider->id)->lockForUpdate()->firstOrFail()->update([
                 'approved_parcel_capacity' => $data['approved_parcel_capacity'] ?? null,
                 'approved_weight_capacity_kg' => $data['approved_weight_capacity_kg'] ?? null,
-                'approved_volume_capacity_liters' => $data['approved_volume_capacity_liters'] ?? null,
             ]);
         });
 
@@ -1066,16 +1064,17 @@ class LogisticsPortalController extends Controller
                 ]),
             ],
             'columns' => [
-                ['label' => 'Date', 'width' => 0.10],
-                ['label' => 'Tracking / order', 'width' => 0.15],
-                ['label' => 'Transaction', 'width' => 0.11],
+                ['label' => 'Date', 'width' => 0.09],
+                ['label' => 'Tracking / order', 'width' => 0.14],
+                ['label' => 'Transaction', 'width' => 0.10],
                 ['label' => 'Amount', 'width' => 0.08],
-                ['label' => 'Status', 'width' => 0.10],
-                ['label' => 'Base shipping', 'width' => 0.09],
-                ['label' => 'Additional Care', 'width' => 0.09],
+                ['label' => 'Status', 'width' => 0.09],
+                ['label' => 'Base shipping', 'width' => 0.08],
+                ['label' => 'Additional Care', 'width' => 0.08],
                 ['label' => 'Combined delivery', 'width' => 0.10],
-                ['label' => 'Logistics share', 'width' => 0.09],
-                ['label' => 'Admin commission', 'width' => 0.09],
+                ['label' => 'Logistics share', 'width' => 0.08],
+                ['label' => 'Rider pass-through', 'width' => 0.08],
+                ['label' => 'Admin commission', 'width' => 0.08],
             ],
             'rows' => $rows,
             'empty_message' => 'No financial transactions match these filters.',

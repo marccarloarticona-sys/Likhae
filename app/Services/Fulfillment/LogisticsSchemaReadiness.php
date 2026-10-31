@@ -43,7 +43,6 @@ final class LogisticsSchemaReadiness
             && $this->hasColumns('rider_profiles', [
                 'approved_parcel_capacity',
                 'approved_weight_capacity_kg',
-                'approved_volume_capacity_liters',
             ]);
     }
 

@@ -91,7 +91,7 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
         $this->assertSame('PROCESSING', $order->fresh()->status);
     }
 
-    public function test_active_return_refund_request_blocks_auto_receipt(): void
+    public function test_active_return_refund_request_does_not_block_auto_receipt(): void
     {
         $this->at('2026-10-16 20:30:00');
         [$order, , $shipments, $buyer] = $this->createOrder([
@@ -108,7 +108,7 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
             'opened_at' => now()->subDay(),
             'resolved_at' => now()->subHours(12),
         ]);
-        ReturnRefundRequest::query()->create([
+        $request = ReturnRefundRequest::query()->create([
             'request_number' => 'AUTO-REQUEST-'.Str::upper(Str::random(8)),
             'dispute_id' => $dispute->id,
             'order_id' => $order->id,
@@ -126,8 +126,9 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
 
         $this->artisan('likhae:auto-confirm-delivered-orders')->assertExitCode(0);
 
-        $this->assertSame('PROCESSING', $order->fresh()->status);
-        $this->assertSame('DELIVERED', $shipments[0]->fresh()->current_status);
+        $this->assertSame('COMPLETED', $order->fresh()->status);
+        $this->assertSame('COMPLETED', $shipments[0]->fresh()->current_status);
+        $this->assertSame('REQUEST_SUBMITTED', $request->fresh()->status);
     }
 
     public function test_auto_receipt_completes_parent_seller_orders_and_shipments_with_system_events(): void

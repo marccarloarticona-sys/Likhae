@@ -97,13 +97,16 @@ Route::prefix('admin')
         Route::patch('/protection-rules/{protectionRule}', [AdminProtectionRuleController::class, 'update'])->name('protection-rules.update');
         Route::patch('/protection-rules/{protectionRule}/toggle', [AdminProtectionRuleController::class, 'toggle'])->name('protection-rules.toggle');
         Route::post('/finance/seller-settlements/{settlement}/authorize', [AdminFinanceController::class, 'authorizeSellerSettlement'])->name('finance.seller-settlements.authorize');
+        Route::post('/finance/seller-settlements/{settlement}/confirm-legacy-markdown', [AdminFinanceController::class, 'confirmLegacySellerMarkdown'])->name('finance.seller-settlements.confirm-legacy-markdown');
         Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
         Route::post('/finance/seller-settlements/{settlement}/fail', [AdminFinanceController::class, 'failSellerPayout'])->name('finance.seller-settlements.fail');
         Route::get('/finance/seller-settlements/{settlement}/proof', [PayoutProofController::class, 'adminSeller'])->name('finance.seller-settlements.proof');
         Route::post('/finance/logistics-pools/{pool}/pay', [AdminFinanceController::class, 'payLogisticsShare'])->name('finance.logistics-pools.pay');
+        Route::post('/finance/logistics-payouts/{entry}/fail', [AdminFinanceController::class, 'failLogisticsPayout'])->whereNumber('entry')->name('finance.logistics-payouts.fail');
         Route::get('/finance/logistics-payouts/{entry}/proof', [PayoutProofController::class, 'adminLogistics'])->name('finance.logistics-payouts.proof');
         Route::post('/finance/product-proceeds/{entry}/acknowledge', [AdminFinanceController::class, 'acknowledgeProductProceeds'])->name('finance.product-proceeds.acknowledge');
         Route::post('/finance/product-proceeds/{entry}/resolve', [AdminFinanceController::class, 'resolveProductProceeds'])->name('finance.product-proceeds.resolve');
+        Route::post('/finance/rider-remittances/{remittance}/resolve', [AdminFinanceController::class, 'resolveRiderRemittance'])->name('finance.rider-remittances.resolve');
         Route::post('/finance/cod-collections/{collection}/resolve', [AdminFinanceController::class, 'resolveBuyerCodDiscrepancy'])->name('finance.cod-collections.resolve');
         Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');

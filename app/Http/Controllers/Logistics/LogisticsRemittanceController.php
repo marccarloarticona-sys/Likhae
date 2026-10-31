@@ -7,6 +7,7 @@ use App\Models\Finance\RiderRemittance;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\LogisticsEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
+use App\Models\Rider\RiderProfile;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
@@ -14,7 +15,7 @@ use App\Services\Finance\PayoutSupportService;
 use App\Services\Finance\ProductProceedsService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\EarningPayoutService;
-use App\Services\Finance\SimulatedPayoutGateway;
+use App\Support\FinancialRules;
 use App\Support\PayoutDestinationInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -35,15 +36,30 @@ class LogisticsRemittanceController extends Controller
             'query' => $request->query(),
         ]);
         $receivedAllocationIds = FinancialLedgerEntry::query()
-            ->select('shipment_financial_allocation_id')
+            ->select('financial_ledger_entries.shipment_financial_allocation_id')
             ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
-            ->where('status', 'RECEIVED');
+            ->where('status', 'RECEIVED')
+            ->whereExists(function ($collection): void {
+                $collection->selectRaw('1')
+                    ->from('cod_collections')
+                    ->whereColumn('cod_collections.shipment_id', 'financial_ledger_entries.shipment_id')
+                    ->whereIn('cod_collections.status', ['REMITTED', 'REMITTED_RIDER_TOPUP'])
+                    ->whereColumn('cod_collections.expected_amount', 'financial_ledger_entries.amount')
+                    ->whereExists(function ($handoff): void {
+                        $handoff->selectRaw('1')
+                            ->from('rider_remittance_items')
+                            ->join('rider_remittances', 'rider_remittances.id', '=', 'rider_remittance_items.rider_remittance_id')
+                            ->whereColumn('rider_remittance_items.cod_collection_id', 'cod_collections.id')
+                            ->where('rider_remittances.status', 'RECONCILED')
+                            ->whereColumn('rider_remittances.expected_amount', 'rider_remittances.verified_amount');
+                    });
+            });
         $pools = $ready
             ? LogisticsEarningPool::query()
                 ->where('logistics_center_id', $center->id)
                 ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
                 ->where('total_amount', '>', 0)
-                ->whereIn('status', ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'])
+                ->whereIn('status', ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED', 'PAID', 'REVIEW_REQUIRED'])
                 ->with(['shipment.sellerOrder.order', 'allocation'])
                 ->orderByRaw("CASE WHEN status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
                 ->latest()->paginate(15, ['*'], 'payout_pool_page')
@@ -63,14 +79,37 @@ class LogisticsRemittanceController extends Controller
             ->where('entry_type', 'LOGISTICS_PAYOUT')
             ->where('metadata->logistics_center_id', $center->id)
             ->whereNotNull('paid_at')
+            ->whereNotNull('metadata->payout_external_reference')
+            ->whereNotNull('metadata->payout_proof_path')
             ->where(fn ($query) => $query->whereNull('metadata->is_simulated')->orWhere('metadata->is_simulated', false))
             ->where(fn ($query) => $query->whereNull('metadata->payout_external_reference')->orWhere('metadata->payout_external_reference', 'not like', 'SIM-%'));
+        $riderReserveLedger = fn () => FinancialLedgerEntry::query()
+            ->where('account_type', 'LOGISTICS_RIDER_LIABILITY')
+            ->where('metadata->logistics_center_id', $center->id)
+            ->where('status', 'POSTED');
+        $availablePools = $ready
+            ? (clone $eligiblePools)->whereIn('status', ['PENDING', 'APPROVED'])->with(['shipment', 'allocation'])->get()
+            : collect();
+        $requestedPools = $ready
+            ? (clone $eligiblePools)->where('status', 'PAYOUT_REQUESTED')->with(['shipment', 'allocation'])->get()
+            : collect();
         $payoutSummary = [
-            'available' => $ready ? (float) (clone $eligiblePools)->whereIn('status', ['PENDING', 'APPROVED'])->sum('total_amount') : 0.0,
-            'requested' => $ready ? (float) (clone $eligiblePools)->where('status', 'PAYOUT_REQUESTED')->sum('total_amount') : 0.0,
+            'available' => $availablePools->sum(fn (LogisticsEarningPool $pool): float =>
+                $pool->payoutBreakdown()['transfer_cents'] / 100
+            ),
+            'requested' => $requestedPools->sum(fn (LogisticsEarningPool $pool): float =>
+                $pool->payoutBreakdown()['transfer_cents'] / 100
+            ),
             'awaiting_ack' => $ready ? (float) $realPayouts()->where('status', 'PAYOUT_PENDING_ACK')->sum('amount') : 0.0,
-            'paid' => $ready ? (float) $realPayouts()->where('status', 'PAID')->sum('amount') : 0.0,
+            'paid' => $ready ? (float) $realPayouts()->where('status', 'PAID')->whereNotNull('metadata->acknowledged_at')->sum('amount') : 0.0,
             'paid_out' => $ready ? (float) $realPayouts()->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])->sum('amount') : 0.0,
+            'commission_earnings' => $ready ? (float) LogisticsEarningPool::query()->where('logistics_center_id', $center->id)->sum('total_amount') : 0.0,
+            'rider_reserved' => $ready ? (float) $riderReserveLedger()->where('direction', 'CREDIT')->sum('amount') - (float) $riderReserveLedger()->where('direction', 'DEBIT')->sum('amount') : 0.0,
+            'rider_paid' => $ready ? (float) FinancialLedgerEntry::query()
+                ->where('entry_type', 'RIDER_FUNDS_RELEASED')
+                ->where('metadata->logistics_center_id', $center->id)
+                ->where('status', 'POSTED')
+                ->sum('amount') : 0.0,
         ];
         $payoutDestinationReady = $destinations->readyFor('logistics_centers');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($center);
@@ -157,7 +196,7 @@ class LogisticsRemittanceController extends Controller
             ->with('status', 'Payout support request sent to Admin.');
     }
 
-    public function index(Request $request, FinanceSchemaReadiness $schema): View
+    public function index(Request $request, FinanceSchemaReadiness $schema, EarningPayoutService $payoutService, RemittanceService $remittanceService, InterhubTimekeepingController $interhubTimekeeping): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
@@ -168,32 +207,76 @@ class LogisticsRemittanceController extends Controller
                 'path' => $request->url(),
                 'query' => $request->query(),
             ]);
+        if ($schemaReady) {
+            foreach ($remittances as $remittance) {
+                $hasLegacyCoveredShortfall = $remittance->status === RiderRemittance::RECONCILED
+                    && $remittance->items->contains(fn ($item): bool => $item->codCollection?->status === \App\Models\Finance\CodCollection::REMITTED_DISCREPANCY
+                        && \App\Support\FinancialRules::cents($item->codCollection->collected_amount ?? 0) < \App\Support\FinancialRules::cents($item->codCollection->expected_amount));
+                if ($hasLegacyCoveredShortfall) {
+                    $remittanceService->reconcile($request->user(), $remittance);
+                    $remittance->load('items.codCollection.shipment', 'items.codCollection.order');
+                }
+            }
+        }
         $productProceeds = $schema->parcelSettlementReady()
             ? FinancialLedgerEntry::query()
                 ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')
                 ->whereHas('shipment', fn ($query) => $query->where(function ($query) use ($center): void {
                     $query->where('destination_logistics_center_id', $center->id)->orWhere('logistics_center_id', $center->id);
                 }))
-                ->with(['shipment.sellerOrder.order', 'allocation', 'actor'])
+                ->with(['shipment.sellerOrder.order', 'shipment.codCollection.remittanceItem.remittance', 'allocation', 'actor'])
                 ->latest()->paginate(20, ['*'], 'product_proceeds_page')
             : new LengthAwarePaginator([], 0, 20, max(1, $request->integer('product_proceeds_page', 1)), [
                 'path' => $request->url(),
                 'query' => $request->query(),
             ]);
-        $riderPayoutRequests = $schema->parcelSettlementReady()
+        $centerRiderParticipantIds = $schema->parcelSettlementReady()
+            ? RiderEarningPoolParticipant::query()
+                ->where(function ($participants) use ($center): void {
+                    $participants->where(function ($singleHub) use ($center): void {
+                        $singleHub->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id))
+                            ->whereDoesntHave('pool.shipment', fn ($shipment) => $shipment
+                                ->whereNotNull('origin_logistics_center_id')
+                                ->whereNotNull('destination_logistics_center_id')
+                                ->whereColumn('origin_logistics_center_id', '<>', 'destination_logistics_center_id'));
+                    })->orWhereHas('pool.shipment', fn ($shipment) => $shipment
+                        ->where('destination_logistics_center_id', $center->id)
+                        ->whereColumn('origin_logistics_center_id', '<>', 'destination_logistics_center_id'));
+                })
+                ->pluck('id')
+            : collect();
+        $localRiderParticipantIds = $schema->parcelSettlementReady() && $centerRiderParticipantIds->isNotEmpty()
+            ? RiderEarningPoolParticipant::query()
+                ->whereIn('id', $centerRiderParticipantIds)
+                ->where('participant_role', '<>', 'HUB_TO_HUB')
+                ->pluck('id')
+            : collect();
+        $interhubParticipantIds = $schema->parcelSettlementReady()
+            && $centerRiderParticipantIds->isNotEmpty()
+            ? RiderEarningPoolParticipant::query()
+                ->whereIn('id', $centerRiderParticipantIds)
+                ->where('participant_role', 'HUB_TO_HUB')
+                ->pluck('id')
+            : collect();
+        $riderPayoutRequests = $schema->parcelSettlementReady() && $localRiderParticipantIds->isNotEmpty()
             ? FinancialLedgerEntry::query()
                 ->where('entry_type', 'RIDER_PAYOUT')
-                ->where('status', 'PAYOUT_REQUESTED')
-                ->whereExists(function ($query) use ($center): void {
-                    $query->selectRaw('1')
-                        ->from('rider_earning_pool_participants')
-                        ->join('rider_profiles', 'rider_profiles.id', '=', 'rider_earning_pool_participants.rider_profile_id')
-                        ->where('rider_profiles.logistics_center_id', $center->id)
-                        ->whereRaw("CAST(JSON_UNQUOTE(JSON_EXTRACT(financial_ledger_entries.metadata, '$.participant_id')) AS UNSIGNED) = rider_earning_pool_participants.id");
-                })
+                ->whereIn('status', ['PAYOUT_REQUESTED', 'PAYOUT_PENDING_ACK', 'PAID'])
+                ->whereIn('metadata->participant_id', $localRiderParticipantIds)
                 ->with(['shipment.sellerOrder.order', 'allocation', 'actor'])
                 ->latest()->paginate(20, ['*'], 'rider_payout_page')
             : new LengthAwarePaginator([], 0, 20, max(1, $request->integer('rider_payout_page', 1)), [
+                'path' => $request->url(),
+                'query' => $request->query(),
+            ]);
+        $interhubPayoutRequests = $schema->parcelSettlementReady() && $interhubParticipantIds->isNotEmpty()
+            ? FinancialLedgerEntry::query()
+                ->where('entry_type', 'RIDER_PAYOUT')
+                ->whereIn('status', ['PAYOUT_REQUESTED', 'PAYOUT_PENDING_ACK', 'PAID'])
+                ->whereIn('metadata->participant_id', $interhubParticipantIds)
+                ->with(['shipment.sellerOrder.order', 'allocation', 'actor'])
+                ->latest()->paginate(20, ['*'], 'interhub_payout_page')
+            : new LengthAwarePaginator([], 0, 20, max(1, $request->integer('interhub_payout_page', 1)), [
                 'path' => $request->url(),
                 'query' => $request->query(),
             ]);
@@ -209,17 +292,65 @@ class LogisticsRemittanceController extends Controller
                 'query' => $request->query(),
             ]);
         $riderPayoutParticipants = collect();
+        $interhubPayoutParticipants = collect();
+        $availableRiderParticipants = collect();
+        $availableInterhubParticipants = collect();
         if ($schema->parcelSettlementReady()) {
             $participantIds = $riderPayoutRequests->getCollection()
                 ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
                 ->filter()
                 ->unique()
                 ->values();
+            $interhubPayoutParticipantIds = $interhubPayoutRequests->getCollection()
+                ->map(fn (FinancialLedgerEntry $entry): int => (int) data_get($entry->metadata, 'participant_id'))
+                ->filter()
+                ->unique()
+                ->values();
             $riderPayoutParticipants = RiderEarningPoolParticipant::query()
                 ->whereIn('id', $participantIds)
-                ->with('riderProfile')
+                ->with('riderProfile.user')
                 ->get()
                 ->keyBy('id');
+            $interhubPayoutParticipants = RiderEarningPoolParticipant::query()
+                ->whereIn('id', $interhubPayoutParticipantIds)
+                ->with('riderProfile.user')
+                ->get()
+                ->keyBy('id');
+
+            $availableProfileIds = RiderEarningPoolParticipant::query()
+                ->whereIn('id', $centerRiderParticipantIds)
+                ->pluck('rider_profile_id')
+                ->unique()
+                ->values();
+            $availableParticipants = RiderProfile::query()
+                ->with('user')
+                ->whereIn('id', $availableProfileIds)
+                ->where('status', 'ACTIVE')
+                ->get()
+                ->flatMap(fn (RiderProfile $rider) => $payoutService->eligibleRiderParticipants($rider))
+                ->filter(fn (RiderEarningPoolParticipant $participant): bool => $centerRiderParticipantIds->contains((int) $participant->id))
+                ->unique('id')
+                ->values();
+
+            $availableKeys = $availableParticipants
+                ->map(fn (RiderEarningPoolParticipant $participant): string => 'rider-payout-'.$participant->id)
+                ->all();
+            if ($availableKeys !== []) {
+                $alreadyRecordedKeys = FinancialLedgerEntry::query()
+                    ->where('entry_type', 'RIDER_PAYOUT')
+                    ->whereIn('idempotency_key', $availableKeys)
+                    ->pluck('idempotency_key')
+                    ->all();
+                $availableParticipants = $availableParticipants
+                    ->reject(fn (RiderEarningPoolParticipant $participant): bool => in_array('rider-payout-'.$participant->id, $alreadyRecordedKeys, true))
+                    ->values();
+            }
+            $availableInterhubParticipants = $availableParticipants
+                ->filter(fn (RiderEarningPoolParticipant $participant): bool => $participant->participant_role === 'HUB_TO_HUB')
+                ->values();
+            $availableRiderParticipants = $availableParticipants
+                ->reject(fn (RiderEarningPoolParticipant $participant): bool => $participant->participant_role === 'HUB_TO_HUB')
+                ->values();
         }
 
         return view('logistics.remittances.index', [
@@ -230,7 +361,12 @@ class LogisticsRemittanceController extends Controller
             'productProceeds' => $productProceeds,
             'riderPayoutRequests' => $riderPayoutRequests,
             'riderPayoutParticipants' => $riderPayoutParticipants,
+            'interhubPayoutRequests' => $interhubPayoutRequests,
+            'interhubPayoutParticipants' => $interhubPayoutParticipants,
+            'availableRiderParticipants' => $availableRiderParticipants,
+            'availableInterhubParticipants' => $availableInterhubParticipants,
             'logisticsPayoutReceipts' => $logisticsPayoutReceipts,
+            ...$interhubTimekeeping->logisticsData($request),
         ]);
     }
 
@@ -259,17 +395,9 @@ class LogisticsRemittanceController extends Controller
 
     public function resolveDiscrepancy(Request $request, RiderRemittance $remittance, RemittanceService $service): RedirectResponse
     {
-        $data = $request->validate([
-            'final_received_amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
-            'resolution' => ['required', 'string', 'max:2000'],
+        throw \Illuminate\Validation\ValidationException::withMessages([
+            'resolution' => 'A Rider handoff discrepancy requires independent Admin review with uploaded actual cash evidence.',
         ]);
-        try {
-            $service->resolveDiscrepancy($request->user(), $remittance, $data['final_received_amount'], $data['resolution']);
-        } catch (RuntimeException $exception) {
-            throw \Illuminate\Validation\ValidationException::withMessages(['resolution' => $exception->getMessage()]);
-        }
-
-        return back()->with('status', 'Rider handoff discrepancy resolution recorded.');
     }
 
     public function submitProductProceeds(Request $request, FinancialLedgerEntry $entry, ProductProceedsService $service): RedirectResponse
@@ -292,7 +420,29 @@ class LogisticsRemittanceController extends Controller
         return back()->with('status', 'Parcel product proceeds handoff recorded for Admin acknowledgment.');
     }
 
-    public function recordRiderPayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $service, SimulatedPayoutGateway $simulatedPayouts): RedirectResponse
+    public function submitProductProceedsBatch(Request $request, ProductProceedsService $service): RedirectResponse
+    {
+        $data = $request->validate([
+            'entry_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'entry_ids.*' => ['required', 'integer', 'distinct'],
+            'handoff_method' => ['nullable', 'string', 'max:80'],
+            'handoff_external_reference' => ['nullable', 'string', 'max:150'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        try {
+            $submittedEntries = $service->submitBatchToAdmin(
+                $request->user(), $data['entry_ids'], $data['notes'] ?? null,
+                $data['handoff_method'] ?? null, $data['handoff_external_reference'] ?? null,
+            );
+        } catch (RuntimeException $exception) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['entry_ids' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Selected full COD remittances submitted to Admin. The verified Rider handoff already covers the full COD total, including any Rider top-ups.');
+    }
+
+    public function recordRiderPayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $service): RedirectResponse
     {
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'decimal:0,2', 'min:0'],
@@ -323,7 +473,7 @@ class LogisticsRemittanceController extends Controller
             if ($proofPath) {
                 Storage::disk('local')->delete($proofPath);
             }
-            throw \Illuminate\Validation\ValidationException::withMessages(['amount' => $exception->getMessage()]);
+            throw \Illuminate\Validation\ValidationException::withMessages(['payout_method' => $exception->getMessage()]);
         } catch (\Throwable $exception) {
             if ($proofPath) {
                 Storage::disk('local')->delete($proofPath);
@@ -331,11 +481,19 @@ class LogisticsRemittanceController extends Controller
             throw $exception;
         }
 
-        $message = $simulatedPayouts->isOnlineMethod($data['payout_method'])
-            ? 'Demo payout simulated. No money was transferred; the Rider can acknowledge the simulated receipt.'
-            : 'Rider payout recorded. The Rider must acknowledge the receipt.';
+        return back()->with('status', 'Verified Rider transfer recorded. The Rider must confirm receipt before it is marked Paid.');
+    }
 
-        return back()->with('status', $message);
+    public function failRiderPayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $service): RedirectResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'max:2000']]);
+        try {
+            $service->markRiderPayoutFailed($request->user(), $entry, $data['reason']);
+        } catch (RuntimeException $exception) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['reason' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Failed Rider transfer recorded. The payout remains requested and can be sent again.');
     }
 
     public function acknowledgeLogisticsPayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $service): RedirectResponse

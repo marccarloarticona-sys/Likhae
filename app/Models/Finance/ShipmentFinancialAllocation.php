@@ -8,6 +8,7 @@ use App\Models\Seller\SellerOrder;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ShipmentFinancialAllocation extends Model
@@ -38,5 +39,6 @@ class ShipmentFinancialAllocation extends Model
     public function approvedBy(): BelongsTo { return $this->belongsTo(User::class, 'approved_by_user_id'); }
     public function sellerSettlement(): HasOne { return $this->hasOne(SellerSettlement::class); }
     public function logisticsPool(): HasOne { return $this->hasOne(LogisticsEarningPool::class); }
+    public function logisticsPools(): HasMany { return $this->hasMany(LogisticsEarningPool::class); }
     public function riderPool(): HasOne { return $this->hasOne(RiderEarningPool::class); }
 }

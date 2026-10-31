@@ -9,6 +9,10 @@
         && in_array($workspaceRider->status, ['ACTIVE', 'WARNED'], true)
         && auth()->user()?->status === \App\Models\User::STATUS_ACTIVE;
     $availabilityOnline = $canToggleAvailability && (bool) $workspaceRider->is_online;
+    $availabilityLocationFresh = $availabilityOnline
+        && $workspaceRider->availability_latitude !== null
+        && $workspaceRider->availability_longitude !== null
+        && ($workspaceRider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false);
     $availabilityUnavailableMessage = ! $availabilitySchemaReady
         ? 'Availability controls are unavailable until Rider status setup is complete.'
         : 'Contact Logistics to restore Rider access.';
@@ -32,16 +36,14 @@
             <div class="rider-mobile-status-copy" role="status" aria-live="polite">
                 <small>RIDER STATUS</small>
                 <strong>{{ $canToggleAvailability ? ($availabilityOnline ? 'ONLINE' : 'OFFLINE') : 'UNAVAILABLE' }}</strong>
-                <span>{{ $canToggleAvailability ? ($availabilityOnline ? 'Available for new jobs' : 'Not accepting new jobs') : $availabilityUnavailableMessage }}</span>
+                <span data-rider-availability-summary>{{ $canToggleAvailability ? ($availabilityOnline ? ($availabilityLocationFresh ? 'Available for new jobs' : 'Share your location for nearby assignments') : 'Not accepting new jobs') : $availabilityUnavailableMessage }}</span>
+                @if($availabilityOnline)<span data-rider-location-status aria-live="polite"></span>@endif
             </div>
             @if($canToggleAvailability)
                 <form method="POST" action="{{ route('rider.availability.update') }}" data-rider-availability-form>
                     @csrf @method('PATCH')
                     <input type="hidden" name="is_online" value="{{ $availabilityOnline ? 0 : 1 }}">
-                    <input type="hidden" name="latitude" data-availability-latitude>
-                    <input type="hidden" name="longitude" data-availability-longitude>
                     <button type="submit" class="rider-topbar-status rider-mobile-status-toggle">{{ $availabilityOnline ? 'Go Offline' : 'Go Online' }}</button>
-                    <span class="sr-only" data-availability-message aria-live="polite"></span>
                 </form>
             @endif
         </div>
@@ -62,11 +64,8 @@
             <form method="POST" action="{{ route('rider.availability.update') }}" style="display:inline-flex;align-items:center;gap:8px" data-rider-availability-form>
                 @csrf @method('PATCH')
                 <input type="hidden" name="is_online" value="{{ $availabilityOnline ? 0 : 1 }}">
-                <input type="hidden" name="latitude" data-availability-latitude>
-                <input type="hidden" name="longitude" data-availability-longitude>
-                <span class="rider-topbar-copy" role="status"><strong>RIDER STATUS · {{ $availabilityOnline ? 'ONLINE' : 'OFFLINE' }}</strong><span>{{ $availabilityOnline ? 'Available for new jobs' : 'Not accepting new jobs' }}</span></span>
+                <span class="rider-topbar-copy" role="status"><strong>RIDER STATUS · {{ $availabilityOnline ? 'ONLINE' : 'OFFLINE' }}</strong><span data-rider-availability-summary>{{ $availabilityOnline ? ($availabilityLocationFresh ? 'Available for new jobs' : 'Share your location for nearby assignments') : 'Not accepting new jobs' }}</span>@if($availabilityOnline)<span data-rider-location-status aria-live="polite"></span>@endif</span>
                 <button type="submit" class="rider-topbar-status" style="cursor:pointer;border-color:{{ $availabilityOnline ? '#CFE8DA' : '#E4DCCB' }};background:{{ $availabilityOnline ? 'var(--ra-success-soft)' : '#F5F1E8' }};color:{{ $availabilityOnline ? 'var(--ra-success)' : '#76684F' }}">{{ $availabilityOnline ? 'Go Offline' : 'Go Online' }}</button>
-                <span class="sr-only" data-availability-message aria-live="polite"></span>
             </form>
         @elseif($isLocalRider)
             <span class="rider-topbar-status" role="status">{{ $availabilitySchemaReady ? 'Unavailable · Contact Logistics' : 'Availability setup unavailable' }}</span>
@@ -74,3 +73,6 @@
         <x-shared.workspace.account-menu label="Rider Account" profile-route="rider.profile" />
     </div>
 </header>
+@if($errors->has('is_online') || $errors->has('latitude') || $errors->has('longitude'))
+    <div role="alert" class="rider-availability-error">{{ $errors->first('is_online') ?: ($errors->first('latitude') ?: $errors->first('longitude')) }}</div>
+@endif
