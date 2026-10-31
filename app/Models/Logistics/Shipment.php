@@ -91,7 +91,21 @@ class Shipment extends Model
 
     public function hasReachedSortingCenter(): bool
     {
-        return in_array($this->current_status, self::CENTER_RECEIVED_STATUSES, true);
+        if (in_array($this->current_status, self::CENTER_RECEIVED_STATUSES, true)) {
+            return true;
+        }
+
+        // Terminal statuses can replace the live status after intake (for
+        // example, a parcel can later be reported lost during delivery). Keep
+        // the recorded custody event authoritative so a later status change
+        // does not make the parcel appear to be awaiting its first intake.
+        if (! in_array($this->current_status, ['CANCELLED', 'LOST', 'DAMAGED', 'RETURNED'], true)) {
+            return false;
+        }
+
+        return $this->events()
+            ->whereIn('status', self::CENTER_RECEIVED_STATUSES)
+            ->exists();
     }
 
     public function orderItem(): BelongsTo

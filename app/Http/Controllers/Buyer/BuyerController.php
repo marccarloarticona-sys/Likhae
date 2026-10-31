@@ -1629,7 +1629,7 @@ class BuyerController extends Controller
 
         $this->ensureBuyerVariantIsAvailable($product, (int) $data['product_variant_id']);
 
-        $item = $this->cartService->add(
+        $item = $this->cartService->setForCheckout(
             $request->user(),
             $product,
             (int) $data['product_variant_id'],

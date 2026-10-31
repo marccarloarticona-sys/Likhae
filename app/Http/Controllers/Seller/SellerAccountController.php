@@ -14,13 +14,12 @@ use App\Services\Account\BuyerMobileChangeOtpService;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Media\ImageOptimizationService;
-use App\Support\PhilippineAddressValidator;
-use App\Support\AddressCoordinateValidator;
 use App\Support\PhilippineMobileNumber;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -157,6 +156,35 @@ class SellerAccountController extends Controller
             ->flip()
             ->all();
         $businessAddress = $this->ownedBusinessAddress($shop);
+        $pickupAddresses = Address::query()
+            ->where('user_id', $shop->user_id)
+            ->orderByDesc('is_default')
+            ->orderBy('id')
+            ->get();
+        $pickupRequestAddressIds = Schema::hasTable('seller_pickup_requests')
+            ? \App\Models\Seller\SellerPickupRequest::query()
+                ->where('seller_profile_id', $shop->id)
+                ->pluck('pickup_address_id')
+                ->map(fn ($id): int => (int) $id)
+                ->all()
+            : [];
+        $pickupAddressEditProtectedIds = $pickupRequestAddressIds;
+        if ($businessAddress && $shop->sellerOrders()->exists()) {
+            $pickupAddressEditProtectedIds[] = (int) $businessAddress->id;
+        }
+        $pickupAddressDeleteProtectedIds = array_values(array_unique([
+            ...$pickupRequestAddressIds,
+            ...($businessAddress ? [(int) $businessAddress->id] : []),
+        ]));
+        $defaultPickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default)
+            ?? $businessAddress
+            ?? $pickupAddresses->first();
+        $pickupAddressToEdit = null;
+        if ($request->filled('pickup_edit')) {
+            $pickupAddressToEdit = $pickupAddresses->firstWhere('id', (int) $request->input('pickup_edit'));
+            abort_unless($pickupAddressToEdit, 404);
+            abort_if(in_array((int) $pickupAddressToEdit->id, $pickupAddressEditProtectedIds, true), 409, 'This address is used by existing pickup or order routes. Add a new address to preserve those routes.');
+        }
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($shop);
         $payoutMultipleReady = $destinations->supportsMultipleFor('seller_profiles');
@@ -172,6 +200,11 @@ class SellerAccountController extends Controller
             'sellerDocuments' => $sellerDocuments,
             'sellerUpdateRequestDocumentIds' => $sellerUpdateRequestDocumentIds,
             'businessAddress' => $businessAddress,
+            'pickupAddresses' => $pickupAddresses,
+            'defaultPickupAddress' => $defaultPickupAddress,
+            'pickupAddressToEdit' => $pickupAddressToEdit,
+            'pickupAddressEditProtectedIds' => array_values(array_unique($pickupAddressEditProtectedIds)),
+            'pickupAddressDeleteProtectedIds' => $pickupAddressDeleteProtectedIds,
             'payoutProfile' => $shop,
             'payoutDestinationReady' => $payoutDestinationReady,
             'payoutDestinationSaved' => $payoutDestinationSaved,
@@ -410,29 +443,11 @@ class SellerAccountController extends Controller
     public function updateBusiness(Request $request): RedirectResponse
     {
         $shop = $this->shop($request);
-        $businessAddress = $this->ownedBusinessAddress($shop);
-        $this->normalizeOptionalMobile($request, 'contact_number');
 
         $data = $request->validate([
             'dti_sec_number' => ['nullable', 'string', 'max:100'],
             'tin' => ['nullable', 'string', 'max:80'],
-            'contact_number' => [
-                'nullable', 'string', 'max:30',
-                function (string $attribute, mixed $value, \Closure $fail) use ($businessAddress, $shop): void {
-                    $existing = $businessAddress?->contact_number ?? $shop->user->contact_number;
-                    if (blank($value)
-                        || PhilippineMobileNumber::normalize((string) $value) !== null
-                        || trim((string) $value) === trim((string) $existing)) {
-                        return;
-                    }
-                    $fail('Enter a valid Philippine mobile number.');
-                },
-            ],
-        ] + PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules());
-
-        PhilippineAddressValidator::assertValid($data);
-        AddressCoordinateValidator::assertValid($data);
-        AddressCoordinateValidator::assertFreshForAddress($businessAddress, $data);
+        ]);
 
         $profileChanges = [];
 
@@ -446,23 +461,6 @@ class SellerAccountController extends Controller
                 ? $this->trimWhitespace((string) $data['tin'])
                 : null;
         }
-
-        $address = $businessAddress ?: new Address([
-            'user_id' => $shop->user_id,
-            'label' => 'Seller business',
-            'is_default' => false,
-        ]);
-        $address->fill([
-            'recipient_name' => $shop->business_name,
-            'contact_number' => array_key_exists('contact_number', $data)
-                ? $data['contact_number']
-                : ($address->contact_number ?? $shop->user->contact_number),
-            ...PhilippineAddressValidator::storageAttributes($data),
-            'latitude' => $data['latitude'],
-            'longitude' => $data['longitude'],
-        ]);
-        $address->save();
-        $profileChanges['business_address_id'] = $address->id;
 
         if ($profileChanges !== []) {
             $shop->update($profileChanges);

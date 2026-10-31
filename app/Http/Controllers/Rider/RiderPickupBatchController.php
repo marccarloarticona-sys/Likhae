@@ -34,7 +34,7 @@ class RiderPickupBatchController extends Controller
                 RiderLocalTrip::IN_PROGRESS,
                 RiderLocalTrip::EN_ROUTE_TO_HUB,
             ])
-            ->with(['seller.businessAddress', 'items.riderAssignment.shipment'])
+            ->with(['seller.businessAddress', 'sellerPickupRequest.pickupAddress', 'items.riderAssignment.shipment'])
             ->latest()
             ->paginate(15);
 
@@ -57,7 +57,7 @@ class RiderPickupBatchController extends Controller
         if ($expired) {
             return redirect()->route('rider.pickups')->with('status', 'This pickup offer expired and was returned to Logistics for reassignment. Refresh Pickups for current work.');
         }
-        $pickup->load(['seller.user', 'seller.businessAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
+        $pickup->load(['seller.user', 'seller.businessAddress', 'sellerPickupRequest.pickupAddress', 'rider.user', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items.product.images']);
 
         $items = $pickup->items;
         $total = $items->count();
@@ -65,14 +65,14 @@ class RiderPickupBatchController extends Controller
         $collected = $collectedAssignmentIds->count();
         $resolved = $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
         $pickupFinished = $pickup->status === RiderLocalTrip::IN_PROGRESS && $resolved;
-        $address = $pickup->seller?->businessAddress;
+        $address = $pickup->sellerPickupRequest?->pickupAddress ?? $pickup->seller?->businessAddress;
         $centerAddress = $pickup->logisticsCenter?->address;
         $routeItem = $pickup->status === RiderLocalTrip::EN_ROUTE_TO_HUB
             ? $items->first(fn ($item): bool => $item->riderAssignment?->status === 'COMPLETED')
             : $items->first();
         $routeShipment = $routeItem?->riderAssignment?->shipment;
         $mapMarkers = $routeShipment
-            ? app(MapDataService::class)->forShipment($routeShipment, false, true, $request->user())
+            ? app(MapDataService::class)->forShipment($routeShipment, false, true, $request->user(), $address)
             : collect([
                 app(MapDataService::class)->addressMarker($address, 'pickup-seller-'.$pickup->id, 'Seller pickup address'),
                 app(MapDataService::class)->centerMarker($pickup->logisticsCenter),
@@ -136,11 +136,14 @@ class RiderPickupBatchController extends Controller
         if ($request->expectsJson()) {
             $batch = $batch->fresh()->load('items.riderAssignment.shipment');
             $collectedCount = $batches->collectedAssignmentIds($batch)->count();
+            $scannedShipment = $result['assignment']->shipment()->first();
 
             return response()->json([
                 'success' => true,
                 'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
-                'tracking' => $result['assignment']->shipment?->tracking_number,
+                'tracking' => $scannedShipment?->tracking_number,
+                'shipment_status' => $scannedShipment?->current_status,
+                'center_received' => $scannedShipment?->hasReachedSortingCenter() ?? false,
                 'assignment_id' => $result['assignment']->id,
                 'already_verified' => $result['already_verified'],
                 'collected_count' => $collectedCount,

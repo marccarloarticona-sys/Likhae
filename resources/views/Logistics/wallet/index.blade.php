@@ -91,6 +91,11 @@
                                 <span class="lk-logistics-wallet__status lk-logistics-wallet__status--paid">Transfer received and confirmed</span>
                             @elseif($pool->status === 'PAYOUT_REQUESTED')
                                 <span class="lk-logistics-wallet__status lk-logistics-wallet__status--waiting">Awaiting Admin transfer</span>
+                            @elseif($pool->status === 'REVIEW_REQUIRED')
+                                <span class="lk-logistics-wallet__status lk-logistics-wallet__status--waiting">Policy reallocation outstanding · held for review</span>
+                                @if(filled($pool->notes))
+                                    <span class="lk-logistics-wallet__save-reminder">{{ $pool->notes }}</span>
+                                @endif
                             @else
                                 <span class="lk-logistics-wallet__status lk-logistics-wallet__status--pending">{{ str($pool->status)->replace('_', ' ')->headline() }}</span>
                                 @if($payoutDestinationSaved)

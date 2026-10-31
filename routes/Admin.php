@@ -97,6 +97,7 @@ Route::prefix('admin')
         Route::patch('/protection-rules/{protectionRule}', [AdminProtectionRuleController::class, 'update'])->name('protection-rules.update');
         Route::patch('/protection-rules/{protectionRule}/toggle', [AdminProtectionRuleController::class, 'toggle'])->name('protection-rules.toggle');
         Route::post('/finance/seller-settlements/{settlement}/authorize', [AdminFinanceController::class, 'authorizeSellerSettlement'])->name('finance.seller-settlements.authorize');
+        Route::post('/finance/seller-settlements/{settlement}/confirm-legacy-markdown', [AdminFinanceController::class, 'confirmLegacySellerMarkdown'])->name('finance.seller-settlements.confirm-legacy-markdown');
         Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
         Route::post('/finance/seller-settlements/{settlement}/fail', [AdminFinanceController::class, 'failSellerPayout'])->name('finance.seller-settlements.fail');
         Route::get('/finance/seller-settlements/{settlement}/proof', [PayoutProofController::class, 'adminSeller'])->name('finance.seller-settlements.proof');

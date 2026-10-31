@@ -137,7 +137,7 @@
         <div class="ad-table-wrap"><table class="ad-table ad-finance-table--seller-payouts"><thead><tr><th>Seller</th><th>Order / parcel</th><th>Product / fee</th><th>Seller amount</th><th>Payment destination</th><th>Status</th><th>Payout receipt / acknowledgment</th><th>Action</th></tr></thead><tbody>
         @forelse($sellerSettlements as $settlement)
             @php($sellerPayoutType = \App\Support\PayoutAccountDetails::typeFor($settlement->sellerProfile))
-            @php($sellerShipmentReceived = $settlement->allocation?->shipment?->current_status === 'COMPLETED')
+            @php($sellerShipmentReceived = $settlement->sellerOrder?->order?->status === 'COMPLETED')
             <tr>
                 <td>{{ $settlement->sellerProfile?->business_name }}</td>
                 <td>{{ $settlement->sellerOrder?->seller_order_number }}<br>{{ $settlement->allocation?->shipment?->tracking_number ?? 'Historical order settlement' }}</td>
@@ -145,7 +145,7 @@
                 <td>{{ $settlement->seller_payable === null ? 'Review required' : 'PHP '.number_format((float) $settlement->seller_payable, 2) }}</td>
                 <td>@if($payoutDestinationReady && $settlement->sellerProfile?->payout_account_number){{ $settlement->sellerProfile->payout_method }}@if($settlement->sellerProfile->payout_bank_name)<br>{{ $settlement->sellerProfile->payout_bank_name }}@endif<br>{{ $settlement->sellerProfile->payout_account_name }}<br>{{ \App\Support\PayoutAccountDetails::typeLabel($sellerPayoutType) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($settlement->sellerProfile->payout_account_number, $sellerPayoutType) }}@elseif(!$payoutDestinationReady)Details unavailable until migration@else Not provided @endif</td>
                 <td>{{ str($settlement->payout_status)->replace('_', ' ')->headline() }}@if($settlement->payout_failure_reason)<br><small>{{ $settlement->payout_failure_reason }}</small>@endif</td>
-                        <td>{{ $settlement->settlement_reference }}<br>{{ $settlement->payout_method }} {{ $settlement->payout_external_reference }}<br>@if(\Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))<strong>Legacy demo entry — no transfer proof</strong><br>@elseif($settlement->payout_proof_path)<a href="{{ route('admin.finance.seller-settlements.proof', $settlement) }}">View transfer proof</a><br>@endif{{ $settlement->paid_at?->format('M d, Y g:i A') ?? '' }}<br>{{ $settlement->seller_acknowledged_at?->format('M d, Y g:i A') ?? 'Awaiting seller acknowledgment' }}</td>
+                        <td>{{ $settlement->settlement_reference }}<br>{{ $settlement->payout_method }} {{ $settlement->payout_external_reference }}<br>@if(\Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))<strong>Legacy demo entry — no transfer proof</strong><br>@elseif($settlement->payout_proof_path)<a href="{{ route('admin.finance.seller-settlements.proof', $settlement) }}">View transfer proof</a><br>@endif{{ $settlement->paid_at?->format('M d, Y g:i A') ?? '' }}@if($settlement->seller_acknowledged_at)<br>Receipt confirmed {{ $settlement->seller_acknowledged_at->format('M d, Y g:i A') }}@elseif($settlement->payout_status === 'PAYOUT_PENDING_ACK' && $settlement->paid_at)<br>Awaiting seller acknowledgment @elseif($settlement->payout_status === 'AUTHORIZED')<br>Awaiting transfer @endif</td>
                 <td>
                     @if((in_array($settlement->payout_status, ['AVAILABLE', 'PAYOUT_REQUESTED', 'FAILED'], true) || ($settlement->payout_status === 'PENDING' && $sellerShipmentReceived)) && $settlement->seller_payable !== null)
                         <form method="POST" action="{{ route('admin.finance.seller-settlements.authorize', $settlement) }}" data-confirm-title="Authorize parcel payout?" data-confirm-message="Authorize PHP {{ number_format((float) $settlement->seller_payable, 2) }} to {{ $settlement->sellerProfile?->business_name }} for parcel {{ $settlement->allocation?->shipment?->tracking_number ?? '—' }}?" data-confirm-label="Authorize payout">
@@ -173,6 +173,16 @@
                         <form method="POST" action="{{ route('admin.finance.seller-settlements.fail', $settlement) }}" class="mt-2 grid gap-1">
                             @csrf<input name="reason" maxlength="2000" placeholder="Failure / dispute reason" required><button class="ad-btn ad-btn-secondary">Record failure</button>
                         </form>
+                    @elseif($settlement->payout_status === 'REVIEW_REQUIRED')
+                        @if($sellerShipmentReceived)
+                            @php($reviewSellerAmount = max(0, (float) ($settlement->allocation?->product_amount ?? 0) - (float) $settlement->platform_commission))
+                            <small>Potential Seller amount: PHP {{ number_format($reviewSellerAmount, 2) }} (product proceeds less platform commission). Confirm only a catalog price markdown funded by Seller; vouchers, promotions, and flash sales remain under review.</small>
+                            <form method="POST" action="{{ route('admin.finance.seller-settlements.confirm-legacy-markdown', $settlement) }}" class="mt-2 grid gap-1" data-confirm-title="Confirm Seller-funded markdown?" data-confirm-message="Confirm only if the saved product price markdown was funded by the Seller. The system verifies the order snapshot and will keep payout blocked if other discount sources are present." data-confirm-label="Confirm markdown">
+                                @csrf<textarea name="notes" rows="2" minlength="10" maxlength="1000" placeholder="Review note" required></textarea><button class="ad-btn ad-btn-secondary">Confirm seller markdown</button>
+                            </form>
+                        @else
+                            <span>Wait for Buyer Order Received and parent order completion before resolving this settlement.</span>
+                        @endif
                     @elseif(in_array($settlement->payout_status, ['ON_HOLD', 'PENDING'], true))
                         <span>On hold until Buyer receipt or automatic confirmation.</span>
                     @else — @endif
@@ -216,11 +226,11 @@
         @forelse($productProceeds as $entry)
             @php($receipt = (array) $entry->metadata)
             <tr>
-                <td>{{ $receipt['receipt_reference'] ?? 'Awaiting handoff' }}<br>{{ $entry->shipment?->tracking_number ?? 'Parcel unavailable' }}</td>
+                <td>@if(!empty($receipt['batch_receipt_reference']))Batch {{ $receipt['batch_receipt_reference'] }}<br>@endif{{ $receipt['receipt_reference'] ?? 'Awaiting handoff' }}<br>{{ $entry->shipment?->tracking_number ?? 'Parcel unavailable' }}</td>
                 <td>{{ $entry->shipment?->sellerOrder?->order?->order_number ?? 'Order unavailable' }}</td>
                 <td>{{ data_get($receipt, 'sender.role', 'LOGISTICS') }} #{{ data_get($receipt, 'sender.logistics_center_id', '—') }}<br>{{ $receipt['submitted_at'] ?? 'Not submitted' }}</td>
                 <td>PHP {{ number_format((float) $entry->amount, 2) }}</td>
-                <td>{{ isset($receipt['amount_submitted']) ? 'PHP '.number_format((float) $receipt['amount_submitted'], 2) : '—' }}</td>
+                <td>{{ isset($receipt['amount_submitted']) ? 'PHP '.number_format((float) $receipt['amount_submitted'], 2) : '—' }}@if((float) ($receipt['batch_logistics_top_up_amount'] ?? 0) > 0)<br>Batch Logistics top-up PHP {{ number_format((float) $receipt['batch_logistics_top_up_amount'], 2) }}@endif</td>
                 <td>{{ isset($receipt['amount_received']) ? 'PHP '.number_format((float) $receipt['amount_received'], 2) : 'Awaiting' }}<br>{{ $receipt['acknowledged_at'] ?? '' }}</td>
                 <td>PHP {{ number_format((float) ($receipt['discrepancy_amount'] ?? 0), 2) }}<br>{{ str($entry->status)->headline() }}</td>
                 <td>
@@ -269,38 +279,132 @@
 
     @if($logisticsPayouts)
         <div class="ad-card" style="margin-top:16px">
-            <div class="ad-card-head"><div><span class="ad-overline">Delivery charge release</span><h2>Logistics transfers ready</h2><p>After full COD verification, release each route allocation. Single-Hub transfers include the Rider reserve; Inter-Hub pays Origin's 30% and Destination's 70%, including the reserved Rider pool.</p></div></div>
-            <div class="ad-table-wrap"><table class="ad-table ad-finance-table--logistics"><thead><tr><th>Logistics</th><th>Parcel / order</th><th>Split and gross transfer</th><th>Status</th><th>Action</th></tr></thead><tbody>
-                @forelse($logisticsPayouts as $pool)
-                    @php($payoutBreakdown = $pool->payoutBreakdown())
-                    @php($grossDeliveryAmount = $payoutBreakdown['transfer_cents'] / 100)
-                    @php($riderPassThrough = $payoutBreakdown['rider_reserve_cents'] / 100)
-                    @php($deliverySplit = \App\Services\Finance\DeliveryEarningsBreakdown::forShipment($pool->shipment, $pool->allocation))
-                    @php($parcelAmounts = $pool->shipment?->orderItem && $pool->shipment?->sellerOrder ? \App\Support\OrderItemParcelAmount::forItem($pool->shipment->sellerOrder, $pool->shipment->orderItem) : null)
-                    <tr>
-                        <td>{{ $pool->logisticsCenter?->business_name ?? 'Logistics center' }}
-                            @if($payoutDestinationReady && $pool->logisticsCenter?->payout_account_number)
-                                @php($logisticsPayoutType = \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter))
-                                <br><small>{{ $pool->logisticsCenter->payout_method }}@if($pool->logisticsCenter->payout_bank_name) · {{ $pool->logisticsCenter->payout_bank_name }}@endif · {{ $pool->logisticsCenter->payout_account_name }} · {{ \App\Support\PayoutAccountDetails::typeLabel($logisticsPayoutType) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($pool->logisticsCenter->payout_account_number, $logisticsPayoutType) }}</small>
-                            @elseif(!$payoutDestinationReady)
-                                <br><small>Saved payout details unavailable until the migration is installed.</small>
-                            @endif
-                        </td>
-                        <td>{{ $pool->shipment?->tracking_number ?? 'Parcel' }}<br>{{ $pool->shipment?->sellerOrder?->order?->order_number ?? 'Order' }}<br><small>Origin: {{ $pool->shipment?->originLogisticsCenter?->business_name ?? '—' }} · Destination: {{ $pool->shipment?->destinationLogisticsCenter?->business_name ?? $pool->logisticsCenter?->business_name ?? '—' }}</small></td>
-                        <td>Regional shipping PHP {{ number_format((float) $pool->allocation->shipping_fee, 2) }}<br>Additional Care PHP {{ number_format((float) ($pool->allocation->protection_amount ?? 0), 2) }}<br>Shipping voucher {{ $parcelAmounts ? 'PHP '.number_format($parcelAmounts['shipping_discount'], 2) : 'unavailable' }}<br><strong>Commission base PHP {{ number_format($deliverySplit['total_cents'] / 100, 2) }}</strong><br><small>@if((int) ($pool->shipment?->orderItem?->funding_snapshot_version ?? 0) === 1)Platform-funded shipping vouchers fund the delivery charge.@else Historical discount funding may require review. @endif</small><br>{{ $payoutBreakdown['role'] }} Logistics: PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }} ({{ $deliverySplit['total_cents'] ? number_format(100 * $payoutBreakdown['net_share_cents'] / $deliverySplit['total_cents'], 2) : '0.00' }}%)<br>Rider pool: PHP {{ number_format($deliverySplit['rider_cents'] / 100, 2) }} ({{ $deliverySplit['total_cents'] ? number_format(100 * $deliverySplit['rider_cents'] / $deliverySplit['total_cents'], 2) : '0.00' }}%)<br>Rider reserve PHP {{ number_format($riderPassThrough, 2) }}<br><strong>Transfer PHP {{ number_format($grossDeliveryAmount, 2) }}</strong></td>
-                        <td>{{ str($pool->status)->replace('_', ' ')->headline() }}</td>
-                        <td>@if($pool->logisticsCenter && $payoutDestinationReady && $pool->logisticsCenter->payout_account_number)<form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.logistics-pools.pay', $pool) }}" class="grid gap-1" data-confirm-title="Release full delivery charges to Logistics?" data-confirm-message="Transfer PHP {{ number_format($grossDeliveryAmount, 2) }}. This includes PHP {{ number_format($riderPassThrough, 2) }} for Logistics to pay the Rider." data-confirm-label="Record full transfer">
-                            @csrf
-                            <input name="amount" type="number" min="0" step="0.01" value="{{ number_format($grossDeliveryAmount, 2, '.', '') }}" required>
-                            <small>Destination: {{ $pool->logisticsCenter->payout_method }} · {{ $pool->logisticsCenter->payout_account_name }} · {{ \App\Support\PayoutAccountDetails::typeLabel($logisticsPayoutType ?? \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter)) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($pool->logisticsCenter->payout_account_number, $logisticsPayoutType ?? \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter)) }}</small>
-                            <input name="payout_external_reference" maxlength="150" placeholder="External transfer reference" required>
-                            <input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" required aria-label="Upload payout proof">
-                            <input name="notes" maxlength="1000" placeholder="Notes">
-                            <button class="ad-btn ad-btn-primary">Record manual transfer</button>
-                        </form>@else<p>Waiting for complete Logistics payout details.</p>@endif</td>
-                    </tr>
-                @empty<tr><td colspan="5">No Logistics payouts are ready for recording.</td></tr>@endforelse
-            </tbody></table></div>{{ $logisticsPayouts->links() }}
+            <div class="ad-card-head"><div><span class="ad-overline">Delivery charge release</span><h2>Logistics transfers ready</h2><p>After full COD verification, release each route allocation. Single-Hub totals include both Rider reserves. Inter-Hub groups Pickup Rider with Origin Logistics, and Delivery Rider with Destination Logistics.</p></div></div>
+            <div class="grid gap-3" style="margin-top:16px">
+                @forelse($logisticsPayouts as $allocation)
+                    @php($shipment = $allocation->shipment)
+                    @php($deliverySplit = \App\Services\Finance\DeliveryEarningsBreakdown::forShipment($shipment, $allocation))
+                    @php($routePools = $allocation->logisticsPools->sortBy(fn ($pool) => match ($pool->payoutBreakdown()['role']) { 'ORIGIN' => 0, 'DESTINATION' => 1, default => 2 }))
+                    @php($routeBreakdowns = $routePools->mapWithKeys(function ($pool) { $breakdown = $pool->payoutBreakdown(); return [$breakdown['role'] => $breakdown]; }))
+                    @php($originBreakdown = $routeBreakdowns->get('ORIGIN'))
+                    @php($destinationBreakdown = $routeBreakdowns->get('DESTINATION'))
+                    @php($usesCurrentInterHubSplit = !$deliverySplit['is_inter_hub'] || ($originBreakdown && $destinationBreakdown && $originBreakdown['rider_reserve_cents'] === $deliverySplit['pickup_rider_cents'] && $destinationBreakdown['rider_reserve_cents'] === $deliverySplit['delivery_rider_cents']))
+                    @php($commissionBaseCents = $deliverySplit['total_cents'])
+                    @php($parcelAmounts = $shipment?->orderItem && $shipment?->sellerOrder ? \App\Support\OrderItemParcelAmount::forItem($shipment->sellerOrder, $shipment->orderItem) : null)
+                    @php($originName = $shipment?->originLogisticsCenter?->business_name)
+                    @php($destinationName = $shipment?->destinationLogisticsCenter?->business_name ?? $shipment?->logisticsCenter?->business_name)
+                    <article class="ad-card" style="padding:16px">
+                        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:16px">
+                            <div>
+                                <span class="ad-overline">{{ $shipment?->tracking_number ?? 'Parcel' }}</span>
+                                <h3 style="margin:4px 0">
+                                    @if($deliverySplit['is_inter_hub'])
+                                        {{ $originName ?? 'Origin' }} → {{ $destinationName ?? 'Destination' }}
+                                    @else
+                                        {{ $destinationName ?? 'Logistics center' }} · Single-Hub
+                                    @endif
+                                </h3>
+                                <p style="margin:0">Order {{ $shipment?->sellerOrder?->order?->order_number ?? '—' }}</p>
+                            </div>
+                            <div style="display:grid;gap:6px;min-width:190px">
+                                <strong>Total charges · PHP {{ number_format($commissionBaseCents / 100, 2) }}</strong>
+                                @foreach($routePools as $pool)
+                                    @php($poolBreakdown = $pool->payoutBreakdown())
+                                    @php($poolRoleLabel = match ($poolBreakdown['role']) { 'ORIGIN' => 'Origin total', 'DESTINATION' => 'Destination total', default => 'Same-Hub total' })
+                                    <span>{{ $poolRoleLabel }} · PHP {{ number_format($poolBreakdown['transfer_cents'] / 100, 2) }}</span>
+                                @endforeach
+                            </div>
+                        </div>
+
+                        <details style="margin-top:12px">
+                            <summary class="ad-btn ad-btn-secondary" style="display:inline-flex;cursor:pointer">View details · Charge receipt and allocation</summary>
+                            <div class="grid gap-3" style="padding-top:16px">
+                                <section>
+                                    <h3>Charge receipt</h3>
+                                    <div class="ad-table-wrap"><table class="ad-table ad-finance-charge-receipt"><thead><tr><th>Item</th><th>Amount</th></tr></thead><tbody>
+                                        <tr><td>Regional shipping</td><td>PHP {{ number_format((float) $allocation->shipping_fee, 2) }}</td></tr>
+                                        <tr><td>Additional Care</td><td>PHP {{ number_format((float) ($allocation->protection_amount ?? 0), 2) }}</td></tr>
+                                        <tr><td>Shipping voucher</td><td>{{ $parcelAmounts ? 'PHP '.number_format($parcelAmounts['shipping_discount'], 2) : 'unavailable' }}</td></tr>
+                                        <tr><th>Total charges to split</th><th>PHP {{ number_format($commissionBaseCents / 100, 2) }}</th></tr>
+                                    </tbody></table></div>
+                                    <small>@if((int) ($shipment?->orderItem?->funding_snapshot_version ?? 0) === 1)Platform-funded shipping vouchers fund the delivery charge.@else Historical discount funding may require review. @endif</small>
+                                </section>
+
+                                <section>
+                                    <h3>Route allocation and payout</h3>
+                                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:12px">
+                                        @foreach($routePools as $pool)
+                                            @php($payoutBreakdown = $pool->payoutBreakdown())
+                                            @php($grossDeliveryAmount = $payoutBreakdown['transfer_cents'] / 100)
+                                            @php($riderPassThrough = $payoutBreakdown['rider_reserve_cents'] / 100)
+                                            @php($routeRole = $payoutBreakdown['role'])
+                                            @php($roleLabel = match ($routeRole) { 'ORIGIN' => 'Origin Logistics', 'DESTINATION' => 'Destination Logistics', default => 'Same-Hub Logistics' })
+                                            @php($pickupRiderCents = $deliverySplit['pickup_rider_cents'])
+                                            @php($deliveryRiderCents = $deliverySplit['delivery_rider_cents'])
+                                            @php($pickupRiderPercent = $commissionBaseCents ? 100 * $pickupRiderCents / $commissionBaseCents : 0)
+                                            @php($deliveryRiderPercent = $commissionBaseCents ? 100 * $deliveryRiderCents / $commissionBaseCents : 0)
+                                            @php($originLogisticsPercent = $commissionBaseCents ? 100 * $deliverySplit['origin_logistics_cents'] / $commissionBaseCents : 0)
+                                            @php($destinationLogisticsPercent = $commissionBaseCents ? 100 * $deliverySplit['destination_logistics_cents'] / $commissionBaseCents : 0)
+                                            @php($logisticsSharePercent = $commissionBaseCents ? 100 * $payoutBreakdown['net_share_cents'] / $commissionBaseCents : 0)
+                                            @php($riderReservePercent = $commissionBaseCents ? 100 * $payoutBreakdown['rider_reserve_cents'] / $commissionBaseCents : 0)
+                                            @php($grossTransferPercent = $commissionBaseCents ? 100 * $payoutBreakdown['transfer_cents'] / $commissionBaseCents : 0)
+                                            <article style="border:1px solid var(--ad-border,#ead7c7);border-radius:8px;padding:14px;min-width:0">
+                                                <h4 style="margin:0 0 8px">{{ $roleLabel }} · {{ $pool->logisticsCenter?->business_name ?? 'Logistics center' }}</h4>
+                                                <div class="ad-table-wrap"><table class="ad-table ad-finance-route-breakdown"><tbody>
+                                                    @if($routeRole === 'ORIGIN')
+                                                        @if($usesCurrentInterHubSplit)
+                                                            <tr><td>Pickup Rider</td><td>{{ number_format($pickupRiderPercent, 2) }}%</td><td>PHP {{ number_format($pickupRiderCents / 100, 2) }}</td></tr>
+                                                        @elseif($riderPassThrough > 0)
+                                                            <tr><td>Rider reserve</td><td>{{ number_format($riderReservePercent, 2) }}%</td><td>PHP {{ number_format($riderPassThrough, 2) }}</td></tr>
+                                                        @endif
+                                                        <tr><td>Origin Logistics</td><td>{{ number_format($originLogisticsPercent, 2) }}%</td><td>PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }}</td></tr>
+                                                        <tr><th>Origin total</th><th>{{ number_format($grossTransferPercent, 2) }}%</th><th>PHP {{ number_format($grossDeliveryAmount, 2) }}</th></tr>
+                                                    @elseif($routeRole === 'DESTINATION')
+                                                        @if($usesCurrentInterHubSplit)
+                                                            <tr><td>Delivery Rider</td><td>{{ number_format($deliveryRiderPercent, 2) }}%</td><td>PHP {{ number_format($deliveryRiderCents / 100, 2) }}</td></tr>
+                                                        @else
+                                                            <tr><td>Rider reserve</td><td>{{ number_format($riderReservePercent, 2) }}%</td><td>PHP {{ number_format($riderPassThrough, 2) }}</td></tr>
+                                                        @endif
+                                                        <tr><td>Destination Logistics</td><td>{{ number_format($destinationLogisticsPercent, 2) }}%</td><td>PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }}</td></tr>
+                                                        <tr><th>Destination total</th><th>{{ number_format($grossTransferPercent, 2) }}%</th><th>PHP {{ number_format($grossDeliveryAmount, 2) }}</th></tr>
+                                                    @else
+                                                        <tr><td>Pickup Rider reserve</td><td>{{ number_format($pickupRiderPercent, 2) }}%</td><td>PHP {{ number_format($pickupRiderCents / 100, 2) }}</td></tr>
+                                                        <tr><td>Delivery Rider reserve</td><td>{{ number_format($deliveryRiderPercent, 2) }}%</td><td>PHP {{ number_format($deliveryRiderCents / 100, 2) }}</td></tr>
+                                                        <tr><td>Same-Hub Logistics</td><td>{{ number_format($logisticsSharePercent, 2) }}%</td><td>PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }}</td></tr>
+                                                        <tr><th>Same-Hub total</th><th>{{ number_format($grossTransferPercent, 2) }}%</th><th>PHP {{ number_format($grossDeliveryAmount, 2) }}</th></tr>
+                                                    @endif
+                                                </tbody></table></div>
+                                                <p>Status: {{ str($pool->status)->replace('_', ' ')->headline() }}</p>
+                                                @if(in_array($pool->status, ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'], true) && $grossDeliveryAmount > 0)
+                                                    @if($pool->logisticsCenter && $payoutDestinationReady && $pool->logisticsCenter->payout_account_number)
+                                                        @php($logisticsPayoutType = \App\Support\PayoutAccountDetails::typeFor($pool->logisticsCenter))
+                                                        <form method="POST" enctype="multipart/form-data" action="{{ route('admin.finance.logistics-pools.pay', $pool) }}" class="grid gap-2" data-confirm-title="Release {{ $roleLabel }} allocation?" data-confirm-message="Transfer PHP {{ number_format($grossDeliveryAmount, 2) }} to {{ strtolower($roleLabel) }}. This includes PHP {{ number_format($riderPassThrough, 2) }} reserved for the Rider." data-confirm-label="Record route allocation">
+                                                            @csrf
+                                                            <label class="grid gap-1"><span>Amount (PHP)</span><input name="amount" type="number" min="0" step="0.01" value="{{ number_format($grossDeliveryAmount, 2, '.', '') }}" required></label>
+                                                            <label class="grid gap-1"><span>External transfer reference</span><input name="payout_external_reference" maxlength="150" placeholder="Enter transfer reference" required></label>
+                                                            <label class="grid gap-1"><span><strong>Proof of payment</strong><small style="display:block">Required · JPG, PNG, or PDF · max 5 MB</small></span><input name="payout_proof" type="file" accept=".jpg,.jpeg,.png,.pdf" required aria-label="Upload proof of payment"></label>
+                                                            <label class="grid gap-1"><span>Notes (optional)</span><input name="notes" maxlength="1000" placeholder="Add notes"></label>
+                                                            <small>Pay to {{ $roleLabel }}: {{ $pool->logisticsCenter->payout_method }} · {{ $pool->logisticsCenter->payout_account_name }} · {{ \App\Support\PayoutAccountDetails::typeLabel($logisticsPayoutType) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($pool->logisticsCenter->payout_account_number, $logisticsPayoutType) }}</small>
+                                                            <button class="ad-btn ad-btn-primary">Record {{ $routeRole === 'ORIGIN' ? 'Origin' : ($routeRole === 'DESTINATION' ? 'Destination' : 'Same-Hub') }} total</button>
+                                                        </form>
+                                                    @else
+                                                        <p>Waiting for complete Logistics payout details.</p>
+                                                    @endif
+                                                @elseif(in_array($pool->status, ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'], true))
+                                                    <p>No amount due for this route.</p>
+                                                @endif
+                                            </article>
+                                        @endforeach
+                                    </div>
+                                    <p><strong>Total allocation · 100% · PHP {{ number_format($commissionBaseCents / 100, 2) }}</strong></p>
+                                </section>
+                            </div>
+                        </details>
+                    </article>
+                @empty
+                    <div class="ad-card">No Logistics payouts are ready for recording.</div>
+                @endforelse
+            </div>{{ $logisticsPayouts->links() }}
         </div>
     @endif
 

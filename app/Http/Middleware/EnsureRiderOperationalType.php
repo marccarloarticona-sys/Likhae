@@ -15,7 +15,7 @@ class EnsureRiderOperationalType
         $rider = $request->user()?->riderProfile;
         abort_unless(
             $request->user()?->isAccountType(User::TYPE_RIDER)
-            && $rider?->status === 'ACTIVE',
+            && in_array($rider?->status, ['ACTIVE', 'WARNED'], true),
             403,
         );
 

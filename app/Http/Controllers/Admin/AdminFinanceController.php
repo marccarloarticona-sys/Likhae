@@ -90,6 +90,18 @@ class AdminFinanceController extends Controller
         return back()->with('status', 'Seller settlement authorized. Payment remains a separate action.');
     }
 
+    public function confirmLegacySellerMarkdown(Request $request, SellerSettlement $settlement, SellerSettlementService $service): RedirectResponse
+    {
+        $data = $request->validate(['notes' => ['required', 'string', 'min:10', 'max:1000']]);
+        try {
+            $service->confirmLegacySellerMarkdown($request->user(), $settlement, $data['notes']);
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages(['settlement' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Seller-funded catalog markdown confirmed. The Seller can request payout after COD and payout details are verified.');
+    }
+
     public function paySeller(Request $request, SellerSettlement $settlement, SellerSettlementService $service, PayoutDestinationReadiness $destinations, FinanceSchemaReadiness $schema): RedirectResponse
     {
         $data = $request->validate([

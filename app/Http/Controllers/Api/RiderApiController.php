@@ -88,11 +88,16 @@ class RiderApiController extends Controller
             return response()->json(['success' => false, 'message' => 'Seller pickup batch workflow is not enabled until its additive schema migration is installed.'], 503);
         }
 
+        $pickupRelations = ['seller.businessAddress', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items'];
+        if ($schema->sellerPickupRequestsReady()) {
+            $pickupRelations[] = 'sellerPickupRequest.pickupAddress';
+        }
+
         $query = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
             ->whereNotNull('seller_profile_id')
             ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])
-            ->with(['seller.businessAddress', 'logisticsCenter.address', 'items.riderAssignment.shipment.sellerOrder.items']);
+            ->with($pickupRelations);
         $rows = $query->paginate($this->perPage($request));
         $statsQuery = RiderLocalTrip::query()->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)->whereNotNull('seller_profile_id');
@@ -487,7 +492,7 @@ class RiderApiController extends Controller
     {
         abort_unless($request->user()?->isAccountType(User::TYPE_RIDER), 403, 'Rider access is required.');
         $rider = $request->user()->riderProfile;
-        abort_unless($rider && $rider->status === 'ACTIVE', 403, 'An active rider profile is required.');
+        abort_unless($rider && in_array($rider->status, ['ACTIVE', 'WARNED'], true), 403, 'An active rider profile is required.');
         return $rider;
     }
 
@@ -522,6 +527,9 @@ class RiderApiController extends Controller
 
     private function pickupBatchPayload(RiderLocalTrip $trip): array
     {
+        $pickupRequest = $trip->relationLoaded('sellerPickupRequest') ? $trip->sellerPickupRequest : null;
+        $pickupAddress = $pickupRequest?->pickupAddress ?? $trip->seller?->businessAddress;
+        $centerAddress = $trip->logisticsCenter?->address;
         $items = $trip->items->map(function (RiderLocalTripItem $item): array {
             $assignment = $item->riderAssignment;
             $shipment = $assignment?->shipment;
@@ -543,9 +551,13 @@ class RiderApiController extends Controller
             'batch_number' => 'P-'.$trip->id,
             'status' => $trip->status,
             'seller' => $trip->seller?->business_name,
-            'pickup_address' => $trip->seller?->businessAddress?->formatted(),
+            'pickup_address' => $pickupAddress?->formatted(),
+            'seller_latitude' => $pickupAddress?->latitude,
+            'seller_longitude' => $pickupAddress?->longitude,
             'logistics_center' => $trip->logisticsCenter?->business_name,
-            'destination_address' => $trip->logisticsCenter?->address?->formatted(),
+            'destination_address' => $centerAddress?->formatted(),
+            'logistics_center_latitude' => $centerAddress?->latitude,
+            'logistics_center_longitude' => $centerAddress?->longitude,
             'parcel_count' => $items->count(),
             'approved_capacity' => $trip->approved_parcel_capacity,
             'collected_count' => $collected,

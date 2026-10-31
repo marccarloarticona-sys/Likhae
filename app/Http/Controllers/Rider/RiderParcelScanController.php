@@ -22,7 +22,7 @@ class RiderParcelScanController extends Controller
         ]);
 
         $rider = $request->user()->riderProfile;
-        abort_unless($rider && $rider->status === 'ACTIVE', 403);
+        abort_unless($rider && in_array($rider->status, ['ACTIVE', 'WARNED'], true), 403);
         $tracking = trim($data['tracking']);
 
         // Search only jobs already assigned to this rider. A tracking number

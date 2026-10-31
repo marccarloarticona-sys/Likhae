@@ -26,9 +26,9 @@ class SellerFinanceController extends Controller
             $service->applyRefundDebtToUnpaidSettlements((int) $seller->id);
             SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
-                ->whereIn('payout_status', ['ON_HOLD', 'PENDING'])
-                ->whereHas('allocation.shipment', fn ($query) => $query->where('current_status', 'COMPLETED'))
-                ->with('allocation.shipment')
+                ->whereIn('payout_status', ['ON_HOLD', 'PENDING', 'REVIEW_REQUIRED'])
+                ->whereHas('sellerOrder.order', fn ($query) => $query->where('status', 'COMPLETED'))
+                ->with(['allocation.shipment', 'sellerOrder.order'])
                 ->get()
                 ->each(fn (SellerSettlement $settlement) => $service->releaseForShipment($settlement->allocation->shipment));
         }
@@ -38,12 +38,28 @@ class SellerFinanceController extends Controller
                 ->with(['allocation.shipment', 'sellerOrder.order'])
                 ->latest()->paginate(25)
             : null;
+        if ($settlements) {
+            $today = now()->startOfDay();
+            $settlements->getCollection()->each(static function (SellerSettlement $settlement) use ($today): void {
+                $elapsedBusinessDays = 0;
+                $countDate = $settlement->authorized_at?->copy()->startOfDay()->addDay();
+                while ($countDate && $countDate->lt($today)) {
+                    if (! $countDate->isWeekend()) {
+                        $elapsedBusinessDays++;
+                    }
+                    $countDate->addDay();
+                }
+                $settlement->setAttribute('payout_business_days_min', max(0, 3 - $elapsedBusinessDays));
+                $settlement->setAttribute('payout_business_days_max', max(0, 5 - $elapsedBusinessDays));
+            });
+        }
 
         $payoutBalances = [
             'available' => 0.0,
             'on_hold' => 0.0,
             'refund_debt' => 0.0,
             'requested' => 0.0,
+            'processing' => 0.0,
             'awaiting_ack' => 0.0,
             'paid_out' => 0.0,
             'paid' => 0.0,
@@ -68,6 +84,8 @@ class SellerFinanceController extends Controller
                 ->where('seller_profile_id', $seller->id)->whereIn('payout_status', ['ON_HOLD', 'PENDING'])->sum('outstanding_balance');
             $payoutBalances['requested'] = (float) SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)->where('payout_status', 'PAYOUT_REQUESTED')->sum('seller_payable');
+            $payoutBalances['processing'] = (float) SellerSettlement::query()
+                ->where('seller_profile_id', $seller->id)->where('payout_status', 'AUTHORIZED')->sum('seller_payable');
             $recordedPayouts = fn () => SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
                 ->whereIn('payout_status', ['PAYOUT_PENDING_ACK', 'PAID'])

@@ -74,6 +74,14 @@ class RiderShipmentController extends Controller
             return back()->withErrors(['action' => 'Seller pickup actions must be performed from the Seller Pickup Assignment page.']);
         }
 
+        $collectedAmount = $request->input('collected_amount');
+        if (is_string($collectedAmount) && str_contains($collectedAmount, ',')) {
+            $collectedAmount = trim($collectedAmount);
+            if (preg_match('/^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/D', $collectedAmount)) {
+                $request->merge(['collected_amount' => str_replace(',', '', $collectedAmount)]);
+            }
+        }
+
         $uploadedProof = $request->file('proof_file');
         if ($request->input('action') === 'delivery_success' && $uploadedProof instanceof UploadedFile && ! $uploadedProof->isValid()) {
             $uploadError = $uploadedProof->getError();

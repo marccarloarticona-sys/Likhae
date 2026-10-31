@@ -120,10 +120,10 @@ class LocalRiderEligibilityService
             throw new RuntimeException('The rider and service area must belong to the same logistics center.');
         }
 
-        if ($rider->status !== 'ACTIVE'
+        if (! in_array($rider->status, ['ACTIVE', 'WARNED'], true)
             || $rider->user?->account_type !== User::TYPE_RIDER
             || $rider->user?->status !== User::STATUS_ACTIVE) {
-            throw new RuntimeException('Only riders with an active rider profile and active user account can receive local assignments.');
+            throw new RuntimeException('Only active or warned riders with an active user account can receive local assignments.');
         }
 
         if (! RiderVehicleType::isLocalBarangay($rider->vehicle_type)) {

@@ -3,6 +3,8 @@
 namespace App\Services\Fulfillment;
 
 use App\Events\ShipmentTrackingUpdated;
+use App\Http\Controllers\Auth\PhilippineAddressController;
+use App\Models\Buyer\Address;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Finance\CodCollection;
@@ -458,12 +460,13 @@ class ShipmentWorkflowService
         bool $allowDeliveryAreaOverride = false,
         ?string $deliveryAreaOverrideReason = null,
         bool $allowUnavailableDeliveryTakeover = false,
+        ?Address $pickupAddress = null,
     ): RiderAssignment
     {
-        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason, $allowDeliveryAreaOverride, $deliveryAreaOverrideReason, $allowUnavailableDeliveryTakeover): RiderAssignment {
+        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason, $allowDeliveryAreaOverride, $deliveryAreaOverrideReason, $allowUnavailableDeliveryTakeover, $pickupAddress): RiderAssignment {
             $shipment = Shipment::query()
                 ->whereKey($shipment->id)
-                ->with('serviceArea')
+                ->with(['serviceArea', 'sellerOrder.sellerProfile.businessAddress'])
                 ->lockForUpdate()
                 ->firstOrFail();
             $rider = RiderProfile::query()
@@ -573,7 +576,7 @@ class ShipmentWorkflowService
                     $isPickupReassignment ? 'reassign a pickup rider before collection' : 'assign a pickup rider',
                 );
 
-                $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter);
+                $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter, $pickupAddress);
                 if (! $pickupArea && ! $allowPickupAreaOverride) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
@@ -581,7 +584,7 @@ class ShipmentWorkflowService
                 $pickupArea?->loadMissing('logisticsCenter');
                 $rider->loadMissing('logisticsCenter.address');
                 $pickupCenter = $pickupArea?->logisticsCenter ?? $rider->logisticsCenter;
-                $sellerAddress = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+                $sellerAddress = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
                 if (! $pickupCenter
                     || (int) $rider->logistics_center_id !== (int) $pickupCenter->id
                     || ! $sellerAddress
@@ -596,7 +599,7 @@ class ShipmentWorkflowService
                     $this->localRiderEligibility->assertRiderCanCoverArea($pickupCenter, $rider, $pickupArea);
                 }
 
-                if (! $this->riderCoversSellerPickupArea($shipment, $rider)
+                if (! $this->riderCoversSellerPickupArea($shipment, $rider, $pickupAddress)
                     && ! $allowPickupAreaOverride) {
                     throw new RuntimeException('The selected rider is not assigned to the seller pickup area. Assign that area to the rider or choose another rider.');
                 }
@@ -1014,10 +1017,10 @@ class ShipmentWorkflowService
         return $this->sellerPickupServiceArea($shipment, $center);
     }
 
-    public function sellerPickupServiceArea(Shipment $shipment, ?LogisticsCenter $center = null): ?ServiceArea
+    public function sellerPickupServiceArea(Shipment $shipment, ?LogisticsCenter $center = null, ?Address $pickupAddress = null): ?ServiceArea
     {
         $shipment->loadMissing('sellerOrder.sellerProfile.businessAddress', 'serviceArea');
-        $address = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+        $address = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
 
         if ($address) {
             $area = $this->findServiceAreaForAddress(
@@ -1036,14 +1039,14 @@ class ShipmentWorkflowService
     }
 
     /** Match pickup coverage using the saved PSGC codes only. */
-    public function riderCoversSellerPickupArea(Shipment $shipment, RiderProfile $rider): bool
+    public function riderCoversSellerPickupArea(Shipment $shipment, RiderProfile $rider, ?Address $pickupAddress = null): bool
     {
         $shipment->loadMissing('sellerOrder.sellerProfile.businessAddress');
         $rider->loadMissing('areaAssignments.serviceArea.locations');
 
         $activeAssignments = $rider->areaAssignments->where('is_active', true);
 
-        $address = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+        $address = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
         if (! $address) {
             return false;
         }
@@ -1082,7 +1085,7 @@ class ShipmentWorkflowService
     {
         $rider->loadMissing('user', 'logisticsCenter');
 
-        return $rider->status === 'ACTIVE'
+        return in_array($rider->status, ['ACTIVE', 'WARNED'], true)
             && $rider->user?->account_type === User::TYPE_RIDER
             && $rider->user?->status === User::STATUS_ACTIVE
             && RiderVehicleType::isLocalBarangay($rider->vehicle_type)
@@ -1223,11 +1226,21 @@ class ShipmentWorkflowService
             throw new RuntimeException('Mark 1 to 10 packed parcels ready for pickup at a time.');
         }
 
-        if ($this->schema->automaticRoutingReady()
-            && $selected->contains(fn (Shipment $shipment): bool => ! $shipment->origin_logistics_center_id
+        $routeRepairedShipmentIds = [];
+        if ($this->schema->automaticRoutingReady()) {
+            $routeIsIncomplete = fn (Shipment $shipment): bool => ! $shipment->origin_logistics_center_id
                 || ! $shipment->destination_logistics_center_id
-                || ! $shipment->service_area_id)) {
-            throw new RuntimeException('This parcel needs manual PSGC routing review before it can be marked ready for pickup.');
+                || ! $shipment->service_area_id;
+
+            foreach ($selected->filter($routeIsIncomplete) as $shipment) {
+                if ($this->resolveUnassignedPickupRoute($shipment)) {
+                    $routeRepairedShipmentIds[] = (int) $shipment->id;
+                }
+            }
+
+            if ($selected->contains($routeIsIncomplete)) {
+                throw new RuntimeException('This parcel needs manual PSGC routing review before it can be marked ready for pickup.');
+            }
         }
 
         $sellerOrder->update(['status' => 'READY_FOR_PICKUP']);
@@ -1250,13 +1263,152 @@ class ShipmentWorkflowService
             );
 
             $this->generateWaybill($shipment, $actor);
+            $eventNote = $sellerDropoff
+                ? 'Seller registered this parcel for drop-off at the assigned logistics center.'
+                : 'Seller marked this parcel ready for pickup.';
+            if (in_array((int) $shipment->id, $routeRepairedShipmentIds, true)) {
+                $eventNote .= ' The saved Seller pickup municipality was matched to its active Logistics hub and the Buyer delivery area was verified.';
+                if (! $sellerDropoff) {
+                    $eventNote .= ' The Logistics pickup can use the existing GPS coverage fallback for the Seller barangay.';
+                }
+            }
+
             $this->recordEvent(
                 $shipment,
                 'READY_FOR_PICKUP',
                 $actor,
-                $sellerDropoff ? 'Seller registered this parcel for drop-off at the assigned logistics center.' : 'Seller marked this parcel ready for pickup.',
+                $eventNote,
             );
         }
+    }
+
+    /**
+     * A saved Seller address can be outside a configured pickup service area
+     * while still belonging to one approved hub's municipality. In that case,
+     * resolve the parcel's origin hub from the Seller address and its delivery
+     * area from the Buyer address. The pickup Rider flow handles uncovered
+     * Seller barangays with its existing audited GPS coverage fallback.
+     */
+    private function resolveUnassignedPickupRoute(Shipment $shipment): bool
+    {
+        $shipment->loadMissing('sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address');
+        $sellerAddress = $shipment->sellerOrder?->sellerProfile?->businessAddress;
+        $destinationAddress = $shipment->sellerOrder?->order?->address;
+        if (! $sellerAddress || ! $destinationAddress) {
+            return false;
+        }
+
+        $routeFields = [
+            'logistics_center_id',
+            'origin_logistics_center_id',
+            'destination_logistics_center_id',
+            'service_area_id',
+            'origin_province_code',
+            'origin_province_name',
+            'origin_municipality_code',
+            'origin_municipality_name',
+            'origin_barangay_code',
+            'origin_barangay_name',
+        ];
+        if (collect($routeFields)->contains(fn (string $field): bool => filled($shipment->getAttribute($field)))
+            || ShipmentTransferLeg::query()->where('shipment_id', $shipment->id)->exists()) {
+            return false;
+        }
+
+        if (! $this->hasCanonicalBarangay($sellerAddress)
+            || ! $this->hasCanonicalBarangay($destinationAddress)) {
+            return false;
+        }
+
+        $originCenters = LogisticsCenter::query()
+            ->approvedActive()
+            ->whereHas('address', fn ($query) => $query
+                ->where('province_code', trim((string) $sellerAddress->province_code))
+                ->where('municipality_code', trim((string) $sellerAddress->municipality_code)))
+            ->with('address')
+            ->orderBy('id')
+            ->get();
+        if ($originCenters->count() !== 1) {
+            return false;
+        }
+
+        try {
+            $destinationArea = $this->findServiceAreaForAddress(
+                trim((string) $destinationAddress->province_code),
+                trim((string) $destinationAddress->municipality_code),
+                trim((string) $destinationAddress->barangay_code),
+            );
+        } catch (RuntimeException) {
+            return false;
+        }
+        if (! $destinationArea) {
+            return false;
+        }
+
+        $origin = $originCenters->first();
+        $originAddress = $origin->address;
+        $destinationArea->loadMissing('logisticsCenter.address');
+        $destination = $destinationArea->logisticsCenter;
+        if (! $originAddress || ! $destination) {
+            return false;
+        }
+
+        $isCrossHub = (int) $origin->id !== (int) $destination->id;
+        if ($isCrossHub && ! $this->schema->manifestReady()) {
+            throw new RuntimeException('Cross-hub fulfillment is disabled until transfer manifests, custody scans, and approved vehicle capacities are installed.');
+        }
+
+        $expected = [
+            'logistics_center_id' => $origin->id,
+            'origin_logistics_center_id' => $origin->id,
+            'destination_logistics_center_id' => $destination->id,
+            'service_area_id' => $destinationArea->id,
+            'origin_province_code' => $originAddress->province_code,
+            'origin_province_name' => $originAddress->province_name,
+            'origin_municipality_code' => $originAddress->municipality_code,
+            'origin_municipality_name' => $originAddress->municipality_name,
+            'origin_barangay_code' => $sellerAddress->barangay_code,
+            'origin_barangay_name' => $sellerAddress->barangay_name,
+            'destination_province_code' => $destinationAddress->province_code,
+            'destination_province_name' => $destinationAddress->province_name,
+            'destination_municipality_code' => $destinationAddress->municipality_code,
+            'destination_municipality_name' => $destinationAddress->municipality_name,
+            'destination_barangay_code' => $destinationAddress->barangay_code,
+            'destination_barangay_name' => $destinationAddress->barangay_name,
+        ];
+        $attributes = [];
+        foreach ($expected as $column => $value) {
+            $existing = $shipment->getAttribute($column);
+            if (filled($existing)) {
+                if (trim((string) $existing) !== trim((string) $value)) {
+                    return false;
+                }
+                continue;
+            }
+
+            $attributes[$column] = $value;
+        }
+
+        $shipment->update($attributes);
+        if ($isCrossHub) {
+            $this->transfers->createPlannedLeg($shipment->refresh(), $origin, $destination);
+        }
+
+        return true;
+    }
+
+    private function hasCanonicalBarangay(object $address): bool
+    {
+        $municipalityCode = trim((string) $address->municipality_code);
+        $barangayCode = trim((string) $address->barangay_code);
+        if ($municipalityCode === '' || $barangayCode === '') {
+            return false;
+        }
+
+        $barangays = PhilippineAddressController::barangayRecordsForMunicipality($municipalityCode);
+
+        return $barangays !== []
+            && collect($barangays)->contains(fn (array $record): bool => trim((string) ($record['code'] ?? '')) === $barangayCode);
     }
 
     private function cancelSellerOrder(SellerOrder $sellerOrder, Collection $shipments, User $actor, string $reason): void
@@ -1290,7 +1442,7 @@ class ShipmentWorkflowService
 
         if (Schema::hasTable('cod_collections')) {
             $collected = CodCollection::query()->whereIn('shipment_id', $shipmentIds)->lockForUpdate()
-                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])
                 ->exists();
             if ($collected) {
                 throw new RuntimeException('This order cannot be cancelled after COD collection has been recorded.');
@@ -1729,7 +1881,7 @@ class ShipmentWorkflowService
 
         $actor->loadMissing('riderProfile');
         if (! $actor->riderProfile
-            || $actor->riderProfile->status !== 'ACTIVE'
+            || ! in_array($actor->riderProfile->status, ['ACTIVE', 'WARNED'], true)
             || (int) $actor->riderProfile->id !== (int) $assignment->rider_profile_id) {
             throw new RuntimeException('This rider assignment is not owned by the authenticated rider.');
         }

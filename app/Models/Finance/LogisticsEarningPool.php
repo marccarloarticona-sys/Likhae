@@ -30,19 +30,59 @@ class LogisticsEarningPool extends Model
     public function payoutBreakdown(): array
     {
         $this->loadMissing('shipment', 'allocation');
+        $confirmedPayouts = FinancialLedgerEntry::query()
+            ->where('shipment_financial_allocation_id', $this->shipment_financial_allocation_id)
+            ->where('entry_type', 'LOGISTICS_PAYOUT')
+            ->whereIn('status', ['PAYOUT_PENDING_ACK', 'PAID'])
+            ->latest('id')
+            ->get();
+        $confirmedPayout = $confirmedPayouts->first(
+            fn (FinancialLedgerEntry $entry): bool => (int) data_get($entry->metadata, 'logistics_center_id') === (int) $this->logistics_center_id,
+        );
+        $confirmedMetadata = (array) $confirmedPayout?->metadata;
+        if ($confirmedPayout && isset($confirmedMetadata['route_role'], $confirmedMetadata['amount_expected'])) {
+            return [
+                'role' => $confirmedMetadata['route_role'],
+                'net_share_cents' => FinancialRules::cents($confirmedMetadata['logistics_net_share'] ?? 0),
+                'transfer_cents' => FinancialRules::cents($confirmedMetadata['amount_expected']),
+                'rider_reserve_cents' => FinancialRules::cents($confirmedMetadata['rider_pass_through'] ?? 0),
+            ];
+        }
+
         $snapshot = FinancialLedgerEntry::query()
             ->where('shipment_financial_allocation_id', $this->shipment_financial_allocation_id)
             ->where('entry_type', 'LOGISTICS_ALLOCATION')
             ->where('metadata->logistics_center_id', $this->logistics_center_id)
             ->first();
-        $metadata = (array) $snapshot?->metadata;
-        if ($snapshot && isset($metadata['route_role'], $metadata['transfer_amount'], $metadata['rider_reserve_amount'])) {
-            return [
-                'role' => $metadata['route_role'],
-                'net_share_cents' => FinancialRules::cents($snapshot->amount),
-                'transfer_cents' => FinancialRules::cents($metadata['transfer_amount']),
-                'rider_reserve_cents' => FinancialRules::cents($metadata['rider_reserve_amount']),
-            ];
+        $confirmedPayoutsMatchCurrentPolicy = $this->shipment && $this->allocation && $confirmedPayouts->isNotEmpty()
+            && $confirmedPayouts->every(function (FinancialLedgerEntry $entry): bool {
+                $metadata = (array) $entry->metadata;
+                $centerId = (int) data_get($metadata, 'logistics_center_id', 0);
+                if ($centerId <= 0 || ! isset($metadata['route_role'], $metadata['amount_expected'])) {
+                    return false;
+                }
+
+                try {
+                    $expected = DeliveryEarningsBreakdown::forLogisticsCenter($this->shipment, $this->allocation, $centerId);
+                } catch (\RuntimeException) {
+                    return false;
+                }
+
+                return $metadata['route_role'] === $expected['role']
+                    && FinancialRules::cents($metadata['logistics_net_share'] ?? -1) === $expected['net_share_cents']
+                    && FinancialRules::cents($metadata['amount_expected']) === $expected['transfer_cents']
+                    && FinancialRules::cents($metadata['rider_pass_through'] ?? -1) === $expected['rider_reserve_cents'];
+            });
+        if ($confirmedPayouts->isNotEmpty() && ! $confirmedPayoutsMatchCurrentPolicy && $snapshot) {
+            $snapshotMetadata = (array) $snapshot->metadata;
+            if (isset($snapshotMetadata['route_role'], $snapshotMetadata['transfer_amount'], $snapshotMetadata['rider_reserve_amount'])) {
+                return [
+                    'role' => $snapshotMetadata['route_role'],
+                    'net_share_cents' => FinancialRules::cents($snapshot->amount),
+                    'transfer_cents' => FinancialRules::cents($snapshotMetadata['transfer_amount']),
+                    'rider_reserve_cents' => FinancialRules::cents($snapshotMetadata['rider_reserve_amount']),
+                ];
+            }
         }
         if (! $this->shipment || ! $this->allocation) {
             return [
@@ -53,10 +93,8 @@ class LogisticsEarningPool extends Model
             ];
         }
 
-        return DeliveryEarningsBreakdown::forLogisticsCenter(
-            $this->shipment,
-            $this->allocation,
-            (int) $this->logistics_center_id,
-        );
+        return $snapshot
+            ? DeliveryEarningsBreakdown::forLogisticsCenter($this->shipment, $this->allocation, (int) $this->logistics_center_id)
+            : DeliveryEarningsBreakdown::forLegacyLogisticsCenter($this->shipment, $this->allocation, (int) $this->logistics_center_id);
     }
 }

@@ -224,7 +224,7 @@ class DispatchController extends Controller
                 ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
                 ->whereNotNull('seller_profile_id')
                 ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB])
-                ->with(['seller.businessAddress', 'rider.user', 'items.riderAssignment.shipment'])
+                ->with(['seller.businessAddress', 'sellerPickupRequest.pickupAddress', 'rider.user', 'items.riderAssignment.shipment'])
                 ->latest()
                 ->get()
             : collect();
@@ -234,6 +234,7 @@ class DispatchController extends Controller
         });
         $activePickupBatches->each(function (RiderLocalTrip $batch) use ($riders, $workflow): void {
             $items = $batch->items;
+            $pickupAddress = $batch->sellerPickupRequest?->pickupAddress;
             $canReassign = in_array($batch->status, [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS], true)
                 && $items->isNotEmpty()
                 && $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true)
@@ -243,7 +244,7 @@ class DispatchController extends Controller
                     (int) $candidate->id !== (int) $batch->rider_profile_id
                     && (int) $candidate->active_assignments_count === 0
                     && LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) >= $items->count()
-                    && $items->every(fn ($item): bool => $workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $candidate)))->values()
+                    && $items->every(fn ($item): bool => $workflow->riderCoversSellerPickupArea($item->riderAssignment->shipment, $candidate, $pickupAddress)))->values()
                 : collect();
             $batch->setAttribute('reassignable_riders', $eligible);
         });
@@ -642,6 +643,7 @@ class DispatchController extends Controller
                     null,
                     $center,
                 );
+                app(\App\Services\Fulfillment\LocalRiderTripService::class)->syncPickupIntake($locked);
 
                 $message = "Shipment {$locked->tracking_number} was reported {$type}. Claim {$dispute->dispute_number} is open for review.";
                 foreach ([$buyer, $seller] as $recipient) {
@@ -1109,7 +1111,7 @@ class DispatchController extends Controller
 
         $alreadyReceived = $shipment->hasReachedSortingCenter();
         try {
-            $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
+            $shipment = $workflow->receiveAtCenter($shipment, $center, $request->user(), $data['scanned_code'], $data['scan_method'] ?? 'MANUAL');
         } catch (\RuntimeException $exception) {
             if ($request->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
@@ -1126,6 +1128,7 @@ class DispatchController extends Controller
                     'success' => true,
                     'message' => 'Parcel was already received. No duplicate intake scan was created.',
                     'tracking' => $shipment->tracking_number,
+                    'current_status' => $shipment->current_status,
                     'already_received' => true,
                     'clear_input' => true,
                 ]);
@@ -1139,15 +1142,18 @@ class DispatchController extends Controller
             $trip->load('items.riderAssignment.shipment');
             $receivedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->shipment?->hasReachedSortingCenter())->count();
             $expectedCount = $trip->items->filter(fn ($item) => $item->riderAssignment?->status === 'COMPLETED')->count();
-            $message = $trip?->status === RiderLocalTrip::COMPLETED
-                ? 'Parcel received. All collected parcels in pickup batch #P-'.$trip->id.' have reached the sorting center.'
-                : 'Parcel received. Scan each remaining parcel in the pickup batch separately.';
+            $message = match ($trip?->status) {
+                RiderLocalTrip::COMPLETED => 'Parcel received. All collected parcels in pickup batch #P-'.$trip->id.' have reached the sorting center.',
+                RiderLocalTrip::EXCEPTION => 'Parcel received. Pickup batch #P-'.$trip->id.' is closed for Logistics review of an exception parcel.',
+                default => 'Parcel received. Scan each remaining parcel in the pickup batch separately.',
+            };
 
             if ($request->expectsJson()) {
                 return response()->json([
                     'success' => true,
                     'message' => $message,
                     'tracking' => $shipment->tracking_number,
+                    'current_status' => $shipment->current_status,
                     'batch_id' => $trip->id,
                     'received_count' => $receivedCount,
                     'expected_count' => $expectedCount,
@@ -1164,6 +1170,7 @@ class DispatchController extends Controller
                 'success' => true,
                 'message' => 'Parcel received. Read the delivery address and confirm its destination area.',
                 'tracking' => $shipment->tracking_number,
+                'current_status' => $shipment->current_status,
                 'open_url' => route('logistics.sorting', ['tracking' => $shipment->tracking_number]),
                 'already_received' => false,
                 'clear_input' => true,
@@ -1227,7 +1234,7 @@ class DispatchController extends Controller
         $shipment = Shipment::query()
             ->where('tracking_number', $tracking)
             ->where('logistics_center_id', $center->id)
-            ->with(['orderItem', 'sellerOrder.items', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
+            ->with(['orderItem.productVariant', 'sellerOrder.items.productVariant', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
             ->firstOrFail();
 
         return view('logistics.waybill', compact('shipment'));

@@ -2,6 +2,7 @@
 
 namespace App\Services\Maps;
 
+use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
@@ -19,7 +20,7 @@ class MapDataService
      * shipment destination. No viewer receives a different user's shipment
      * coordinates through this service.
      */
-    public function forShipment(?Shipment $shipment, bool $includeDestination = true, bool $includeSeller = false, ?User $viewer = null): array
+    public function forShipment(?Shipment $shipment, bool $includeDestination = true, bool $includeSeller = false, ?User $viewer = null, ?Address $pickupAddress = null): array
     {
         if (! $shipment) {
             return [];
@@ -55,7 +56,7 @@ class MapDataService
         }
 
         if ($includeSeller) {
-            $marker = $this->addressMarker($shipment->sellerOrder?->sellerProfile?->businessAddress, 'seller-'.$shipment->id, 'Seller pickup address');
+            $marker = $this->addressMarker($pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress, 'seller-'.$shipment->id, 'Seller pickup address');
             if ($marker) {
                 $marker['kind'] = 'seller';
                 $marker['target_kind'] = 'seller';

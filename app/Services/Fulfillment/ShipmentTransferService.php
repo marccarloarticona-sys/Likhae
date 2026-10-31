@@ -306,7 +306,7 @@ final class ShipmentTransferService
         $rider = $actor->riderProfile;
         if ($actor->account_type !== User::TYPE_RIDER
             || $actor->status !== User::STATUS_ACTIVE
-            || $rider?->status !== 'ACTIVE'
+            || ! in_array($rider?->status, ['ACTIVE', 'WARNED'], true)
             || (int) $rider?->logistics_center_id !== $centerId
             || ! \App\Support\RiderVehicleType::isInterLogistics($rider?->vehicle_type)) {
             throw new RuntimeException('Only the assigned active inter-logistics driver may depart this transfer.');

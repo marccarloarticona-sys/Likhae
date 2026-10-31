@@ -6,12 +6,13 @@ use App\Models\Admin\CommissionTransaction;
 use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\CodCollection;
-use App\Models\Finance\RiderRemittance;
 use App\Models\Finance\SellerSettlement;
+use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Logistics\Shipment;
 use App\Models\User;
 use App\Support\FinancialRules;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -96,6 +97,160 @@ class SellerSettlementService
 
             return $locked->refresh();
         });
+    }
+
+    /**
+     * Clear a legacy funding review only when the saved order snapshot proves
+     * the discount came solely from the Seller's catalog price markdown.
+     */
+    public function confirmLegacySellerMarkdown(User $actor, SellerSettlement $settlement, string $notes): SellerSettlement
+    {
+        $this->assertReady();
+        $this->assertRole($actor, User::TYPE_ADMIN);
+
+        return DB::transaction(function () use ($actor, $settlement, $notes): SellerSettlement {
+            $locked = SellerSettlement::query()
+                ->with(['sellerOrder.order', 'allocation.shipment.orderItem'])
+                ->whereKey($settlement->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $allocation = ShipmentFinancialAllocation::query()
+                ->whereKey($locked->shipment_financial_allocation_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($locked->payout_status !== 'REVIEW_REQUIRED'
+                || $locked->seller_payable !== null
+                || $allocation->seller_payable !== null
+                || $allocation->discount_funding_status !== 'UNRESOLVED'
+                || $allocation->status !== 'REVIEW_REQUIRED') {
+                throw new RuntimeException('This settlement is no longer awaiting a legacy discount-funding review.');
+            }
+            if (FinancialRules::cents($locked->payout_amount) > 0
+                || $locked->paid_at
+                || filled($locked->payout_external_reference)
+                || filled($locked->payout_proof_path)) {
+                throw new RuntimeException('A settlement with a recorded transfer cannot be reclassified.');
+            }
+
+            $shipment = $allocation->shipment;
+            if (! $shipment || ! $this->shipmentOrderIsCompleted($shipment)) {
+                throw new RuntimeException('The Buyer must confirm Order Received and complete the parent order before resolving this seller payout.');
+            }
+            if (! $this->isLegacySellerFundedMarkdown($locked, $allocation)) {
+                throw new RuntimeException('The saved order has other or incomplete discount sources. This review cannot safely be confirmed as a Seller-funded catalog markdown.');
+            }
+            $this->assertFullCodReceivedForPayout($locked);
+
+            $sellerPayableCents = max(
+                0,
+                FinancialRules::cents($allocation->product_amount)
+                    - FinancialRules::cents($allocation->platform_commission),
+            );
+            if ($sellerPayableCents <= 0) {
+                throw new RuntimeException('This allocation does not produce a positive Seller payout.');
+            }
+            $sellerPayable = FinancialRules::amount($sellerPayableCents);
+
+            $ledgerEntries = FinancialLedgerEntry::query()
+                ->where('shipment_financial_allocation_id', $allocation->id)
+                ->where('status', 'REVIEW_REQUIRED')
+                ->whereIn('entry_type', ['PRODUCT_REVENUE', 'PLATFORM_COMMISSION', 'RIDER_ALLOCATION', 'LOGISTICS_ALLOCATION', 'COD_EXPECTED'])
+                ->lockForUpdate()
+                ->get();
+            $before = [
+                'settlement' => $locked->toArray(),
+                'allocation' => $allocation->only(['seller_payable', 'discount_funding_status', 'status']),
+                'ledger' => $ledgerEntries->map(fn (FinancialLedgerEntry $entry): array => $entry->only(['id', 'entry_type', 'amount', 'status']))->all(),
+            ];
+
+            $allocation->update([
+                'seller_payable' => $sellerPayable,
+                'discount_funding_status' => 'SELLER_MARKDOWN_CONFIRMED',
+                'status' => 'PENDING',
+            ]);
+            $locked->update([
+                'seller_payable' => $sellerPayable,
+                'outstanding_balance' => $sellerPayable,
+                'payout_status' => 'PENDING',
+                'notes' => trim(implode("\n", array_filter([$locked->notes, trim($notes)]))),
+            ]);
+
+            foreach ($ledgerEntries as $entry) {
+                $entry->update([
+                    'amount' => $entry->entry_type === 'PRODUCT_REVENUE' ? $sellerPayable : $entry->amount,
+                    'status' => $entry->entry_type === 'PRODUCT_REVENUE' ? 'ON_HOLD' : 'PENDING',
+                    'actor_user_id' => $actor->id,
+                ]);
+            }
+
+            $after = [
+                'settlement' => $locked->fresh()->toArray(),
+                'allocation' => $allocation->fresh()->only(['seller_payable', 'discount_funding_status', 'status']),
+                'ledger' => FinancialLedgerEntry::query()
+                    ->whereIn('id', $ledgerEntries->modelKeys())
+                    ->get(['id', 'entry_type', 'amount', 'status'])
+                    ->map(fn (FinancialLedgerEntry $entry): array => $entry->toArray())
+                    ->all(),
+            ];
+            FinanceAuditEvent::query()->create([
+                'event_type' => 'SELLER_LEGACY_MARKDOWN_CONFIRMED',
+                'auditable_type' => SellerSettlement::class,
+                'auditable_id' => $locked->id,
+                'actor_user_id' => $actor->id,
+                'before_state' => $before,
+                'after_state' => $after,
+                'notes' => trim($notes),
+            ]);
+
+            return $locked->refresh();
+        }, attempts: 3);
+    }
+
+    private function isLegacySellerFundedMarkdown(SellerSettlement $settlement, ShipmentFinancialAllocation $allocation): bool
+    {
+        $sellerOrder = $settlement->sellerOrder;
+        $shipment = $allocation->shipment;
+        $item = $shipment?->orderItem;
+        if (! $sellerOrder || ! $item || (int) $item->seller_order_id !== (int) $sellerOrder->id
+            || (int) ($sellerOrder->funding_snapshot_version ?? 0) !== 0
+            || (int) ($item->funding_snapshot_version ?? 0) !== 0
+            || ! Schema::hasColumn('order_items', 'flash_sale_quantity')
+            || $item->flash_sale_quantity === null
+            || (int) $item->flash_sale_quantity !== 0) {
+            return false;
+        }
+
+        foreach (['voucher_discount', 'seller_voucher_discount', 'platform_voucher_discount', 'reward_points_discount', 'promotion_discount_total', 'shipping_voucher_discount'] as $column) {
+            if (FinancialRules::cents($sellerOrder->getAttribute($column)) !== 0) {
+                return false;
+            }
+        }
+        if ($sellerOrder->voucher_id !== null) {
+            return false;
+        }
+        foreach (['seller_voucher_discount', 'platform_voucher_discount', 'reward_points_discount', 'promotion_discount_amount'] as $column) {
+            if (FinancialRules::cents($item->getAttribute($column)) !== 0) {
+                return false;
+            }
+        }
+        if (! empty((array) $item->promotion_snapshot)
+            || $item->original_unit_price === null
+            || $item->unit_price === null
+            || $item->discount_amount === null) {
+            return false;
+        }
+
+        $quantity = max(0, (int) $item->quantity);
+        $originalItemCents = FinancialRules::cents($item->original_unit_price) * $quantity;
+        $chargedItemCents = FinancialRules::cents($item->unit_price) * $quantity;
+        $markdownCents = max(0, $originalItemCents - $chargedItemCents);
+
+        return $markdownCents > 0
+            && FinancialRules::cents($item->discount_amount) === $markdownCents
+            && FinancialRules::cents($allocation->original_product_amount) === $originalItemCents
+            && FinancialRules::cents($allocation->product_amount) === $chargedItemCents
+            && FinancialRules::cents($settlement->platform_commission) === FinancialRules::cents($allocation->platform_commission);
     }
 
     public function pay(
@@ -323,14 +478,33 @@ class SellerSettlementService
                 $this->applyRefundDebtToUnpaidSettlements((int) $sellerProfileId, $actor);
             }
             $settlements = SellerSettlement::query()
-                ->with('allocation.shipment')
+                ->with(['allocation.shipment.orderItem', 'sellerOrder.order'])
                 ->whereHas('allocation', fn ($query) => $query->where('shipment_id', $shipment->id))
                 ->lockForUpdate()
                 ->get();
             $changed = 0;
 
             foreach ($settlements as $settlement) {
+                if ($settlement->payout_status === 'REVIEW_REQUIRED') {
+                    $allocation = ShipmentFinancialAllocation::query()
+                        ->whereKey($settlement->shipment_financial_allocation_id)
+                        ->lockForUpdate()
+                        ->first();
+                    if (! $allocation) {
+                        continue;
+                    }
+                    $allocation->setRelation('shipment', $settlement->allocation?->shipment);
+                    if (! $this->autoResolveLegacySellerMarkdown($settlement, $allocation, $actor)) {
+                        continue;
+                    }
+                    $settlement->refresh()->load('allocation.shipment');
+                }
                 if (! in_array($settlement->payout_status, ['ON_HOLD', 'PENDING'], true)) {
+                    continue;
+                }
+                try {
+                    $this->assertFullCodReceivedForPayout($settlement);
+                } catch (RuntimeException) {
                     continue;
                 }
 
@@ -343,6 +517,102 @@ class SellerSettlementService
 
             return $changed;
         }, attempts: 3);
+    }
+
+    private function autoResolveLegacySellerMarkdown(
+        SellerSettlement $settlement,
+        ShipmentFinancialAllocation $allocation,
+        ?User $actor,
+    ): bool {
+        if ($settlement->payout_status !== 'REVIEW_REQUIRED'
+            || $settlement->seller_payable !== null
+            || $allocation->seller_payable !== null
+            || $allocation->discount_funding_status !== 'UNRESOLVED'
+            || $allocation->status !== 'REVIEW_REQUIRED'
+            || FinancialRules::cents($settlement->payout_amount) > 0
+            || $settlement->paid_at
+            || filled($settlement->payout_external_reference)
+            || filled($settlement->payout_proof_path)
+            || ! $this->shipmentOrderIsCompleted($allocation->shipment)
+            || ! $this->isLegacySellerFundedMarkdown($settlement, $allocation)) {
+            return false;
+        }
+
+        try {
+            $this->assertFullCodReceivedForPayout($settlement);
+        } catch (RuntimeException) {
+            return false;
+        }
+
+        $sellerPayableCents = max(
+            0,
+            FinancialRules::cents($allocation->product_amount)
+                - FinancialRules::cents($allocation->platform_commission),
+        );
+        if ($sellerPayableCents <= 0) {
+            return false;
+        }
+        $sellerPayable = FinancialRules::amount($sellerPayableCents);
+        $ledgerEntries = FinancialLedgerEntry::query()
+            ->where('shipment_financial_allocation_id', $allocation->id)
+            ->where('status', 'REVIEW_REQUIRED')
+            ->whereIn('entry_type', ['PRODUCT_REVENUE', 'PLATFORM_COMMISSION', 'RIDER_ALLOCATION', 'LOGISTICS_ALLOCATION', 'COD_EXPECTED'])
+            ->lockForUpdate()
+            ->get();
+        $before = [
+            'settlement' => $settlement->toArray(),
+            'allocation' => $allocation->only(['seller_payable', 'discount_funding_status', 'status']),
+            'ledger' => $ledgerEntries->map(fn (FinancialLedgerEntry $entry): array => $entry->only(['id', 'entry_type', 'amount', 'status']))->all(),
+        ];
+
+        $allocation->update([
+            'seller_payable' => $sellerPayable,
+            'discount_funding_status' => 'SELLER_MARKDOWN_CONFIRMED',
+            'status' => 'PENDING',
+        ]);
+        $settlement->update([
+            'seller_payable' => $sellerPayable,
+            'outstanding_balance' => $sellerPayable,
+            'payout_status' => 'PENDING',
+        ]);
+        foreach ($ledgerEntries as $entry) {
+            $entry->update([
+                'amount' => $entry->entry_type === 'PRODUCT_REVENUE' ? $sellerPayable : $entry->amount,
+                'status' => $entry->entry_type === 'PRODUCT_REVENUE' ? 'ON_HOLD' : 'PENDING',
+                'actor_user_id' => $actor?->id,
+            ]);
+        }
+
+        $this->applyRefundDebtToUnpaidSettlements((int) $settlement->seller_profile_id, $actor);
+        $settlement->refresh();
+        $sellerPayable = $settlement->seller_payable ?? '0.00';
+        $allocation->update(['seller_payable' => $sellerPayable]);
+        $this->sellerLedger($settlement)?->update([
+            'amount' => $sellerPayable,
+            'status' => 'ON_HOLD',
+            'actor_user_id' => $actor?->id,
+        ]);
+
+        $after = [
+            'settlement' => $settlement->fresh()->toArray(),
+            'allocation' => $allocation->fresh()->only(['seller_payable', 'discount_funding_status', 'status']),
+            'ledger' => FinancialLedgerEntry::query()
+                ->whereIn('id', $ledgerEntries->modelKeys())
+                ->get(['id', 'entry_type', 'amount', 'status'])
+                ->map(fn (FinancialLedgerEntry $entry): array => $entry->toArray())
+                ->all(),
+        ];
+        FinanceAuditEvent::query()->create([
+            'event_type' => 'SELLER_LEGACY_MARKDOWN_AUTO_RESOLVED',
+            'auditable_type' => SellerSettlement::class,
+            'auditable_id' => $settlement->id,
+            'actor_user_id' => $actor?->id,
+            'before_state' => $before,
+            'after_state' => $after,
+            'notes' => 'Auto-resolved from the saved Seller catalog price markdown after parent order completion and verified full COD receipt; no voucher, promotion, or flash-sale funding was present.',
+        ]);
+
+        return true;
     }
 
     /** Apply posted seller refund debits to unpaid settlements, recording each allocation idempotently. */
@@ -457,17 +727,15 @@ class SellerSettlementService
     private function assertFullCodReceivedForPayout(SellerSettlement $settlement): void
     {
         $shipment = $settlement->allocation?->shipment;
-        $collection = $shipment ? CodCollection::query()->where('shipment_id', $shipment->id)->lockForUpdate()->first() : null;
+        $collection = $shipment ? CodCollection::query()->with('remittanceItem.remittance.items.codCollection')->where('shipment_id', $shipment->id)->lockForUpdate()->first() : null;
         $remittance = $collection?->remittanceItem?->remittance;
         $receipt = $settlement->shipment_financial_allocation_id
             ? FinancialLedgerEntry::query()->where('shipment_financial_allocation_id', $settlement->shipment_financial_allocation_id)
                 ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')->lockForUpdate()->first()
             : null;
         $destinationId = $shipment?->destination_logistics_center_id ?: $shipment?->logistics_center_id;
-        if (! $collection || $collection->status !== CodCollection::REMITTED
-            || $collection->collected_amount === null || ! $destinationId
+        if (! $collection || ! $remittance?->coversCollectionWithVerifiedFullCash($collection) || ! $destinationId
             || (int) $collection->logistics_center_id !== (int) $destinationId
-            || ! $remittance || $remittance->status !== RiderRemittance::RECONCILED
             || (int) $remittance->logistics_center_id !== (int) $destinationId
             || $remittance->verified_amount === null || $receipt?->status !== 'RECEIVED'
             || ! filled(data_get($receipt->metadata, 'acknowledged_at'))
@@ -475,9 +743,7 @@ class SellerSettlementService
             throw new RuntimeException('A verified full COD handoff from Destination Logistics to Admin is required before seller payout.');
         }
         $expected = FinancialRules::cents($collection->expected_amount);
-        if (FinancialRules::cents($collection->collected_amount) !== $expected
-            || FinancialRules::cents($remittance->expected_amount) !== $expected
-            || FinancialRules::cents($remittance->verified_amount) !== $expected
+        if (! $remittance->coversCollectionWithVerifiedFullCash($collection)
             || FinancialRules::cents($receipt->amount) !== $expected
             || FinancialRules::cents(data_get($receipt->metadata, 'amount_received', -1)) !== $expected) {
             throw new RuntimeException('The verified Admin receipt must equal the full parcel COD before seller payout.');

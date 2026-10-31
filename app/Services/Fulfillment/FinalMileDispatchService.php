@@ -58,10 +58,10 @@ final class FinalMileDispatchService
                 ->lockForUpdate()
                 ->firstOrFail();
             if ((int) $rider->logistics_center_id !== (int) $center->id
-                || $rider->status !== 'ACTIVE'
+                || ! in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 || $rider->user?->account_type !== User::TYPE_RIDER
                 || $rider->user?->status !== User::STATUS_ACTIVE) {
-                throw new RuntimeException('Select an active final-mile rider assigned to this logistics center.');
+                throw new RuntimeException('Select an active or warned final-mile rider assigned to this logistics center.');
             }
             if ($requireFreshRiderLocation
                 && (! $this->schema->riderAvailabilityReady()

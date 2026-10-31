@@ -167,25 +167,21 @@ class TransferController extends Controller
     {
         $manifest = $this->loadManifest($manifest);
         $data = $request->validate([
-            'parcel_weight_kg' => ['nullable', 'required_without:parcel_volume_liters', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
-            'parcel_volume_liters' => ['nullable', 'required_without:parcel_weight_kg', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
+            'parcel_weight_kg' => ['required', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
         ]);
 
         try {
-            $this->manifests->recordItemMeasurements(
+            $this->manifests->recordItemWeight(
                 $request->user(),
                 $manifest,
                 TransferManifestItem::query()->findOrFail($item),
-                isset($data['parcel_weight_kg']) ? (string) $data['parcel_weight_kg'] : null,
-                isset($data['parcel_volume_liters']) ? (string) $data['parcel_volume_liters'] : null,
+                (string) $data['parcel_weight_kg'],
             );
         } catch (RuntimeException $exception) {
             return back()->withErrors(['measurements' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', isset($data['parcel_weight_kg']) && isset($data['parcel_volume_liters'])
-            ? 'Parcel weight and volume saved.'
-            : (isset($data['parcel_weight_kg']) ? 'Packed parcel weight saved.' : 'Optional parcel volume saved.'));
+        return back()->with('status', 'Packed parcel weight saved in kilograms.');
     }
 
     public function assignDriver(Request $request, int $manifest): RedirectResponse
@@ -365,7 +361,7 @@ class TransferController extends Controller
         $available = $this->manifests->eligibleDriversForCenter($centerId, $manifestId);
         $candidates = RiderProfile::query()
             ->where('rider_profiles.logistics_center_id', $centerId)
-            ->where('rider_profiles.status', 'ACTIVE')
+            ->whereIn('rider_profiles.status', ['ACTIVE', 'WARNED'])
             ->whereNotNull('rider_profiles.approved_by_user_id')
             ->whereNotNull('rider_profiles.approved_at')
             ->whereIn('rider_profiles.vehicle_type', \App\Support\RiderVehicleType::interLogisticsValues())
@@ -387,14 +383,13 @@ class TransferController extends Controller
             ->each(function (RiderProfile $driver) use ($activeManifests): void {
                 $manifest = $activeManifests->get($driver->id);
                 $hasCapacity = (int) $driver->approved_parcel_capacity > 0
-                    && (float) $driver->approved_weight_capacity_kg > 0
-                    && (float) $driver->approved_volume_capacity_liters > 0;
+                    && (float) $driver->approved_weight_capacity_kg > 0;
                 $reasons = [];
                 if ($manifest) {
                     $reasons[] = 'Assigned to active manifest '.$manifest->manifest_number.' ('.$manifest->status.').';
                 }
                 if (! $hasCapacity) {
-                    $reasons[] = 'Approved parcel, weight, and volume capacities are incomplete.';
+                    $reasons[] = 'Approved parcel and weight capacities are incomplete.';
                 }
                 if ($reasons === []) {
                     $reasons[] = 'Currently unavailable for another transfer.';

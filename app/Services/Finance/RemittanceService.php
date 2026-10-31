@@ -5,6 +5,7 @@ namespace App\Services\Finance;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\FinanceAuditEvent;
 use App\Models\Finance\RiderRemittance;
+use App\Models\Finance\RiderRemittanceItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Support\FinancialRules;
@@ -39,15 +40,12 @@ class RemittanceService
             throw new RuntimeException('Remittance schema is not installed. Apply the additive Step 6 migration first.');
         }
         $rider = $actor->riderProfile;
-        if ($actor->status !== User::STATUS_ACTIVE || ! $rider || $rider->status !== 'ACTIVE') {
+        if ($actor->status !== User::STATUS_ACTIVE || ! $rider || ! in_array($rider->status, ['ACTIVE', 'WARNED'], true)) {
             throw new RuntimeException('Only an active authenticated rider may submit a remittance.');
         }
         $ids = array_values(array_unique(array_map('intval', $collectionIds)));
         if ($ids === []) {
             throw new RuntimeException('Select at least one collected COD parcel.');
-        }
-        if (count($ids) !== 1) {
-            throw new RuntimeException('Submit one COD parcel per remittance so its receipt and cash discrepancy remain parcel specific.');
         }
 
         return DB::transaction(function () use ($actor, $rider, $ids, $submittedAmount, $notes): RiderRemittance {
@@ -88,13 +86,17 @@ class RemittanceService
                 }
             }
 
-            // The obligation is the checkout COD snapshot, never the amount
-            // entered by the Rider. A short/incorrect declaration must not
-            // reduce what Logistics is expected to receive.
+            // The Rider remits the full checkout COD amount. Any buyer
+            // collection shortfall is covered by the Rider before handoff.
             $expectedCents = $collections->sum(fn (CodCollection $collection): int => FinancialRules::cents($collection->expected_amount));
             $submittedCents = FinancialRules::cents($submittedAmount);
             if ($submittedCents < 0) {
                 throw new RuntimeException('A cash handoff amount cannot be negative.');
+            }
+            if ($submittedCents !== $expectedCents) {
+                throw new RuntimeException(
+                    'The submitted cash must equal the selected COD due total of PHP '.number_format($expectedCents / 100, 2, '.', ',').'. The Rider must cover any buyer collection shortfall.',
+                );
             }
             $remittance = RiderRemittance::query()->create([
                 'rider_profile_id' => $lockedRider->id,
@@ -130,7 +132,7 @@ class RemittanceService
                     'submitted_at' => $remittance->submitted_at?->toIso8601String(),
                     'discrepancy_amount' => FinancialRules::amount(abs($submittedCents - $expectedCents)),
                 ]),
-                'notes' => 'Rider recorded the parcel cash handoff for destination-center acknowledgment.',
+                'notes' => 'Rider recorded the cash handoff for the selected parcels for destination-center acknowledgment.',
             ]);
 
             return $remittance->refresh();
@@ -200,7 +202,12 @@ class RemittanceService
             $remittance = RiderRemittance::query()->with('riderProfile.user')->whereKey($remittance->id)->lockForUpdate()->firstOrFail();
             $this->assertAuthorizedCenterActor($actor, (int) $remittance->logistics_center_id, 'reconcile');
             $this->assertDestinationHandoff($remittance);
-            if (in_array($remittance->status, [RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY], true)) {
+            if ($remittance->status === RiderRemittance::RECONCILED) {
+                $this->recognizeVerifiedRiderTopUps($remittance, $actor);
+
+                return $remittance->refresh();
+            }
+            if ($remittance->status === RiderRemittance::DISCREPANCY) {
                 return $remittance;
             }
             if ($remittance->status !== RiderRemittance::VERIFIED) {
@@ -217,14 +224,7 @@ class RemittanceService
                 'notes' => $notes ?: $remittance->notes,
             ]);
             if ($cleanHandoff) {
-                foreach ($remittance->items as $item) {
-                    $item->codCollection?->update([
-                        'confirmed_by_user_id' => $actor->id,
-                        'status' => $item->codCollection->status === CodCollection::REMITTED_DISCREPANCY
-                            ? CodCollection::REMITTED_DISCREPANCY
-                            : CodCollection::REMITTED,
-                    ]);
-                }
+                $this->recognizeVerifiedRiderTopUps($remittance, $actor);
             }
             FinanceAuditEvent::query()->create([
                 'event_type' => $remittance->status === RiderRemittance::RECONCILED ? 'RIDER_HANDOFF_RECONCILED' : 'RIDER_HANDOFF_DISCREPANCY',
@@ -242,7 +242,9 @@ class RemittanceService
                     'reconciled_at' => now()->toIso8601String(),
                     'discrepancy_amount' => $remittance->discrepancy_amount,
                 ]),
-                'notes' => $cleanHandoff ? 'Rider declaration, expected COD, and verified cash matched.' : 'The Rider declaration or verified cash differs from full COD; discrepancy remains open.',
+                'notes' => $cleanHandoff
+                    ? 'The Rider handed over the full COD batch and Logistics verified the total. Buyer shortfalls are recorded as Rider top-ups without changing the original buyer-collected amounts.'
+                    : 'The Rider declaration or verified cash differs from full COD; discrepancy remains open.',
             ]);
             if ($cleanHandoff) {
                 $this->postRiderToLogisticsLedgerTransfer($remittance, $actor);
@@ -309,17 +311,7 @@ class RemittanceService
                 'discrepancy_amount' => '0.00',
                 'notes' => trim($resolution),
             ]);
-            foreach ($locked->items as $item) {
-                $collection = $item->codCollection;
-                if (! $collection) {
-                    continue;
-                }
-                $collection->update([
-                    'status' => FinancialRules::cents($collection->collected_amount) === FinancialRules::cents($collection->expected_amount)
-                        ? CodCollection::REMITTED
-                        : CodCollection::REMITTED_DISCREPANCY,
-                ]);
-            }
+            $this->recognizeVerifiedRiderTopUps($locked, $actor);
             FinanceAuditEvent::query()->create([
                 'event_type' => 'RIDER_HANDOFF_DISCREPANCY_RESOLVED',
                 'auditable_type' => RiderRemittance::class,
@@ -358,6 +350,77 @@ class RemittanceService
             if (! $destinationId || (int) $destinationId !== (int) $remittance->logistics_center_id
                 || (int) $collection?->logistics_center_id !== (int) $destinationId) {
                 throw new RuntimeException('Only the destination logistics center may receive this parcel COD.');
+            }
+        }
+    }
+
+    private function recognizeVerifiedRiderTopUps(RiderRemittance $remittance, User $actor): void
+    {
+        $remittance->loadMissing('items.codCollection.shipment');
+        $items = $remittance->items;
+        if ($remittance->status !== RiderRemittance::RECONCILED
+            || $items->isEmpty()
+            || $items->contains(fn (RiderRemittanceItem $item): bool => ! $item->codCollection)) {
+            return;
+        }
+
+        $batchDueCents = $items->sum(fn (RiderRemittanceItem $item): int =>
+            FinancialRules::cents($item->codCollection->expected_amount)
+        );
+        if ($batchDueCents <= 0
+            || $batchDueCents !== FinancialRules::cents($remittance->expected_amount)
+            || $batchDueCents !== FinancialRules::cents($remittance->verified_amount)) {
+            return;
+        }
+
+        foreach ($items as $item) {
+            $collection = $item->codCollection;
+            // A missing buyer collection amount is missing evidence, not a
+            // Rider top-up. Keep that parcel out of onward settlement.
+            if ($collection->collected_amount === null) {
+                continue;
+            }
+            $expectedCents = FinancialRules::cents($collection->expected_amount);
+            $buyerCollectedCents = FinancialRules::cents($collection->collected_amount);
+            $status = match (true) {
+                $buyerCollectedCents === $expectedCents => CodCollection::REMITTED,
+                $buyerCollectedCents < $expectedCents => CodCollection::REMITTED_RIDER_TOPUP,
+                default => CodCollection::REMITTED_DISCREPANCY,
+            };
+            $beforeStatus = $collection->status;
+            if ($beforeStatus !== $status || (int) ($collection->confirmed_by_user_id ?? 0) !== (int) $actor->id) {
+                $collection->update([
+                    'confirmed_by_user_id' => $actor->id,
+                    'status' => $status,
+                ]);
+            }
+
+            if ($status === CodCollection::REMITTED_RIDER_TOPUP && $beforeStatus !== CodCollection::REMITTED_RIDER_TOPUP) {
+                FinanceAuditEvent::query()->create([
+                    'event_type' => 'RIDER_COD_SHORTFALL_COVERED_BY_TOPUP',
+                    'auditable_type' => CodCollection::class,
+                    'auditable_id' => $collection->id,
+                    'actor_user_id' => $actor->id,
+                    'before_state' => [
+                        'status' => $beforeStatus,
+                        'buyer_amount_collected' => $collection->collected_amount,
+                    ],
+                    'after_state' => [
+                        'status' => CodCollection::REMITTED_RIDER_TOPUP,
+                        'buyer_amount_collected' => $collection->collected_amount,
+                        'cod_due' => $collection->expected_amount,
+                        'rider_top_up_amount' => FinancialRules::amount($expectedCents - $buyerCollectedCents),
+                        'rider_remittance_reference' => $remittance->remittance_reference,
+                        'rider_cash_verified' => $remittance->verified_amount,
+                    ],
+                    'notes' => 'Logistics verified the full Rider remittance batch. The Rider covered this buyer COD shortfall; the original buyer-collected amount was preserved.',
+                ]);
+            }
+
+            if (in_array($status, [CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP], true)
+                && $remittance->coversCollectionWithVerifiedFullCash($collection)
+                && $collection->shipment) {
+                app(FinancialAllocationService::class)->initializeForShipment($collection->shipment);
             }
         }
     }
@@ -442,6 +505,12 @@ class RemittanceService
                 'amount_expected' => $remittanceItem->codCollection?->expected_amount,
                 'buyer_cod_expected_amount' => $remittanceItem->codCollection?->expected_amount,
                 'buyer_amount_collected' => $remittanceItem->codCollection?->collected_amount,
+                'rider_top_up_amount' => $remittanceItem->codCollection?->collected_amount === null
+                    ? null
+                    : FinancialRules::amount(max(0,
+                        FinancialRules::cents($remittanceItem->codCollection->expected_amount)
+                        - FinancialRules::cents($remittanceItem->codCollection->collected_amount),
+                    )),
                 'buyer_collection_status' => $remittanceItem->codCollection?->status,
                 'currency' => 'PHP',
             ])->values()->all(),

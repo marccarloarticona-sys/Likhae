@@ -11,6 +11,7 @@ use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\Voucher;
 use App\Models\Buyer\OrderItem;
+use App\Models\Buyer\Address;
 use App\Models\Buyer\SellerFollower;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
@@ -256,6 +257,14 @@ class SellerOperationsController extends Controller
         }
 
         $pickupRequestSchemaReady = app(LogisticsSchemaReadiness::class)->sellerPickupRequestsReady();
+        $pickupAddresses = Address::query()
+            ->where('user_id', $seller->user_id)
+            ->orderByDesc('is_default')
+            ->orderBy('id')
+            ->get();
+        $pickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default)
+            ?? $pickupAddresses->firstWhere('id', (int) $seller->business_address_id)
+            ?? $pickupAddresses->first();
 
         $orders = SellerOrder::query()
             ->where('seller_profile_id', $seller->id)
@@ -306,7 +315,8 @@ class SellerOperationsController extends Controller
             'seller' => $seller,
             'trackingOrder' => null,
             'orders' => $orders,
-            'pickupAddress' => $seller->businessAddress,
+            'pickupAddress' => $pickupAddress,
+            'pickupAddresses' => $pickupAddresses,
             'readyPickupParcels' => $readyPickupParcels,
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,
@@ -324,7 +334,7 @@ class SellerOperationsController extends Controller
         try {
             $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
         } catch (RuntimeException $exception) {
-            $sellerOrder->load(['items', 'shipments.orderItem', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
+            $sellerOrder->load(['items.productVariant', 'shipments.orderItem.productVariant', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
             $legacyShipment = $sellerOrder->shipments->count() === 1 ? $sellerOrder->shipments->first() : null;
             if (! $legacyShipment || $legacyShipment->order_item_id !== null) {
                 throw $exception;
@@ -337,7 +347,7 @@ class SellerOperationsController extends Controller
                 'waybill' => $legacyShipment->waybills()->latest('format_version')->first(),
             ]);
         }
-        $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
+        $sellerOrder->load(['items.shipment', 'items.productVariant', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
         $shipments->each(fn ($shipment) => $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]));
 
         return view('seller.waybills', [
@@ -378,7 +388,7 @@ class SellerOperationsController extends Controller
     /** @return array<int, string> */
     private function waybillRelations(): array
     {
-        $relations = ['waybills', 'events'];
+        $relations = ['waybills', 'events', 'orderItem.productVariant'];
         if (Schema::hasTable('cod_collections')) {
             $relations[] = 'codCollection';
         }

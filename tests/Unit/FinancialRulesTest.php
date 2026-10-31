@@ -215,6 +215,74 @@ class FinancialRulesTest extends TestCase
         $this->assertFalse($allocation['discount_funding_unresolved']);
     }
 
+    public function test_shipping_and_additional_care_earnings_are_split_separately(): void
+    {
+        $allocation = FinancialRules::allocation(
+            [['original_unit_price' => '100.00', 'charged_unit_price' => '100.00', 'quantity' => 1]],
+            '0.00',
+            '0.01',
+            '60.0000',
+            '0.00',
+            null,
+            '0.1000',
+            '0.01',
+        );
+
+        $this->assertSame('0.02', $allocation['rider_allocation']);
+        $this->assertSame('0.00', $allocation['logistics_allocation']);
+    }
+
+    public function test_fifty_peso_shipping_fee_uses_fixed_pickup_delivery_and_single_hub_shares(): void
+    {
+        $distribution = FinancialRules::riderPoolRoleDistribution(
+            3000,
+            0,
+            ['PICKUP' => [11], 'DELIVERY' => [22]],
+            ['PICKUP' => 8, 'HUB_TO_HUB' => 5, 'DELIVERY' => 15],
+        );
+
+        $this->assertSame([
+            ['rider_profile_id' => 11, 'participant_role' => 'PICKUP', 'share_cents' => 1000],
+            ['rider_profile_id' => 22, 'participant_role' => 'DELIVERY', 'share_cents' => 2000],
+        ], $distribution['participants']);
+        $this->assertSame(0, $distribution['unresolved_cents']);
+        $this->assertSame(['rider_cents' => 3000, 'logistics_cents' => 2000], FinancialRules::shippingAllocationCents(5000, '60'));
+        $this->assertSame([3000, 1500, 500], FinancialRules::interHubDeliverySplitCents(5000));
+    }
+
+    public function test_incomplete_rider_leg_keeps_its_fixed_shipping_share_unresolved(): void
+    {
+        $distribution = FinancialRules::riderPoolRoleDistribution(
+            3000,
+            0,
+            ['PICKUP' => [11]],
+            ['PICKUP' => 8, 'HUB_TO_HUB' => 5, 'DELIVERY' => 15],
+        );
+
+        $this->assertSame(1000, $distribution['participants'][0]['share_cents']);
+        $this->assertSame(2000, $distribution['unresolved_cents']);
+    }
+
+    public function test_centavo_rounding_keeps_role_allocations_balanced_for_variable_fees(): void
+    {
+        $allocation = FinancialRules::allocation(
+            [['original_unit_price' => '1.00', 'charged_unit_price' => '1.00', 'quantity' => 1]],
+            shippingFee: '0.71',
+        );
+        $distribution = FinancialRules::riderPoolRoleDistribution(
+            43,
+            0,
+            ['PICKUP' => [11], 'DELIVERY' => [22]],
+            ['PICKUP' => 8, 'HUB_TO_HUB' => 5, 'DELIVERY' => 15],
+        );
+
+        $this->assertSame('0.43', $allocation['rider_allocation']);
+        $this->assertSame('0.28', $allocation['logistics_allocation']);
+        $this->assertSame([14, 29], array_column($distribution['participants'], 'share_cents'));
+        $this->assertSame(0, $distribution['unresolved_cents']);
+        $this->assertSame(71, 14 + 29 + FinancialRules::cents($allocation['logistics_allocation']));
+    }
+
     public function test_partial_refund_slices_preserve_every_centavo_across_quantities(): void
     {
         $first = OrderItemParcelAmount::refundSliceCents(1000, 3, 0, 1);

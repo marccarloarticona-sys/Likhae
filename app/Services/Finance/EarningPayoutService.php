@@ -38,9 +38,9 @@ final class EarningPayoutService
             ->where('status', 'PENDING')
             ->where('share_amount', '>', 0)
             ->whereHas('pool.shipment.codCollection', fn ($collections) => $collections
-                ->where('status', 'REMITTED')
+                ->whereIn('status', [CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::REMITTED_DISCREPANCY])
                 ->whereHas('remittanceItem.remittance', fn ($remittances) => $remittances->where('status', 'RECONCILED')))
-            ->with(['pool.allocation', 'pool.shipment.sellerOrder.order', 'pool.shipment.codCollection.remittanceItem.remittance'])
+            ->with(['riderProfile.user', 'pool.allocation', 'pool.shipment.sellerOrder.order', 'pool.shipment.codCollection.remittanceItem.remittance'])
             ->orderBy('created_at')
             ->orderBy('id')
             ->get()
@@ -130,6 +130,7 @@ final class EarningPayoutService
                     'payout_reference' => 'RDP-'.Str::upper((string) Str::uuid()),
                     'participant_id' => $participant->id,
                     'payout_logistics_center_id' => $this->payoutCenterIdForParticipant($participant),
+                    'funding_logistics_center_id' => $this->fundingCenterIdForParticipant($participant),
                     'rider_pool_id' => $participant->rider_earning_pool_id,
                     'rider_profile_id' => $rider->id,
                     'rider_user_id' => $actor->id,
@@ -249,6 +250,8 @@ final class EarningPayoutService
             }
             $metadata = array_merge((array) $locked->metadata, [
                 'amount_paid' => FinancialRules::amount($amountCents),
+                'payout_logistics_center_id' => $this->payoutCenterIdForParticipant($participant),
+                'funding_logistics_center_id' => $this->fundingCenterIdForParticipant($participant),
                 'payout_method' => $method,
                 'payout_external_reference' => $externalReference,
                 'payout_proof_path' => $proofPath,
@@ -315,7 +318,11 @@ final class EarningPayoutService
             if ($amountCents !== FinancialRules::cents($locked->amount)) {
                 throw new \RuntimeException('Confirm the exact amount paid on this receipt.');
             }
-            $participant = RiderEarningPoolParticipant::query()->with('pool')->whereKey((int) data_get($locked->metadata, 'participant_id'))->lockForUpdate()->firstOrFail();
+            $participant = RiderEarningPoolParticipant::query()
+                ->with(['pool.shipment', 'riderProfile'])
+                ->whereKey((int) data_get($locked->metadata, 'participant_id'))
+                ->lockForUpdate()
+                ->firstOrFail();
             if ((int) $participant->rider_profile_id !== (int) $actor->riderProfile?->id) {
                 throw new \RuntimeException('This payout is assigned to another Rider profile.');
             }
@@ -338,7 +345,8 @@ final class EarningPayoutService
                 [
                     'participant_id' => $participant->id,
                     'rider_profile_id' => $participant->rider_profile_id,
-                    'logistics_center_id' => data_get($locked->metadata, 'payout_logistics_center_id'),
+                    'logistics_center_id' => data_get($locked->metadata, 'funding_logistics_center_id')
+                        ?: $this->fundingCenterIdForParticipant($participant),
                     'amount_paid' => FinancialRules::amount($amountCents),
                 ],
             );
@@ -460,8 +468,7 @@ final class EarningPayoutService
             $this->assertFullCodReceived($lockedPool, $proceeds);
             $amountCents = FinancialRules::cents($amount);
             $breakdown = $lockedPool->payoutBreakdown();
-            if (FinancialRules::cents($lockedPool->total_amount) !== $breakdown['net_share_cents']
-                || ($breakdown['rider_reserve_cents'] > 0 && FinancialRules::cents($lockedPool->allocation?->rider_allocation) !== $breakdown['rider_reserve_cents'])) {
+            if (! $this->logisticsBreakdownMatchesAllocation($lockedPool, $breakdown)) {
                 throw new \RuntimeException('This historical Logistics allocation differs from the current route split and requires finance review.');
             }
             $expectedCents = $breakdown['transfer_cents'];
@@ -752,8 +759,7 @@ final class EarningPayoutService
                 throw new \RuntimeException('This parcel payout belongs to a different Logistics center.');
             }
             $breakdown = $lockedPool->payoutBreakdown();
-            if (FinancialRules::cents($lockedPool->total_amount) !== $breakdown['net_share_cents']
-                || ($breakdown['rider_reserve_cents'] > 0 && FinancialRules::cents($lockedPool->allocation?->rider_allocation) !== $breakdown['rider_reserve_cents'])) {
+            if (! $this->logisticsBreakdownMatchesAllocation($lockedPool, $breakdown)) {
                 throw new \RuntimeException('This historical Logistics allocation differs from the current route split and requires finance review.');
             }
             $idempotencyKey = $this->logisticsPayoutKey($lockedPool, $breakdown['role']);
@@ -762,7 +768,7 @@ final class EarningPayoutService
                     ->where('idempotency_key', $idempotencyKey)
                     ->firstOrFail();
             }
-            if (! in_array($lockedPool->status, ['PENDING', 'APPROVED'], true) || FinancialRules::cents($lockedPool->total_amount) <= 0) {
+            if (! in_array($lockedPool->status, ['PENDING', 'APPROVED'], true) || $breakdown['transfer_cents'] <= 0) {
                 throw new \RuntimeException('This Logistics share is not eligible for a payout request.');
             }
             $proceeds = FinancialLedgerEntry::query()
@@ -823,7 +829,8 @@ final class EarningPayoutService
     private function assertReconciledRiderCash(RiderEarningPoolParticipant $participant): void
     {
         $collection = $participant->pool?->shipment?->codCollection;
-        if ($collection?->status !== 'REMITTED' || $collection?->remittanceItem?->remittance?->status !== 'RECONCILED') {
+        $remittance = $collection?->remittanceItem?->remittance;
+        if (! $collection || ! $remittance?->coversCollectionWithVerifiedFullCash($collection)) {
             throw new \RuntimeException('The Rider cash handoff must be reconciled by Logistics before this earning can be requested or paid.');
         }
         if (! $this->hasConfirmedGrossLogisticsPayout($participant)) {
@@ -842,21 +849,18 @@ final class EarningPayoutService
             ->with('remittanceItem.remittance')
             ->where('shipment_id', $pool->shipment_id)
             ->first();
-        if (! $collection
-            || $collection->status !== CodCollection::REMITTED
-            || $collection->remittanceItem?->remittance?->status !== 'RECONCILED') {
+        $remittance = $collection?->remittanceItem?->remittance;
+        if (! $collection || ! $remittance?->coversCollectionWithVerifiedFullCash($collection)) {
             throw new \RuntimeException('The full Rider-to-Logistics COD handoff must be reconciled before Admin can release delivery charges.');
         }
         $fullCodCents = FinancialRules::cents($collection->expected_amount);
-        $riderRemittance = $collection->remittanceItem->remittance;
+        $riderRemittance = $remittance;
         $destinationId = $pool->shipment?->destination_logistics_center_id ?: $pool->shipment?->logistics_center_id;
         if (! $destinationId || (int) $collection->logistics_center_id !== (int) $destinationId
             || (int) $riderRemittance->logistics_center_id !== (int) $destinationId
-            || $collection->collected_amount === null || FinancialRules::cents($collection->collected_amount) !== $fullCodCents
             || $riderRemittance->verified_amount === null
-            || FinancialRules::cents($riderRemittance->expected_amount) !== $fullCodCents
-            || FinancialRules::cents($riderRemittance->verified_amount) !== $fullCodCents) {
-            throw new \RuntimeException('The verified Rider handoff must equal the full COD collected before Admin can release delivery charges.');
+            || ! $riderRemittance->coversCollectionWithVerifiedFullCash($collection)) {
+            throw new \RuntimeException('The verified Rider handoff batch must cover the full COD due before Admin can release delivery charges.');
         }
         if ($proceeds?->status !== 'RECEIVED') {
             throw new \RuntimeException('Admin must verify receipt of the Logistics-to-Admin COD handoff before releasing delivery charges.');
@@ -879,7 +883,7 @@ final class EarningPayoutService
             return false;
         }
 
-        $centerId = $this->payoutCenterIdForParticipant($participant);
+        $centerId = $this->fundingCenterIdForParticipant($participant);
         try {
             $logisticsPool = LogisticsEarningPool::query()
                 ->with(['shipment', 'allocation'])
@@ -934,16 +938,58 @@ final class EarningPayoutService
 
     private function payoutCenterIdForParticipant(RiderEarningPoolParticipant $participant): int
     {
+        return $this->fundingCenterIdForParticipant($participant);
+    }
+
+    private function fundingCenterIdForParticipant(RiderEarningPoolParticipant $participant): int
+    {
         $participant->loadMissing('pool.shipment', 'riderProfile');
         $shipment = $participant->pool?->shipment;
         if ($shipment
             && filled($shipment->origin_logistics_center_id)
             && filled($shipment->destination_logistics_center_id)
             && (int) $shipment->origin_logistics_center_id !== (int) $shipment->destination_logistics_center_id) {
-            return (int) $shipment->destination_logistics_center_id;
+            return match ($participant->participant_role) {
+                'PICKUP' => (int) $shipment->origin_logistics_center_id,
+                'DELIVERY' => (int) $shipment->destination_logistics_center_id,
+                default => (int) $shipment->destination_logistics_center_id,
+            };
         }
 
-        return (int) ($participant->riderProfile?->logistics_center_id ?? 0);
+        return (int) ($participant->riderProfile?->logistics_center_id
+            ?: $shipment?->destination_logistics_center_id
+            ?: $shipment?->logistics_center_id
+            ?: 0);
+    }
+
+    /** @param array{role:string,net_share_cents:int,transfer_cents:int,rider_reserve_cents:int} $breakdown */
+    private function logisticsBreakdownMatchesAllocation(LogisticsEarningPool $pool, array $breakdown): bool
+    {
+        if (! $pool->shipment || ! $pool->allocation
+            || FinancialRules::cents($pool->total_amount) !== $breakdown['net_share_cents']) {
+            return false;
+        }
+
+        $split = DeliveryEarningsBreakdown::forShipment($pool->shipment, $pool->allocation);
+        $routeBreakdowns = LogisticsEarningPool::query()
+            ->where('shipment_financial_allocation_id', $pool->shipment_financial_allocation_id)
+            ->with(['shipment', 'allocation'])
+            ->get()
+            ->mapWithKeys(fn (LogisticsEarningPool $routePool): array => [
+                (int) $routePool->id => $routePool->payoutBreakdown(),
+            ]);
+        $currentBreakdown = $routeBreakdowns->get((int) $pool->id);
+        $routeNetCents = $routeBreakdowns->sum(fn (array $route): int => $route['net_share_cents']);
+        $routeReserveCents = $routeBreakdowns->sum(fn (array $route): int => $route['rider_reserve_cents']);
+        $routeTransferCents = $routeBreakdowns->sum(fn (array $route): int => $route['transfer_cents']);
+        $expectedNetCents = $split['origin_logistics_cents'] + $split['destination_logistics_cents'];
+
+        return $currentBreakdown === $breakdown
+            && FinancialRules::cents($pool->allocation->logistics_allocation) === $expectedNetCents
+            && FinancialRules::cents($pool->allocation->rider_allocation) === $split['rider_cents']
+            && $routeNetCents === $expectedNetCents
+            && $routeReserveCents === $split['rider_cents']
+            && $routeTransferCents === $split['total_cents'];
     }
 
     private function logisticsPayoutKey(LogisticsEarningPool $pool, string $routeRole): string

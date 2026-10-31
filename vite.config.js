@@ -54,6 +54,7 @@ export default defineConfig(({ mode }) => {
                     'resources/css/admin/system-settings.css',
                     'resources/js/app.js',
                     'resources/js/shared/messages.js',
+                    'resources/js/shared/interhub-attendance.js',
                     'resources/js/Buyer/buyer.js',
                     'resources/js/Buyer/realtime.js',
                     'resources/js/Buyer/likhae-buyer-ai.js',

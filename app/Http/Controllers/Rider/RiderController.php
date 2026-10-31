@@ -27,6 +27,7 @@ use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
 use App\Services\Maps\MapDataService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\InterhubTimekeepingService;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use Illuminate\Http\JsonResponse;
@@ -105,11 +106,14 @@ class RiderController extends Controller
             : back()->with('status', 'Your dispatch location was updated.');
     }
 
-    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers): View|RedirectResponse
+    public function dashboard(Request $request, LogisticsSchemaReadiness $schema, RiderAssignmentOfferExpiryService $offers, InterhubTimekeepingService $interhubTimekeeping): View|RedirectResponse
     {
         $rider = $this->rider($request);
         if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
-            return redirect()->route('rider.transfers');
+            return view('rider.interhub.dashboard', [
+                'rider' => $rider->loadMissing('logisticsCenter.address', 'user'),
+                ...$interhubTimekeeping->driverDashboardData($rider),
+            ]);
         }
         abort_unless(RiderVehicleType::isLocalBarangay($rider->vehicle_type), 403);
         $offers->expireDuePickupOffers((int) $rider->id);
@@ -275,9 +279,12 @@ class RiderController extends Controller
         return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'deliveryTrip', 'mapMarkers', 'returnHandoffPending'));
     }
 
-    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View
+    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View|RedirectResponse
     {
         $rider = $this->rider($request);
+        if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
+            return redirect()->route('rider.dashboard')->with('status', 'Interhub pay is managed through timekeeping and payroll on your Dashboard.');
+        }
         $financeSchema = app(FinanceSchemaReadiness::class);
         $filters = $this->dateRange($request);
         $from = filled($filters['from']) ? \Illuminate\Support\Carbon::parse($filters['from'])->startOfDay() : null;
@@ -759,8 +766,8 @@ class RiderController extends Controller
         $remittances = $rider->remittances();
 
         return [
-            'cod_collected' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])->sum('collected_amount'),
-            'unremitted_cash' => (float) (clone $collections)->where('status', CodCollection::COLLECTED)->whereDoesntHave('remittanceItem')->sum('expected_amount'),
+            'cod_collected' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])->sum('collected_amount'),
+            'unremitted_cash' => (float) (clone $collections)->whereIn('status', [CodCollection::COLLECTED, CodCollection::DISCREPANCY])->whereDoesntHave('remittanceItem')->sum('expected_amount'),
             'remittances_submitted' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('submitted_amount'),
             'verified_cash' => (float) (clone $remittances)->whereIn('status', [RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])->sum('verified_amount'),
             'discrepancies' => (int) (clone $remittances)->where('status', RiderRemittance::DISCREPANCY)->count(),

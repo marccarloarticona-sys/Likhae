@@ -38,20 +38,15 @@ class ProductProceedsService
             $riderRemittance = $collection
                 ? RiderRemittance::query()->whereIn('id', DB::table('rider_remittance_items')->where('cod_collection_id', $collection->id)->select('rider_remittance_id'))->first()
                 : null;
-            if (! $collection || $collection->status !== CodCollection::REMITTED || $riderRemittance?->status !== RiderRemittance::RECONCILED) {
-                throw new RuntimeException('The rider handoff must be reconciled and the buyer COD discrepancy resolved before product proceeds can move to Admin.');
+            if (! $collection || ! $riderRemittance?->coversCollectionWithVerifiedFullCash($collection)) {
+                throw new RuntimeException('Logistics must verify the full Rider remittance batch before this parcel COD can move to Admin.');
             }
 
             $fullCodCents = FinancialRules::cents($collection->expected_amount);
             $destinationId = $locked->shipment->destination_logistics_center_id ?: $locked->shipment->logistics_center_id;
             if (! $destinationId || (int) $collection->logistics_center_id !== (int) $destinationId
-                || (int) $riderRemittance->logistics_center_id !== (int) $destinationId
-                || $collection->collected_amount === null
-                || FinancialRules::cents($collection->collected_amount) !== $fullCodCents
-                || $riderRemittance->verified_amount === null
-                || FinancialRules::cents($riderRemittance->expected_amount) !== $fullCodCents
-                || FinancialRules::cents($riderRemittance->verified_amount) !== $fullCodCents) {
-                throw new RuntimeException('The verified Rider remittance must equal the full COD collected for this parcel.');
+                || (int) $riderRemittance->logistics_center_id !== (int) $destinationId) {
+                throw new RuntimeException('The verified Rider batch must belong to this parcel destination.');
             }
 
             $metadata = (array) $locked->metadata;
@@ -96,6 +91,11 @@ class ProductProceedsService
             if ($locked->status !== 'PENDING') {
                 throw new RuntimeException('This parcel proceeds handoff is no longer awaiting submission.');
             }
+            if ($submittedCents !== $expectedCents) {
+                throw new RuntimeException($submittedCents < $expectedCents
+                    ? 'The full COD handoff must equal PHP '.number_format($expectedCents / 100, 2, '.', ',').'. Logistics must cover the PHP '.number_format(($expectedCents - $submittedCents) / 100, 2, '.', ',').' shortfall before submitting to Admin.'
+                    : 'The full COD handoff must equal PHP '.number_format($expectedCents / 100, 2, '.', ',').'. Remove the PHP '.number_format(($submittedCents - $expectedCents) / 100, 2, '.', ',').' excess before submitting.');
+            }
 
             $reference = 'PR-'.now()->format('Ymd').'-'.Str::upper(Str::random(10));
             $metadata = array_merge($metadata, [
@@ -120,6 +120,96 @@ class ProductProceedsService
             $this->audit('LOGISTICS_TO_ADMIN_HANDOFF_SUBMITTED', $locked, $actor, $before, $metadata, $notes);
 
             return $locked->refresh();
+        });
+    }
+
+    /** @param array<int, int|string> $entryIds @return array<int, FinancialLedgerEntry> */
+    public function submitBatchToAdmin(
+        User $actor,
+        array $entryIds,
+        ?string $notes = null,
+        ?string $handoffMethod = null,
+        ?string $externalReference = null,
+    ): array {
+        $this->assertActiveRole($actor, User::TYPE_LOGISTICS);
+        $ids = array_values(array_unique(array_map('intval', $entryIds)));
+        if ($ids === [] || count($ids) !== count($entryIds) || in_array(0, $ids, true)) {
+            throw new RuntimeException('Select one or more valid pending parcel remittances.');
+        }
+
+        return DB::transaction(function () use ($actor, $ids, $notes, $handoffMethod, $externalReference): array {
+            $entries = FinancialLedgerEntry::query()
+                ->with(['shipment.codCollection.remittanceItem.remittance', 'allocation', 'shipment.sellerOrder.order'])
+                ->whereIn('id', $ids)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            if ($entries->count() !== count($ids)) {
+                throw new RuntimeException('One or more selected parcel remittances are no longer available. Refresh and select them again.');
+            }
+
+            $expectedTotalCents = 0;
+            foreach ($entries as $entry) {
+                if ($entry->entry_type !== 'PRODUCT_PROCEEDS_REMITTANCE'
+                    || $entry->status !== 'PENDING'
+                    || ! $entry->shipment
+                    || ! $entry->allocation) {
+                    throw new RuntimeException('Every selected parcel must still be pending COD remittance to Admin.');
+                }
+                $this->assertShipmentCenter($actor, $entry->shipment);
+                $collection = $entry->shipment->codCollection;
+                $riderRemittance = $collection?->remittanceItem?->remittance;
+                if (! $collection || ! $riderRemittance?->coversCollectionWithVerifiedFullCash($collection)) {
+                    throw new RuntimeException('Logistics must verify the full Rider remittance batch for every selected parcel before sending COD to Admin.');
+                }
+                $expectedTotalCents += FinancialRules::cents($collection->expected_amount);
+            }
+
+            // Each selected parcel is eligible only after its full Rider batch
+            // was reconciled. That verified amount already includes Rider-funded
+            // shortfalls, so forward the COD due without charging Logistics again.
+            $cashFromRiderCents = $expectedTotalCents;
+            $logisticsTopUpCents = 0;
+
+            $batchReference = 'PRB-'.now()->format('Ymd').'-'.Str::upper(Str::random(10));
+            $submittedEntries = [];
+            foreach ($entries as $entry) {
+                $collection = $entry->shipment->codCollection;
+                $submitted = $this->submitToAdmin(
+                    $actor,
+                    $entry,
+                    $collection->expected_amount,
+                    $notes,
+                    $handoffMethod,
+                    $externalReference,
+                );
+                $before = (array) $submitted->metadata;
+                $metadata = array_merge($before, [
+                    'batch_receipt_reference' => $batchReference,
+                    'batch_expected_amount' => FinancialRules::amount($expectedTotalCents),
+                    'batch_cash_from_rider_amount' => FinancialRules::amount($cashFromRiderCents),
+                    'batch_logistics_top_up_amount' => FinancialRules::amount($logisticsTopUpCents),
+                    'batch_submitted_amount' => FinancialRules::amount($expectedTotalCents),
+                    'batch_parcel_count' => $entries->count(),
+                    'batch_position' => count($submittedEntries) + 1,
+                ]);
+                $submitted->update(['metadata' => $metadata]);
+                $submittedEntries[] = $submitted->refresh();
+            }
+
+            $this->audit('LOGISTICS_TO_ADMIN_BATCH_SUBMITTED', $submittedEntries[0], $actor, [], [
+                'batch_receipt_reference' => $batchReference,
+                'parcel_entry_ids' => collect($submittedEntries)->map(fn (FinancialLedgerEntry $entry): int => (int) $entry->id)->all(),
+                'batch_expected_amount' => FinancialRules::amount($expectedTotalCents),
+                'cash_from_rider_amount' => FinancialRules::amount($cashFromRiderCents),
+                'logistics_top_up_amount' => FinancialRules::amount($logisticsTopUpCents),
+                'batch_submitted_amount' => FinancialRules::amount($expectedTotalCents),
+                'batch_parcel_count' => count($submittedEntries),
+                'handoff_method' => filled($handoffMethod) ? trim($handoffMethod) : 'Manual cash handoff',
+                'handoff_external_reference' => filled($externalReference) ? trim($externalReference) : null,
+            ], $notes);
+
+            return $submittedEntries;
         });
     }
 
@@ -339,13 +429,10 @@ class ProductProceedsService
         $remittance = $collection?->remittanceItem?->remittance;
         $destinationId = $shipment?->destination_logistics_center_id ?: $shipment?->logistics_center_id;
         $fullCodCents = $collection ? FinancialRules::cents($collection->expected_amount) : -1;
-        if (! $destinationId || ! $collection || $collection->status !== CodCollection::REMITTED
-            || $collection->collected_amount === null || FinancialRules::cents($collection->collected_amount) !== $fullCodCents
+        if (! $destinationId || ! $collection || ! $remittance
+            || ! $remittance->coversCollectionWithVerifiedFullCash($collection)
             || (int) $collection->logistics_center_id !== (int) $destinationId
-            || ! $remittance || $remittance->status !== RiderRemittance::RECONCILED || $remittance->verified_amount === null
             || (int) $remittance->logistics_center_id !== (int) $destinationId
-            || FinancialRules::cents($remittance->expected_amount) !== $fullCodCents
-            || FinancialRules::cents($remittance->verified_amount) !== $fullCodCents
             || (int) data_get($entry->metadata, 'sender.logistics_center_id') !== (int) $destinationId) {
             throw new RuntimeException('The full Rider COD must be reconciled at Destination Logistics before Admin verifies the handoff.');
         }

@@ -511,7 +511,7 @@ class AdminOperationsController extends Controller
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
-                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::DISCREPANCY])
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])
                 ->sum('collected_amount');
             $financialTotals['cash_submitted'] = (float) RiderRemittance::query()
                 ->whereIn('status', [RiderRemittance::SUBMITTED, RiderRemittance::VERIFIED, RiderRemittance::RECONCILED, RiderRemittance::DISCREPANCY])
@@ -665,16 +665,15 @@ class AdminOperationsController extends Controller
                         $collection->selectRaw('1')
                             ->from('cod_collections')
                             ->whereColumn('cod_collections.shipment_id', 'financial_ledger_entries.shipment_id')
-                            ->where('cod_collections.status', CodCollection::REMITTED)
-                            ->whereColumn('cod_collections.collected_amount', 'financial_ledger_entries.amount')
+                            ->whereIn('cod_collections.status', [CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP])
+                            ->whereColumn('cod_collections.expected_amount', 'financial_ledger_entries.amount')
                             ->whereExists(function ($handoff): void {
                                 $handoff->selectRaw('1')
                                     ->from('rider_remittance_items')
                                     ->join('rider_remittances', 'rider_remittances.id', '=', 'rider_remittance_items.rider_remittance_id')
                                     ->whereColumn('rider_remittance_items.cod_collection_id', 'cod_collections.id')
                                     ->where('rider_remittances.status', RiderRemittance::RECONCILED)
-                                    ->whereColumn('rider_remittances.expected_amount', 'cod_collections.collected_amount')
-                                    ->whereColumn('rider_remittances.verified_amount', 'cod_collections.collected_amount');
+                                    ->whereColumn('rider_remittances.expected_amount', 'rider_remittances.verified_amount');
                             });
                     });
                 $availableLogisticsPools = LogisticsEarningPool::query()
@@ -720,14 +719,23 @@ class AdminOperationsController extends Controller
                             ->orWhereColumn('origin_logistics_center_id', '=', 'destination_logistics_center_id'));
                     }
                 };
-                $logisticsPayouts = LogisticsEarningPool::query()
-                    ->whereIn('shipment_financial_allocation_id', $receivedAllocationIds)
-                    ->where('total_amount', '>', 0)
-                    ->whereIn('status', ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'])
-                    ->whereHas('shipment', $routeFilter)
-                    ->with(['logisticsCenter', 'shipment.sellerOrder.order', 'shipment.sellerOrder.items', 'shipment.orderItem', 'shipment.originLogisticsCenter', 'shipment.destinationLogisticsCenter', 'allocation'])
-                    ->orderByRaw("CASE WHEN status = 'PAYOUT_REQUESTED' THEN 0 ELSE 1 END")
-                    ->latest()
+                $eligibleLogisticsPayoutStatuses = ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'];
+                $logisticsPayouts = ShipmentFinancialAllocation::query()
+                    ->whereIn('id', $receivedAllocationIds)
+                    ->whereHas('logisticsPools', function ($pools) use ($eligibleLogisticsPayoutStatuses, $routeFilter): void {
+                        $pools->whereIn('status', $eligibleLogisticsPayoutStatuses)
+                            ->whereHas('shipment', $routeFilter);
+                    })
+                    ->with([
+                        'shipment.sellerOrder.order',
+                        'shipment.sellerOrder.items',
+                        'shipment.orderItem',
+                        'shipment.logisticsCenter',
+                        'shipment.originLogisticsCenter',
+                        'shipment.destinationLogisticsCenter',
+                        'logisticsPools' => fn ($pools) => $pools->with(['logisticsCenter', 'shipment', 'allocation']),
+                    ])
+                    ->latest('id')
                     ->paginate(15, ['*'], 'logistics_payouts_page')->withQueryString();
                 $logisticsPayoutReceipts = FinancialLedgerEntry::query()
                     ->where('entry_type', 'LOGISTICS_PAYOUT')

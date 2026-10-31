@@ -12,14 +12,71 @@
 <div class="sl-page">
     <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Account Management</span><h2>Seller Account</h2><p>Profile and business updates now save to your account.</p></div><span class="sl-account-status"><i></i> {{ str($seller->status ?? 'active')->headline() }}</span></div>
     <div class="sl-account-layout">
-        <aside class="sl-card sl-account-nav"><div class="sl-account-person"><span class="sl-avatar"><x-shared.profile-image :path="$storeProfile->avatar_path" role="seller" :alt="$storeProfile->shop_name ?: 'Shop picture'" /></span><div><strong>{{ $seller->name }}</strong><small>Seller ID: SLR-{{ str_pad((string)$seller->id,5,'0',STR_PAD_LEFT) }}</small></div></div><nav>@foreach(['profile'=>'Profile','business'=>'Business Information','payouts'=>'Payout Details','verification'=>'Verification','security'=>'Security'] as $key=>$label)<a href="{{ route('seller.account',['tab'=>$key]) }}" class="{{ $currentTab===$key?'is-active':'' }}"><span>{{ $loop->iteration }}</span>{{ $label }}<i>›</i></a>@endforeach</nav></aside>
+        <aside class="sl-card sl-account-nav"><div class="sl-account-person"><span class="sl-avatar"><x-shared.profile-image :path="$storeProfile->avatar_path" role="seller" :alt="$storeProfile->shop_name ?: 'Shop picture'" /></span><div><strong>{{ $seller->name }}</strong><small>Seller ID: SLR-{{ str_pad((string)$seller->id,5,'0',STR_PAD_LEFT) }}</small></div></div><nav>@foreach(['profile'=>'Profile','business'=>'Business Information','pickup-addresses'=>'Pickup Addresses','payouts'=>'Payout Details','verification'=>'Verification','security'=>'Security'] as $key=>$label)<a href="{{ route('seller.account',['tab'=>$key]) }}" class="{{ $currentTab===$key?'is-active':'' }}"><span>{{ $loop->iteration }}</span>{{ $label }}<i>›</i></a>@endforeach</nav></aside>
         <main class="sl-account-content">
             @if(session('status'))<div class="sl-card" role="status" style="padding:12px 15px;color:#276749">{{ session('status') }}</div>@endif
             @if($errors->any())<div class="sl-card" role="alert" style="padding:12px 15px;color:#9B2C2C">{{ $errors->first() }}</div>@endif
             @if($currentTab === 'business')
-                <form class="sl-card sl-form-section" method="POST" action="{{ route('seller.account.business') }}">@csrf @method('PUT')<header class="sl-card-head"><div><h2>Business Information</h2><p>Legal information used for marketplace compliance.</p></div></header><div class="sl-form-grid">
-                    <label class="sl-field"><span>Registered business name</span><input value="{{ $storeProfile->business_name ?? '' }}" disabled aria-describedby="business-name-help"><small id="business-name-help">Verified business names cannot be changed here.</small></label><label class="sl-field"><span>Business type</span><input value="{{ $storeProfile->business_type ?? '' }}" disabled aria-describedby="business-type-help"><small id="business-type-help">Your verified Seller category is managed by LIKHAE.</small></label><label class="sl-field"><span>DTI/SEC registration number</span><input name="dti_sec_number" value="{{ old('dti_sec_number',$storeProfile->dti_sec_number ?? '') }}"></label><label class="sl-field"><span>TIN</span><input name="tin" value="{{ old('tin',$storeProfile->tin ?? '') }}"></label><label class="sl-field"><span>Operational pickup contact number</span><input name="contact_number" value="{{ old('contact_number',$businessAddress?->contact_number ?: $seller->contact_number) }}"></label><div class="contents sl-business-address-fields"><x-shared.philippine-address-fields :address="$businessAddress" field-class="" label-class="sl-field" wrapper-class="contents" /></div><x-shared.address-pin :address="$businessAddress" class="sl-span-2 sl-business-address-pin" />
+                <form class="sl-card sl-form-section" method="POST" action="{{ route('seller.account.business') }}">@csrf @method('PUT')<header class="sl-card-head"><div><h2>Business Information</h2><p>Legal information used for marketplace compliance. Pickup locations are managed separately.</p></div></header><div class="sl-form-grid">
+                    <label class="sl-field"><span>Registered business name</span><input value="{{ $storeProfile->business_name ?? '' }}" disabled aria-describedby="business-name-help"><small id="business-name-help">Verified business names cannot be changed here.</small></label><label class="sl-field"><span>Business type</span><input value="{{ $storeProfile->business_type ?? '' }}" disabled aria-describedby="business-type-help"><small id="business-type-help">Your verified Seller category is managed by LIKHAE.</small></label><label class="sl-field"><span>DTI/SEC registration number</span><input name="dti_sec_number" value="{{ old('dti_sec_number',$storeProfile->dti_sec_number ?? '') }}"></label><label class="sl-field"><span>TIN</span><input name="tin" value="{{ old('tin',$storeProfile->tin ?? '') }}"></label>
                 </div><div class="sl-form-actions"><button type="submit" class="sl-btn sl-btn-primary">Save Business Information</button></div></form>
+            @elseif($currentTab === 'pickup-addresses')
+                @php
+                    $editingPickupAddress = $pickupAddressToEdit;
+                @endphp
+                <section class="sl-card sl-form-section">
+                    <header class="sl-card-head"><div><h2>Pickup Addresses</h2><p>Save up to 3 locations and choose which one Logistics should use for each pickup request.</p></div><span class="sl-status {{ $pickupAddresses->count() ? 'is-success' : 'is-warning' }}">{{ $pickupAddresses->count() }}/3 saved</span></header>
+                    <p class="px-5 pb-2 text-sm text-muted">@if($businessAddress)Your current Seller origin address is listed here.@elseAdd a pickup address and set a default to establish your Seller origin location.@endif Pickup requests save the selected address, so changing your default later does not rewrite an existing request. Existing orders keep their current route.</p>
+                    @if(!$editingPickupAddress && $pickupAddresses->count() >= 3)
+                        <p class="mx-5 mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">You have reached the 3-address limit. Remove an address that has not been used for an order or pickup before adding another.</p>
+                    @else
+                        <form class="sl-form-grid" method="POST" action="{{ $editingPickupAddress ? route('seller.account.pickup-addresses.update', $editingPickupAddress) : route('seller.account.pickup-addresses.store') }}">
+                            @csrf @if($editingPickupAddress) @method('PUT') @endif
+                            <label class="sl-field"><span>Address label</span><input name="label" required maxlength="50" value="{{ old('label', $editingPickupAddress?->label ?? '') }}" placeholder="Main shop, warehouse, branch"></label>
+                            <label class="sl-field"><span>Contact person</span><input name="recipient_name" required maxlength="200" value="{{ old('recipient_name', $editingPickupAddress?->recipient_name ?? $seller->name) }}"></label>
+                            <label class="sl-field"><span>Mobile number</span><input name="contact_number" required maxlength="30" value="{{ old('contact_number', $editingPickupAddress?->contact_number ?? $seller->contact_number) }}" placeholder="+63 9XX XXX XXXX"></label>
+                            <div class="contents"><x-shared.philippine-address-fields :address="$editingPickupAddress" field-class="" label-class="sl-field" wrapper-class="contents" /></div>
+                            <x-shared.address-pin :address="$editingPickupAddress" class="sl-span-2" />
+                            <div class="sl-form-actions sl-span-2"><a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">{{ $editingPickupAddress ? 'Cancel edit' : 'Clear form' }}</a><button type="submit" class="sl-btn sl-btn-primary">{{ $editingPickupAddress ? 'Save address changes' : 'Add pickup address' }}</button></div>
+                        </form>
+                    @endif
+                </section>
+
+                <section class="space-y-3" aria-label="Saved pickup addresses">
+                    @forelse($pickupAddresses as $address)
+                        @php
+                            $isEffectiveDefault = $defaultPickupAddress && (int) $defaultPickupAddress->id === (int) $address->id;
+                        @endphp
+                        <article class="sl-card p-5">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div class="min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2"><h3 class="font-semibold text-ink">{{ $address->label ?: 'Pickup address' }}</h3>
+                                        @if($isEffectiveDefault)<span class="sl-status is-success">{{ $address->is_default ? 'Default pickup' : 'Business Address fallback' }}</span>@endif
+                                    @if($businessAddress && (int)$businessAddress->id === (int)$address->id)<span class="sl-status">Seller origin route</span>@endif
+                                    </div>
+                                    <p class="mt-2 text-sm text-ink">{{ $address->formatted() }}</p>
+                                    <p class="mt-1 text-sm text-muted">{{ $address->recipient_name }} · {{ $address->contact_number }}</p>
+                                    @if(is_numeric($address->latitude) && is_numeric($address->longitude))<p class="mt-1 text-xs text-muted">Pickup pin confirmed</p>@elseif(in_array((int)$address->id, $pickupAddressEditProtectedIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. This address is locked to preserve existing routes; add another address with a confirmed map pin.</p>@else<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Edit this address and confirm its map pin.</p>@endif
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    @if(!$address->is_default)
+                                        <form method="POST" action="{{ route('seller.account.pickup-addresses.default', $address) }}">@csrf<button class="sl-btn sl-btn-ghost">Set as default</button></form>
+                                    @endif
+                                    @if(!in_array((int)$address->id, $pickupAddressEditProtectedIds, true))
+                                        <a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses','pickup_edit'=>$address->id]) }}">Edit</a>
+                                    @else
+                                        <span class="text-xs text-muted">Locked to preserve existing routes</span>
+                                    @endif
+                                    @if(!in_array((int)$address->id, $pickupAddressDeleteProtectedIds, true) && $pickupAddresses->count() > 1)
+                                        <form method="POST" action="{{ route('seller.account.pickup-addresses.destroy', $address) }}" data-confirm-title="Remove this pickup address?" data-confirm-message="Addresses used by orders or pickup requests cannot be removed." data-confirm-label="Remove address">@csrf @method('DELETE')<button class="sl-btn sl-btn-ghost">Remove</button></form>
+                                    @endif
+                                </div>
+                            </div>
+                        </article>
+                    @empty
+                        <article class="sl-card p-5 text-sm text-muted">No pickup address is saved yet. Add one above before requesting a Logistics pickup.</article>
+                    @endforelse
+                </section>
             @elseif($currentTab === 'payouts')
                 <section class="sl-card sl-form-section payout-section">
                     <header class="sl-card-head payout-section-head"><div><span class="payout-overline">Payout destination</span><h2>Payment details</h2><p>Choose where Admin should send approved Seller payouts.</p></div>@if($payoutDestinationSaved)<span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Destination saved</span>@endif</header>

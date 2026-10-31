@@ -191,15 +191,24 @@
     @else
         <section class="sl-card" data-seller-pickup-request-form>
             <header class="sl-card-head"><div><span class="sl-eyebrow">Seller Pickup</span><h2>Request one pickup for 1–10 ready parcels</h2><p>Parcels may come from different SellerOrders. Each keeps its own tracking number, waybill, and Rider scan state.</p></div></header>
-            @if(!$pickupAddress)
-                <p class="mt-3 text-sm text-amber-800">Add a registered business pickup address before requesting a Rider.</p>
+            @if($pickupAddresses->isEmpty())
+                <p class="mt-3 text-sm text-amber-800">Add a pickup address before requesting a Rider. <a class="font-semibold underline" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">Manage pickup addresses</a>.</p>
             @elseif($readyPickupParcels->isEmpty())
                 <p class="mt-3 text-sm text-muted">No eligible parcels are ready for a new pickup request.</p>
             @else
-                <p class="mt-2 text-sm text-muted">Pickup address: <strong class="text-ink">{{ $pickupAddress->formatted() }}</strong></p>
                 <form method="POST" action="{{ route('seller.logistics.pickup-requests.store') }}" class="mt-4 space-y-4">
                     @csrf
-                    <input type="hidden" name="pickup_address_id" value="{{ $pickupAddress->id }}">
+                    <label class="grid max-w-2xl gap-2 text-sm font-medium text-ink"><span>Pickup address</span>
+                        <select name="pickup_address_id" required class="min-h-11 border border-line bg-white px-3 py-2">
+                            <option value="">Select a saved pickup address</option>
+                            @foreach($pickupAddresses as $address)
+                                <option value="{{ $address->id }}" @disabled(!is_numeric($address->latitude) || !is_numeric($address->longitude)) @selected((string)old('pickup_address_id', $pickupAddress?->id) === (string)$address->id)>
+                                    {{ $address->label ?: 'Pickup address' }}{{ $address->is_default ? ' · Default' : '' }} — {{ $address->formatted() }}{{ !is_numeric($address->latitude) || !is_numeric($address->longitude) ? ' · Confirm map pin first' : '' }}
+                                </option>
+                            @endforeach
+                        </select>
+                        <small class="font-normal text-muted">Choose the location for this request. The saved request keeps this address. Its Logistics center must match the parcels' existing route. <a class="font-semibold underline" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">Manage addresses</a>.</small>
+                    </label>
                     <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Select</th><th>Tracking / product</th><th>SellerOrder</th><th>Waybill</th></tr></thead><tbody>
                         @foreach($readyPickupParcels as $parcel)
                             <tr>

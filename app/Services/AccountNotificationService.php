@@ -6,6 +6,7 @@ use App\Mail\AccountAlert;
 use App\Models\Admin\Notification;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\Review;
+use App\Models\Finance\CodCollection;
 use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
@@ -149,6 +150,26 @@ class AccountNotificationService
             in_array($status, ['SUSPENDED', 'BANNED'], true) ? null : '/notifications',
             email: true,
             allowInactive: true,
+        );
+    }
+
+    public function riderCodRemittanceOverdue(CodCollection $collection, string $requiredAmount): void
+    {
+        $collection->loadMissing('riderProfile.user', 'shipment');
+        $trackingNumber = $collection->shipment?->tracking_number ?: 'parcel #'.$collection->shipment_id;
+        $message = 'The COD cash for parcel '.$trackingNumber.' has not been remitted within 24 hours. '
+            .'Your account has been marked Warned. Remit the full COD due of PHP '.$requiredAmount
+            .', cover any buyer collection shortfall, and have Logistics verify the cash received.';
+
+        $this->record(
+            $collection->riderProfile?->user,
+            'RIDER_COD_REMITTANCE_OVERDUE',
+            'Account warning: COD remittance overdue',
+            $message,
+            CodCollection::class,
+            (int) $collection->id,
+            '/rider/remittances',
+            email: true,
         );
     }
 

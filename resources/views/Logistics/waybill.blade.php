@@ -20,6 +20,10 @@
 			<div class="box"><strong>Seller</strong><p>{{ $order?->sellerProfile?->business_name }}<br>{{ $order?->sellerProfile?->businessAddress?->formatted() }}</p></div>
 			<div class="box"><strong>Recipient</strong><p>{{ $order?->order?->address?->recipient_name }}<br>{{ $order?->order?->address?->formatted() }}</p></div>
 		</section>
+		@php($weightItems = $shipment->orderItem ? collect([$shipment->orderItem]) : ($order?->items ?? collect()))
+		<section class="grid" style="margin-top:16px">
+			<x-shared.waybill-weight :shipment="$shipment" :items="$weightItems" />
+		</section>
 		@if($shipment->orderItem)
 		<table class="items">
 			<thead><tr><th>Item</th><th>Variant</th><th>Qty</th></tr></thead>

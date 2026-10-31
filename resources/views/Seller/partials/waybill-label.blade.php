@@ -1,7 +1,7 @@
 @php
     $address = $sellerOrder->order?->address;
     $paymentMethod = $sellerOrder->order?->payments?->first()?->method;
-    $weightKnown = is_numeric($shipment->parcel_weight_kg) && (float) $shipment->parcel_weight_kg > 0;
+    $weightItems = $item ? collect([$item]) : $sellerOrder->items;
     $codCollection = $shipment->relationLoaded('codCollection') ? $shipment->getRelation('codCollection') : null;
     $codAmount = $codCollection?->expected_amount;
     if ($paymentMethod === 'COD' && $codAmount === null) {
@@ -29,7 +29,7 @@
         <p style="margin-top:18px;padding:12px;border:1px solid #a8a29e">Legacy parcel contents: {{ $sellerOrder->items->pluck('product_name')->implode(', ') }}. This tracking number covers the legacy parcel.</p>
     @endif
     <section style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
-        <div class="box"><strong>Parcel weight</strong><br>@if($weightKnown){{ number_format((float) $shipment->parcel_weight_kg, 3) }} kg @else Weight not recorded @endif</div>
+        <x-shared.waybill-weight :shipment="$shipment" :items="$weightItems" />
         <div class="box"><strong>Payment</strong><br>@if($paymentMethod === 'COD') COD - PHP {{ number_format((float) $codAmount, 2) }} @elseif($paymentMethod === 'ONLINE') Prepaid @else Payment method unavailable @endif</div>
     </section>
     <p><strong>Destination:</strong> {{ collect([$shipment->destination_barangay_name, $shipment->destination_municipality_name, $shipment->destination_province_name])->filter()->implode(', ') }}</p>

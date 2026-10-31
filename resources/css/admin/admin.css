@@ -294,6 +294,20 @@ a.ad-stat:hover { border-color: var(--ad-blue-border); transform: translateY(-1p
 .ad-table tbody tr:hover { background: #FFFDF9; }
 .ad-table strong { color: var(--ad-text); font-size: 8px; }
 .ad-table small { display: block; margin-top: 3px; color: var(--ad-muted); font-size: 7px; }
+.ad-table.ad-finance-charge-receipt,
+.ad-table.ad-finance-route-breakdown { table-layout: fixed; }
+.ad-table.ad-finance-charge-receipt th,
+.ad-table.ad-finance-charge-receipt td,
+.ad-table.ad-finance-route-breakdown th,
+.ad-table.ad-finance-route-breakdown td { white-space: normal; overflow-wrap: anywhere; }
+.ad-table.ad-finance-charge-receipt th:first-child,
+.ad-table.ad-finance-charge-receipt td:first-child { width: 68%; }
+.ad-table.ad-finance-route-breakdown th:first-child,
+.ad-table.ad-finance-route-breakdown td:first-child { width: 52%; }
+.ad-table.ad-finance-route-breakdown th:nth-child(2),
+.ad-table.ad-finance-route-breakdown td:nth-child(2) { width: 18%; }
+.ad-table.ad-finance-route-breakdown th:nth-child(3),
+.ad-table.ad-finance-route-breakdown td:nth-child(3) { width: 30%; }
 .ad-cell-user, .ad-cell-product { display: flex; align-items: center; gap: 9px; }
 .ad-cell-user .ad-avatar { width: 30px; height: 30px; flex-basis: 30px; overflow: hidden; border-radius: 8px; font-size: 9px; }
 .ad-cell-user .ad-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }

@@ -157,7 +157,7 @@ class RiderTransferApiController extends Controller
         $rider = $user->riderProfile;
         abort_unless(
             $rider instanceof RiderProfile
-                && $rider->status === 'ACTIVE'
+                && in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 && RiderVehicleType::isInterLogistics($rider->vehicle_type),
             403,
             'An active inter-logistics rider vehicle is required.',

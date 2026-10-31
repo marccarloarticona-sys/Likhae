@@ -14,6 +14,7 @@ final class LogisticsFinancialReportService
     /** @var list<string> */
     private const ENTRY_TYPES = [
         'LOGISTICS_ALLOCATION',
+        'LOGISTICS_ROUTE_POLICY_ADJUSTMENT',
         'PRODUCT_PROCEEDS_REMITTANCE',
         'LOGISTICS_PAYOUT',
     ];
@@ -27,6 +28,10 @@ final class LogisticsFinancialReportService
         $query = FinancialLedgerEntry::query()
             ->where('account_type', 'LOGISTICS')
             ->whereIn('entry_type', self::ENTRY_TYPES)
+            ->where(function ($entries) use ($center): void {
+                $entries->where('entry_type', '<>', 'LOGISTICS_ROUTE_POLICY_ADJUSTMENT')
+                    ->orWhere('metadata->logistics_center_id', $center->id);
+            })
             ->whereExists(function ($pool) use ($center): void {
                 $pool->selectRaw('1')
                     ->from('logistics_earning_pools')
@@ -115,6 +120,10 @@ final class LogisticsFinancialReportService
         return FinancialLedgerEntry::query()
             ->where('account_type', 'LOGISTICS')
             ->whereIn('entry_type', self::ENTRY_TYPES)
+            ->where(function ($entries) use ($center): void {
+                $entries->where('entry_type', '<>', 'LOGISTICS_ROUTE_POLICY_ADJUSTMENT')
+                    ->orWhere('metadata->logistics_center_id', $center->id);
+            })
             ->whereExists(function ($pool) use ($center): void {
                 $pool->selectRaw('1')
                     ->from('logistics_earning_pools')
@@ -145,6 +154,7 @@ final class LogisticsFinancialReportService
         $timestamp = $entry->paid_at ?: $entry->posted_at ?: $entry->created_at;
         $isAllocation = $entry->entry_type === 'LOGISTICS_ALLOCATION';
         $isLogisticsPayout = $entry->entry_type === 'LOGISTICS_PAYOUT';
+        $isRoutePolicyAdjustment = $entry->entry_type === 'LOGISTICS_ROUTE_POLICY_ADJUSTMENT';
 
         return [
             'date' => $timestamp?->timezone(config('app.timezone'))->format('Y-m-d H:i:s') ?? '',
@@ -170,14 +180,14 @@ final class LogisticsFinancialReportService
                 ? number_format((float) $allocation->logistics_allocation, 2, '.', '')
                 : ($isLogisticsPayout
                     ? (string) ($metadata['logistics_net_share'] ?? ($allocation ? number_format((float) $allocation->logistics_allocation, 2, '.', '') : ''))
-                    : ''),
+                    : ($isRoutePolicyAdjustment ? number_format((float) $entry->amount, 2, '.', '') : '')),
             'rider_pass_through' => $isLogisticsPayout ? (string) ($metadata['rider_pass_through'] ?? '') : '',
             'admin_product_commission' => $isAllocation && $allocation ? number_format((float) $allocation->platform_commission, 2, '.', '') : '',
             'expected' => (string) ($metadata['amount_expected'] ?? ($entry->entry_type === 'PRODUCT_PROCEEDS_REMITTANCE' ? $entry->amount : '')),
             'submitted' => (string) ($metadata['amount_submitted'] ?? ''),
             'received' => (string) ($metadata['amount_received'] ?? ''),
             'discrepancy' => (string) ($metadata['discrepancy_amount'] ?? ''),
-            'reference' => (string) ($metadata['receipt_reference'] ?? $metadata['payout_reference'] ?? ''),
+            'reference' => (string) ($metadata['receipt_reference'] ?? $metadata['payout_reference'] ?? $metadata['adjustment_reference'] ?? ''),
         ];
     }
 

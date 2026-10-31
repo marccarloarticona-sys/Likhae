@@ -25,7 +25,7 @@
                     <div>
                         <p class="text-xs font-bold uppercase tracking-[0.15em] text-primary">Pickup Batch #P-{{ $batch->id }}</p>
                         <h2 class="mt-2 text-xl font-bold text-ink">{{ $batch->seller?->business_name ?? 'Seller unavailable' }}</h2>
-                        <p class="mt-2 text-sm text-muted">{{ $batch->seller?->businessAddress?->formatted() ?? 'Pickup address unavailable' }}</p>
+                        <p class="mt-2 text-sm text-muted">{{ $batch->sellerPickupRequest?->pickupAddress?->formatted() ?? $batch->seller?->businessAddress?->formatted() ?? 'Pickup address unavailable' }}</p>
                         <p class="mt-3 text-sm font-semibold text-ink">{{ $total }} {{ str('parcel')->plural($total) }} · {{ $collected }}/{{ $total }} verified</p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">

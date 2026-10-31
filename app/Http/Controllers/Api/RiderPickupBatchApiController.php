@@ -29,7 +29,7 @@ class RiderPickupBatchApiController extends Controller
         $rider = $user->riderProfile;
         abort_unless(
             $rider instanceof RiderProfile
-                && $rider->status === 'ACTIVE'
+                && in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 && RiderVehicleType::isLocalBarangay($rider->vehicle_type),
             403,
             'Active local rider access is required.',
@@ -70,7 +70,7 @@ class RiderPickupBatchApiController extends Controller
         $rider = $user->riderProfile;
         abort_unless(
             $rider instanceof RiderProfile
-                && $rider->status === 'ACTIVE'
+                && in_array($rider->status, ['ACTIVE', 'WARNED'], true)
                 && RiderVehicleType::isLocalBarangay($rider->vehicle_type),
             403,
             'Local Rider access is required.',
@@ -83,17 +83,22 @@ class RiderPickupBatchApiController extends Controller
             ], 503);
         }
 
+        $batchRelations = [
+            'seller.businessAddress',
+            'logisticsCenter.address',
+            'items.riderAssignment.shipment.sellerOrder.items',
+        ];
+        if ($schema->sellerPickupRequestsReady()) {
+            $batchRelations[] = 'sellerPickupRequest.pickupAddress';
+        }
+
         $offers->expireDuePickupOffers((int) $rider->id);
 
         $batch = RiderLocalTrip::query()
             ->where('rider_profile_id', $rider->id)
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
             ->whereNotNull('seller_profile_id')
-            ->with([
-                'seller.businessAddress',
-                'logisticsCenter.address',
-                'items.riderAssignment.shipment.sellerOrder.items',
-            ])
+            ->with($batchRelations)
             ->findOrFail($trip);
 
         if ($batch->status === RiderLocalTrip::EN_ROUTE_TO_HUB) {
@@ -106,11 +111,7 @@ class RiderPickupBatchApiController extends Controller
                 }
             }
 
-            $batch->refresh()->load([
-                'seller.businessAddress',
-                'logisticsCenter.address',
-                'items.riderAssignment.shipment.sellerOrder.items',
-            ]);
+            $batch->refresh()->load($batchRelations);
         }
 
         return response()->json([
@@ -121,6 +122,9 @@ class RiderPickupBatchApiController extends Controller
 
     private function batchPayload(RiderLocalTrip $trip): array
     {
+        $pickupRequest = $trip->relationLoaded('sellerPickupRequest') ? $trip->sellerPickupRequest : null;
+        $pickupAddress = $pickupRequest?->pickupAddress ?? $trip->seller?->businessAddress;
+        $centerAddress = $trip->logisticsCenter?->address;
         $items = $trip->items->map(function (RiderLocalTripItem $item): array {
             $assignment = $item->riderAssignment;
             $shipment = $assignment?->shipment;
@@ -141,9 +145,13 @@ class RiderPickupBatchApiController extends Controller
             'batch_number' => 'P-'.$trip->id,
             'status' => $trip->status,
             'seller' => $trip->seller?->business_name,
-            'pickup_address' => $trip->seller?->businessAddress?->formatted(),
+            'pickup_address' => $pickupAddress?->formatted(),
+            'seller_latitude' => $pickupAddress?->latitude,
+            'seller_longitude' => $pickupAddress?->longitude,
             'logistics_center' => $trip->logisticsCenter?->business_name,
-            'destination_address' => $trip->logisticsCenter?->address?->formatted(),
+            'destination_address' => $centerAddress?->formatted(),
+            'logistics_center_latitude' => $centerAddress?->latitude,
+            'logistics_center_longitude' => $centerAddress?->longitude,
             'parcel_count' => $items->count(),
             'approved_capacity' => $trip->approved_parcel_capacity,
             'collected_count' => $items->where('assignment_status', 'COMPLETED')->count(),

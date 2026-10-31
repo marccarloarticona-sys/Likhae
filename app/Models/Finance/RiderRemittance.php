@@ -5,6 +5,7 @@ namespace App\Models\Finance;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
+use App\Support\FinancialRules;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -42,4 +43,47 @@ class RiderRemittance extends Model
     public function submittedBy(): BelongsTo { return $this->belongsTo(User::class, 'submitted_by_user_id'); }
     public function verifiedBy(): BelongsTo { return $this->belongsTo(User::class, 'verified_by_user_id'); }
     public function items(): HasMany { return $this->hasMany(RiderRemittanceItem::class); }
+
+    public function coversCollectionWithVerifiedFullCash(CodCollection $collection): bool
+    {
+        if ($this->status !== self::RECONCILED
+            || $this->verified_amount === null
+            || (int) $this->logistics_center_id !== (int) $collection->logistics_center_id) {
+            return false;
+        }
+
+        $this->loadMissing('items.codCollection');
+        $items = $this->items;
+        if ($items->isEmpty() || $items->contains(fn (RiderRemittanceItem $item): bool => ! $item->codCollection)) {
+            return false;
+        }
+
+        $batchDueCents = $items->sum(fn (RiderRemittanceItem $item): int =>
+            FinancialRules::cents($item->codCollection->expected_amount)
+        );
+        if ($batchDueCents <= 0
+            || $batchDueCents !== FinancialRules::cents($this->expected_amount)
+            || $batchDueCents !== FinancialRules::cents($this->verified_amount)) {
+            return false;
+        }
+
+        $included = $items->contains(fn (RiderRemittanceItem $item): bool =>
+            (int) $item->cod_collection_id === (int) $collection->id
+        );
+        if (! $included || $collection->collected_amount === null) {
+            return false;
+        }
+
+        $buyerCollectedCents = FinancialRules::cents($collection->collected_amount);
+        $collectionDueCents = FinancialRules::cents($collection->expected_amount);
+
+        return match ($collection->status) {
+            CodCollection::REMITTED => $buyerCollectedCents === $collectionDueCents,
+            CodCollection::REMITTED_RIDER_TOPUP => $buyerCollectedCents < $collectionDueCents,
+            // Recognize old reconciled receipts created before Rider top-ups
+            // were represented as their own collection status.
+            CodCollection::REMITTED_DISCREPANCY => $buyerCollectedCents < $collectionDueCents,
+            default => false,
+        };
+    }
 }

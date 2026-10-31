@@ -9,12 +9,19 @@
 @section('content')
 @php
     $allResolved = $items->every(fn ($item) => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
+    $collectedItems = $items->filter(fn ($item) => $collectedAssignmentIds->contains($item->riderAssignment?->id));
+    $awaitingLogisticsIntakeCount = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'PICKED_UP')->count();
+    $receivedAtCenterCount = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->hasReachedSortingCenter())->count();
+    $needsLogisticsReviewCount = max(0, $collectedItems->count() - $awaitingLogisticsIntakeCount - $receivedAtCenterCount);
     $pickupStatusLabel = match ($pickup->status) {
         'LOADING' => 'Assigned',
         'READY' => 'Accepted',
         'IN_PROGRESS' => $pickupFinished ? 'Seller pickup complete' : 'In progress',
-        'EN_ROUTE_TO_HUB' => 'In transit to logistics center',
+        'EN_ROUTE_TO_HUB' => $awaitingLogisticsIntakeCount > 0
+            ? 'In transit to logistics center'
+            : ($needsLogisticsReviewCount > 0 ? 'Logistics review required' : 'Received at sorting center'),
         'COMPLETED' => 'Completed',
+        'EXCEPTION' => 'Logistics review required',
         default => str($pickup->status)->headline(),
     };
 @endphp
@@ -42,8 +49,13 @@
                 'IN_PROGRESS' => $pickupFinished
                     ? ['Complete the seller pickup and start the route to the logistics center.', 'You, the pickup rider']
                     : ['Scan each assigned waybill; record a reason for parcels not collected.', 'You, the pickup rider'],
-                'EN_ROUTE_TO_HUB' => ['Hand the collected parcels to Logistics for intake scans.', 'You, the pickup rider'],
+                'EN_ROUTE_TO_HUB' => $awaitingLogisticsIntakeCount > 0
+                    ? ['Hand the '.$awaitingLogisticsIntakeCount.' parcel(s) still marked Picked Up to Logistics for intake scans.'.($needsLogisticsReviewCount > 0 ? ' Contact Logistics about '.$needsLogisticsReviewCount.' exception parcel(s).' : ''), 'You, the pickup rider']
+                    : ($needsLogisticsReviewCount > 0
+                        ? ['No parcels are awaiting intake. Contact Logistics to review '.$needsLogisticsReviewCount.' exception parcel(s).', 'Logistics team']
+                        : ['All collected parcels have reached the sorting center.', 'No action pending']),
                 'COMPLETED' => ['This pickup batch is closed.', 'No action pending'],
+                'EXCEPTION' => ['This pickup route is closed with a shipment exception. Review the parcel status with Logistics.', 'Logistics team'],
                 default => ['Review the pickup batch for its next action.', 'Pickup rider'],
             };
         @endphp
@@ -83,9 +95,17 @@
                     <div class="hidden border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800" data-pickup-finished-message>All assigned parcels are resolved. Continue with the collected parcels.</div>
                     <form method="POST" action="{{ route('rider.pickups.batches.finish', $pickup->id) }}" class="hidden" data-finish-pickup-form>@csrf<button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Complete Seller Pickup · Start Route to Logistics</button></form>
                 @elseif($pickup->status === 'EN_ROUTE_TO_HUB')
-                    <div class="border border-primary/20 bg-primary-soft p-4 text-sm font-semibold text-primary">Seller pickup complete. Deliver {{ $collected }} collected parcel(s) to the assigned logistics center for individual intake scans.</div>
+                    @if($awaitingLogisticsIntakeCount > 0)
+                        <div class="border border-primary/20 bg-primary-soft p-4 text-sm font-semibold text-primary">Seller pickup complete. Deliver {{ $awaitingLogisticsIntakeCount }} parcel(s) still marked Picked Up to the assigned logistics center for individual intake scans.@if($needsLogisticsReviewCount > 0) {{ $needsLogisticsReviewCount }} exception parcel(s) require Logistics review.@endif</div>
+                    @elseif($needsLogisticsReviewCount > 0)
+                        <div class="border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">No parcels are awaiting intake. {{ $needsLogisticsReviewCount }} exception parcel(s) require Logistics review.</div>
+                    @else
+                        <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">All collected parcels have already reached the sorting center.</div>
+                    @endif
                 @elseif($pickup->status === 'COMPLETED')
                     <div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">This pickup batch is closed.</div>
+                @elseif($pickup->status === 'EXCEPTION')
+                    <div class="border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">This pickup route is closed with a shipment exception. Contact Logistics for review.</div>
                 @endif
                 <a href="{{ route('rider.pickups') }}" class="rounded-xl border border-line px-5 py-3 text-center text-sm font-semibold text-ink">Back to Seller Pickups</a>
             </div>
@@ -119,11 +139,17 @@
             @foreach($items as $item)
                 @php($assignment = $item->riderAssignment)
                 @php($shipment = $assignment?->shipment)
+                @php($pickupWasScanned = $collectedAssignmentIds->contains($assignment?->id))
+                @php($shipmentStatus = (string) ($shipment?->current_status ?? ''))
                 <article class="rounded-2xl border border-line p-4" data-pickup-item data-tracking="{{ $shipment?->tracking_number }}" data-pickup-resolved="{{ in_array($assignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true) ? 'true' : 'false' }}">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div><strong class="text-ink">{{ $shipment?->tracking_number ?? 'Waybill unavailable' }}</strong><p class="mt-1 text-xs text-muted">{{ ($shipment?->orderItem?->product_name ?? $shipment?->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</p></div>
-                        @if($collectedAssignmentIds->contains($assignment?->id))
-                            <span class="text-sm font-semibold text-green-700">âœ“ Received by rider Â· waiting for logistics intake</span>
+                        @if($pickupWasScanned && ($shipment?->hasReachedSortingCenter() ?? false))
+                            <span class="text-sm font-semibold text-green-700">Received at Sorting Center{{ $shipmentStatus !== 'AT_SORTING_CENTER' ? ' · Current status: '.str($shipmentStatus)->headline() : '' }}</span>
+                        @elseif($pickupWasScanned && $shipmentStatus === 'PICKED_UP')
+                            <span class="text-sm font-semibold text-green-700">Received by rider · waiting for logistics intake</span>
+                        @elseif($pickupWasScanned)
+                            <span class="text-sm font-semibold text-amber-800">Pickup scan recorded · Current shipment status: {{ str($shipmentStatus)->headline() }} · Logistics review required</span>
                         @elseif(in_array($assignment?->status, ['REJECTED', 'CANCELLED'], true))
                             <span class="text-sm font-semibold text-amber-800">Not collected: {{ $assignment->rejection_reason ?: 'Resolved' }}</span>
                         @else
@@ -162,10 +188,22 @@ document.addEventListener('parcel-scanner:success', (event) => {
         item.dataset.pickupResolved = 'true';
         const status = item.querySelector('span');
         if (status) {
-            status.className = 'text-sm font-semibold text-green-700';
-            status.textContent = result.already_verified
-                ? 'Already collected by rider · waiting for logistics intake'
-                : 'Collected by rider · waiting for logistics intake';
+            const shipmentStatus = String(result.shipment_status || 'PICKED_UP');
+            const shipmentStatusLabel = shipmentStatus.toLowerCase().replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+            if (result.center_received) {
+                status.className = 'text-sm font-semibold text-green-700';
+                status.textContent = shipmentStatus === 'AT_SORTING_CENTER'
+                    ? 'Received at Sorting Center'
+                    : `Received at Sorting Center · Current status: ${shipmentStatusLabel}`;
+            } else if (shipmentStatus === 'PICKED_UP') {
+                status.className = 'text-sm font-semibold text-green-700';
+                status.textContent = result.already_verified
+                    ? 'Already collected by rider · waiting for logistics intake'
+                    : 'Collected by rider · waiting for logistics intake';
+            } else {
+                status.className = 'text-sm font-semibold text-amber-800';
+                status.textContent = `Pickup scan recorded · Current shipment status: ${shipmentStatusLabel} · Logistics review required`;
+            }
         }
     }
 

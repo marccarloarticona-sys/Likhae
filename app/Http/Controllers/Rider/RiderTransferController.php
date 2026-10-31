@@ -36,24 +36,51 @@ class RiderTransferController extends Controller
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
         abort_unless($this->schema->transferReady(), 503, 'Transfer schema is not installed.');
-        $manifest = TransferManifest::query()->where('assigned_driver_rider_profile_id', $rider->id)->with('originLogisticsCenter', 'destinationLogisticsCenter.address', 'items.transferLeg.shipment.sellerOrder.items')->findOrFail($manifest);
+        $manifest = TransferManifest::query()->where('assigned_driver_rider_profile_id', $rider->id)->with('originLogisticsCenter.address', 'destinationLogisticsCenter.address', 'items.transferLeg.shipment.sellerOrder.items')->findOrFail($manifest);
         $mapMarkers = [];
-        if ($manifest->status === TransferManifest::IN_TRANSIT) {
-            $destinationMarker = app(MapDataService::class)->centerMarker($manifest->destinationLogisticsCenter);
-            if ($destinationMarker) {
-                $destinationName = $manifest->destinationLogisticsCenter?->business_name ?: 'Destination hub';
-                $destinationMarker['label'] = 'Destination hub';
-                $destinationMarker['title'] = $destinationName;
-                $destinationMarker['target_kind'] = 'destination';
-                $destinationMarker['navigation_destination'] = [
-                    'name' => $destinationName,
-                    'address' => $destinationMarker['popup'] ?: 'Saved hub address pin',
-                ];
-                $mapMarkers[] = $destinationMarker;
+        $mapRouteReady = false;
+        if (in_array($manifest->status, [TransferManifest::RELEASED, TransferManifest::IN_TRANSIT], true)) {
+            $mapData = app(MapDataService::class);
+            $originMarker = $mapData->centerMarker($manifest->originLogisticsCenter);
+            $destinationMarker = $mapData->centerMarker($manifest->destinationLogisticsCenter);
+            $mapRouteReady = $destinationMarker !== null;
+            $routeStatus = $manifest->status === TransferManifest::IN_TRANSIT
+                ? TransferManifest::IN_TRANSIT
+                : TransferManifest::RELEASED;
+            $routeGroupId = 'transfer-manifest-'.$manifest->id;
+
+            foreach ([
+                ['marker' => $originMarker, 'role' => 'origin', 'sequence' => 1, 'name' => $manifest->originLogisticsCenter?->business_name ?: 'Origin logistics center'],
+                ['marker' => $destinationMarker, 'role' => 'destination', 'sequence' => 2, 'name' => $manifest->destinationLogisticsCenter?->business_name ?: 'Destination logistics center'],
+            ] as $stop) {
+                if (! $stop['marker']) {
+                    continue;
+                }
+
+                $marker = $stop['marker'];
+                $marker['id'] = $routeGroupId.'-'.$stop['role'];
+                $marker['shipment_id'] = $routeGroupId;
+                $marker['center_role'] = $stop['role'];
+                $marker['transfer_leg_id'] = $manifest->id;
+                $marker['transfer_status'] = $routeStatus;
+                $marker['tracking_status'] = 'SORTED';
+                $marker['sequence_no'] = $stop['sequence'];
+                $marker['label'] = $stop['role'] === 'origin' ? 'Origin logistics center' : 'Destination logistics center';
+                $marker['title'] = $stop['name'];
+                $marker['target_kind'] = $stop['role'] === 'destination' ? 'destination' : 'origin';
+
+                if ($stop['role'] === 'destination') {
+                    $marker['navigation_destination'] = [
+                        'name' => $stop['name'],
+                        'address' => $marker['popup'] ?: 'Saved hub address pin',
+                    ];
+                }
+
+                $mapMarkers[] = $marker;
             }
         }
 
-        return view('rider.transfer-show', compact('rider', 'manifest', 'mapMarkers'));
+        return view('rider.transfer-show', compact('rider', 'manifest', 'mapMarkers', 'mapRouteReady'));
     }
 
     public function accept(Request $request, int $manifest): RedirectResponse

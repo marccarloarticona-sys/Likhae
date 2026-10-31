@@ -13,7 +13,11 @@ class DeliveryEarningsBreakdownTest extends TestCase
     {
         foreach (range(0, 200) as $cents) {
             [$rider, $origin, $destination] = \App\Support\FinancialRules::interHubDeliverySplitCents($cents);
-            $this->assertSame(\App\Support\FinancialRules::shippingAllocationCents($cents, '60')['rider_cents'], $rider);
+            $split = \App\Support\FinancialRules::shippingAllocationCents($cents, '60');
+            [$originShare, $destinationShare] = \App\Support\FinancialRules::allocateCents($split['logistics_cents'], [30, 10]);
+            $this->assertSame($split['rider_cents'], $rider);
+            $this->assertSame($originShare, $origin);
+            $this->assertSame($destinationShare, $destination);
             $this->assertSame($cents, $rider + $origin + $destination);
         }
     }
@@ -72,6 +76,51 @@ class DeliveryEarningsBreakdownTest extends TestCase
             'rider_reserve_cents' => 6300,
         ], $destination);
         $this->assertSame(10500, $origin['transfer_cents'] + $destination['net_share_cents'] + $destination['rider_reserve_cents']);
+    }
+
+    public function test_inter_hub_shipping_split_and_existing_additional_care_split_are_rounded_separately(): void
+    {
+        $shipment = new Shipment([
+            'origin_logistics_center_id' => 4,
+            'destination_logistics_center_id' => 8,
+            'logistics_center_id' => 4,
+        ]);
+        $allocation = new ShipmentFinancialAllocation([
+            'shipping_fee' => '0.01',
+            'protection_amount' => '0.01',
+            'logistics_allocation' => '0.00',
+            'rider_allocation' => '0.02',
+        ]);
+
+        $split = DeliveryEarningsBreakdown::forShipment($shipment, $allocation);
+
+        $this->assertSame(2, $split['rider_cents']);
+        $this->assertSame(0, $split['origin_logistics_cents']);
+        $this->assertSame(0, $split['destination_logistics_cents']);
+        $this->assertSame($split['total_cents'], $split['rider_cents'] + $split['origin_logistics_cents'] + $split['destination_logistics_cents']);
+    }
+
+    public function test_legacy_inter_hub_pool_reconstruction_preserves_its_combined_fee_split(): void
+    {
+        $shipment = new Shipment([
+            'origin_logistics_center_id' => 4,
+            'destination_logistics_center_id' => 8,
+            'logistics_center_id' => 4,
+        ]);
+        $allocation = new ShipmentFinancialAllocation([
+            'shipping_fee' => '100.00',
+            'protection_amount' => '5.00',
+            'logistics_allocation' => '42.00',
+            'rider_allocation' => '63.00',
+        ]);
+
+        $origin = DeliveryEarningsBreakdown::forLegacyLogisticsCenter($shipment, $allocation, 4);
+        $destination = DeliveryEarningsBreakdown::forLegacyLogisticsCenter($shipment, $allocation, 8);
+
+        $this->assertSame(3150, $origin['transfer_cents']);
+        $this->assertSame(1050, $destination['net_share_cents']);
+        $this->assertSame(6300, $destination['rider_reserve_cents']);
+        $this->assertSame(10500, $origin['transfer_cents'] + $destination['transfer_cents']);
     }
 
     public function test_variable_regional_and_additional_care_amounts_reconcile_to_each_centavo(): void
