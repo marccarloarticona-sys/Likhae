@@ -427,7 +427,7 @@ html.dark .likhae-logo {
 .auth-workspace-logistics .auth-hero {
     border-color: #e4d2bd;
     background:
-        linear-gradient(180deg, rgba(248, 240, 228, 0.92), rgba(248, 240, 228, 0.88)),
+        linear-gradient(90deg, rgba(248, 240, 228, 0.56) 0%, rgba(248, 240, 228, 0.4) 56%, rgba(248, 240, 228, 0.27) 100%),
         var(--lk-auth-bg-image) center / cover no-repeat,
         #f8f0e4;
 }
