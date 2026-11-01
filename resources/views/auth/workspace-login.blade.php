@@ -21,15 +21,13 @@
 <div class="auth-shell">
     <section class="auth-hero" aria-labelledby="workspace-hero-title">
         <div class="auth-hero__inner">
-            <a href="{{ $homeRoute }}" class="auth-brand">
-                @if (($workspace ?? '') === 'logistics')
-                    <x-shared.logistics-logo label="LIKHAE Logistics and Riders" class="sl-logistics-logo--auth" />
-                @else
+            @if (($workspace ?? '') !== 'logistics')
+                <a href="{{ $homeRoute }}" class="auth-brand">
                     <span class="likhae-logo likhae-logo--auth" role="img" aria-label="LIKHAE {{ $accountLabel }}">
                         <img class="likhae-logo__image" src="{{ asset('images/likhae-logo.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true">
                     </span>
-                @endif
-            </a>
+                </a>
+            @endif
 
             <div class="auth-hero__content">
                 <div class="auth-hero__copy">

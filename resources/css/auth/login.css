@@ -224,34 +224,6 @@ html.dark .likhae-logo {
     max-width: min(300px, 68vw);
 }
 
-.auth-hero .likhae-logo--logistics {
-    position: relative;
-    padding: 0;
-    background: transparent;
-    box-shadow: none;
-}
-
-.auth-hero .likhae-logo--logistics img {
-    filter: drop-shadow(0 3px 8px rgba(34, 10, 9, 0.24));
-}
-
-.auth-hero .likhae-logo--logistics::after {
-    position: absolute;
-    inset: 0;
-    content: "";
-    background: #151515;
-    clip-path: inset(0 0 0 37.5%);
-    mask: url("/images/likhae-logo-dark.png") center / contain no-repeat;
-    -webkit-mask: url("/images/likhae-logo-dark.png") center / contain no-repeat;
-    pointer-events: none;
-}
-
-.auth-workspace-logistics .auth-hero .sl-logistics-logo--auth {
-    width: min(250px, 68vw);
-    flex: 0 1 250px;
-    aspect-ratio: 3 / 1;
-}
-
 .auth-workspace-logistics .auth-logistics-card-brand .sl-logistics-logo--auth-panel {
     width: min(300px, 78vw);
     flex: 0 1 300px;
@@ -462,14 +434,6 @@ html.dark .likhae-logo {
 
 .auth-workspace-logistics .auth-hero::before {
     border-color: rgba(105, 24, 27, 0.2);
-}
-
-.auth-workspace-logistics .auth-hero .likhae-logo--logistics img {
-    filter: none;
-}
-
-.auth-workspace-logistics .auth-hero .likhae-logo--logistics::after {
-    display: none;
 }
 
 .auth-workspace-logistics .auth-eyebrow {
