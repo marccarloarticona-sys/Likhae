@@ -204,16 +204,19 @@ class AdminUserController extends Controller
             $user->isActive();
         }
         $user->load(['addresses', 'sellerProfile', 'logisticsCenter']);
-        $sellerApplication = $user->isAccountType(User::TYPE_SELLER)
+        $verificationApplication = $user->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS)
             ? $user->sellerVerificationApplication()
             : null;
-        $sellerApplication?->load('documents');
-        $sellerDocuments = $sellerApplication?->documents
+        $verificationApplication?->load('documents');
+        $verificationDocuments = $verificationApplication?->documents
             ->groupBy(fn (ApplicationDocument $document): string => strtoupper((string) $document->document_type))
             ->map(fn ($versions): ApplicationDocument => $versions->sortByDesc('id')->first()) ?? collect();
-        $sellerUpdateRequestDocumentIds = $user->isAccountType(User::TYPE_SELLER)
+        $verificationDocumentUpdateRequestIds = $user->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS)
             ? AuditLog::query()
-                ->where('event', 'seller.document_update_requested_by_admin')
+                ->whereIn('event', [
+                    'seller.document_update_requested_by_admin',
+                    'logistics.document_update_requested_by_admin',
+                ])
                 ->where('auditable_type', User::class)
                 ->where('auditable_id', $user->id)
                 ->get(['new_values'])
@@ -222,6 +225,19 @@ class AdminUserController extends Controller
                 ->flip()
                 ->all()
             : [];
+        $missingDocumentRequestsByType = $user->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS)
+            ? AuditLog::query()
+                ->whereIn('event', [
+                    'seller.document_requirement_requested_by_admin',
+                    'logistics.document_requirement_requested_by_admin',
+                ])
+                ->where('auditable_type', User::class)
+                ->where('auditable_id', $user->id)
+                ->latest('created_at')
+                ->get()
+                ->unique(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')))
+                ->keyBy(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')))
+            : collect();
         $changes = AuditLog::query()
             ->with('actor')
             ->where('auditable_type', User::class)
@@ -251,9 +267,13 @@ class AdminUserController extends Controller
 
         return view('Admin.users.show', [
             'user' => $user,
-            'sellerApplication' => $sellerApplication,
-            'sellerDocuments' => $sellerDocuments,
-            'sellerUpdateRequestDocumentIds' => $sellerUpdateRequestDocumentIds,
+            'verificationApplication' => $verificationApplication,
+            'verificationDocuments' => $verificationDocuments,
+            'verificationDocumentTypes' => $user->isAccountType(User::TYPE_LOGISTICS)
+                ? array_values(ApplicationDocument::LOGISTICS_UPLOAD_FIELDS)
+                : array_values(ApplicationDocument::SELLER_UPLOAD_FIELDS),
+            'verificationDocumentUpdateRequestIds' => $verificationDocumentUpdateRequestIds,
+            'missingDocumentRequestsByType' => $missingDocumentRequestsByType,
             'changes' => $changes,
             'warnings' => $warnings,
             'riskSignals' => $riskSignals,
@@ -267,14 +287,18 @@ class AdminUserController extends Controller
         ]);
     }
 
-    public function reviewSellerDocument(Request $request, User $user, ApplicationDocument $document): RedirectResponse
+    public function reviewVerificationDocument(Request $request, User $user, ApplicationDocument $document): RedirectResponse
     {
-        abort_unless($user->isAccountType(User::TYPE_SELLER), 404);
+        abort_unless($user->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS), 404);
 
         $data = $request->validate([
             'decision' => ['required', 'string', Rule::in(['verify', 'reject', 'request_update'])],
             'reason' => ['required_if:decision,reject,request_update', 'nullable', 'string', 'min:3', 'max:1000'],
         ]);
+        $allowedDocumentTypes = $user->isAccountType(User::TYPE_LOGISTICS)
+            ? array_values(ApplicationDocument::LOGISTICS_UPLOAD_FIELDS)
+            : array_values(ApplicationDocument::SELLER_UPLOAD_FIELDS);
+        abort_unless(in_array(strtoupper((string) $document->document_type), $allowedDocumentTypes, true), 404);
         $application = $document->application()->with('user')->firstOrFail();
         abort_unless((int) $application->user_id === (int) $user->id, 404);
 
@@ -283,7 +307,10 @@ class AdminUserController extends Controller
         $label = ApplicationDocument::DOCUMENT_LABELS[strtoupper((string) $document->document_type)]
             ?? str($document->document_type)->replace('_', ' ')->headline()->toString();
 
-        DB::transaction(function () use ($request, $user, $application, $document, $decision, $reason, $label): void {
+        $eventPrefix = $user->isAccountType(User::TYPE_LOGISTICS) ? 'logistics' : 'seller';
+
+        DB::transaction(function () use ($request, $user, $application, $document, $decision, $reason, $label, $eventPrefix): void {
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             $lockedApplication = RegistrationApplication::query()
                 ->whereKey($application->id)
                 ->lockForUpdate()
@@ -294,10 +321,12 @@ class AdminUserController extends Controller
                 ->firstOrFail();
 
             abort_unless(
-                (int) $lockedApplication->user_id === (int) $user->id
-                    && $user->isAccountType(User::TYPE_SELLER)
-                    && strtoupper((string) $user->status) === User::STATUS_ACTIVE
-                    && strtoupper((string) $user->sellerProfile?->status) === User::STATUS_ACTIVE,
+                (int) $lockedApplication->user_id === (int) $lockedUser->id
+                    && $lockedUser->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS)
+                    && strtoupper((string) $lockedUser->status) === User::STATUS_ACTIVE
+                    && ($lockedUser->isAccountType(User::TYPE_SELLER)
+                        ? $lockedUser->sellerProfile()->where('status', User::STATUS_ACTIVE)->exists()
+                        : $lockedUser->logisticsCenter()->where('status', User::STATUS_ACTIVE)->exists()),
                 404,
             );
 
@@ -310,7 +339,7 @@ class AdminUserController extends Controller
                 : $currentStatus === 'PENDING';
             if ((int) $latestId !== (int) $lockedDocument->id || ! $validDecisionStatus) {
                 throw ValidationException::withMessages([
-                    'document' => 'This document is no longer available for that action. Refresh the seller record and review the latest status.',
+                    'document' => 'This document is no longer available for that action. Refresh the account record and review the latest status.',
                 ]);
             }
 
@@ -329,9 +358,9 @@ class AdminUserController extends Controller
             AuditLog::create([
                 'actor_user_id' => $request->user()->id,
                 'event' => match ($decision) {
-                    'verify' => 'seller.document_update_verified',
-                    'request_update' => 'seller.document_update_requested_by_admin',
-                    default => 'seller.document_update_rejected',
+                    'verify' => $eventPrefix.'.document_update_verified',
+                    'request_update' => $eventPrefix.'.document_update_requested_by_admin',
+                    default => $eventPrefix.'.document_update_rejected',
                 },
                 'auditable_type' => User::class,
                 'auditable_id' => $user->id,
@@ -351,11 +380,14 @@ class AdminUserController extends Controller
 
         $approved = $decision === 'verify';
         $updateRequested = $decision === 'request_update';
+        $isLogistics = $user->isAccountType(User::TYPE_LOGISTICS);
+        $workspaceLabel = $isLogistics ? 'Logistics Center' : 'Seller';
+        $profileUrl = $isLogistics ? route('logistics.profile') : route('seller.account', ['tab' => 'verification']);
         Notification::create([
             'user_id' => $user->id,
             'type' => $approved
-                ? 'SELLER_DOCUMENT_UPDATE_VERIFIED'
-                : ($updateRequested ? 'SELLER_DOCUMENT_UPDATE_REQUESTED' : 'SELLER_DOCUMENT_UPDATE_REJECTED'),
+                ? strtoupper($eventPrefix).'_DOCUMENT_UPDATE_VERIFIED'
+                : ($updateRequested ? strtoupper($eventPrefix).'_DOCUMENT_UPDATE_REQUESTED' : strtoupper($eventPrefix).'_DOCUMENT_UPDATE_REJECTED'),
             'title' => $approved
                 ? 'Document update approved'
                 : ($updateRequested ? 'Document update requested' : 'Document update needs a new upload'),
@@ -366,7 +398,7 @@ class AdminUserController extends Controller
                     : $label.' was not accepted. Reason: '.$reason),
             'reference_type' => ApplicationDocument::class,
             'reference_id' => $document->id,
-            'action_url' => route('seller.account', ['tab' => 'verification']),
+            'action_url' => $profileUrl,
         ]);
 
         return redirect()->route('admin.users.show', $user)->with(
@@ -374,8 +406,86 @@ class AdminUserController extends Controller
             $approved
                 ? $label.' marked as verified.'
                 : ($updateRequested
-                    ? 'Update requested for '.$label.'. The seller can upload a replacement.'
-                    : $label.' update rejected. The seller can upload a replacement.'),
+                    ? 'Update requested for '.$label.'. The '.$workspaceLabel.' can upload a replacement.'
+                    : $label.' update rejected. The '.$workspaceLabel.' can upload a replacement.'),
+        );
+    }
+
+    public function requestMissingVerificationDocument(Request $request, User $user): RedirectResponse
+    {
+        abort_unless($user->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS), 404);
+
+        $allowedDocumentTypes = $user->isAccountType(User::TYPE_LOGISTICS)
+            ? array_values(ApplicationDocument::LOGISTICS_UPLOAD_FIELDS)
+            : array_values(ApplicationDocument::SELLER_UPLOAD_FIELDS);
+
+        $data = $request->validate([
+            'document_type' => ['required', 'string', Rule::in($allowedDocumentTypes)],
+            'reason' => ['required', 'string', 'min:3', 'max:1000'],
+        ]);
+        $documentType = strtoupper($data['document_type']);
+        $reason = trim($data['reason']);
+        $label = ApplicationDocument::DOCUMENT_LABELS[$documentType]
+            ?? str($documentType)->replace('_', ' ')->headline()->toString();
+        $eventPrefix = $user->isAccountType(User::TYPE_LOGISTICS) ? 'logistics' : 'seller';
+
+        DB::transaction(function () use ($request, $user, $documentType, $reason, $eventPrefix): void {
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            abort_unless(
+                $lockedUser->isAccountType(User::TYPE_SELLER, User::TYPE_LOGISTICS)
+                    && strtoupper((string) $lockedUser->status) === User::STATUS_ACTIVE
+                    && ($lockedUser->isAccountType(User::TYPE_SELLER)
+                        ? $lockedUser->sellerProfile()->where('status', User::STATUS_ACTIVE)->exists()
+                        : $lockedUser->logisticsCenter()->where('status', User::STATUS_ACTIVE)->exists()),
+                404,
+            );
+
+            $application = $lockedUser->sellerVerificationApplication();
+            if ($application) {
+                $lockedApplication = RegistrationApplication::query()
+                    ->whereKey($application->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+                $alreadySubmitted = $lockedApplication->documents()
+                    ->whereRaw('UPPER(document_type) = ?', [$documentType])
+                    ->exists();
+                if ($alreadySubmitted) {
+                    throw ValidationException::withMessages([
+                        'document_type' => 'This requirement is no longer missing. Refresh the account record and review the latest upload.',
+                    ]);
+                }
+            }
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => $eventPrefix.'.document_requirement_requested_by_admin',
+                'auditable_type' => User::class,
+                'auditable_id' => $lockedUser->id,
+                'new_values' => [
+                    'application_id' => $application?->id,
+                    'document_type' => $documentType,
+                    'reason' => $reason,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        $isLogistics = $user->isAccountType(User::TYPE_LOGISTICS);
+        $workspaceLabel = $isLogistics ? 'Logistics Center' : 'Seller';
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => strtoupper($eventPrefix).'_DOCUMENT_REQUIREMENT_REQUESTED',
+            'title' => 'Required document requested',
+            'message' => 'Admin requested your '.$label.' for your '.$workspaceLabel.'. Requirement: '.$reason,
+            'reference_type' => User::class,
+            'reference_id' => $user->id,
+            'action_url' => $isLogistics ? route('logistics.profile') : route('seller.account', ['tab' => 'verification']),
+        ]);
+
+        return redirect()->route('admin.users.show', $user)->with(
+            'status', 'Requested '.$label.' from the '.$workspaceLabel.'. They can upload it from their verification page.',
         );
     }
 

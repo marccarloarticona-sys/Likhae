@@ -36,7 +36,7 @@
             'subtitle' => $pageSubtitle,
         ])
 
-        <main class="sl-main" id="mainContent">
+        <main class="sl-main" id="mainContent" data-workspace-search-content>
             @yield('content')
         </main>
 

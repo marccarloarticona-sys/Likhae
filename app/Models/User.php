@@ -239,6 +239,23 @@ class User extends Authenticatable implements MustVerifyEmailContract
             ])->save();
             $lockedUser->sellerProfile()->where('status', self::STATUS_SUSPENDED)->update(['status' => self::STATUS_ACTIVE]);
             $lockedUser->logisticsCenter()->where('status', self::STATUS_SUSPENDED)->update(['status' => self::STATUS_ACTIVE]);
+            if ($lockedUser->isAccountType(self::TYPE_RIDER)) {
+                $rider = $lockedUser->riderProfile()
+                    ->where('status', self::STATUS_SUSPENDED)
+                    ->lockForUpdate()
+                    ->first();
+                if ($rider) {
+                    $rider->update(['status' => 'ACTIVE', 'is_online' => false]);
+                    AuditLog::create([
+                        'event' => 'rider.reactivated',
+                        'auditable_type' => RiderProfile::class,
+                        'auditable_id' => $rider->id,
+                        'old_values' => ['status' => 'SUSPENDED', 'suspended_until' => $suspendedUntil->toISOString()],
+                        'new_values' => ['status' => 'ACTIVE', 'reason' => 'The temporary suspension period ended.', 'automatic' => true],
+                        'created_at' => now(),
+                    ]);
+                }
+            }
 
             AuditLog::create([
                 'event' => 'ACCOUNT_SUSPENSION_EXPIRED',

@@ -37,13 +37,8 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 /* Header and navigation */
 .lp-header { display: flex; align-items: center; gap: 32px; min-height: 108px; padding-block: 24px; }
 .lp-brand { display: inline-flex; align-items: center; flex-shrink: 0; border-radius: 5px; }
-.lp-brand .likhae-logo { display: inline-flex; }
-.lp-brand .likhae-logo img { display: block; width: auto; height: 40px; max-width: 190px; object-fit: contain; }
-.lp-brand .likhae-logo .likhae-logo__image--dark { display: none; }
-.lp-brand__context {
-    margin-left: 20px; padding-left: 20px; border-left: 1px solid var(--lp-line);
-    color: var(--lp-muted); font-size: 10px; font-weight: 500; line-height: 1.6; letter-spacing: 0.04em;
-}
+.lp-brand .sl-logistics-logo { display: block; width: 190px; max-width: 100%; height: auto; aspect-ratio: 3 / 1; flex: 0 1 190px; overflow: hidden; }
+.lp-brand .sl-logistics-logo__image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .lp-nav { display: flex; align-items: center; gap: 28px; margin-left: auto; color: #67594e; font-size: 12px; font-weight: 500; }
 .lp-nav a { display: inline-flex; align-items: center; gap: 5px; padding-block: 10px; white-space: nowrap; }
 .lp-nav svg { width: 14px; height: 14px; }
@@ -180,9 +175,35 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 .lp-footer a { display: inline-flex; gap: 8px; }
 .lp-footer small { font: inherit; }
 
+/* Public parcel tracking */
+.lp-tracking__form { display: grid; gap: 8px; min-width: 0; }
+.lp-tracking__form > label { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #5f4b3e; font-size: 10px; font-weight: 700; }
+.lp-tracking__form > label span { color: var(--lp-muted); font-size: 9px; font-weight: 400; }
+.lp-tracking__form--hero { width: min(100%, 720px); margin: 18px auto 0; padding: 13px 14px 11px; border: 1px solid rgba(231, 222, 210, .92); border-radius: 13px; background: rgba(255, 253, 249, .82); box-shadow: 0 10px 26px rgba(57, 40, 32, .07); }
+.lp-tracking__form--hero[aria-busy="true"] { opacity: .85; }
+.lp-tracking__control { display: flex; gap: 9px; }
+.lp-tracking__control input { width: 100%; min-width: 0; min-height: 48px; padding: 12px 14px; border: 1px solid #d9c8b7; border-radius: 10px; outline: none; background: #fffefa; color: var(--lp-ink); font: inherit; font-size: 12px; }
+.lp-tracking__control input:focus { border-color: var(--lp-red); box-shadow: 0 0 0 3px rgba(143, 23, 25, .11); }
+.lp-tracking__control input::placeholder { color: #9b8c7f; }
+.lp-tracking__control .lp-button { flex: 0 0 auto; min-height: 48px; padding-block: 11px; }
+.lp-tracking__control .lp-button:disabled { cursor: wait; opacity: .65; }
+.lp-tracking__hint { min-height: 14px; margin: 0; color: var(--lp-muted); font-size: 9px; line-height: 1.55; }
+.lp-tracking__dialog { width: min(480px, calc(100% - 32px)); max-width: 480px; padding: 0; border: 1px solid #e7ded2; border-radius: 20px; background: #fffdf9; color: var(--lp-ink); box-shadow: 0 24px 80px rgba(34, 22, 18, .28); }
+.lp-tracking__dialog::backdrop { background: rgba(34, 22, 18, .52); backdrop-filter: blur(3px); }
+.lp-tracking__dialog-inner { position: relative; display: grid; gap: 12px; padding: 30px; }
+.lp-tracking__dialog-close { position: absolute; top: 14px; right: 15px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--lp-line); border-radius: 50%; background: #fff; color: var(--lp-ink); font-size: 22px; line-height: 1; cursor: pointer; }
+.lp-tracking__dialog-inner h2 { margin: 0; padding-right: 30px; font-size: 26px; font-weight: 500; letter-spacing: -.04em; }
+.lp-tracking__dialog-copy { margin: 0; color: var(--lp-muted); font-size: 11px; line-height: 1.7; }
+.lp-tracking__result { display: grid; gap: 10px; margin-top: 5px; padding: 14px; border: 1px solid var(--lp-line); border-radius: 12px; background: #f8f2eb; }
+.lp-tracking__result[hidden] { display: none; }
+.lp-tracking__result > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lp-tracking__result > div > span { color: var(--lp-muted); font-size: 9px; }
+.lp-tracking__result strong { color: var(--lp-ink); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
+.lp-tracking__result .lp-tracking__status { color: var(--lp-red-dark); font-size: 11px; }
+.lp-tracking__dialog-action { justify-self: end; min-height: 40px !important; margin-top: 4px; }
+
 @media (max-width: 1100px) {
     .lp-container { width: calc(100% - 48px); }
-    .lp-brand__context { display: none; }
     .lp-header { gap: 24px; }
     .lp-nav { gap: 20px; }
     .lp-hero__scene::before {
@@ -220,7 +241,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 @media (max-width: 600px) {
     .lp-container { width: calc(100% - 32px); }
     .lp-header { gap: 16px; }
-    .lp-brand .likhae-logo img { height: 34px; max-width: 160px; }
+    .lp-brand .sl-logistics-logo { width: 160px; flex-basis: 160px; }
     .lp-nav { justify-content: space-between; gap: 12px; font-size: 10px; }
     .lp-hero { border-radius: 20px; }
     .lp-hero__scene { padding-bottom: 245px; }
@@ -242,6 +263,10 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
     .lp-role__actions { flex-direction: row; align-items: center; flex-wrap: wrap; }
     .lp-desktop-break { display: none; }
     .lp-workflow { padding: 26px 24px; }
+    .lp-tracking__form--hero { width: 100%; margin-top: 15px; padding: 12px; }
+    .lp-tracking__control { align-items: stretch; flex-direction: column; }
+    .lp-tracking__control .lp-button { width: 100%; }
+    .lp-tracking__dialog-inner { padding: 25px 20px 20px; }
     .lp-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 20px; }
     .lp-steps li:nth-child(2)::after { display: none; }
     .lp-footer { align-items: flex-start; flex-direction: column; gap: 16px; padding-block: 28px; }
@@ -249,7 +274,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 }
 
 @media (max-width: 360px) {
-    .lp-brand .likhae-logo img { height: 30px; max-width: 140px; }
+    .lp-brand .sl-logistics-logo { width: 140px; flex-basis: 140px; }
     .lp-header > .lp-button { padding-inline: 14px; gap: 8px; }
 }
 

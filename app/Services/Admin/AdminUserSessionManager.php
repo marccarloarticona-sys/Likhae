@@ -139,7 +139,12 @@ class AdminUserSessionManager
      *
      * @param list<User> $users
      */
-    public function revoke(Request $request, array $users): int
+    public function revoke(
+        Request $request,
+        array $users,
+        string $actorLabel = 'an administrator',
+        string $auditAction = 'ADMIN_FORCED_SIGN_OUT',
+    ): int
     {
         if (! $this->available()) {
             throw new \RuntimeException('Active session management is unavailable for the configured session driver or database schema.');
@@ -166,7 +171,10 @@ class AdminUserSessionManager
         $markedSessionIds = [];
         foreach ($sessionIds as $sessionId) {
             try {
-                Cache::put($this->revocationCacheKey($sessionId), $allSessionIds[$sessionId], now()->addMinutes($sessionLifetime));
+                Cache::put($this->revocationCacheKey($sessionId), [
+                    'user_id' => $allSessionIds[$sessionId],
+                    'actor_label' => $actorLabel,
+                ], now()->addMinutes($sessionLifetime));
                 $markedSessionIds[] = $sessionId;
             } catch (Throwable $exception) {
                 foreach ($markedSessionIds as $markedSessionId) {
@@ -177,7 +185,7 @@ class AdminUserSessionManager
         }
 
         try {
-            DB::transaction(function () use ($request, $users, $sessionIds, $sessionCounts, $sessionTable): void {
+            DB::transaction(function () use ($request, $users, $sessionIds, $sessionCounts, $sessionTable, $auditAction, $actorLabel): void {
                 foreach ($users as $user) {
                     $changes = ['remember_token' => null];
                     if (Schema::hasColumn('users', 'api_token_hash')) {
@@ -197,7 +205,8 @@ class AdminUserSessionManager
                         'auditable_id' => $user->id,
                         'old_values' => ['active_sessions' => $sessionCount],
                         'new_values' => [
-                            'action' => 'ADMIN_FORCED_SIGN_OUT',
+                            'action' => $auditAction,
+                            'actor_label' => $actorLabel,
                             'active_sessions_revoked' => $sessionCount,
                         ],
                         'ip_address' => $request->ip(),
@@ -209,7 +218,7 @@ class AdminUserSessionManager
                         'user_id' => $user->id,
                         'type' => 'SESSION_SUSPENDED',
                         'title' => 'Session suspended',
-                        'message' => 'Your active sessions were suspended by an administrator. Please sign in again to continue using your account.',
+                        'message' => 'Your active sessions were suspended by '.$actorLabel.'. Please sign in again to continue using your account.',
                         'reference_type' => User::class,
                         'reference_id' => $user->id,
                         'action_url' => null,
@@ -249,9 +258,24 @@ class AdminUserSessionManager
             return null;
         }
 
-        $userId = Cache::get($this->revocationCacheKey($sessionId));
+        $revocation = Cache::get($this->revocationCacheKey($sessionId));
+        $userId = is_array($revocation) ? ($revocation['user_id'] ?? null) : $revocation;
 
         return is_numeric($userId) ? (int) $userId : null;
+    }
+
+    public function revokedActorLabel(string $sessionId): string
+    {
+        if (! $this->validSessionId($sessionId)) {
+            return 'an administrator';
+        }
+
+        $revocation = Cache::get($this->revocationCacheKey($sessionId));
+        $actorLabel = is_array($revocation) ? ($revocation['actor_label'] ?? null) : null;
+
+        return is_string($actorLabel) && trim($actorLabel) !== ''
+            ? trim($actorLabel)
+            : 'an administrator';
     }
 
     /** Save IP/browser metadata after Laravel has persisted the file-backed session. */

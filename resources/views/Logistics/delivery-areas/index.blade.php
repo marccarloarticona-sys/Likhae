@@ -2,90 +2,116 @@
 
 @section('title', 'Delivery Areas - LIKHAE Logistics')
 
+@push('styles')
+    <style>
+        .delivery-area-address > label:nth-of-type(-n + 2) {
+            display: none;
+        }
+
+        .delivery-area-address > label {
+            min-width: 0;
+        }
+
+        @media (max-width: 640px) {
+            .delivery-area-address {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+    </style>
+@endpush
+
 @section('content')
-    <div class="space-y-6">
-        <header>
-            <p class="text-xs font-bold uppercase text-primary">Area Assignment</p>
-            <h1 class="mt-2 text-2xl font-bold">Delivery Areas</h1>
-            <p class="mt-2 text-sm text-muted">Cover one exact barangay per local rider assignment.</p>
+    <div class="delivery-areas-page mx-auto w-full max-w-[1500px] space-y-6">
+        <header class="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-line bg-surface px-5 py-5 shadow-sm sm:px-7 sm:py-6">
+            <div>
+                <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rider management</p>
+                <h1 class="mt-2 text-2xl font-bold tracking-tight text-ink sm:text-3xl">Delivery Areas</h1>
+                <p class="mt-2 text-sm text-muted">Assign local riders to specific barangays within your center’s municipality.</p>
+            </div>
             @if ($center->address)
-                <p class="mt-2 text-xs text-muted">
-                    Center municipality: {{ collect([$center->address->municipality_name, $center->address->province_name])->filter()->implode(', ') }}
-                </p>
+                <div class="rounded-xl border border-line bg-page px-4 py-3 text-xs text-muted">
+                    <span class="block text-[9px] font-bold uppercase tracking-[0.14em]">Center municipality</span>
+                    <strong class="mt-1 block text-sm font-semibold text-ink">{{ collect([$center->address->municipality_name, $center->address->province_name])->filter()->implode(', ') }}</strong>
+                </div>
             @endif
         </header>
 
         @if (session('status'))
-            <div class="border border-green-200 bg-green-50 p-4">{{ session('status') }}</div>
+            <div class="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800" role="status">{{ session('status') }}</div>
         @endif
         @if ($errors->any())
-            <div class="border border-red-200 bg-red-50 p-4 text-red-700">{{ $errors->first() }}</div>
+            <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">{{ $errors->first() }}</div>
         @endif
 
-        <x-shared.mapbox :markers="$mapMarkers" title="Delivery area map" height="220px" user-location-target="center" />
-
         @if ($centerCanonicalMunicipality)
-            <form method="POST" action="{{ route('logistics.delivery-areas.store') }}" class="grid gap-3 border border-line bg-surface p-5 md:grid-cols-2">
+            <form method="POST" action="{{ route('logistics.delivery-areas.store') }}" class="overflow-hidden rounded-2xl border border-line bg-surface shadow-sm">
                 @csrf
-                <h2 class="font-semibold md:col-span-2">Add barangay coverage</h2>
-                <p class="text-sm text-muted md:col-span-2">The address selector is limited to this center's canonical municipality. The server checks the PSGC codes again before saving.</p>
-                <label class="text-sm">Area name
-                    <input name="name" value="{{ old('name') }}" required class="mt-1 w-full border border-line p-2">
-                </label>
-                <label class="text-sm">Area code
-                    <input name="code" value="{{ old('code') }}" class="mt-1 w-full border border-line p-2">
-                </label>
-                <div class="md:col-span-2">
+                <div class="border-b border-line px-5 py-4 sm:px-6">
+                    <h2 class="text-base font-bold text-ink">Add barangay coverage</h2>
+                    <p class="mt-1 text-xs leading-5 text-muted">Choose a barangay in your center’s municipality. Coverage is verified against official PSGC codes when saved.</p>
+                </div>
+                <div class="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
+                    <label class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink">Area name
+                        <input name="name" value="{{ old('name') }}" required class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm font-normal text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10">
+                    </label>
+                    <label class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink"><span class="flex items-center gap-2">Area code <span class="font-normal text-muted">Optional</span></span>
+                        <input name="code" value="{{ old('code') }}" class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm font-normal text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10">
+                    </label>
                     <x-shared.philippine-address-fields
+                        :address="$center->address"
                         :include-details="false"
                         :allowed-province-code="$centerCanonicalMunicipality['province_code']"
                         :allowed-municipality-code="$centerCanonicalMunicipality['municipality_code']"
-                        field-class="mt-1 w-full border border-line p-2"
-                        wrapper-class="grid gap-3 md:grid-cols-4"
+                        :region-code="$centerCanonicalMunicipality['region_code']"
+                        field-class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
+                        label-class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink"
+                        wrapper-class="delivery-area-address grid min-w-0 gap-4 sm:col-span-2 sm:grid-cols-2"
                     />
+                    <label class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink sm:col-span-2">Assign active local rider
+                        <select name="rider_profile_id" class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm font-normal text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10">
+                            <option value="">No rider yet</option>
+                            @foreach ($riders as $rider)
+                                <option value="{{ $rider->id }}" @selected((string) old('rider_profile_id') === (string) $rider->id)>
+                                    {{ $rider->user?->name }} - {{ ucfirst(str_replace('_', ' ', $rider->vehicle_type)) }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </label>
+                    <div class="flex justify-end border-t border-line pt-4 sm:col-span-2">
+                        <button class="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/25 sm:w-auto">Save Area Assignment</button>
+                    </div>
                 </div>
-                <label class="text-sm md:col-span-2">Assign active local rider
-                    <select name="rider_profile_id" class="mt-1 w-full border border-line p-2">
-                        <option value="">No rider yet</option>
-                        @foreach ($riders as $rider)
-                            <option value="{{ $rider->id }}" @selected((string) old('rider_profile_id') === (string) $rider->id)>
-                                {{ $rider->user?->name }} - {{ ucfirst(str_replace('_', ' ', $rider->vehicle_type)) }}
-                            </option>
-                        @endforeach
-                    </select>
-                </label>
-                <button class="bg-primary px-4 py-3 font-semibold text-white md:col-span-2">Save Area Assignment</button>
             </form>
         @else
-            <div class="border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 Configure this center with a resolvable province and municipality before adding barangay coverage.
             </div>
         @endif
 
-        <section class="border border-line bg-surface p-5">
-            <div class="flex flex-wrap items-center justify-between gap-2">
+        <section class="rounded-2xl border border-line bg-surface p-5 shadow-sm sm:p-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h2 class="font-semibold">Uncovered barangays</h2>
-                    <p class="mt-1 text-sm text-muted">Active service areas in this center's municipality are excluded.</p>
+                    <h2 class="text-base font-bold text-ink">Uncovered barangays</h2>
+                    <p class="mt-1 text-xs text-muted">Barangays in this municipality without an active service area.</p>
                 </div>
-                <span class="text-sm font-semibold text-primary">{{ $uncoveredBarangays->count() }} uncovered</span>
+                <span class="rounded-full border border-line bg-page px-3 py-1.5 text-xs font-bold text-primary">{{ $uncoveredBarangays->count() }} uncovered</span>
             </div>
             @if ($uncoveredBarangays->isNotEmpty())
-                <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     @foreach ($uncoveredBarangays as $barangay)
-                        <div class="border border-dashed border-line p-3 text-sm">
-                            <strong>{{ $barangay['name'] }}</strong>
-                            <span class="mt-1 block text-xs text-muted">PSGC {{ $barangay['code'] }}</span>
+                        <div class="rounded-xl border border-line bg-page px-4 py-3.5 transition hover:border-primary/40">
+                            <strong class="block text-sm font-semibold text-ink">{{ $barangay['name'] }}</strong>
+                            <span class="mt-1 block text-[11px] text-muted">PSGC {{ $barangay['code'] }}</span>
                         </div>
                     @endforeach
                 </div>
             @else
-                <p class="mt-4 text-sm text-muted">No uncovered barangays were returned by the PSGC address source.</p>
+                <p class="mt-5 rounded-xl border border-dashed border-line bg-page p-5 text-sm text-muted">No uncovered barangays were returned by the PSGC address source.</p>
             @endif
         </section>
 
         @if ($invalidAreaReasons->isNotEmpty())
-            <section class="border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+            <section class="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:p-6">
                 <h2 class="font-semibold">Existing records requiring review</h2>
                 <p class="mt-1">These records were preserved. They cannot receive new local rider assignments until their PSGC coverage is reviewed.</p>
                 <ul class="mt-3 list-disc space-y-1 pl-5">
@@ -96,8 +122,11 @@
             </section>
         @endif
 
-        <section class="space-y-3">
-            <h2 class="font-semibold">Service areas</h2>
+        <section class="space-y-4">
+            <div>
+                <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Assignments</p>
+                <h2 class="mt-1 text-lg font-bold text-ink">Service areas</h2>
+            </div>
             @forelse ($areas as $area)
                 @php
                     $isAssignable = in_array((int) $area->id, $assignableAreaIds, true);
@@ -107,23 +136,23 @@
                         ->filter()
                         ->join(', ');
                 @endphp
-                <article class="border border-line bg-surface p-5">
+                <article class="rounded-2xl border border-line bg-surface p-5 shadow-sm sm:p-6">
                     <div class="flex flex-wrap items-start justify-between gap-3">
                         <div>
                             <div class="flex flex-wrap items-center gap-2">
-                                <strong>{{ $area->name }}</strong>
-                                <span class="rounded-full px-2 py-1 text-xs {{ $area->is_active ? 'bg-green-100 text-green-800' : 'bg-stone-100 text-stone-700' }}">
+                                <strong class="text-sm font-bold text-ink">{{ $area->name }}</strong>
+                                <span class="rounded-full px-2.5 py-1 text-[10px] font-bold {{ $area->is_active ? 'bg-green-100 text-green-800' : 'bg-stone-100 text-stone-700' }}">
                                     {{ $area->is_active ? 'Active' : 'Inactive' }}
                                 </span>
                             </div>
-                            <p class="mt-2 text-sm text-muted">
+                            <p class="mt-3 space-y-1 text-xs leading-5 text-muted">
                                 @forelse ($area->locations as $location)
                                     <span class="block">{{ collect([$location->barangay_name, $location->municipality_name, $location->province_name])->filter()->implode(', ') }} <span class="text-xs">(PSGC {{ $location->barangay_code }})</span></span>
                                 @empty
                                     No barangay location saved.
                                 @endforelse
                             </p>
-                            <p class="mt-2 text-sm">Riders: {{ $activeRiderNames ?: 'None assigned' }}</p>
+                            <p class="mt-3 inline-flex rounded-lg bg-page px-3 py-2 text-xs font-medium text-ink">Riders: {{ $activeRiderNames ?: 'None assigned' }}</p>
                             @if ($area->is_active && ! $isAssignable)
                                 <p class="mt-2 text-xs text-amber-700">Not assignable: this area is not exactly one barangay in the center's canonical municipality.</p>
                             @endif
@@ -131,12 +160,12 @@
                         <form method="POST" action="{{ route('logistics.delivery-areas.toggle', $area) }}" data-confirm-title="{{ $area->is_active ? 'Deactivate delivery area?' : 'Activate delivery area?' }}" data-confirm-message="{{ $area->is_active ? 'Riders will no longer receive new assignments for this delivery area.' : 'This delivery area will become available for new assignments.' }}" data-confirm-label="{{ $area->is_active ? 'Deactivate' : 'Activate' }}" @if($area->is_active) data-confirm-tone="danger" @endif>
                             @csrf
                             @method('PATCH')
-                            <button class="border border-line px-3 py-2">{{ $area->is_active ? 'Deactivate' : 'Activate' }}</button>
+                            <button class="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-ink transition hover:border-primary hover:text-primary">{{ $area->is_active ? 'Deactivate' : 'Activate' }}</button>
                         </form>
                     </div>
                 </article>
             @empty
-                <div class="border border-dashed border-line p-8 text-center text-muted">No delivery areas configured.</div>
+                <div class="rounded-2xl border border-dashed border-line bg-surface p-8 text-center text-sm text-muted">No delivery areas configured.</div>
             @endforelse
         </section>
     </div>

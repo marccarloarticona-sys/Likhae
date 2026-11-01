@@ -7,11 +7,14 @@
     'streetRequired' => true,
     'allowedProvinceCode' => null,
     'allowedMunicipalityCode' => null,
+    'regionCode' => null,
 ])
 
 @php
     $provinceCode = old('province_code', $address?->province_code);
-    $regionCode = old('region_code', preg_match('/^\d{2}/', (string) $provinceCode) ? substr((string) $provinceCode, 0, 2).'00000000' : '');
+    $regionCode = $regionCode !== null
+        ? (old('region_code') ?: $regionCode)
+        : old('region_code', preg_match('/^\d{2}/', (string) $provinceCode) ? substr((string) $provinceCode, 0, 2).'00000000' : '');
 @endphp
 
 <div class="{{ $wrapperClass }}" data-postal-address data-postal-base="{{ \Illuminate\Support\Str::beforeLast(route('address.philippines.regions', [], false), '/regions') }}" data-postal-allowed-province-code="{{ $allowedProvinceCode }}" data-postal-allowed-municipality-code="{{ $allowedMunicipalityCode }}">

@@ -80,13 +80,13 @@ class BuyerController extends Controller
         )->limit(2)->get()
             ->map(fn (Product $product) => $this->catalog->productPayload($product));
         $dealProducts = $this->productDiscountsQuery()
-            ->limit(4)
+            ->limit(6)
             ->get()
             ->map(fn (Product $product) => $this->dealProductPayload($product, 'product_discount'))
             ->filter()
             ->values();
         $flashDealProducts = $this->activeFlashSaleProductsQuery()
-            ->limit(4)
+            ->limit(6)
             ->get()
             ->map(fn (Product $product) => $this->dealProductPayload($product, 'flash_sale'))
             ->filter()

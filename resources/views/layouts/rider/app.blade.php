@@ -386,44 +386,130 @@
             position: sticky;
             top: 0;
             z-index: 40;
-            display: flex;
-            min-height: 62px;
+            display: grid;
+            grid-template-columns: minmax(180px, .85fr) minmax(260px, 480px) minmax(330px, 1fr);
+            min-height: 64px;
             align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            padding: 0 26px;
+            gap: clamp(10px, 1.4vw, 20px);
+            padding: 8px 24px;
             border-bottom: 1px solid var(--ra-line);
             background: rgba(251, 247, 242, .88);
             backdrop-filter: blur(18px);
+            overflow: visible;
+            isolation: isolate;
         }
 
-        .rider-topbar-copy strong {
+        .rider-topbar-heading {
+            min-width: 0;
+        }
+
+        .rider-topbar-heading strong {
             display: block;
             color: var(--ra-text-deep);
-            font-size: 12px;
+            font-size: 16px;
             font-weight: 900;
-            letter-spacing: -.025em;
+            letter-spacing: -.035em;
         }
 
-        .rider-topbar-copy span {
+        .rider-topbar-heading strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .rider-topbar-heading span {
             display: block;
-            margin-top: 2px;
+            margin-top: 3px;
             color: var(--ra-muted);
+            font-size: 9px;
+        }
+
+        .rider-topbar-actions {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .rider-header-action {
+            position: relative;
+            display: grid;
+            width: 38px;
+            height: 38px;
+            flex: 0 0 38px;
+            place-items: center;
+            border: 1px solid var(--ra-line);
+            border-radius: 10px;
+            background: var(--ra-card);
+            color: var(--ra-maroon);
+            text-decoration: none;
+            box-shadow: 0 3px 10px rgba(74, 35, 27, .035);
+            transition: border-color .16s ease, background .16s ease, transform .16s ease;
+        }
+
+        .rider-header-action:hover {
+            border-color: var(--ra-line-strong);
+            background: var(--ra-page-soft);
+            transform: translateY(-1px);
+        }
+
+        .rider-header-action svg {
+            width: 17px;
+            height: 17px;
+            fill: none;
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-width: 1.8;
+        }
+
+        .rider-search-wrap {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .rider-topbar-availability {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 0;
+            padding-left: 14px;
+            border-left: 1px solid var(--ra-line);
+        }
+
+        .rider-topbar-availability-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 150px;
+        }
+
+        .rider-topbar-availability-copy strong {
+            color: var(--ra-text);
             font-size: 8px;
+            font-weight: 900;
+            letter-spacing: .08em;
+        }
+
+        .rider-topbar-availability-copy span {
+            color: var(--ra-muted);
+            font-size: 9px;
         }
 
         .rider-topbar-status {
             display: inline-flex;
-            min-height: 31px;
+            min-height: 36px;
             align-items: center;
             gap: 7px;
-            padding: 0 10px;
+            padding: 0 12px;
             border: 1px solid #CFE8DA;
-            border-radius: 999px;
+            border-radius: 11px;
             background: var(--ra-success-soft);
             color: var(--ra-success);
-            font-size: 7px;
+            font-family: inherit;
+            font-size: 9px;
             font-weight: 900;
+            white-space: nowrap;
         }
 
         .rider-topbar-status::before {
@@ -463,6 +549,14 @@
             background: var(--ra-card);
             color: var(--ra-maroon);
             cursor: pointer;
+            box-shadow: 0 3px 10px rgba(74, 35, 27, .035);
+            transition: border-color .16s ease, background .16s ease, transform .16s ease;
+        }
+
+        .rider-mobile-menu-btn:hover {
+            border-color: var(--ra-line-strong);
+            background: var(--ra-page-soft);
+            transform: translateY(-1px);
         }
 
         .rider-notification-trigger {
@@ -536,13 +630,14 @@
                 z-index: 45;
                 display: flex;
                 flex-wrap: wrap;
-                min-height: 62px;
+                min-height: 66px;
                 align-items: center;
                 justify-content: space-between;
                 gap: 8px;
-                padding: 8px 12px;
+                padding: 9px 16px;
                 border-bottom: 1px solid var(--ra-line);
                 background: rgba(251, 247, 242, .92);
+                box-shadow: 0 5px 18px rgba(74, 35, 27, .035);
                 backdrop-filter: blur(18px);
             }
 
@@ -553,7 +648,8 @@
                 align-items: center;
                 justify-content: space-between;
                 gap: 12px;
-                padding: 8px 2px 2px;
+                margin-top: 3px;
+                padding: 11px 0 2px;
                 border-top: 1px solid var(--ra-line);
             }
 
@@ -566,8 +662,8 @@
             }
 
             .rider-mobile-status-copy strong {
-                color: var(--ra-success);
-                font-size: 11px;
+                color: var(--ra-text);
+                font-size: 10px;
                 letter-spacing: .06em;
             }
 
@@ -589,17 +685,22 @@
             }
 
             .rider-mobile-status-toggle {
-                min-height: 44px;
-                padding: 0 14px;
+                min-height: 40px;
+                padding: 0 13px;
                 font-size: 11px;
             }
 
             .rider-mobile-brand {
                 display: flex;
                 min-width: 0;
-                flex: 1;
+                flex: 1 1 auto;
                 align-items: center;
                 gap: 9px;
+            }
+
+            .rider-mobile-brand .sl-logistics-logo {
+                width: 118px;
+                flex-basis: 118px;
             }
 
             body.workspace-sidebar-open .rider-mobile-brand {
@@ -628,6 +729,35 @@
             }
         }
 
+        @media (min-width: 1024px) and (max-width: 1279px) {
+            .rider-topbar {
+                grid-template-columns: minmax(135px, .75fr) minmax(190px, 1fr) auto;
+                gap: 10px;
+                padding-inline: 16px;
+            }
+
+            .rider-topbar-heading strong {
+                font-size: 13px;
+            }
+
+            .rider-topbar-availability-copy {
+                display: none;
+            }
+
+            .rider-topbar-availability {
+                gap: 6px;
+                padding-left: 8px;
+            }
+
+            .rider-topbar-actions {
+                gap: 5px;
+            }
+
+            .rider-topbar-actions .workspace-account__copy {
+                display: none;
+            }
+        }
+
         html.dark {
             color-scheme: dark;
         }
@@ -652,13 +782,15 @@
         }
 
         html.dark .rider-brand-copy strong,
-        html.dark .rider-topbar-copy strong,
+        html.dark .rider-topbar-heading strong,
+        html.dark .rider-topbar-availability-copy strong,
         html.dark .rider-mobile-brand strong {
             color: #F5EFE8;
         }
 
         html.dark .rider-brand-copy span,
-        html.dark .rider-topbar-copy span,
+        html.dark .rider-topbar-heading span,
+        html.dark .rider-topbar-availability-copy span,
         html.dark .rider-nav-label {
             color: #8F817A;
         }
@@ -717,6 +849,12 @@
             background: #16291F;
             color: #79C79D;
         }
+
+        html.dark .rider-header-action {
+            border-color: #3B2E27;
+            background: #211B17;
+            color: #EAC2B7;
+        }
     </style>
 </head>
 
@@ -738,9 +876,12 @@
 
         <main class="rider-main" data-sidebar-content>
 
-            <x-rider.header :notification-count="$workspaceNotificationCount ?? 0" />
+            @php
+                $riderHeaderTitle = trim(\Illuminate\Support\Str::before(trim($__env->yieldContent('title')), ' - LIKHAE')) ?: 'Dashboard';
+            @endphp
+            <x-rider.header :title="$riderHeaderTitle" subtitle="Manage your pickups, deliveries, and rider account." :notification-count="$workspaceNotificationCount ?? 0" :message-count="$sidebarCounts['messages'] ?? 0" />
 
-            <div class="rider-content">
+            <div class="rider-content" data-workspace-search-content>
                 @yield('content')
             </div>
 

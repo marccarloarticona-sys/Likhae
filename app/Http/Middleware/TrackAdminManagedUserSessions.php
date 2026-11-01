@@ -19,6 +19,7 @@ class TrackAdminManagedUserSessions
     {
         $sessionId = $request->session()->getId();
         if ($this->sessions->isRevoked($sessionId)) {
+            $actorLabel = $this->sessions->revokedActorLabel($sessionId);
             $user = $request->user();
             $accountType = $user?->account_type;
             if ($accountType === null && ($revokedUserId = $this->sessions->revokedUserId($sessionId)) !== null) {
@@ -33,7 +34,7 @@ class TrackAdminManagedUserSessions
                 return response()->json([
                     'success' => false,
                     'code' => 'session_suspended',
-                    'message' => 'Your session was suspended by an administrator. Please sign in again.',
+                    'message' => 'Your session was suspended by '.$actorLabel.'. Please sign in again.',
                 ], 401);
             }
 
@@ -42,7 +43,7 @@ class TrackAdminManagedUserSessions
                 : 'login';
 
             return redirect()->route($loginRoute)
-                ->with('status', 'Your session was suspended by an administrator. Please sign in again.');
+                ->with('status', 'Your session was suspended by '.$actorLabel.'. Please sign in again.');
         }
 
         $response = $next($request);

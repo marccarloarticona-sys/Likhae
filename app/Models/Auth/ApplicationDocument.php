@@ -26,6 +26,13 @@ class ApplicationDocument extends Model
         'bir_form_2303' => 'BIR_FORM_2303',
     ];
 
+    public const LOGISTICS_UPLOAD_FIELDS = [
+        'valid_id' => 'VALID_ID',
+        'business_permit' => 'BUSINESS_PERMIT',
+        'sec_certificate' => 'SEC_CERTIFICATE',
+        'bir_form_2303' => 'BIR_FORM_2303',
+    ];
+
     public const DOCUMENT_LABELS = [
         'VALID_ID' => 'Valid Government ID',
         'BUSINESS_PERMIT' => 'Business Permit',

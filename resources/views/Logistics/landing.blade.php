@@ -16,8 +16,7 @@
 
     <header class="lp-header lp-container">
         <a href="{{ route('logistics.home') }}" class="lp-brand" aria-label="LIKHAE Logistics home">
-            <x-shared.likhae-logo context="Logistics" />
-            <span class="lp-brand__context" aria-hidden="true">Logistics<br>&amp; Riders</span>
+            <x-shared.logistics-logo label="LIKHAE Logistics and Riders" />
         </a>
         <nav class="lp-nav" aria-label="Portal navigation">
             <a href="#workspaces">Who it's for</a>
@@ -52,6 +51,18 @@
                         <a href="#workspaces" class="lp-button lp-button--secondary">Join the network</a>
                     </div>
                     <p class="lp-hero__note"><span aria-hidden="true"></span>For the people behind every delivery.</p>
+                    <form id="parcel-tracking" class="lp-tracking__form lp-tracking__form--hero" action="{{ route('logistics.tracking.lookup') }}" method="POST" data-parcel-tracking-form>
+                        @csrf
+                        <label for="lp-tracking-code">Track your parcel <span>No sign-in required</span></label>
+                        <div class="lp-tracking__control">
+                            <input id="lp-tracking-code" name="tracking_code" type="text" maxlength="100" autocomplete="off" placeholder="Enter tracking code" aria-describedby="lp-tracking-hint" required data-tracking-input>
+                            <button class="lp-button lp-button--primary" type="submit" data-tracking-submit>
+                                Track
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+                            </button>
+                        </div>
+                        <p id="lp-tracking-hint" class="lp-tracking__hint" role="status" aria-live="polite" data-tracking-feedback>Search for a parcel using its tracking code.</p>
+                    </form>
                 </div>
                 <div class="lp-hero__caption" aria-hidden="true">
                     <svg viewBox="0 0 24 24"><path d="M4 6h11v11H4V6Zm11 4h4l3 4v3h-7M2 10h5M1 13h6" /><circle cx="7.5" cy="18" r="2" /><circle cx="18.5" cy="18" r="2" /></svg>
@@ -146,5 +157,103 @@
         <a href="{{ route('home') }}">Back to the marketplace <span aria-hidden="true">↗</span></a>
         <small>&copy; {{ date('Y') }} LIKHAE</small>
     </footer>
+
+    <dialog class="lp-tracking__dialog" aria-labelledby="lp-tracking-dialog-title" data-tracking-dialog>
+        <div class="lp-tracking__dialog-inner">
+            <button class="lp-tracking__dialog-close" type="button" aria-label="Close tracking result" data-tracking-close>&times;</button>
+            <span class="lp-eyebrow" data-tracking-eyebrow>Parcel tracking</span>
+            <h2 id="lp-tracking-dialog-title" data-tracking-title>Tracking result</h2>
+            <p class="lp-tracking__dialog-copy" data-tracking-copy></p>
+            <div class="lp-tracking__result" data-tracking-result hidden>
+                <div><span>Tracking code</span><strong data-tracking-result-code></strong></div>
+                <div><span>Latest status</span><strong class="lp-tracking__status" data-tracking-result-status></strong></div>
+                <div><span>Status updated</span><strong data-tracking-result-time></strong></div>
+            </div>
+            <button class="lp-button lp-button--secondary lp-tracking__dialog-action" type="button" data-tracking-close>Close</button>
+        </div>
+    </dialog>
+
+    <script>
+        (() => {
+            const form = document.querySelector('[data-parcel-tracking-form]');
+            const dialog = document.querySelector('[data-tracking-dialog]');
+            if (!form || !dialog) return;
+
+            const submit = form.querySelector('[data-tracking-submit]');
+            const feedback = form.querySelector('[data-tracking-feedback]');
+            const title = dialog.querySelector('[data-tracking-title]');
+            const eyebrow = dialog.querySelector('[data-tracking-eyebrow]');
+            const copy = dialog.querySelector('[data-tracking-copy]');
+            const result = dialog.querySelector('[data-tracking-result]');
+            const closeDialog = () => dialog.close();
+
+            const showResult = ({ found, message, data }) => {
+                title.textContent = found ? 'Parcel found' : 'No parcel found';
+                eyebrow.textContent = found ? 'Latest tracking update' : 'Check your tracking code';
+                copy.textContent = message;
+                result.hidden = !found;
+
+                if (found && data) {
+                    dialog.querySelector('[data-tracking-result-code]').textContent = data.tracking_number || '';
+                    dialog.querySelector('[data-tracking-result-status]').textContent = data.status_label || 'Processing';
+                    const updatedAt = data.updated_at ? new Date(data.updated_at) : null;
+                    const formattedTime = updatedAt && !Number.isNaN(updatedAt.getTime())
+                        ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(updatedAt)
+                        : 'Time not available';
+                    dialog.querySelector('[data-tracking-result-time]').textContent = formattedTime;
+                }
+
+                if (!dialog.open) dialog.showModal();
+            };
+
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                if (!form.reportValidity()) return;
+
+                submit.disabled = true;
+                form.setAttribute('aria-busy', 'true');
+                feedback.textContent = 'Checking tracking code…';
+
+                try {
+                    const response = await fetch(form.action, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json' },
+                        body: new FormData(form),
+                    });
+                    const payload = await response.json();
+
+                    if (response.ok && payload.success && payload.data) {
+                        feedback.textContent = 'Tracking update found.';
+                        showResult({
+                            found: true,
+                            message: 'Here is the latest recorded status for your parcel.',
+                            data: payload.data,
+                        });
+                        return;
+                    }
+
+                    const message = payload.message || 'We could not check that tracking code. Please try again.';
+                    feedback.textContent = message;
+                    showResult({ found: false, message });
+                } catch (error) {
+                    const message = 'Tracking is temporarily unavailable. Please try again in a moment.';
+                    feedback.textContent = message;
+                    showResult({ found: false, message });
+                } finally {
+                    submit.disabled = false;
+                    form.removeAttribute('aria-busy');
+                }
+            });
+
+            form.querySelector('[data-tracking-input]')?.addEventListener('input', () => {
+                feedback.textContent = 'Look up the latest recorded status for a parcel.';
+            });
+            dialog.querySelectorAll('[data-tracking-close]').forEach((button) => button.addEventListener('click', closeDialog));
+            dialog.addEventListener('click', (event) => {
+                if (event.target === dialog) closeDialog();
+            });
+        })();
+    </script>
 </body>
 </html>

@@ -163,6 +163,7 @@
                                 $document = $sellerDocuments->get($type);
                                 $documentStatus = strtoupper((string) ($document?->verification_status ?? 'MISSING'));
                                 $adminRequestedUpdate = $document && isset($sellerUpdateRequestDocumentIds[$document->id]);
+                                $adminRequestedMissingDocument = ! $document ? ($sellerMissingDocumentRequestsByType[$type] ?? null) : null;
                                 $documentLabel = \App\Models\Auth\ApplicationDocument::DOCUMENT_LABELS[$type];
                             @endphp
                             <article>
@@ -170,19 +171,22 @@
                                 <div>
                                     <strong>{{ $documentLabel }}</strong>
                                     <small>{{ $document?->original_name ?: 'No document submitted yet' }}</small>
+                                    @if($adminRequestedMissingDocument)
+                                        <small>Admin requested this document: {{ data_get($adminRequestedMissingDocument->new_values, 'reason') }}</small>
+                                    @endif
                                     @if($documentStatus === 'REJECTED' && $document?->rejection_reason)
                                         <small class="sl-document-rejection">{{ $adminRequestedUpdate ? 'Admin requested this update:' : "Admin's reason:" }} {{ $document->rejection_reason }}</small>
                                     @elseif($documentStatus === 'PENDING')
                                         <small>Update submitted. Your current approved document remains on file during review.</small>
                                     @endif
                                 </div>
-                                <span class="sl-status {{ $documentStatus === 'VERIFIED' ? 'is-success' : ($documentStatus === 'PENDING' ? 'is-warning' : ($documentStatus === 'REJECTED' ? 'is-danger' : 'is-neutral')) }}">{{ $documentStatus === 'VERIFIED' ? 'Verified' : ($documentStatus === 'PENDING' ? 'Update pending' : ($documentStatus === 'REJECTED' ? ($adminRequestedUpdate ? 'Update requested' : 'Needs replacement') : 'Missing')) }}</span>
+                                <span class="sl-status {{ $documentStatus === 'VERIFIED' ? 'is-success' : ($documentStatus === 'PENDING' ? 'is-warning' : ($documentStatus === 'REJECTED' ? 'is-danger' : ($adminRequestedMissingDocument ? 'is-warning' : 'is-neutral'))) }}">{{ $documentStatus === 'VERIFIED' ? 'Verified' : ($documentStatus === 'PENDING' ? 'Update pending' : ($documentStatus === 'REJECTED' ? ($adminRequestedUpdate ? 'Update requested' : 'Needs replacement') : ($adminRequestedMissingDocument ? 'Requested by Admin' : 'Missing'))) }}</span>
                             </article>
                         @endforeach
                     </div>
                         <form class="sl-verification-upload" method="POST" enctype="multipart/form-data" action="{{ route('seller.account.verification-documents.store') }}">
                             @csrf
-                            <div class="sl-verification-upload__intro"><strong>Request a document update</strong><p>Upload a replacement for any document. Admin will review it before the new version is accepted. JPG, PNG, WebP, or PDF, up to 5 MB.</p></div>
+                            <div class="sl-verification-upload__intro"><strong>Upload replacement documents</strong><p>Choose a replacement for any document that needs updating. Admin will review it before the new version is accepted. JPG, PNG, WebP, or PDF, up to 5 MB.</p></div>
                             <div class="sl-verification-upload__grid">
                                 @foreach($sellerDocumentInputs as $field => $type)
                                     @php($document = $sellerDocuments->get($type))
@@ -190,11 +194,11 @@
                                     <label class="sl-field">
                                         <span>{{ \App\Models\Auth\ApplicationDocument::DOCUMENT_LABELS[$type] }}</span>
                                         <input type="file" name="documents[{{ $field }}]" accept=".jpg,.jpeg,.png,.webp,.pdf" @disabled($isPending)>
-                                        <small>{{ $isPending ? 'Already waiting for Admin review.' : 'Optional. Choose a file to submit this document for re-verification.' }}</small>
+                                        <small>{{ $isPending ? 'Already waiting for Admin review.' : ($adminRequestedMissingDocument ? 'Admin requested this requirement. Choose a file to submit it for review.' : 'Optional. Choose a file to submit this document for re-verification.') }}</small>
                                     </label>
                                 @endforeach
                             </div>
-                            <div class="sl-form-actions"><button type="submit" class="sl-btn sl-btn-primary">Send update request</button><small>Choose at least one document.</small></div>
+                            <div class="sl-form-actions"><button type="submit" class="sl-btn sl-btn-primary">Submit documents for review</button><small>Choose at least one document.</small></div>
                         </form>
                 </section>
             @elseif($currentTab === 'security')

@@ -155,6 +155,14 @@ class SellerAccountController extends Controller
             ->filter()
             ->flip()
             ->all();
+        $sellerMissingDocumentRequestsByType = AuditLog::query()
+            ->where('event', 'seller.document_requirement_requested_by_admin')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $shop->user_id)
+            ->latest('id')
+            ->get()
+            ->unique(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')))
+            ->keyBy(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')));
         $businessAddress = $this->ownedBusinessAddress($shop);
         $pickupAddresses = Address::query()
             ->where('user_id', $shop->user_id)
@@ -199,6 +207,7 @@ class SellerAccountController extends Controller
             'sellerApplication' => $sellerApplication,
             'sellerDocuments' => $sellerDocuments,
             'sellerUpdateRequestDocumentIds' => $sellerUpdateRequestDocumentIds,
+            'sellerMissingDocumentRequestsByType' => $sellerMissingDocumentRequestsByType,
             'businessAddress' => $businessAddress,
             'pickupAddresses' => $pickupAddresses,
             'defaultPickupAddress' => $defaultPickupAddress,

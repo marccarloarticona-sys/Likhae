@@ -54,9 +54,8 @@
         <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle aria-expanded="true" aria-label="Collapse sidebar">
             <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <a href="{{ route('logistics.dashboard') }}" class="sl-brand">
-            <span class="sl-brand-mark">L</span>
-            <span class="sl-brand-copy"><strong>LIKHAE</strong><small>{{ $workspaceName }}</small></span>
+        <a href="{{ route('logistics.dashboard') }}" class="sl-brand" aria-label="LIKHAE Logistics Center">
+            <x-shared.logistics-logo label="LIKHAE Logistics Center" />
         </a>
     </div>
 

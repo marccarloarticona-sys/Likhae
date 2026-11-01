@@ -22,9 +22,13 @@
     <section class="auth-hero" aria-labelledby="workspace-hero-title">
         <div class="auth-hero__inner">
             <a href="{{ $homeRoute }}" class="auth-brand">
-                <span class="likhae-logo likhae-logo--auth likhae-logo--logistics" role="img" aria-label="LIKHAE {{ $accountLabel }}">
-                    <img class="likhae-logo__image" src="{{ asset('images/likhae-logo.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true">
-                </span>
+                @if (($workspace ?? '') === 'logistics')
+                    <x-shared.logistics-logo label="LIKHAE Logistics and Riders" class="sl-logistics-logo--auth" />
+                @else
+                    <span class="likhae-logo likhae-logo--auth" role="img" aria-label="LIKHAE {{ $accountLabel }}">
+                        <img class="likhae-logo__image" src="{{ asset('images/likhae-logo.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true">
+                    </span>
+                @endif
             </a>
 
             <div class="auth-hero__content">
@@ -84,9 +88,7 @@
             <div class="auth-mobile-brand {{ ($workspace ?? '') === 'logistics' ? 'auth-panel-brand auth-logistics-card-brand' : '' }}">
                 <a href="{{ $homeRoute }}" class="auth-brand">
                     @if (($workspace ?? '') === 'logistics')
-                        <span class="likhae-logo likhae-logo--auth-panel" role="img" aria-label="LIKHAE {{ $accountLabel }}">
-                            <img src="{{ asset('images/likhae-logo-black-text.png') }}" alt="" width="194" height="42" loading="eager" decoding="async" aria-hidden="true">
-                        </span>
+                        <x-shared.logistics-logo label="LIKHAE Logistics and Riders" class="sl-logistics-logo--auth-panel" />
                     @else
                         <x-shared.likhae-logo :context="$accountLabel" class="likhae-logo--auth" />
                     @endif

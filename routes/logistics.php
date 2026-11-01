@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\AuthenticationController;
 use App\Http\Controllers\Communication\SmartMessagingController;
 use App\Http\Controllers\Logistics\DispatchController;
 use App\Http\Controllers\Logistics\LogisticsPortalController;
+use App\Http\Controllers\Logistics\PublicParcelTrackingController;
 use App\Http\Controllers\Logistics\InterhubTimekeepingController;
 use App\Http\Controllers\Logistics\LogisticsReturnWorkflowController;
 use App\Http\Controllers\Logistics\LogisticsRemittanceController;
@@ -22,6 +23,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('logistics')->name('logistics.')->group(function (): void {
     Route::get('/', fn () => view('logistics.landing'))->name('home');
+    Route::post('/tracking/lookup', [PublicParcelTrackingController::class, 'lookup'])
+        ->middleware('throttle:12,1')
+        ->name('tracking.lookup');
 
     Route::get('/login', function (\Illuminate\Http\Request $request, AuthenticationController $auth) {
         $user = $request->user();
@@ -132,6 +136,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/waybills/{tracking}', [DispatchController::class, 'waybill'])->name('waybills.show');
 
         Route::get('/riders', [LogisticsPortalController::class, 'riders'])->name('riders');
+        Route::post('/riders/sessions/revoke', [LogisticsPortalController::class, 'revokeRiderSessions'])->name('riders.sessions.revoke');
         Route::get('/riders/applications', [RiderApplicationController::class, 'index'])->name('riders.applications');
         Route::get('/riders/applications/{application}', [RiderApplicationController::class, 'show'])->name('riders.application.show');
         Route::post('/riders/applications/{application}/approve', [RiderApplicationController::class, 'approve'])->name('riders.approve');
@@ -144,6 +149,10 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/riders/{rider}/profile-updates/{profileUpdateRequest}/approve', [LogisticsPortalController::class, 'approveRiderProfileUpdate'])->name('riders.profile-updates.approve');
         Route::post('/riders/{rider}/profile-updates/{profileUpdateRequest}/reject', [LogisticsPortalController::class, 'rejectRiderProfileUpdate'])->name('riders.profile-updates.reject');
         Route::patch('/riders/{rider}/moderation', [LogisticsPortalController::class, 'moderateRider'])->name('riders.moderation.update');
+        Route::post('/riders/{rider}/warnings', [LogisticsPortalController::class, 'warnRider'])->name('riders.warnings.store');
+        Route::post('/riders/{rider}/suspend', [LogisticsPortalController::class, 'suspendRider'])->name('riders.suspend');
+        Route::post('/riders/{rider}/reactivate', [LogisticsPortalController::class, 'reactivateRider'])->name('riders.reactivate');
+        Route::post('/riders/{rider}/ban', [LogisticsPortalController::class, 'permanentlyBanRider'])->name('riders.ban');
         Route::patch('/riders/{rider}/area', [LogisticsPortalController::class, 'reassignRiderArea'])->name('riders.area.update');
         Route::patch('/riders/{rider}/capacity', [LogisticsPortalController::class, 'updateRiderCapacity'])->name('riders.capacity.update');
         Route::patch('/riders/{rider}/activate', [LogisticsPortalController::class, 'activateRider'])->name('riders.activate');
@@ -187,6 +196,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/reports/export', [LogisticsPortalController::class, 'exportReport'])->name('reports.export');
         Route::get('/profile', [LogisticsPortalController::class, 'profile'])->name('profile');
         Route::get('/account', [LogisticsPortalController::class, 'profile'])->name('account');
+        Route::post('/profile/verification-documents', [LogisticsPortalController::class, 'submitVerificationDocuments'])
+            ->middleware('throttle:5,1')->name('profile.verification-documents.store');
         Route::patch('/account/profile', [LogisticsPortalController::class, 'updateAccount'])->name('account.profile.update');
         Route::patch('/account/address', [LogisticsPortalController::class, 'updateCenterAddress'])->name('account.address.update');
         Route::patch('/account/password', [LogisticsPortalController::class, 'updatePassword'])->name('account.password.update');

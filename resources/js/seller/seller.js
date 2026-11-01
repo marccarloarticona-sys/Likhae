@@ -4,8 +4,10 @@ import '../shared/echo.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
 import '../shared/payout-destination.js';
+import { initializeWorkspaceHeaderSearch } from '../shared/workspace-header-search.js';
 
 document.addEventListener('DOMContentLoaded', () => {
+    initializeWorkspaceHeaderSearch();
     const select = (selector, root = document) => root.querySelector(selector);
     const selectAll = (selector, root = document) => Array.from(root.querySelectorAll(selector));
     const sidebar = select('[data-sl-sidebar]');

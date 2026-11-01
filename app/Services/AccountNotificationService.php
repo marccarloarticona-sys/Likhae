@@ -130,7 +130,7 @@ class AccountNotificationService
         );
     }
 
-    public function riderModerationChanged(RiderProfile $rider, string $status, string $reason): void
+    public function riderModerationChanged(RiderProfile $rider, string $status, string $reason, array $details = []): void
     {
         $rider->loadMissing('user');
         $label = $this->label($status);
@@ -138,6 +138,18 @@ class AccountNotificationService
         $message = 'Your rider account status is now '.$label.'.';
         if ($reasonText !== '') {
             $message .= ' Reason: '.$reasonText;
+        }
+        if (filled($details['category_label'] ?? null)) {
+            $message .= ' Category: '.$details['category_label'].'.';
+        }
+        if (filled($details['corrective_action'] ?? null)) {
+            $message .= ' Corrective action: '.$details['corrective_action'];
+        }
+        if (filled($details['suspended_until'] ?? null)) {
+            $message .= ' Suspended until '.$details['suspended_until'].'.';
+        }
+        if (filled($details['reference'] ?? null)) {
+            $message .= ' Reference: '.$details['reference'];
         }
 
         $this->record(

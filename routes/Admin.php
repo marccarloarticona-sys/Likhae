@@ -56,8 +56,10 @@ Route::prefix('admin')
         Route::get('/users', [AdminUserController::class, 'index'])->name('users');
         Route::post('/users/sessions/revoke', [AdminUserController::class, 'revokeSessions'])->name('users.sessions.revoke');
         Route::get('/users/{user}', [AdminUserController::class, 'show'])->name('users.show');
-        Route::post('/users/{user}/seller-documents/{document}/review', [AdminUserController::class, 'reviewSellerDocument'])
-            ->name('users.seller-documents.review');
+        Route::post('/users/{user}/verification-documents/{document}/review', [AdminUserController::class, 'reviewVerificationDocument'])
+            ->name('users.verification-documents.review');
+        Route::post('/users/{user}/verification-document-requirements', [AdminUserController::class, 'requestMissingVerificationDocument'])
+            ->name('users.verification-documents.requirement');
         Route::post('/users/{user}/risk-signals/{signal}/review', [AdminUserController::class, 'reviewRiskSignal'])->name('users.risk-signals.review');
         Route::post('/users/{user}/warnings', [AdminUserController::class, 'issueWarning'])->name('users.warnings.store');
         Route::post('/users/{user}/warnings/{warning}/review', [AdminUserController::class, 'reviewWarning'])->name('users.warnings.review');

@@ -124,14 +124,16 @@
         @endforeach
     </nav>
 
-    <div class="ad-inline-actions" style="justify-content:flex-end; margin:12px 0">
-        <a class="ad-btn {{ $riskFilter === 'flagged' ? 'ad-btn-primary' : 'ad-btn-secondary' }} ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">
-            Buyers flagged for safety review ({{ number_format($stats['open_buyer_risk_reviews'] ?? 0) }})
-        </a>
-        @if($riskFilter === 'flagged')
-            <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers']) }}">Show all buyers</a>
-        @endif
-    </div>
+    @if($role === 'buyers')
+        <div class="ad-inline-actions" style="justify-content:flex-end; margin:12px 0">
+            <a class="ad-btn {{ $riskFilter === 'flagged' ? 'ad-btn-primary' : 'ad-btn-secondary' }} ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">
+                Buyers flagged for safety review ({{ number_format($stats['open_buyer_risk_reviews'] ?? 0) }})
+            </a>
+            @if($riskFilter === 'flagged')
+                <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers']) }}">Show all buyers</a>
+            @endif
+        </div>
+    @endif
 
     <section class="ad-card ad-users-card" id="user-table">
         <form class="ad-filter-bar" action="{{ route('admin.users') }}" method="GET" role="search">
@@ -185,7 +187,7 @@
                     <strong data-session-selected-count>0</strong> selected on this page
                 </span>
                 <button
-                    class="ad-btn ad-btn-secondary ad-btn-sm"
+                    class="ad-btn ad-btn-danger-soft ad-btn-sm"
                     type="submit"
                     data-session-bulk-submit
                     disabled
@@ -210,7 +212,6 @@
                             <th>User</th>
                             <th>Role</th>
                             <th>Joined</th>
-                            <th>Orders / jobs</th>
                             <th>IP address</th>
                             <th>Browser / sessions</th>
                             <th>Status</th>
@@ -278,7 +279,6 @@
 
                                 <td>{{ $roleLabel }}</td>
                                 <td>{{ $user->created_at->format('M d, Y') }}</td>
-                                <td>0</td>
                                 <td>{{ $sessionSummary['ip_address'] ?? 'Not captured' }}</td>
                                 <td>
                                     @if(($sessionSummary['session_count'] ?? 0) > 0)
@@ -307,7 +307,7 @@
                                             View
                                         </a>
                                         <button
-                                            class="ad-btn ad-btn-secondary ad-btn-sm"
+                                            class="ad-btn ad-btn-danger-soft ad-btn-sm"
                                             type="submit"
                                             name="single_user_id"
                                             value="{{ $user->id }}"
@@ -322,7 +322,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="9">
+                                <td colspan="8">
                                     No accounts match your search.
                                 </td>
                             </tr>

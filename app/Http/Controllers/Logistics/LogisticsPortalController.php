@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Logistics;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Auth\PhilippineAddressController;
+use App\Models\Auth\ApplicationDocument;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Admin\AuditLog;
 use App\Models\Buyer\Address;
@@ -24,6 +25,7 @@ use App\Models\Rider\RiderProfileUpdateRequest;
 use App\Models\User;
 use App\Services\Account\ProfilePhotoService;
 use App\Services\AccountNotificationService;
+use App\Services\Admin\AdminUserSessionManager;
 use App\Services\Communication\ConversationService;
 use App\Services\Communication\ConversationMessageSender;
 use App\Services\Communication\MessageAttachmentService;
@@ -38,7 +40,6 @@ use App\Services\RegistrationWorkflowService;
 use App\Services\Reports\WorkspaceExportPdfService;
 use App\Services\Reports\LogisticsFinancialReportService;
 use App\Services\RiderRatingService;
-use App\Services\Maps\MapDataService;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
@@ -53,25 +54,46 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Throwable;
 
 class LogisticsPortalController extends Controller
 {
+    private const RIDER_WARNING_CATEGORIES = [
+        'UNSAFE_DRIVING' => 'Unsafe or reckless driving',
+        'PARCEL_HANDLING' => 'Unsafe or careless parcel handling',
+        'CUSTOMER_CONDUCT' => 'Unprofessional conduct toward a customer or seller',
+        'DELIVERY_FAILURES' => 'Repeated unexplained delivery failures',
+        'COD_REMITTANCE' => 'COD remittance or cash-handling violation',
+        'POLICY_VIOLATIONS' => 'Substantiated rider policy violations',
+        'OTHER' => 'Other',
+    ];
+
+    private const RIDER_SUSPENSION_DURATIONS = [
+        'week' => ['label' => '1 week', 'unit' => 'week', 'count' => 1],
+        'fortnight' => ['label' => '2 weeks', 'unit' => 'week', 'count' => 2],
+        'month' => ['label' => '1 month', 'unit' => 'month', 'count' => 1],
+        'quarter' => ['label' => '3 months', 'unit' => 'month', 'count' => 3],
+        'half_year' => ['label' => '6 months', 'unit' => 'month', 'count' => 6],
+    ];
+
     public function __construct(
         private readonly RegistrationWorkflowService $registrationWorkflow,
         private readonly LocalRiderEligibilityService $localRiderEligibility,
     ) {}
 
-    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery, InterhubTimekeepingController $interhubTimekeeping): View
+    public function dashboard(Request $request, LogisticsShipmentQuery $shipmentQuery, InterhubTimekeepingController $interhubTimekeeping): View|JsonResponse
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
-        $filters = $shipmentQuery->filters($request);
+        // Dashboard data is live operational state and is not restricted by shipment dates.
+        abort_if($request->hasAny(['company_id', 'hub_id', 'logistics_center_id']), 403);
 
         // Related figures come from one read transaction; the next request reads
         // current persisted statuses after any rider workflow transaction commits.
-        $shipmentData = DB::transaction(function () use ($center, $filters, $shipmentQuery): array {
-            $base = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $filters);
+        $shipmentData = DB::transaction(function () use ($center, $shipmentQuery): array {
+            $base = $shipmentQuery->operationalFor($center);
             $counts = $shipmentQuery->counts($base);
             $ready = app(LogisticsSchemaReadiness::class)->automaticRoutingReady();
             $operational = [
@@ -114,12 +136,6 @@ class LogisticsPortalController extends Controller
                     ->where(fn ($query) => $query->where('origin_logistics_center_id', $center->id)
                         ->orWhere('destination_logistics_center_id', $center->id))
                     ->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
-                if (! empty($filters['from_date'])) {
-                    $manifests->whereDate('created_at', '>=', $filters['from_date']);
-                }
-                if (! empty($filters['to_date'])) {
-                    $manifests->whereDate('created_at', '<=', $filters['to_date']);
-                }
                 $operational['manifests'] = $manifests->count();
             }
 
@@ -167,9 +183,28 @@ class LogisticsPortalController extends Controller
             $finance['pending_settlement'] = (float) (clone $pools)->whereIn('status', ['PENDING', 'APPROVED', 'REVIEW_REQUIRED'])->sum('unresolved_share_amount');
         }
 
+        if ($request->expectsJson()) {
+            $recentShipments = $shipmentData['recentShipments']->map(fn (Shipment $shipment): array => [
+                'tracking_number' => $shipment->tracking_number,
+                'status' => (string) str($shipment->current_status)->headline(),
+                'origin' => $shipment->originLogisticsCenter?->business_name ?? '—',
+                'destination' => $shipment->destinationLogisticsCenter?->business_name ?? '—',
+                'last_event' => $shipment->latestEvent?->occurred_at?->format('M d, Y g:i A') ?? 'No event yet',
+                'rider' => $shipment->latestRiderAssignment?->riderProfile?->user?->name ?? 'Unassigned',
+                'url' => route('logistics.parcels.show', $shipment),
+            ])->values();
+
+            return response()->json([
+                'counts' => $shipmentData['counts'],
+                'operational' => $shipmentData['operational'],
+                'financeSummary' => $finance,
+                'recentShipments' => $recentShipments,
+                'updatedAt' => now()->toIso8601String(),
+            ], 200, ['Cache-Control' => 'private, no-store']);
+        }
+
         return view('logistics.dashboard.index', [
             'center' => $center,
-            'filters' => $filters,
             ...$shipmentData,
             'financeSummary' => $finance,
             ...$interhubTimekeeping->logisticsData($request),
@@ -241,16 +276,45 @@ class LogisticsPortalController extends Controller
         return back()->with('status', 'Rider application rejected.');
     }
 
-    public function riders(Request $request): View
+    public function riders(Request $request, AdminUserSessionManager $sessions): View
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
+
+        $filters = $request->validate([
+            'tab' => ['nullable', Rule::in(['all', 'local', 'interhub'])],
+            'q' => ['nullable', 'string', 'max:120'],
+        ]);
+        $activeTab = $filters['tab'] ?? 'all';
+        $search = trim((string) ($filters['q'] ?? ''));
 
         $riderQuery = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
             ->whereHas('user', fn ($query) => $query->where('account_type', User::TYPE_RIDER));
 
-        $riders = (clone $riderQuery)
+        $tabCounts = [
+            'all' => (clone $riderQuery)->count(),
+            'local' => (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::localValues())->count(),
+            'interhub' => (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::interLogisticsValues())->count(),
+        ];
+
+        $filteredRiderQuery = clone $riderQuery;
+        if ($activeTab === 'local') {
+            $filteredRiderQuery->whereIn('vehicle_type', RiderVehicleType::localValues());
+        } elseif ($activeTab === 'interhub') {
+            $filteredRiderQuery->whereIn('vehicle_type', RiderVehicleType::interLogisticsValues());
+        }
+        if ($search !== '') {
+            $filteredRiderQuery->where(function ($query) use ($search): void {
+                $query->whereHas('user', fn ($user) => $user
+                    ->where('name', 'like', '%'.$search.'%')
+                    ->orWhere('email', 'like', '%'.$search.'%'))
+                    ->orWhere('vehicle_type', 'like', '%'.$search.'%')
+                    ->orWhere('plate_number', 'like', '%'.$search.'%');
+            });
+        }
+
+        $riders = $filteredRiderQuery
             ->with(['user', 'areaAssignments.serviceArea'])
             ->withCount([
                 'assignments as active_pickup_assignments_count' => fn ($query) => $query
@@ -265,7 +329,8 @@ class LogisticsPortalController extends Controller
             ])
             ->latest()
             ->orderByDesc('id')
-            ->paginate(15);
+            ->paginate(15)
+            ->withQueryString();
 
         if (Schema::hasTable('rider_profile_update_requests')) {
             $pendingProfileUpdates = RiderProfileUpdateRequest::query()
@@ -294,15 +359,73 @@ class LogisticsPortalController extends Controller
             ['label' => 'Pending', 'value' => (clone $riderQuery)->where('status', 'PENDING')->count()],
             ['label' => 'Suspended / Banned', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])->count()],
         ];
-        $localRiderCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::localValues())->count();
-        $interLogisticsDriverCount = (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::interLogisticsValues())->count();
-        $classificationCounts = [
-            'local' => $localRiderCount,
-            'inter_logistics' => $interLogisticsDriverCount,
-            'other' => max(0, (int) $stats[0]['value'] - $localRiderCount - $interLogisticsDriverCount),
-        ];
+        $sessionManagementAvailable = $sessions->available();
+        $sessionSummaries = $sessions->summaries($riders->getCollection()->pluck('user')->filter());
+        $riders->getCollection()->each(function (RiderProfile $rider) use ($sessionSummaries): void {
+            $summary = $sessionSummaries[$rider->user?->id] ?? ['session_count' => 0];
+            $rider->setAttribute('active_session_count', (int) ($summary['session_count'] ?? 0));
+        });
 
-        return view('logistics.riders.index', compact('riders', 'center', 'stats', 'classificationCounts'));
+        return view('logistics.riders.index', compact(
+            'riders',
+            'center',
+            'stats',
+            'activeTab',
+            'tabCounts',
+            'search',
+            'sessionManagementAvailable',
+        ));
+    }
+
+    public function revokeRiderSessions(Request $request, AdminUserSessionManager $sessions): RedirectResponse
+    {
+        $data = $request->validate([
+            'single_rider_id' => ['nullable', 'integer', 'min:1'],
+            'rider_ids' => ['required_without:single_rider_id', 'array', 'min:1', 'max:100'],
+            'rider_ids.*' => ['integer', 'distinct', 'min:1'],
+            'tab' => ['nullable', Rule::in(['all', 'local', 'interhub'])],
+            'q' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        if (! $sessions->available()) {
+            return back()->withErrors([
+                'sessions' => 'Session controls are unavailable for the configured session driver or database schema.',
+            ]);
+        }
+
+        $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
+        $single = filled($data['single_rider_id'] ?? null);
+        $requestedIds = $single
+            ? [(int) $data['single_rider_id']]
+            : collect($data['rider_ids'] ?? [])->map(fn ($id): int => (int) $id)->unique()->values()->all();
+
+        $riders = RiderProfile::query()
+            ->whereIn('id', $requestedIds)
+            ->where('logistics_center_id', $center->id)
+            ->whereHas('user', fn ($query) => $query->where('account_type', User::TYPE_RIDER))
+            ->with('user')
+            ->get();
+        if ($riders->count() !== count($requestedIds)) {
+            return back()->withErrors(['sessions' => 'One or more selected riders are no longer assigned to this Logistics center.']);
+        }
+
+        $users = $riders->pluck('user')->filter()->unique('id')->values();
+        if ($users->count() !== $riders->count()) {
+            return back()->withErrors(['sessions' => 'One or more selected rider accounts are unavailable.']);
+        }
+        if ($users->contains(fn (User $user): bool => (int) $user->id === (int) $request->user()->id)) {
+            return back()->withErrors(['sessions' => 'You cannot suspend your own current session.']);
+        }
+
+        $revokedCount = $sessions->revoke(
+            $request,
+            $users->all(),
+            'your assigned Logistics center',
+            'LOGISTICS_FORCED_RIDER_SIGN_OUT',
+        );
+        $riderCount = $users->count();
+
+        return back()->with('status', 'Suspended sessions for '.$riderCount.' rider account'.($riderCount === 1 ? '' : 's').'; revoked '.$revokedCount.' active browser session'.($revokedCount === 1 ? '' : 's').'. Riders must sign in again.');
     }
 
     public function riderShow(Request $request, RiderProfile $rider, RiderRatingService $riderRatings): View
@@ -310,7 +433,12 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
 
-        $rider->load(['user', 'areaAssignments.serviceArea', 'assignments.shipment.sellerOrder.sellerProfile.businessAddress', 'assignments.shipment.sellerOrder.order.address', 'assignments.shipment.riderAssignments.liveLocation', 'assignments.shipment.logisticsCenter.address', 'assignments.liveLocation', 'earnings', 'moderationLogs.actor']);
+        $rider->load('user');
+        $rider->user?->isSuspended();
+        $rider->refresh()->load(['user', 'areaAssignments.serviceArea', 'assignments', 'earnings', 'moderationLogs.actor']);
+        $warningLogs = $rider->moderationLogs->where('event', 'rider.warned')->values();
+        $warningCount = $warningLogs->count();
+        $accountEnforcementReady = User::accountEnforcementSchemaReady();
         $profileUpdateSchemaReady = Schema::hasTable('rider_profile_update_requests')
             && Schema::hasTable('rider_profile_update_documents');
         $profileUpdateRequests = $profileUpdateSchemaReady
@@ -341,22 +469,24 @@ class LogisticsPortalController extends Controller
                 ->get()
             : collect();
 
-        $maps = app(MapDataService::class);
-        $mapMarkers = $maps->forAssignments($rider->assignments, true);
-        if ($centerMarker = $maps->centerMarker($center->loadMissing('address'))) {
-            $mapMarkers[] = $centerMarker;
-        }
         $schema = app(LogisticsSchemaReadiness::class);
         return view('logistics.riders.show', [
             'rider' => $rider,
             'center' => $center,
-            'mapMarkers' => $mapMarkers,
             'serviceAreas' => $serviceAreas,
             'isLocalRider' => $isLocalRider,
             'manifestSchemaReady' => $schema->manifestReady(),
             'localTripsSchemaReady' => $schema->localTripsReady(),
             'profileUpdateSchemaReady' => $profileUpdateSchemaReady,
             'profileUpdateRequests' => $profileUpdateRequests,
+            'riderWarningCategories' => self::RIDER_WARNING_CATEGORIES,
+            'riderWarningLogs' => $warningLogs,
+            'riderWarningCount' => $warningCount,
+            'riderSuspensionDurations' => array_map(
+                fn (array $duration): string => $duration['label'],
+                self::RIDER_SUSPENSION_DURATIONS,
+            ),
+            'accountEnforcementReady' => $accountEnforcementReady,
         ]);
     }
 
@@ -612,6 +742,342 @@ class LogisticsPortalController extends Controller
         );
     }
 
+    public function warnRider(Request $request, RiderProfile $rider): RedirectResponse
+    {
+        $this->ensureRiderInLogisticsCenter($request, $rider);
+        if ($request->has('reason')) {
+            $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        }
+        if ($request->has('corrective_action')) {
+            $request->merge(['corrective_action' => trim((string) $request->input('corrective_action'))]);
+        }
+        if ($request->has('evidence')) {
+            $request->merge(['evidence' => trim((string) $request->input('evidence'))]);
+        }
+
+        $data = $request->validate([
+            'category' => ['required', 'string', Rule::in(array_keys(self::RIDER_WARNING_CATEGORIES))],
+            'reason' => ['required', 'string', 'min:10', 'max:5000'],
+            'corrective_action' => ['required', 'string', 'min:5', 'max:5000'],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
+        $categoryLabel = self::RIDER_WARNING_CATEGORIES[$data['category']];
+        $reason = $data['reason'];
+        $correctiveAction = $data['corrective_action'];
+        $reference = $this->makeRiderModerationReference($rider, 'WARNING');
+
+        $warningNumber = DB::transaction(function () use ($request, $rider, $data, $categoryLabel, $reason, $correctiveAction, $reference): int {
+            $lockedRider = RiderProfile::query()
+                ->with('user')
+                ->whereKey($rider->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->ensureRiderInLogisticsCenter($request, $lockedRider);
+            abort_unless(
+                $lockedRider->user
+                    && $lockedRider->user->status === User::STATUS_ACTIVE
+                    && ! $lockedRider->user->isPermanentlyBanned()
+                    && in_array($lockedRider->status, ['ACTIVE', 'WARNED'], true),
+                422,
+                'Only an active rider can receive a new warning.',
+            );
+
+            $warningQuery = AuditLog::query()
+                ->where('event', 'rider.warned')
+                ->where('auditable_type', RiderProfile::class)
+                ->where('auditable_id', $lockedRider->id);
+            $warningCount = (clone $warningQuery)->count();
+            if ($warningCount >= User::MAX_ACCOUNT_WARNINGS) {
+                throw ValidationException::withMessages([
+                    'warning_limit' => 'This rider has reached the three-warning limit.',
+                ]);
+            }
+
+            $duplicateWarning = (clone $warningQuery)
+                ->get(['new_values'])
+                ->first(function (AuditLog $warning) use ($data, $reason): bool {
+                    $values = $warning->new_values ?? [];
+
+                    return data_get($values, 'category') === $data['category']
+                        && trim((string) data_get($values, 'reason')) === $reason
+                        && ! in_array(data_get($values, 'warning_status', 'OPEN'), ['RESOLVED', 'CLOSED'], true);
+                });
+            if ($duplicateWarning) {
+                throw ValidationException::withMessages([
+                    'duplicate_warning' => 'This warning is already recorded and remains open for review.',
+                ]);
+            }
+
+            $oldStatus = $lockedRider->status;
+            $lockedRider->update(['status' => 'WARNED']);
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'rider.warned',
+                'auditable_type' => RiderProfile::class,
+                'auditable_id' => $lockedRider->id,
+                'old_values' => ['status' => $oldStatus],
+                'new_values' => [
+                    'status' => 'WARNED',
+                    'warning_status' => 'OPEN',
+                    'warning_number' => $warningCount + 1,
+                    'category' => $data['category'],
+                    'category_label' => $categoryLabel,
+                    'reason' => $reason,
+                    'corrective_action' => $correctiveAction,
+                    'reference' => $reference,
+                    'evidence' => filled($data['evidence'] ?? null) ? $data['evidence'] : null,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+
+            return $warningCount + 1;
+        });
+
+        $rider->refresh()->load('user');
+        app(AccountNotificationService::class)->riderModerationChanged($rider, 'WARNED', $reason, [
+            'category_label' => $categoryLabel,
+            'corrective_action' => $correctiveAction,
+            'reference' => $reference,
+        ]);
+
+        return back()->with('status', 'Rider warning '.$warningNumber.' of '.User::MAX_ACCOUNT_WARNINGS.' recorded. Reference: '.$reference);
+    }
+
+    public function suspendRider(Request $request, RiderProfile $rider): RedirectResponse
+    {
+        $this->ensureRiderInLogisticsCenter($request, $rider);
+        if (! User::accountEnforcementSchemaReady()) {
+            return back()->withErrors(['account_access' => 'Temporary suspension controls are unavailable until the account enforcement migration is applied.']);
+        }
+        if ($request->has('reason')) {
+            $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        }
+        if ($request->has('evidence')) {
+            $request->merge(['evidence' => trim((string) $request->input('evidence'))]);
+        }
+
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'duration' => ['required', Rule::in(array_keys(self::RIDER_SUSPENSION_DURATIONS))],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
+        $duration = self::RIDER_SUSPENSION_DURATIONS[$data['duration']];
+        $suspendedUntil = $duration['unit'] === 'week'
+            ? now()->addWeeks($duration['count'])
+            : now()->addMonths($duration['count']);
+        $reason = $data['reason'];
+        $reference = $this->makeRiderModerationReference($rider, 'SUSPENSION');
+
+        DB::transaction(function () use ($request, $rider, $data, $duration, $suspendedUntil, $reason, $reference): void {
+            $lockedRider = RiderProfile::query()
+                ->with('user')
+                ->whereKey($rider->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->ensureRiderInLogisticsCenter($request, $lockedRider);
+            abort_unless(
+                $lockedRider->user
+                    && $lockedRider->user->status === User::STATUS_ACTIVE
+                    && ! $lockedRider->user->isPermanentlyBanned()
+                    && in_array($lockedRider->status, ['ACTIVE', 'WARNED'], true),
+                422,
+                'Only an active rider can be temporarily suspended.',
+            );
+
+            $oldValues = [
+                'status' => $lockedRider->status,
+                'user_status' => $lockedRider->user->status,
+                'suspended_until' => $lockedRider->user->suspended_until?->toISOString(),
+            ];
+            $lockedRider->update(['status' => 'SUSPENDED', 'is_online' => false]);
+            $lockedRider->user->forceFill([
+                'status' => User::STATUS_SUSPENDED,
+                'suspended_until' => $suspendedUntil,
+            ])->save();
+
+            $this->releaseUncollectedPickupAssignments($lockedRider);
+            $this->releaseUncollectedDeliveryAssignments($lockedRider);
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'rider.suspended',
+                'auditable_type' => RiderProfile::class,
+                'auditable_id' => $lockedRider->id,
+                'old_values' => $oldValues,
+                'new_values' => [
+                    'status' => 'SUSPENDED',
+                    'duration' => $data['duration'],
+                    'duration_label' => $duration['label'],
+                    'suspended_until' => $suspendedUntil->toISOString(),
+                    'reason' => $reason,
+                    'reference' => $reference,
+                    'evidence' => filled($data['evidence'] ?? null) ? $data['evidence'] : null,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        $rider->refresh()->load('user');
+        app(AccountNotificationService::class)->riderModerationChanged($rider, 'SUSPENDED', $reason, [
+            'suspended_until' => $suspendedUntil->format('M d, Y h:i A'),
+            'reference' => $reference,
+        ]);
+
+        return back()->with('status', 'Rider suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reference: '.$reference);
+    }
+
+    public function reactivateRider(Request $request, RiderProfile $rider): RedirectResponse
+    {
+        $this->ensureRiderInLogisticsCenter($request, $rider);
+        if ($request->has('reason')) {
+            $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        }
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+        ]);
+        $reason = $data['reason'];
+        $reference = $this->makeRiderModerationReference($rider, 'REACTIVATION');
+
+        DB::transaction(function () use ($request, $rider, $reason, $reference): void {
+            $lockedRider = RiderProfile::query()
+                ->with('user')
+                ->whereKey($rider->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->ensureRiderInLogisticsCenter($request, $lockedRider);
+            abort_unless($lockedRider->user, 422, 'The rider account is unavailable.');
+            abort_if(
+                $lockedRider->user->isPermanentlyBanned() || $lockedRider->status === 'BANNED',
+                422,
+                'A permanently banned rider cannot be reactivated from this page.',
+            );
+            abort_unless(
+                $lockedRider->status === 'SUSPENDED' || $lockedRider->user->status === User::STATUS_SUSPENDED,
+                422,
+                'Only a suspended rider can be reactivated.',
+            );
+
+            $oldValues = [
+                'status' => $lockedRider->status,
+                'user_status' => $lockedRider->user->status,
+                'suspended_until' => $lockedRider->user->suspended_until?->toISOString(),
+            ];
+            $lockedRider->update(['status' => 'ACTIVE', 'is_online' => false]);
+            $userChanges = ['status' => User::STATUS_ACTIVE];
+            if (User::accountEnforcementSchemaReady()) {
+                $userChanges['suspended_until'] = null;
+            }
+            $lockedRider->user->forceFill($userChanges)->save();
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'rider.reactivated',
+                'auditable_type' => RiderProfile::class,
+                'auditable_id' => $lockedRider->id,
+                'old_values' => $oldValues,
+                'new_values' => ['status' => 'ACTIVE', 'reason' => $reason, 'reference' => $reference],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        $rider->refresh()->load('user');
+        app(AccountNotificationService::class)->riderModerationChanged($rider, 'ACTIVE', $reason, ['reference' => $reference]);
+
+        return back()->with('status', 'Rider reactivated. Reference: '.$reference);
+    }
+
+    public function permanentlyBanRider(Request $request, RiderProfile $rider): RedirectResponse
+    {
+        $this->ensureRiderInLogisticsCenter($request, $rider);
+        if (! User::accountEnforcementSchemaReady()) {
+            return back()->withErrors(['account_access' => 'Permanent ban controls are unavailable until the account enforcement migration is applied.']);
+        }
+        if ($request->has('reason')) {
+            $request->merge(['reason' => trim((string) $request->input('reason'))]);
+        }
+        if ($request->has('evidence')) {
+            $request->merge(['evidence' => trim((string) $request->input('evidence'))]);
+        }
+
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'evidence' => ['nullable', 'string', 'max:5000'],
+        ]);
+        $reason = $data['reason'];
+        $bannedAt = now();
+        $reference = $this->makeRiderModerationReference($rider, 'BAN');
+
+        DB::transaction(function () use ($request, $rider, $data, $reason, $bannedAt, $reference): void {
+            $lockedRider = RiderProfile::query()
+                ->with('user')
+                ->whereKey($rider->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->ensureRiderInLogisticsCenter($request, $lockedRider);
+            abort_unless($lockedRider->user, 422, 'The rider account is unavailable.');
+            abort_unless(! $lockedRider->user->isPermanentlyBanned(), 422, 'This rider is already permanently banned.');
+
+            $oldValues = [
+                'status' => $lockedRider->status,
+                'user_status' => $lockedRider->user->status,
+                'suspended_until' => $lockedRider->user->suspended_until?->toISOString(),
+            ];
+            $lockedRider->update(['status' => 'BANNED', 'is_online' => false]);
+            $lockedRider->user->forceFill([
+                'status' => User::STATUS_DEACTIVATED,
+                'suspended_until' => null,
+                'permanently_banned_at' => $bannedAt,
+                'api_token_hash' => null,
+                'api_token_expires_at' => null,
+                'remember_token' => null,
+            ])->save();
+
+            $this->releaseUncollectedPickupAssignments($lockedRider);
+            $this->releaseUncollectedDeliveryAssignments($lockedRider);
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'rider.banned',
+                'auditable_type' => RiderProfile::class,
+                'auditable_id' => $lockedRider->id,
+                'old_values' => $oldValues,
+                'new_values' => [
+                    'status' => 'PERMANENTLY_BANNED',
+                    'account_status' => User::STATUS_DEACTIVATED,
+                    'permanently_banned_at' => $bannedAt->toISOString(),
+                    'reason' => $reason,
+                    'reference' => $reference,
+                    'evidence' => filled($data['evidence'] ?? null) ? $data['evidence'] : null,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+        });
+
+        $rider->refresh()->load('user');
+        app(AccountNotificationService::class)->riderModerationChanged($rider, 'BANNED', $reason, ['reference' => $reference]);
+
+        return back()->with('status', 'Rider permanently banned. Reference: '.$reference);
+    }
+
+    private function ensureRiderInLogisticsCenter(Request $request, RiderProfile $rider): void
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center && (int) $rider->logistics_center_id === (int) $center->id, 403);
+    }
+
+    private function makeRiderModerationReference(RiderProfile $rider, string $action): string
+    {
+        return 'RID-'.$rider->id.'-'.$action.'-'.Str::upper((string) Str::ulid());
+    }
+
     private function saveRiderModeration(Request $request, RiderProfile $rider, string $status, string $reason): RedirectResponse
     {
         $center = $request->user()->logisticsCenter;
@@ -630,6 +1096,11 @@ class LogisticsPortalController extends Controller
                 ->whereKey($riderId)
                 ->lockForUpdate()
                 ->firstOrFail();
+            abort_if(
+                $status === 'ACTIVE' && ($rider->status === 'BANNED' || $rider->user?->isPermanentlyBanned()),
+                422,
+                'A permanently banned rider cannot be reactivated from this page.',
+            );
             $oldStatus = $rider->status;
             $rider->update([
                 'status' => $status,
@@ -817,8 +1288,7 @@ class LogisticsPortalController extends Controller
             return $reason ? [$area->id => $reason] : [];
         });
 
-        $mapMarkers = array_filter([app(MapDataService::class)->centerMarker($center)]);
-        return view('logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'centerCanonicalMunicipality', 'mapMarkers', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
+        return view('logistics.delivery-areas.index', compact('areas', 'riders', 'center', 'centerCanonicalMunicipality', 'uncoveredBarangays', 'assignableAreaIds', 'invalidAreaReasons'));
     }
 
     public function saveDeliveryArea(Request $request): RedirectResponse
@@ -1164,12 +1634,165 @@ class LogisticsPortalController extends Controller
         $user = $request->user();
         $center = $user->logisticsCenter?->load('address');
         abort_unless($center, 403);
+        $verificationApplication = $user->sellerVerificationApplication();
+        $verificationApplication?->load('documents');
+        $verificationDocuments = $verificationApplication?->documents
+            ->groupBy(fn (ApplicationDocument $document): string => strtoupper((string) $document->document_type))
+            ->map(fn ($versions): ApplicationDocument => $versions->sortByDesc('id')->first()) ?? collect();
+        $adminRequestedDocumentUpdateIds = AuditLog::query()
+            ->where('event', 'logistics.document_update_requested_by_admin')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->get(['new_values'])
+            ->map(fn (AuditLog $entry): int => (int) data_get($entry->new_values, 'document_id'))
+            ->filter()
+            ->flip()
+            ->all();
+        $adminMissingDocumentRequestsByType = AuditLog::query()
+            ->where('event', 'logistics.document_requirement_requested_by_admin')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->latest('id')
+            ->get()
+            ->unique(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')))
+            ->keyBy(fn (AuditLog $entry): string => strtoupper((string) data_get($entry->new_values, 'document_type')));
         $payoutDestinationReady = $destinations->readyFor('logistics_centers');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($center);
         $payoutMultipleReady = $destinations->supportsMultipleFor('logistics_centers');
         $payoutDestinations = $payoutMultipleReady ? $manager->accounts($center) : [];
+        $verificationDocumentTypes = array_values(ApplicationDocument::LOGISTICS_UPLOAD_FIELDS);
 
-        return view('logistics.profile.index', compact('center', 'user', 'payoutDestinationReady', 'payoutDestinationSaved', 'payoutMultipleReady', 'payoutDestinations'));
+        return view('logistics.profile.index', compact(
+            'center',
+            'user',
+            'verificationApplication',
+            'verificationDocuments',
+            'verificationDocumentTypes',
+            'adminRequestedDocumentUpdateIds',
+            'adminMissingDocumentRequestsByType',
+            'payoutDestinationReady',
+            'payoutDestinationSaved',
+            'payoutMultipleReady',
+            'payoutDestinations',
+        ));
+    }
+
+    public function submitVerificationDocuments(Request $request): RedirectResponse
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center, 403);
+
+        $request->validate([
+            'documents' => ['required', 'array:'.implode(',', array_keys(ApplicationDocument::LOGISTICS_UPLOAD_FIELDS))],
+            'documents.*' => [
+                'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf',
+                'mimetypes:image/jpeg,image/png,image/webp,application/pdf',
+                'extensions:jpg,jpeg,png,webp,pdf', 'max:5120',
+            ],
+        ]);
+        $files = collect($request->file('documents', []))
+            ->filter(fn ($file): bool => $file instanceof \Illuminate\Http\UploadedFile)
+            ->all();
+
+        if ($files === []) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'documents' => 'Choose at least one required Logistics Center document to submit for review.',
+            ]);
+        }
+
+        $storedPaths = [];
+        try {
+            DB::transaction(function () use ($request, $center, $files, &$storedPaths): void {
+                $lockedUser = User::query()->whereKey($request->user()->id)->lockForUpdate()->firstOrFail();
+                $lockedCenter = LogisticsCenter::query()
+                    ->whereKey($center->id)
+                    ->where('owner_user_id', $lockedUser->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+                abort_unless(
+                    $lockedUser->isAccountType(User::TYPE_LOGISTICS)
+                        && strtoupper((string) $lockedUser->status) === User::STATUS_ACTIVE
+                        && strtoupper((string) $lockedCenter->status) === User::STATUS_ACTIVE,
+                    403,
+                );
+
+                $application = $lockedUser->sellerVerificationApplication();
+                if ($application) {
+                    $lockedApplication = RegistrationApplication::query()
+                        ->whereKey($application->id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                } else {
+                    $lockedApplication = RegistrationApplication::create([
+                        'application_number' => 'REG-LOGISTICS-LEGACY-'.$lockedUser->id.'-'.Str::upper(Str::random(8)),
+                        'user_id' => $lockedUser->id,
+                        'status' => RegistrationApplication::STATUS_APPROVED,
+                        'submitted_at' => now(),
+                        'reviewed_at' => now(),
+                        'decision_notes' => 'Verification record created for an existing active Logistics Center because no registration application was available.',
+                    ]);
+                }
+
+                $submittedDocuments = [];
+                foreach ($files as $input => $file) {
+                    $type = ApplicationDocument::LOGISTICS_UPLOAD_FIELDS[$input] ?? null;
+                    if (! $type) {
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'documents' => 'Select a supported Logistics Center verification document.',
+                        ]);
+                    }
+
+                    $latest = $lockedApplication->documents()
+                        ->whereRaw('UPPER(document_type) = ?', [$type])
+                        ->orderByDesc('id')
+                        ->lockForUpdate()
+                        ->first();
+                    if ($latest && strtoupper((string) $latest->verification_status) === 'PENDING') {
+                        throw \Illuminate\Validation\ValidationException::withMessages([
+                            'documents' => ApplicationDocument::DOCUMENT_LABELS[$type].' is already waiting for Admin review.',
+                        ]);
+                    }
+
+                    $directory = 'registration/logistics/'.$lockedApplication->application_number
+                        .'/'.strtolower($type).'/updates';
+                    $path = $file->store($directory, 'registrations');
+                    if (! is_string($path)) {
+                        throw new \RuntimeException('The verification document could not be stored.');
+                    }
+                    $storedPaths[] = $path;
+
+                    $document = $lockedApplication->documents()->create([
+                        'document_type' => $type,
+                        'file_path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'verification_status' => 'PENDING',
+                    ]);
+                    $submittedDocuments[] = [
+                        'document_id' => $document->id,
+                        'document_type' => $type,
+                        'verification_status' => 'PENDING',
+                    ];
+                }
+
+                AuditLog::create([
+                    'actor_user_id' => $lockedUser->id,
+                    'event' => 'logistics.document_update_requested',
+                    'auditable_type' => User::class,
+                    'auditable_id' => $lockedUser->id,
+                    'new_values' => ['application_id' => $lockedApplication->id, 'documents' => $submittedDocuments],
+                    'ip_address' => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                    'created_at' => now(),
+                ]);
+            });
+        } catch (Throwable $exception) {
+            Storage::disk('registrations')->delete($storedPaths);
+
+            throw $exception;
+        }
+
+        return back()->with('status', 'Logistics Center documents submitted to Admin for review.');
     }
 
     public function updateAccount(Request $request, ProfilePhotoService $profilePhotos): RedirectResponse

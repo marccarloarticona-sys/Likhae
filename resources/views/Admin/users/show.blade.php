@@ -55,21 +55,22 @@
         </div>
     </section>
 
-    @if($user->isAccountType(\App\Models\User::TYPE_SELLER))
+    @if($user->isAccountType(\App\Models\User::TYPE_SELLER, \App\Models\User::TYPE_LOGISTICS))
         @php
-            $sellerDocumentTypes = array_values(\App\Models\Auth\ApplicationDocument::SELLER_UPLOAD_FIELDS);
+            $verificationIsLogistics = $user->isAccountType(\App\Models\User::TYPE_LOGISTICS);
         @endphp
         <section class="ad-card ad-user-verification-card" id="seller-verification">
-            <header class="ad-card-head"><div><h2>Seller verification documents</h2><p>Current files and document update requests from this seller.</p></div>@if($sellerApplication)<span class="ad-status is-{{ \Illuminate\Support\Str::slug($sellerApplication->status) }}">Verification record {{ str($sellerApplication->status)->replace('_', ' ')->headline() }}</span>@endif</header>
+            <header class="ad-card-head"><div><h2>{{ $verificationIsLogistics ? 'Logistics Center verification documents' : 'Seller verification documents' }}</h2><p>Current files and document update requests from this {{ $verificationIsLogistics ? 'Logistics Center' : 'seller' }}.</p></div>@if($verificationApplication)<span class="ad-status is-{{ \Illuminate\Support\Str::slug($verificationApplication->status) }}">Verification record {{ str($verificationApplication->status)->replace('_', ' ')->headline() }}</span>@endif</header>
             <div class="ad-table-wrap ad-user-history-table">
                 <table class="ad-table ad-user-verification-table">
                     <thead><tr><th>Document</th><th>Latest upload</th><th>Status</th><th>Admin review</th></tr></thead>
                     <tbody>
-                        @foreach($sellerDocumentTypes as $documentType)
+                        @foreach($verificationDocumentTypes as $documentType)
                             @php
-                                $document = $sellerDocuments->get($documentType);
+                                $document = $verificationDocuments->get($documentType);
                                 $documentStatus = strtoupper((string) $document?->verification_status);
-                                $adminRequestedUpdate = $document && isset($sellerUpdateRequestDocumentIds[$document->id]);
+                                $adminRequestedUpdate = $document && isset($verificationDocumentUpdateRequestIds[$document->id]);
+                                $missingDocumentRequest = $missingDocumentRequestsByType[$documentType] ?? null;
                                 $documentLabel = \App\Models\Auth\ApplicationDocument::DOCUMENT_LABELS[$documentType];
                             @endphp
                             <tr>
@@ -78,34 +79,46 @@
                                     @if($document)
                                         <span>{{ $document->original_name ?: 'Submitted document' }}</span>
                                         <small>Uploaded {{ $document->created_at?->format('M d, Y H:i') ?? 'date unavailable' }}</small>
-                                        <div class="ad-user-document-links"><a href="{{ route('admin.registrations.documents.show', [$sellerApplication, $document, 'preview' => 1]) }}" target="_blank" rel="noopener">Preview</a><a href="{{ route('admin.registrations.documents.show', [$sellerApplication, $document]) }}">Download</a></div>
+                                        <div class="ad-user-document-links"><a href="{{ route('admin.registrations.documents.show', [$verificationApplication, $document, 'preview' => 1]) }}" target="_blank" rel="noopener">Preview</a><a href="{{ route('admin.registrations.documents.show', [$verificationApplication, $document]) }}">Download</a></div>
                                         @if($document->rejection_reason)<small class="ad-user-document-reason">Reason: {{ $document->rejection_reason }}</small>@endif
                                     @else
                                         <span>Not submitted</span>
                                     @endif
                                 </td>
-                                <td><span class="ad-status {{ $document ? 'is-'.\Illuminate\Support\Str::slug($documentStatus) : 'is-review' }}">{{ $adminRequestedUpdate && $documentStatus === 'REJECTED' ? 'Update requested' : ($document ? str($documentStatus)->replace('_', ' ')->headline() : 'Missing') }}</span></td>
+                                <td><span class="ad-status {{ $document ? 'is-'.\Illuminate\Support\Str::slug($documentStatus) : ($missingDocumentRequest ? 'is-warning' : 'is-review') }}">{{ $adminRequestedUpdate && $documentStatus === 'REJECTED' ? 'Update requested' : ($document ? str($documentStatus)->replace('_', ' ')->headline() : ($missingDocumentRequest ? 'Requested' : 'Missing')) }}</span></td>
                                 <td>
                                     @if($document && $documentStatus === 'PENDING')
                                         <div class="ad-user-verification-actions">
-                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}">
+                                            <form method="POST" action="{{ route('admin.users.verification-documents.review', ['user' => $user, 'document' => $document]) }}">
                                                 @csrf<input type="hidden" name="decision" value="verify"><button class="ad-btn ad-btn-secondary ad-btn-sm" type="submit">Verify update</button>
                                             </form>
-                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Reject this document update?" data-confirm-message="The seller will be asked to upload another replacement." data-confirm-label="Reject update" data-confirm-tone="danger">
+                                            <form method="POST" action="{{ route('admin.users.verification-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Reject this document update?" data-confirm-message="The {{ $verificationIsLogistics ? 'Logistics Center' : 'seller' }} will be asked to upload another replacement." data-confirm-label="Reject update" data-confirm-tone="danger">
                                                 @csrf<input type="hidden" name="decision" value="reject"><input type="text" name="reason" required minlength="3" maxlength="1000" placeholder="Reason for rejection"><button class="ad-btn ad-btn-danger-soft ad-btn-sm" type="submit">Reject update</button>
                                             </form>
                                         </div>
                                     @elseif($documentStatus === 'VERIFIED')
                                         <div class="ad-user-verification-actions">
                                             <small>Verified{{ $document->verified_at ? ' on '.$document->verified_at->format('M d, Y') : '' }}.</small>
-                                            <form method="POST" action="{{ route('admin.users.seller-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Request a document update?" data-confirm-message="The seller will be notified and can upload a replacement for Admin review." data-confirm-label="Request update" data-confirm-tone="danger">
+                                            <form method="POST" action="{{ route('admin.users.verification-documents.review', ['user' => $user, 'document' => $document]) }}" data-confirm-title="Request a document update?" data-confirm-message="The {{ $verificationIsLogistics ? 'Logistics Center' : 'seller' }} will be notified and can upload a replacement for Admin review." data-confirm-label="Request update" data-confirm-tone="danger">
                                                 @csrf<input type="hidden" name="decision" value="request_update"><input type="text" name="reason" required minlength="3" maxlength="1000" placeholder="What needs to be updated?"><button class="ad-btn ad-btn-danger-soft ad-btn-sm" type="submit">Request update</button>
                                             </form>
                                         </div>
                                     @elseif($documentStatus === 'REJECTED')
-                                        <small>{{ $adminRequestedUpdate ? 'Admin requested an update; waiting for the seller to upload a replacement.' : 'Waiting for the seller to upload a replacement.' }}</small>
+                                        <small>{{ $adminRequestedUpdate ? 'Admin requested an update; waiting for the '.($verificationIsLogistics ? 'Logistics Center' : 'seller').' to upload a replacement.' : 'Waiting for the '.($verificationIsLogistics ? 'Logistics Center' : 'seller').' to upload a replacement.' }}</small>
                                     @else
-                                        <small>No review is needed yet.</small>
+                                        <div class="ad-user-verification-actions">
+                                            @if($missingDocumentRequest)
+                                                <small>Requested {{ $missingDocumentRequest->created_at?->format('M d, Y H:i') ?? 'previously' }}. Waiting for the {{ $verificationIsLogistics ? 'Logistics Center' : 'seller' }} to upload it.</small>
+                                            @else
+                                                <small>This required document has not been submitted.</small>
+                                            @endif
+                                            <form method="POST" action="{{ route('admin.users.verification-documents.requirement', $user) }}">
+                                                @csrf
+                                                <input type="hidden" name="document_type" value="{{ $documentType }}">
+                                                <input type="text" name="reason" value="{{ old('reason', data_get($missingDocumentRequest?->new_values, 'reason')) }}" required minlength="3" maxlength="1000" placeholder="What must the {{ $verificationIsLogistics ? 'Logistics Center' : 'seller' }} provide?">
+                                                <button class="ad-btn ad-btn-danger-soft ad-btn-sm" type="submit">{{ $missingDocumentRequest ? 'Send reminder' : 'Request document' }}</button>
+                                            </form>
+                                        </div>
                                     @endif
                                 </td>
                             </tr>

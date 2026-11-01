@@ -814,45 +814,11 @@
         }
     }
 
-    .lk-home-page .lk-product-grid.lk-home-product-carousel {
-        display: flex !important;
-        grid-template-columns: none !important;
-        gap: 16px !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
-        padding: 12px 8px 18px !important;
-        overscroll-behavior-x: contain;
-        scroll-padding-inline: 8px;
-        scroll-snap-type: x mandatory;
-        scrollbar-color: var(--lk-border-strong) transparent;
-        scrollbar-width: thin;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    .lk-home-page .lk-home-product-carousel > .lk-product-card {
-        width: auto !important;
-        min-width: 0 !important;
-        flex: 0 0 clamp(235px, calc((100% - 48px) / 4), 340px);
-        scroll-snap-align: start;
-    }
-
-    .lk-home-page .lk-home-product-carousel:focus-visible {
-        outline: 2px solid var(--lk-tan);
-        outline-offset: 4px;
-    }
-
-    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar {
-        height: 8px;
-    }
-
-    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar-track {
-        background: transparent;
-    }
-
-    .lk-home-page .lk-home-product-carousel::-webkit-scrollbar-thumb {
-        border: 2px solid var(--lk-bg);
-        border-radius: 999px;
-        background: var(--lk-border-strong);
+    .lk-home-page .lk-home-product-grid,
+    .lk-home-page .lk-home-recommendation-grid {
+        display: grid !important;
+        grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+        gap: 14px !important;
     }
 
     .lk-home-page .lk-recommendation-actions {
@@ -862,29 +828,44 @@
         gap: 10px;
     }
 
-    .lk-home-page .lk-recommendation-controls {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
+    @media (max-width: 1279px) and (min-width: 768px) {
+        .lk-home-page .lk-home-product-grid,
+        .lk-home-page .lk-home-recommendation-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        }
     }
 
-    .lk-home-page .lk-recommendation-controls[hidden] {
-        display: none;
+    @media (max-width: 767px) {
+        .lk-home-page .lk-home-product-grid,
+        .lk-home-page .lk-home-recommendation-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 10px !important;
+        }
     }
 
-    .lk-home-page .lk-recommendation-pause {
-        border: 0;
-        background: transparent;
-        color: var(--lk-brown);
-        cursor: pointer;
-        font-size: 11px;
-        font-weight: 700;
-        padding: 7px 4px;
+    /* Use available home-content width so the buyer sidebar is accounted for. */
+    @container (min-width: 1280px) {
+        .lk-home-page .lk-home-product-grid,
+        .lk-home-page .lk-home-recommendation-grid {
+            grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+            gap: 14px !important;
+        }
     }
 
-    .lk-home-page [data-recommendation-loop].is-looping {
-        scroll-snap-type: none;
-        scroll-behavior: auto;
+    @container (min-width: 768px) and (max-width: 1279px) {
+        .lk-home-page .lk-home-product-grid,
+        .lk-home-page .lk-home-recommendation-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 14px !important;
+        }
+    }
+
+    @container (max-width: 767px) {
+        .lk-home-page .lk-home-product-grid,
+        .lk-home-page .lk-home-recommendation-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 10px !important;
+        }
     }
 
     /* Buyer Home editorial storefront. Keep these rules inside the main page content. */
@@ -898,6 +879,7 @@
         --lk-home-button-maroon: #561c17;
         --lk-home-button-maroon-hover: #3e130f;
         --lk-home-line: #eadfd4;
+        container-type: inline-size;
         padding: clamp(16px, 2vh, 24px) clamp(18px, 2vw, 30px) 32px !important;
         background: var(--lk-home-ivory) !important;
         color: var(--lk-home-ink) !important;
@@ -2029,8 +2011,8 @@
         $products = collect($buyerProducts ?? []);
     }
 
-    $featuredProducts = $products->take(4);
-    $recommendedProducts = $products->skip(4)->take(8);
+    $featuredProducts = $products->take(6);
+    $recommendedProducts = $products->skip(6)->take(6);
 
     /*
     |--------------------------------------------------------------------------
@@ -2212,7 +2194,7 @@
                 <div><span class="lk-kicker">Save on your next find</span><h2 id="home-discounts-heading">Discounts For You</h2><p>Active product discounts from LIKHAE sellers.</p></div>
                 <a href="{{ route('buyer.discounts') }}" class="lk-text-link">View All Discounts <span aria-hidden="true">→</span></a>
             </div>
-            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Discounted products" tabindex="0">
+            <div class="lk-product-grid lk-home-product-grid" role="region" aria-label="Discounted products">
                 @foreach($dealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
             </div>
         </section>
@@ -2224,7 +2206,7 @@
                 <div><span class="lk-kicker">Limited-time prices</span><h2 id="home-flash-deals-heading">Flash Deals</h2><p>Seller flash sales with promotional stock and end times.</p></div>
                 <a href="{{ route('buyer.flash-deals') }}" class="lk-text-link">View All Flash Deals <span aria-hidden="true">→</span></a>
             </div>
-            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Active flash deals" tabindex="0">
+            <div class="lk-product-grid lk-home-product-grid" role="region" aria-label="Active flash deals">
                 @foreach($flashDealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
             </div>
         </section>
@@ -2299,7 +2281,7 @@
         </div>
 
         @if ($featuredProducts->isNotEmpty())
-            <div class="lk-product-grid lk-home-product-carousel" role="region" aria-label="Featured products" tabindex="0">
+            <div class="lk-product-grid lk-home-product-grid" role="region" aria-label="Featured products">
                 @foreach ($featuredProducts as $product)
                     <x-buyer.product-card :product="$product" home />
                 @endforeach
@@ -2382,13 +2364,6 @@
             </div>
 
             <div class="lk-recommendation-actions">
-                @if ($recommendedProducts->count() > 1)
-                    <div class="lk-recommendation-controls" data-recommendation-controls role="group" aria-label="Recommended product controls" hidden>
-                        <button type="button" class="lk-home-category-arrow" data-recommendation-previous aria-controls="recommended-products-scroll" aria-label="Previous recommended products">&#8592;</button>
-                        <button type="button" class="lk-home-category-arrow" data-recommendation-next aria-controls="recommended-products-scroll" aria-label="Next recommended products">&#8594;</button>
-                        <button type="button" class="lk-recommendation-pause" data-recommendation-pause aria-controls="recommended-products-scroll" aria-pressed="false">Pause</button>
-                    </div>
-                @endif
                 <a
                     href="{{ route('buyer.products', ['sort' => 'best-rated']) }}"
                     class="lk-text-link"
@@ -2400,7 +2375,7 @@
         </div>
 
         @if ($recommendedProducts->isNotEmpty())
-            <div id="recommended-products-scroll" class="lk-product-grid lk-home-product-carousel" data-recommendation-loop role="region" aria-label="Recommended products" tabindex="0">
+            <div class="lk-product-grid lk-home-recommendation-grid" role="region" aria-label="Recommended products">
                 @foreach ($recommendedProducts as $product)
                     <x-buyer.product-card :product="$product" home />
                 @endforeach
@@ -2431,130 +2406,6 @@
 @push('scripts')
 <script>
     (() => {
-        const row = document.querySelector('[data-recommendation-loop]');
-        const controls = document.querySelector('[data-recommendation-controls]');
-        const originalCards = row ? Array.from(row.children) : [];
-
-        if (row && controls && originalCards.length > 1) {
-            const pauseButton = controls.querySelector('[data-recommendation-pause]');
-            const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-            let paused = reducedMotion.matches;
-            let pointerDown = false;
-            let hovered = false;
-            let interactionUntil = 0;
-            let groupCount = 0;
-            let groupWidth = 0;
-            let lastFrame = 0;
-            let fractionalMovement = 0;
-            let visible = true;
-            let resizeTimer;
-
-            const setPauseLabel = () => {
-                pauseButton.textContent = paused ? 'Play' : 'Pause';
-                pauseButton.setAttribute('aria-pressed', String(paused));
-                pauseButton.setAttribute('aria-label', paused ? 'Play automatic scrolling' : 'Pause automatic scrolling');
-            };
-            const copyCard = (card) => {
-                const copy = card.cloneNode(true);
-                copy.dataset.recommendationCopy = '';
-                copy.setAttribute('aria-hidden', 'true');
-                copy.querySelectorAll('a, button, input, select, textarea, [tabindex]').forEach((element) => {
-                    element.setAttribute('tabindex', '-1');
-                });
-                return copy;
-            };
-            const measure = () => {
-                const start = row.children[groupCount];
-                const next = row.children[groupCount * 2];
-                groupWidth = start && next ? next.offsetLeft - start.offsetLeft : 0;
-            };
-            const buildLoop = () => {
-                row.querySelectorAll('[data-recommendation-copy]').forEach((copy) => copy.remove());
-                const step = originalCards[0].getBoundingClientRect().width + (parseFloat(getComputedStyle(row).columnGap) || 0);
-                if (!step || !row.clientWidth) return;
-                const repeats = Math.max(1, Math.ceil(row.clientWidth / (step * originalCards.length)) + 1);
-                groupCount = repeats * originalCards.length;
-                const before = document.createDocumentFragment();
-                const after = document.createDocumentFragment();
-                const newCopies = [];
-                const addCopies = (target, count) => {
-                    for (let repeat = 0; repeat < count; repeat++) {
-                        originalCards.forEach((card) => {
-                            const copy = copyCard(card);
-                            newCopies.push(copy);
-                            target.appendChild(copy);
-                        });
-                    }
-                };
-                addCopies(before, repeats);
-                addCopies(after, repeats - 1);
-                addCopies(after, repeats);
-                row.prepend(before);
-                row.append(after);
-                row.classList.add('is-looping');
-                measure();
-                row.scrollLeft = groupWidth;
-                controls.hidden = false;
-                // The buyer script binds new cards through this event after initial page load.
-                if (document.readyState !== 'loading') {
-                    newCopies.forEach((copy) => document.dispatchEvent(new CustomEvent('catalog:results-updated', { detail: { root: copy } })));
-                }
-            };
-            const normalizeScroll = () => {
-                if (!groupWidth) return;
-                if (row.scrollLeft < groupWidth || row.scrollLeft >= groupWidth * 2) {
-                    row.scrollLeft = groupWidth + (((row.scrollLeft - groupWidth) % groupWidth) + groupWidth) % groupWidth;
-                }
-            };
-            const deferAuto = () => { interactionUntil = performance.now() + 4000; };
-            const move = (direction) => {
-                deferAuto();
-                const step = originalCards[0].getBoundingClientRect().width + (parseFloat(getComputedStyle(row).columnGap) || 0);
-                row.scrollBy({ left: direction * step, behavior: 'auto' });
-            };
-
-            buildLoop();
-            setPauseLabel();
-            row.addEventListener('scroll', normalizeScroll, { passive: true });
-            row.addEventListener('pointerenter', () => { hovered = true; });
-            row.addEventListener('pointerleave', () => { hovered = false; });
-            row.addEventListener('pointerdown', () => { pointerDown = true; deferAuto(); });
-            window.addEventListener('pointerup', () => { if (pointerDown) { pointerDown = false; deferAuto(); } });
-            window.addEventListener('pointercancel', () => { if (pointerDown) { pointerDown = false; deferAuto(); } });
-            row.addEventListener('wheel', deferAuto, { passive: true });
-            row.addEventListener('keydown', deferAuto);
-            controls.querySelector('[data-recommendation-previous]').addEventListener('click', () => move(-1));
-            controls.querySelector('[data-recommendation-next]').addEventListener('click', () => move(1));
-            pauseButton.addEventListener('click', () => { paused = !paused; setPauseLabel(); });
-            reducedMotion.addEventListener('change', (event) => { if (event.matches) { paused = true; setPauseLabel(); } });
-            if ('IntersectionObserver' in window) {
-                new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; }).observe(row);
-            }
-            window.addEventListener('resize', () => {
-                clearTimeout(resizeTimer);
-                resizeTimer = setTimeout(() => {
-                    measure();
-                    if (groupWidth <= row.clientWidth) buildLoop();
-                    else normalizeScroll();
-                    deferAuto();
-                }, 150);
-            });
-            const animate = (now) => {
-                if (lastFrame && visible && !paused && !hovered && !pointerDown && !row.contains(document.activeElement)
-                    && !controls.contains(document.activeElement) && !document.hidden && now >= interactionUntil) {
-                    fractionalMovement += Math.min(now - lastFrame, 50) * 0.03;
-                    const pixels = Math.floor(fractionalMovement);
-                    if (pixels) {
-                        row.scrollLeft += pixels;
-                        fractionalMovement -= pixels;
-                    }
-                }
-                lastFrame = now;
-                requestAnimationFrame(animate);
-            };
-            requestAnimationFrame(animate);
-        }
-
         document.querySelectorAll('[data-category-carousel]').forEach((carousel) => {
             const pages = Array.from(carousel.querySelectorAll('[data-category-page]'));
             const dots = Array.from(carousel.querySelectorAll('[data-category-dot]'));

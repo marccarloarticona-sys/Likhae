@@ -17,6 +17,9 @@
     $isInterLogisticsRider = \App\Support\RiderVehicleType::isInterLogistics($rider->vehicle_type);
     $manifestSchemaReady = (bool) ($manifestSchemaReady ?? false);
     $localTripsSchemaReady = (bool) ($localTripsSchemaReady ?? false);
+    $riderWarningCount = (int) ($riderWarningCount ?? 0);
+    $isPermanentlyBanned = $rider->status === 'BANNED' || (bool) $rider->user?->isPermanentlyBanned();
+    $isRiderSuspended = ! $isPermanentlyBanned && ($rider->status === 'SUSPENDED' || $rider->user?->status === \App\Models\User::STATUS_SUSPENDED);
     $initials = collect(explode(' ', trim($name)))
         ->filter()
         ->take(2)
@@ -38,7 +41,7 @@
 @endphp
 
 @section('content')
-<div class="flex w-full flex-col gap-6">
+<div class="lk-logistics-dashboard lk-rider-management">
     <nav class="flex flex-wrap items-center gap-2 text-[10px] text-muted">
         <a href="{{ route('logistics.dashboard') }}" class="transition hover:text-primary">Dashboard</a>
         <span>/</span>
@@ -54,19 +57,17 @@
         <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[10px] text-red-700">{{ $errors->first() }}</div>
     @endif
 
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <div class="flex flex-col gap-5 md:flex-row md:items-center">
-            <div class="grid h-20 w-20 place-items-center rounded-full bg-primary-soft text-primary">
-                <span class="text-[20px] font-bold">{{ $initials }}</span>
-            </div>
-
-            <div>
-                <span class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rider Management</span>
-                <h1 class="mt-2 font-display text-[32px] font-semibold tracking-[-0.04em] text-ink">{{ $name }}</h1>
-                <p class="mt-1 text-[10px] text-muted">Rider ID: RID-{{ str_pad((string) data_get($rider, 'id', 0), 4, '0', STR_PAD_LEFT) }}</p>
-            </div>
+    <header class="lk-dashboard-heading lk-rider-management__hero">
+        <div class="lk-dashboard-heading__copy">
+            <span class="lk-dashboard-overline">Rider management</span>
+            <h1>{{ $name }}</h1>
+            <p>Rider ID: RID-{{ str_pad((string) data_get($rider, 'id', 0), 4, '0', STR_PAD_LEFT) }} · Account, delivery operations, and review history.</p>
         </div>
-    </section>
+        <div class="lk-dashboard-heading__actions">
+            <span class="lk-rider-management__identity">{{ $initials }}</span>
+            <span class="lk-rider-management__status" data-status="{{ strtolower($rider->status) }}">{{ str($rider->status)->replace('_', ' ')->headline() }}</span>
+        </div>
+    </header>
 
     @if($isLocalRider)
     <section class="rounded-xl border border-line bg-surface p-5">
@@ -106,8 +107,6 @@
         @endif
     </section>
     @endif
-    <x-shared.mapbox :markers="$mapMarkers" title="Rider operations map" height="220px" user-location-target="center" />
-
     <section class="rounded-xl border border-line bg-surface p-5">
         <h2 class="text-[13px] font-semibold text-ink">Rider Information</h2>
         <div class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -184,33 +183,168 @@
         @endif
     </section>
 
-    <section class="rounded-xl border border-line bg-surface p-5">
-        <h2 class="text-[13px] font-semibold text-ink">Rider Status and Discipline</h2>
-        <p class="mt-1 text-[10px] leading-5 text-muted">Warned riders may continue working. Suspended and banned riders lose access and cannot receive new assignments. Add a reason for warnings and restrictions.</p>
-        <form method="POST" action="{{ route('logistics.riders.moderation.update', $rider) }}" class="mt-4 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-end" data-rider-moderation-form data-confirm-title="Change rider status?" data-confirm-message="Suspending or banning this rider blocks account access and new assignments. Warnings keep the rider active. Confirm the selected status and reason before saving." data-confirm-label="Save rider status">
-            @csrf
-            @method('PATCH')
-            <label class="text-[10px] font-semibold text-ink">Status
-                <select name="status" required data-rider-moderation-status class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-3 text-[10px] font-normal">
-                    @foreach(['ACTIVE' => 'Active', 'WARNED' => 'Warned', 'SUSPENDED' => 'Suspended', 'BANNED' => 'Banned'] as $value => $label)
-                        <option value="{{ $value }}" @selected($rider->status === $value)>{{ $label }}</option>
-                    @endforeach
-                </select>
-            </label>
-            <label class="text-[10px] font-semibold text-ink">Reason
-                <textarea name="reason" rows="2" minlength="10" maxlength="1000" class="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-[10px] font-normal" placeholder="At least 10 characters for warn, suspend, or ban"></textarea>
-            </label>
-            <button type="submit" class="rounded-lg bg-primary px-4 py-3 text-[10px] font-semibold text-white">Save Status</button>
-        </form>
-        <div class="mt-5 border-t border-line pt-4">
-            <h3 class="text-[11px] font-semibold text-ink">Moderation History</h3>
-            @forelse($rider->moderationLogs as $log)
-                <div class="mt-3 flex flex-col gap-1 border-b border-line pb-3 text-[9px] last:border-0">
-                    <span class="font-semibold text-ink">{{ str(str_replace('rider.', '', $log->event))->headline() }} · {{ $log->created_at?->format('M j, Y g:i A') }}</span>
-                    <span class="text-muted">By {{ $log->actor?->name ?? data_get($log->new_values, 'actor_label', 'Former staff member') }}{{ data_get($log->new_values, 'reason') ? ' — '.data_get($log->new_values, 'reason') : '' }}</span>
+    <section class="lk-dashboard-card lk-rider-management__discipline" id="rider-discipline">
+        <header class="lk-dashboard-card-head">
+            <div class="lk-dashboard-card-head__copy">
+                <span class="lk-dashboard-overline">Trust and safety</span>
+                <h2>Rider account controls</h2>
+                <p>Issue documented warnings, suspend access for a set period, or permanently ban this rider.</p>
+            </div>
+            <span class="lk-rider-management__warning-count">{{ $riderWarningCount }} / {{ \App\Models\User::MAX_ACCOUNT_WARNINGS }} warnings</span>
+        </header>
+
+        <div class="lk-rider-management__control-grid">
+            <section class="lk-rider-management__warning-panel">
+                <div class="lk-rider-management__panel-heading">
+                    <span class="lk-rider-management__eyebrow">Corrective action</span>
+                    <h3>Issue a warning</h3>
+                    <p>Warnings keep an active rider able to work. The three-warning limit includes automatic COD warnings.</p>
                 </div>
+
+                @if(in_array($rider->status, ['ACTIVE', 'WARNED'], true) && $rider->user?->status === 'ACTIVE' && ! $isPermanentlyBanned)
+                    @if($riderWarningCount < \App\Models\User::MAX_ACCOUNT_WARNINGS)
+                        <form method="POST" action="{{ route('logistics.riders.warnings.store', $rider) }}" class="lk-rider-management__form" data-confirm-title="Issue rider warning?" data-confirm-message="Send this documented warning and corrective action to {{ $name }}? Warnings do not suspend the rider’s access." data-confirm-label="Issue warning">
+                            @csrf
+                            <label class="lk-rider-management__field">Warning category
+                                <select name="category" required class="lk-rider-management__input">
+                                    <option value="">Select a review category</option>
+                                    @foreach($riderWarningCategories as $category => $label)
+                                        <option value="{{ $category }}" @selected(old('category') === $category)>{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </label>
+                            <label class="lk-rider-management__field">Detailed reason
+                                <textarea name="reason" rows="3" required minlength="10" maxlength="5000" class="lk-rider-management__input" placeholder="Describe the substantiated concern.">{{ old('reason') }}</textarea>
+                            </label>
+                            <label class="lk-rider-management__field">Corrective action requested
+                                <textarea name="corrective_action" rows="3" required minlength="5" maxlength="5000" class="lk-rider-management__input" placeholder="Explain what the rider must correct or review.">{{ old('corrective_action') }}</textarea>
+                            </label>
+                            <label class="lk-rider-management__field">Evidence or investigation notes <span>Optional</span>
+                                <textarea name="evidence" rows="2" maxlength="5000" class="lk-rider-management__input" placeholder="Add relevant supporting context.">{{ old('evidence') }}</textarea>
+                            </label>
+                            <p class="lk-rider-management__reference-note">A case reference is generated automatically.</p>
+                            <button type="submit" class="lk-dashboard-button lk-rider-management__warning-button">Issue warning ({{ \App\Models\User::MAX_ACCOUNT_WARNINGS - $riderWarningCount }} remaining)</button>
+                        </form>
+                    @else
+                        <p class="lk-rider-management__notice lk-rider-management__notice--warning" role="status">This rider has reached the three-warning limit. No further warnings can be issued.</p>
+                    @endif
+                @else
+                    <p class="lk-rider-management__notice">Warnings can be issued while the rider account is active and able to work.</p>
+                @endif
+
+                <div class="lk-rider-management__history">
+                    <h4>Warning history</h4>
+                    @forelse($riderWarningLogs as $warning)
+                        @php($warningValues = $warning->new_values ?? [])
+                        <article class="lk-rider-management__history-item">
+                            <div class="lk-rider-management__history-top">
+                                <strong>{{ data_get($warningValues, 'category_label', data_get($warningValues, 'automatic') ? 'Automatic COD remittance warning' : 'Rider warning') }}</strong>
+                                <span class="lk-rider-management__tag">{{ str(data_get($warningValues, 'warning_status', 'OPEN'))->replace('_', ' ')->headline() }}</span>
+                            </div>
+                            <p>{{ data_get($warningValues, 'reason', 'No reason recorded.') }}</p>
+                            @if(data_get($warningValues, 'corrective_action'))<p><strong>Corrective action:</strong> {{ data_get($warningValues, 'corrective_action') }}</p>@endif
+                            <small>{{ $warning->created_at?->format('M j, Y g:i A') }} · {{ $warning->actor?->name ?? data_get($warningValues, 'actor_label', 'Former staff member') }}
+                                @if(data_get($warningValues, 'reference'))
+                                    · Ref {{ data_get($warningValues, 'reference') }}
+                                @endif
+                            </small>
+                        </article>
+                    @empty
+                        <p class="lk-rider-management__empty">No warnings have been recorded for this rider.</p>
+                    @endforelse
+                </div>
+            </section>
+
+            <div class="lk-rider-management__access-panels">
+                <section class="lk-rider-management__access-panel">
+                    <div class="lk-rider-management__panel-heading">
+                        <span class="lk-rider-management__eyebrow">Temporary restriction</span>
+                        <h3>{{ $isRiderSuspended ? 'Suspension in effect' : 'Suspend rider access' }}</h3>
+                    </div>
+                    @if($isPermanentlyBanned)
+                        <p class="lk-rider-management__notice lk-rider-management__notice--danger">This rider is permanently banned. Suspension controls are closed.</p>
+                    @elseif($isRiderSuspended)
+                        <p class="lk-rider-management__current-state">This rider is suspended{{ $rider->user?->suspended_until ? ' until '.$rider->user->suspended_until->format('M d, Y h:i A') : ' with no expiry recorded' }}. Access returns automatically when a temporary suspension ends.</p>
+                        <form method="POST" action="{{ route('logistics.riders.reactivate', $rider) }}" class="lk-rider-management__form" data-confirm-title="Reactivate rider?" data-confirm-message="Restore {{ $name }}’s account access? The rider will remain offline until they choose to go online." data-confirm-label="Reactivate rider">
+                            @csrf
+                            <label class="lk-rider-management__field">Reason for reactivation
+                                <textarea name="reason" rows="2" required minlength="10" maxlength="2000" class="lk-rider-management__input" placeholder="Document why the suspension is ending early.">{{ old('reason') }}</textarea>
+                            </label>
+                            <button type="submit" class="lk-dashboard-button lk-dashboard-button--primary">Reactivate rider</button>
+                        </form>
+                    @elseif($accountEnforcementReady)
+                        <p class="lk-rider-management__copy">Workspace access returns automatically when the selected period ends.</p>
+                        <form method="POST" action="{{ route('logistics.riders.suspend', $rider) }}" class="lk-rider-management__form" data-confirm-title="Suspend rider?" data-confirm-message="{{ $name }} will lose account access and cannot receive new assignments for the selected period." data-confirm-label="Suspend rider" data-confirm-tone="danger">
+                            @csrf
+                            <label class="lk-rider-management__field">Suspension period
+                                <select name="duration" required class="lk-rider-management__input">
+                                    @foreach($riderSuspensionDurations as $duration => $label)
+                                        <option value="{{ $duration }}" @selected(old('duration', 'week') === $duration)>{{ $label }}</option>
+                                    @endforeach
+                                </select>
+                            </label>
+                            <label class="lk-rider-management__field">Reason for suspension
+                                <textarea name="reason" rows="3" required minlength="10" maxlength="2000" class="lk-rider-management__input" placeholder="Explain why account access is being restricted.">{{ old('reason') }}</textarea>
+                            </label>
+                            <label class="lk-rider-management__field">Evidence or investigation notes <span>Optional</span>
+                                <textarea name="evidence" rows="2" maxlength="5000" class="lk-rider-management__input" placeholder="Add supporting context.">{{ old('evidence') }}</textarea>
+                            </label>
+                            <p class="lk-rider-management__reference-note">A case reference is generated automatically.</p>
+                            <button type="submit" class="lk-dashboard-button lk-rider-management__danger-button">Suspend rider</button>
+                        </form>
+                    @else
+                        <p class="lk-rider-management__notice lk-rider-management__notice--warning">Temporary suspension controls are unavailable until the account enforcement migration is applied.</p>
+                    @endif
+                </section>
+
+                <section class="lk-rider-management__access-panel lk-rider-management__ban-panel">
+                    <div class="lk-rider-management__panel-heading">
+                        <span class="lk-rider-management__eyebrow">Permanent restriction</span>
+                        <h3>{{ $isPermanentlyBanned ? 'Rider permanently banned' : 'Permanently ban rider' }}</h3>
+                    </div>
+                    @if($isPermanentlyBanned)
+                        <p class="lk-rider-management__notice lk-rider-management__notice--danger">Sign-in and workspace access are blocked permanently. This action cannot be reversed from this page.</p>
+                    @elseif($accountEnforcementReady)
+                        <p class="lk-rider-management__copy">A permanent ban does not expire and cannot be undone from this page.</p>
+                        <form method="POST" action="{{ route('logistics.riders.ban', $rider) }}" class="lk-rider-management__form" data-confirm-title="Permanently ban this rider?" data-confirm-message="{{ $name }} will lose LIKHAE access permanently. This cannot be undone from this page." data-confirm-label="Permanently ban" data-confirm-tone="danger">
+                            @csrf
+                            <label class="lk-rider-management__field">Reason for permanent ban
+                                <textarea name="reason" rows="3" required minlength="10" maxlength="2000" class="lk-rider-management__input" placeholder="Document the reason for permanently removing this rider from the platform.">{{ old('reason') }}</textarea>
+                            </label>
+                            <label class="lk-rider-management__field">Evidence or investigation notes <span>Optional</span>
+                                <textarea name="evidence" rows="2" maxlength="5000" class="lk-rider-management__input" placeholder="Add supporting evidence.">{{ old('evidence') }}</textarea>
+                            </label>
+                            <p class="lk-rider-management__reference-note">A case reference is generated automatically.</p>
+                            <button type="submit" class="lk-dashboard-button lk-rider-management__danger-button">Permanently ban rider</button>
+                        </form>
+                    @else
+                        <p class="lk-rider-management__notice lk-rider-management__notice--warning">Permanent ban controls are unavailable until the account enforcement migration is applied.</p>
+                    @endif
+                </section>
+            </div>
+        </div>
+
+        <div class="lk-rider-management__history lk-rider-management__access-history">
+            <h3>Access and discipline history</h3>
+            @forelse($rider->moderationLogs->reject(fn ($log) => $log->event === 'rider.warned') as $log)
+                @php($logValues = $log->new_values ?? [])
+                <article class="lk-rider-management__history-item">
+                    <div class="lk-rider-management__history-top">
+                        <strong>{{ str(str_replace('rider.', '', $log->event))->headline() }} · {{ $log->created_at?->format('M j, Y g:i A') }}</strong>
+                        @if(data_get($logValues, 'duration_label'))<span class="lk-rider-management__tag">{{ data_get($logValues, 'duration_label') }}</span>@endif
+                    </div>
+                    <p>{{ data_get($logValues, 'reason', 'No reason recorded.') }}</p>
+                    <small>By {{ $log->actor?->name ?? data_get($logValues, 'actor_label', 'Former staff member') }}
+                        @if(data_get($logValues, 'reference'))
+                            · Ref {{ data_get($logValues, 'reference') }}
+                        @endif
+                        @if(data_get($logValues, 'suspended_until'))
+                            · Until {{ \Illuminate\Support\Carbon::parse(data_get($logValues, 'suspended_until'))->format('M d, Y h:i A') }}
+                        @endif
+                    </small>
+                </article>
             @empty
-                <p class="mt-2 text-[9px] text-muted">No moderation actions recorded.</p>
+                <p class="lk-rider-management__empty">No suspensions, bans, or reactivations have been recorded.</p>
             @endforelse
         </div>
     </section>
@@ -264,35 +398,4 @@
     </section>
 
 </div>
-@push('scripts')
-<script>
-(() => {
-    const form = document.querySelector('[data-rider-moderation-form]');
-    const status = form?.querySelector('[data-rider-moderation-status]');
-    if (!form || !status) return;
-    const riderName = @json($rider->user?->name ?? 'Rider');
-
-    const syncConfirmation = () => {
-        const selected = status.value;
-        const config = {
-            ACTIVE: ['Reactivate rider?', 'Restore this rider’s ability to access the workspace and receive assignments?', 'Reactivate', false],
-            WARNED: ['Issue rider warning?', 'Record a warning for this rider. Their account access and assignments will remain active.', 'Save warning', false],
-            SUSPENDED: ['Suspend rider?', 'This rider will lose workspace access and cannot receive new assignments while suspended.', 'Suspend rider', true],
-            BANNED: ['Ban rider?', 'This rider will lose workspace access and cannot receive new assignments. Confirm the ban and documented reason.', 'Ban rider', true],
-        }[selected] || ['Change rider status?', 'Confirm the selected rider status and reason before saving.', 'Save status', false];
-
-        [form.dataset.confirmTitle, form.dataset.confirmMessage, form.dataset.confirmLabel] = config;
-        form.dataset.confirmDetails = `Rider: ${riderName} | Status: ${selected}`;
-        const reason = form.querySelector('textarea[name="reason"]')?.value.trim();
-        if (reason) form.dataset.confirmDetails += `\nReason: ${reason}`;
-        if (config[3]) form.dataset.confirmTone = 'danger';
-        else delete form.dataset.confirmTone;
-    };
-
-    status.addEventListener('change', syncConfirmation);
-    form.querySelector('textarea[name="reason"]')?.addEventListener('input', syncConfirmation);
-    syncConfirmation();
-})();
-</script>
-@endpush
 @endsection

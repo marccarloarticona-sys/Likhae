@@ -26,7 +26,7 @@
     $notificationActive = $active === 'notifications' || request()->routeIs('notifications.index', 'seller.notifications');
 @endphp
 
-<aside id="seller-sidebar" class="sl-sidebar" data-sl-sidebar aria-label="Seller Center navigation">
+<aside id="seller-sidebar" class="sl-sidebar" data-sl-sidebar data-sidebar-workspace="seller" aria-label="Seller Center navigation">
     <div class="sl-sidebar-head">
         <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle aria-controls="seller-sidebar" aria-label="Collapse sidebar" aria-expanded="true">
             <svg class="sl-sidebar-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>

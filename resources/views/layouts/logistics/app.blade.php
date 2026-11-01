@@ -153,7 +153,10 @@
             "
         >
 
-            <x-logistics.header :notification-count="$workspaceNotificationCount ?? 0" />
+            @php
+                $logisticsHeaderTitle = trim(\Illuminate\Support\Str::before(trim($__env->yieldContent('title')), ' - LIKHAE')) ?: 'Dashboard';
+            @endphp
+            <x-logistics.header :title="$logisticsHeaderTitle" subtitle="Manage riders, parcels, and center operations." :notification-count="$workspaceNotificationCount ?? 0" :message-count="$sidebarCounts['messages'] ?? 0" />
 
             {{-- =================================================
                 PAGE CONTENT
@@ -163,7 +166,7 @@
                 class="
                     mx-auto
                     w-full
-                    max-w-[1500px]
+                    {{ request()->routeIs('logistics.profile', 'logistics.account') ? 'max-w-none' : 'max-w-[1500px]' }}
 
                     px-[14px]
                     py-5
@@ -173,6 +176,8 @@
                     lg:py-8
                     xl:py-9
                 "
+                data-logistics-search-content
+                data-workspace-search-content
             >
 
                 @yield('content')

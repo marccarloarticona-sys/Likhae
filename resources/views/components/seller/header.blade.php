@@ -17,6 +17,20 @@
         </div>
     </div>
 
+    <div class="sl-header-search sl-search-wrap" data-workspace-search data-search-workspace="seller" data-search-label="Seller">
+        <form class="sl-search" action="{{ route('seller.dashboard') }}" method="GET" role="search" data-workspace-search-form>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input name="q" type="search" placeholder="Search all Seller pages..." aria-label="Search all Seller pages" aria-autocomplete="list" aria-expanded="false" aria-controls="sellerSearchSuggestions" autocomplete="off" data-workspace-search-input>
+            <kbd>Ctrl K</kbd>
+        </form>
+        <div class="sl-search-dropdown" id="sellerSearchSuggestions" role="listbox" aria-label="Seller search suggestions" hidden data-workspace-search-results>
+            <p class="sl-search-dropdown__heading" data-workspace-search-heading></p>
+            <div class="sl-search-dropdown__options" data-workspace-search-options></div>
+            <p class="sl-search-dropdown__empty" hidden data-workspace-search-empty></p>
+            <button type="button" class="sl-search-dropdown__clear" hidden data-workspace-search-clear>Clear search history</button>
+        </div>
+    </div>
+
     <div class="sl-header-actions">
         @php($messageUnreadCount = (int) ($sellerMessagePreview['unread_count'] ?? $sellerUiCounts['messages'] ?? 0))
         <button type="button" class="sl-icon-btn sl-header-action" aria-label="Messages" aria-controls="sellerMessagePopover" aria-expanded="false" data-message-preview-toggle>
