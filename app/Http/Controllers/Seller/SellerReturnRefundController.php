@@ -12,7 +12,9 @@ use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
 use App\Services\Returns\CashRefundWorkflowService;
 use App\Services\Returns\ReturnCustodyService;
+use App\Services\Returns\PhysicalReturnCompletionService;
 use App\Models\Buyer\ReturnRefundRequestItem;
+use App\Models\Returns\ReturnInspection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -43,11 +45,26 @@ class SellerReturnRefundController extends Controller
             $sellerRequest->setRelation('cashRefundObligation', null);
         }
 
+        $physicalReturnRequired = trim((string) $sellerRequest->request?->solution) === 'Return & Refund';
+        $physicalReturnReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady()
+            && app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+        $inspectionsByItem = collect();
+        if ($physicalReturnRequired && $physicalReturnReady) {
+            $sellerRequest->load('buyerReturnWorkflow.shipment', 'buyerReturnWorkflow.logisticsCenter.address');
+            $inspectionsByItem = ReturnInspection::query()
+                ->where('seller_return_refund_request_id', $sellerRequest->id)
+                ->latest('id')
+                ->get()
+                ->keyBy('return_refund_request_item_id');
+        } else {
+            $sellerRequest->setRelation('buyerReturnWorkflow', null);
+        }
+
         $responseDeadline = $sellerRequest->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW
             ? $sellerRequest->created_at?->copy()->addDays(ReturnRefundWorkflowService::SELLER_RESPONSE_DAYS)->timezone(config('app.timezone'))
             : null;
 
-        return view('seller.return-refund-show', compact('sellerRequest', 'responseDeadline'));
+        return view('Seller.return-refund-show', compact('sellerRequest', 'responseDeadline', 'physicalReturnRequired', 'physicalReturnReady', 'inspectionsByItem'));
     }
 
     public function approve(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse
@@ -121,6 +138,12 @@ class SellerReturnRefundController extends Controller
             'seller_note' => ['nullable', 'string', 'max:2000'],
         ]);
 
+        try {
+            app(PhysicalReturnCompletionService::class)->assertComplete($sellerRequest);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
+        }
+
         $stored = $proofs->storeImage($request->file('proof'), 'refund-proof/'.$sellerRequest->id);
         try {
             DB::transaction(function () use ($request, $sellerRequest, $data, $stored, $workflow): void {
@@ -128,6 +151,7 @@ class SellerReturnRefundController extends Controller
             abort_unless(in_array($locked->status, [SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true), 409, 'Only an approved refund can receive payment proof.');
                 abort_if($locked->payouts->isNotEmpty(), 409, 'A payout report has already been recorded for this refund.');
                 abort_unless(abs((float) $data['amount_sent'] - (float) $locked->approved_amount) < 0.005, 422, 'Amount sent must match the approved refund amount.');
+                app(PhysicalReturnCompletionService::class)->assertComplete($locked);
 
                 $reference = trim($data['transaction_reference']);
                 $payout = RefundPayout::create([
@@ -150,6 +174,9 @@ class SellerReturnRefundController extends Controller
                 $workflow->syncParentStatus($locked->request);
                 $this->notifyBuyer($locked, 'Refund payment reported', 'Your Seller has submitted GCash refund payment details. Please check your GCash account.');
             });
+        } catch (\RuntimeException $exception) {
+            \Illuminate\Support\Facades\Storage::disk($stored['disk'])->delete($stored['path']);
+            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
         } catch (\Throwable $exception) {
             \Illuminate\Support\Facades\Storage::disk($stored['disk'])->delete($stored['path']);
             throw $exception;
@@ -172,12 +199,25 @@ class SellerReturnRefundController extends Controller
         return back()->with('status', 'Cash refund obligation is ready. Physical cash payment remains blocked until an authorized payer policy is configured.');
     }
 
-    public function receiveReturn(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnCustodyService $custody): RedirectResponse
+    public function receiveReturn(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnCustodyService $custody, ShipmentReturnWorkflowService $returns): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
         $request->validate(['confirm_received' => ['required', 'accepted'], 'notes' => ['nullable', 'string', 'max:2000']]);
         try {
+            if (trim((string) $sellerRequest->request?->solution) === 'Return & Refund') {
+                if (! app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady()) {
+                    throw new \RuntimeException('The Buyer return waybill route is not installed yet.');
+                }
+                $returnWorkflow = \App\Models\Logistics\ShipmentReturnWorkflow::query()
+                    ->where('seller_return_refund_request_id', $sellerRequest->id)
+                    ->first();
+                if (! $returnWorkflow) {
+                    throw new \RuntimeException('The Buyer must create a return waybill and hand the parcel to Logistics before Seller receipt can be recorded.');
+                }
+                $returns->confirmSellerReceipt($returnWorkflow, $request->user(), $request->input('notes'));
+                return back()->with('status', 'Seller receipt confirmed through the return-to-seller route. Complete inspection before the refund can be paid.');
+            }
             $custody->recordCustodyEvent($sellerRequest, $request->user(), 'SELLER_RECEIVED', ['from_party' => 'LOGISTICS_OR_RIDER', 'to_party' => 'SELLER_OR_FACILITY', 'notes' => $request->input('notes')]);
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['return' => $exception->getMessage()])->withInput();

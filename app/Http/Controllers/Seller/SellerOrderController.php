@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\OrderItem;
 use App\Models\Logistics\ParcelScan;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
@@ -154,12 +155,63 @@ class SellerOrderController extends Controller
             ->latest();
         $refundRequests = $requestedStatus === 'returns' ? $refundQuery->paginate(15)->withQueryString() : null;
 
+        $returnWorkflowSchemaReady = $schema->shipmentReturnsReady();
+        $returnEnhancementsReady = $schema->shipmentReturnEnhancementsReady();
+        $sellerReturnWorkflows = collect();
+        $sellerReturnWorkflowCount = 0;
+        if ($returnWorkflowSchemaReady) {
+            $sellerReturnWorkflowQuery = ShipmentReturnWorkflow::query()
+                ->whereHas('shipment.sellerOrder', fn ($query) => $query->where('seller_profile_id', $seller->id));
+
+            if (Schema::hasColumn('shipment_return_workflows', 'seller_return_refund_request_id')) {
+                $sellerReturnWorkflowQuery->whereNull('seller_return_refund_request_id');
+            }
+            if ($returnEnhancementsReady) {
+                $sellerReturnWorkflowQuery->where(function ($query): void {
+                    $query->whereNull('return_disposition')
+                        ->orWhere('return_disposition', ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN);
+                });
+            }
+
+            $sellerReturnWorkflowQuery->whereIn('status', [
+                ...ShipmentReturnWorkflow::OPEN_STATUSES,
+                ShipmentReturnWorkflow::SELLER_RECEIVED,
+            ]);
+            $sellerReturnWorkflowCount = (clone $sellerReturnWorkflowQuery)->count();
+
+            if ($requestedStatus === 'returns') {
+                $sellerReturnWorkflows = (clone $sellerReturnWorkflowQuery)
+                    ->with([
+                        'shipment.orderItem',
+                        'shipment.sellerOrder.order',
+                        'logisticsCenter',
+                        'sellerHandoffBy',
+                        'sellerReceivedBy',
+                    ])
+                    ->when($refundSearch !== '', function ($query) use ($refundSearch): void {
+                        $query->where(function ($nested) use ($refundSearch): void {
+                            $nested->where('reason', 'like', '%'.$refundSearch.'%')
+                                ->when(Schema::hasColumn('shipment_return_workflows', 'return_tracking_number'), fn ($search) => $search->orWhere('return_tracking_number', 'like', '%'.$refundSearch.'%'))
+                                ->orWhereHas('shipment', fn ($shipment) => $shipment
+                                    ->where('tracking_number', 'like', '%'.$refundSearch.'%')
+                                    ->orWhereHas('sellerOrder', fn ($order) => $order
+                                        ->where('seller_order_number', 'like', '%'.$refundSearch.'%')
+                                        ->orWhereHas('order', fn ($parent) => $parent->where('order_number', 'like', '%'.$refundSearch.'%')))
+                                    ->orWhereHas('orderItem', fn ($item) => $item->where('product_name', 'like', '%'.$refundSearch.'%')));
+                        });
+                    })
+                    ->latest('updated_at')
+                    ->limit(30)
+                    ->get();
+            }
+        }
+
         $counts = (clone $ownedOrders)
             ->selectRaw('status, COUNT(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status');
         $statusCounts = $counts->mapWithKeys(fn ($count, $status): array => [$this->statusKey((string) $status) => (int) $count]);
-        $statusCounts->put('returns', (int) $refundCounts->sum());
+        $statusCounts->put('returns', (int) $refundCounts->sum() + $sellerReturnWorkflowCount);
         $readyPickupCount = (clone $ownedOrders)->where('status', 'READY_FOR_PICKUP')->with('shipments')->get()
             ->sum(fn (SellerOrder $order): int => $order->shipments->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'])->count());
 
@@ -175,6 +227,9 @@ class SellerOrderController extends Controller
             'selectedOrderView' => $selectedOrderView,
             'sellerOrders' => $ordersPage->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady, $successfulPickupScanKeys)),
             'refundRequests' => $refundRequests,
+            'sellerReturnWorkflows' => $sellerReturnWorkflows,
+            'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
+            'returnEnhancementsReady' => $returnEnhancementsReady,
             'refundCounts' => $refundCounts,
             'refundStatus' => $refundStatus,
             'statusCounts' => $statusCounts,
@@ -326,7 +381,7 @@ class SellerOrderController extends Controller
         }
 
         return redirect()->route('seller.orders')->with('status', $data['handover_method'] === 'seller_dropoff'
-            ? 'Drop-off registered. Bring the parcel and tracking number to your assigned logistics center.'
+            ? 'Drop-off registered. Print each selected waybill and take the parcel(s) to your assigned logistics center for an intake scan.'
             : 'Logistics pickup requested.');
     }
 
@@ -361,8 +416,18 @@ class SellerOrderController extends Controller
             'parcels' => collect(),
         ];
         $parcelStatuses = $shipments->pluck('current_status');
+        $sellerDropoffShipmentIds = $shipments
+            ->filter(fn ($shipment): bool => $shipment->current_status === 'READY_FOR_PICKUP'
+                && $shipment->pickupRequests->contains(fn ($pickup): bool => in_array($pickup->status, ['PENDING', 'APPROVED'], true)
+                    && str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:')))
+            ->pluck('id')
+            ->map(fn ($id): int => (int) $id)
+            ->values()
+            ->all();
+        $sellerDropoffPending = $sellerDropoffShipmentIds !== [];
         $pickupStatus = match (true) {
             $parcelStatuses->isNotEmpty() && $parcelStatuses->every(fn (string $status): bool => in_array($status, ['PICKED_UP', 'AT_SORTING_CENTER', 'SORTED', 'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'], true)) => 'Picked up',
+            $sellerDropoffPending => 'Waiting for Intake',
             $pickupBatch?->status === 'EN_ROUTE_TO_HUB' => 'In transit to logistics',
             $pickupBatch?->status === 'IN_PROGRESS' => 'Pickup in Progress',
             $pickupAssignment && in_array($pickupAssignment->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'], true) => 'Pickup scheduled',
@@ -398,7 +463,9 @@ class SellerOrderController extends Controller
             && $order->status !== 'COMPLETED';
         $orderDisplayStatus = $buyerReceiptPending
             ? 'Delivered, awaiting buyer receipt'
-            : ($allParcelsReceived ? 'Completed' : str($order->status)->replace('_', ' ')->title()->toString());
+            : ($allParcelsReceived
+                ? 'Completed'
+                : ($sellerDropoffPending ? 'Waiting for Intake' : str($order->status)->replace('_', ' ')->title()->toString()));
 
         return [
             'id' => $order->seller_order_number,
@@ -410,6 +477,7 @@ class SellerOrderController extends Controller
             'buyer_note' => $order->buyer_note,
             'items' => $items->values(),
             'parcels' => $parcelRows,
+            'seller_dropoff_shipment_ids' => $sellerDropoffShipmentIds,
             'ready_parcels' => $parcelRows->filter(fn (array $parcel): bool => $parcel['packed']
                 && $parcel['shipment']?->current_status === 'PREPARING')->values(),
             'unpacked_parcels' => $parcelRows->filter(fn (array $parcel): bool => ! $parcel['packed']

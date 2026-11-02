@@ -38,7 +38,7 @@
         @if($order)
             <x-shared.mapbox :markers="$order['map_markers']" title="Shipment tracking map" height="220px" class="sl-map-seller" navigation />
             <div class="sl-tracking-layout">
-                <section class="sl-card sl-shipment-summary"><div class="sl-shipment-head"><div><span class="sl-eyebrow">Order #{{ $order['id'] }}</span><h2>Shipment items</h2><ul class="mt-2 space-y-1">@foreach($order['items'] as $item)<li>{{ $item->product_name }} · Qty {{ $item->quantity }}</li>@endforeach</ul><p>Shared shipment tracking no. {{ data_get($delivery,'tracking_number','Not assigned') }}</p></div><span class="sl-status is-info">{{ data_get($delivery,'current_status') ? str(data_get($delivery,'current_status'))->replace('_', ' ')->title() : $order['status'] }}</span></div><dl class="sl-shipment-meta"><div><dt>Logistics</dt><dd>{{ data_get($delivery,'provider.name',$order['shipping']) }}</dd></div><div><dt>Rider</dt><dd>{{ data_get($delivery,'rider.user.name','Waiting assignment') }}</dd></div><div><dt>Buyer</dt><dd>{{ $order['buyer'] }}</dd></div><div><dt>Address</dt><dd>{{ $order['shipping_address'] }}</dd></div></dl></section>
+                <section class="sl-card sl-shipment-summary"><div class="sl-shipment-head"><div><span class="sl-eyebrow">Order #{{ $order['id'] }}</span><h2>Shipment items</h2><ul class="mt-2 space-y-1">@foreach($order['items'] as $item)<li>{{ $item->product_name }} · Qty {{ $item->quantity }}</li>@endforeach</ul><p>Shared shipment tracking no. {{ data_get($delivery,'tracking_number','Not assigned') }}</p></div><span class="sl-status is-info">{{ in_array((int) data_get($delivery,'id'), $order['seller_dropoff_shipment_ids'], true) ? 'Waiting for Intake' : (data_get($delivery,'current_status') ? str(data_get($delivery,'current_status'))->replace('_', ' ')->title() : $order['status']) }}</span></div><dl class="sl-shipment-meta"><div><dt>Logistics</dt><dd>{{ data_get($delivery,'provider.name',$order['shipping']) }}</dd></div><div><dt>Rider</dt><dd>{{ data_get($delivery,'rider.user.name','Waiting assignment') }}</dd></div><div><dt>Buyer</dt><dd>{{ $order['buyer'] }}</dd></div><div><dt>Address</dt><dd>{{ $order['shipping_address'] }}</dd></div></dl></section>
                 <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Progress</span><h2>Shipment Timeline</h2><p>Timeline follows the current persisted delivery state.</p></div></header><ol class="sl-timeline">
                     @php $steps=['requested'=>'Pickup Requested','assigned'=>'Rider Assigned','out_for_delivery'=>'Out for Delivery','delivered'=>'Delivered']; $current=data_get($delivery,'status','requested'); $keys=array_keys($steps); $currentIndex=array_search($current,$keys,true); @endphp
                     @foreach($steps as $key=>$label)<li class="{{ array_search($key,$keys,true) <= ($currentIndex===false?0:$currentIndex) ? 'is-complete':'' }}"><span>{{ array_search($key,$keys,true) <= ($currentIndex===false?0:$currentIndex) ? '✓':'' }}</span><div><strong>{{ $label }}</strong><small>{{ data_get($delivery,'updated_at')?->format('M d · g:i A') }}</small><p>{{ $key===$current?'Current shipment state':'Shipment milestone' }}</p></div></li>@endforeach
@@ -53,7 +53,7 @@
             @if(filled($order['buyer_note'] ?? null))
                 <section class="sl-card" data-buyer-note><h3>Buyer Note</h3><p class="whitespace-pre-line">{{ $order['buyer_note'] }}</p></section>
             @endif
-            <div class="sl-order-detail-layout"><div class="sl-order-detail-main"><section class="sl-card"><header class="sl-card-head"><div><h2>Products and parcel labels</h2>@if($order['has_unresolved_legacy_shipment'])<p>This legacy shipment's item mapping is unresolved.</p>@else<p>Each product line has its own tracking code. Its ordered quantity stays together in that parcel.</p>@endif</div><span class="sl-status is-warning">{{ $order['status'] }}</span></header>@if($order['has_unresolved_legacy_shipment'])<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Legacy shipment preserved</strong>@foreach($order['unresolved_legacy_shipments'] as $legacyShipment)<p class="mt-1">Tracking {{ $legacyShipment->tracking_number }} · {{ str($legacyShipment->current_status)->replace('_', ' ')->title() }}</p>@endforeach<p class="mt-2">The item mapping is unresolved, so this tracking history remains attached to the original shipment. Logistics must reconcile it before separate item labels can be issued.</p></div>@elseif($order['parcels_need_setup'])<form method="POST" action="{{ route('seller.orders.parcels.ensure', $order['db_id']) }}" class="mb-4">@csrf<button class="sl-btn sl-btn-primary" type="submit">Create item parcel labels</button><p class="mt-2 text-sm text-stone-600">Create one shipment for each item line before fulfillment starts.</p></form>@elseif($order['can_print_waybills'] && count($order['parcels']) > 1)<a class="sl-btn sl-btn-primary mb-4 inline-flex" href="{{ route('seller.orders.waybill', $order['db_id']) }}">Print all waybills</a>@endif<ul class="divide-y divide-stone-200">@foreach($order['items'] as $item)<li class="flex flex-wrap items-center gap-4 py-4 first:pt-2 last:pb-2"><x-shared.product-thumbnail :item="$item" size="72" class="sl-order-thumb"/><div class="min-w-0 flex-1"><strong>{{ $item->product_name }}</strong><span class="block">Variant: {{ $item->variant_description ?: 'Standard' }}</span><small>@if($item->original_unit_price !== null)Original unit price: PHP {{ number_format((float) $item->original_unit_price, 2) }} | @endif Effective unit price: PHP {{ number_format((float) $item->unit_price, 2) }} | Qty: {{ $item->quantity }}@if((float) $item->discount_amount > 0) | Line discount: PHP {{ number_format((float) $item->discount_amount, 2) }}@endif</small>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)@if((int) data_get($promotionSnapshot, 'free_reward_quantity', 0) > 0)<span class="mt-1 block text-xs font-semibold text-emerald-800">{{ data_get($promotionSnapshot, 'name', 'Buy X Get Y') }} · {{ (int) data_get($promotionSnapshot, 'free_reward_quantity') }} promotional free reward item(s)</span>@else<span class="mt-1 block text-xs font-semibold text-emerald-800">{{ data_get($promotionSnapshot, 'name', 'Seller offer') }} · promotional item</span>@endif @endforeach @if($item->shipment)<span class="mt-1 block text-sm">Tracking: <strong>{{ $item->shipment->tracking_number }}</strong> · {{ str($item->shipment->current_status)->replace('_', ' ')->title() }}</span>@if($order['can_print_waybills'])<a class="mt-2 inline-flex text-sm font-semibold text-red-900 underline" href="{{ route('seller.orders.waybill.item', [$order['db_id'], $item->id]) }}">Print this parcel waybill</a>@endif@else<span class="mt-1 block text-sm text-amber-800">Parcel label not created yet</span>@endif</div><strong>₱{{ number_format((float) $item->line_total, 2) }}</strong></li>@endforeach</ul></section>
+            <div class="sl-order-detail-layout"><div class="sl-order-detail-main"><section class="sl-card"><header class="sl-card-head"><div><h2>Products and parcel labels</h2>@if($order['has_unresolved_legacy_shipment'])<p>This legacy shipment's item mapping is unresolved.</p>@else<p>Each product line has its own tracking code. Its ordered quantity stays together in that parcel.</p>@endif</div><span class="sl-status is-warning">{{ $order['status'] }}</span></header>@if($order['has_unresolved_legacy_shipment'])<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Legacy shipment preserved</strong>@foreach($order['unresolved_legacy_shipments'] as $legacyShipment)<p class="mt-1">Tracking {{ $legacyShipment->tracking_number }} · {{ str($legacyShipment->current_status)->replace('_', ' ')->title() }}</p>@endforeach<p class="mt-2">The item mapping is unresolved, so this tracking history remains attached to the original shipment. Logistics must reconcile it before separate item labels can be issued.</p></div>@elseif($order['parcels_need_setup'])<form method="POST" action="{{ route('seller.orders.parcels.ensure', $order['db_id']) }}" class="mb-4">@csrf<button class="sl-btn sl-btn-primary" type="submit">Create item parcel labels</button><p class="mt-2 text-sm text-stone-600">Create one shipment for each item line before fulfillment starts.</p></form>@elseif($order['can_print_waybills'] && count($order['parcels']) > 1)<a class="sl-btn sl-btn-primary mb-4 inline-flex" href="{{ route('seller.orders.waybill', $order['db_id']) }}">Print all waybills</a>@endif<ul class="divide-y divide-stone-200">@foreach($order['items'] as $item)<li class="flex flex-wrap items-center gap-4 py-4 first:pt-2 last:pb-2"><x-shared.product-thumbnail :item="$item" size="72" class="sl-order-thumb"/><div class="min-w-0 flex-1"><strong>{{ $item->product_name }}</strong><span class="block">Variant: {{ $item->variant_description ?: 'Standard' }}</span><small>@if($item->original_unit_price !== null)Original unit price: PHP {{ number_format((float) $item->original_unit_price, 2) }} | @endif Effective unit price: PHP {{ number_format((float) $item->unit_price, 2) }} | Qty: {{ $item->quantity }}@if((float) $item->discount_amount > 0) | Line discount: PHP {{ number_format((float) $item->discount_amount, 2) }}@endif</small>@foreach((array) $item->promotion_snapshot as $promotionSnapshot)@if((int) data_get($promotionSnapshot, 'free_reward_quantity', 0) > 0)<span class="mt-1 block text-xs font-semibold text-emerald-800">{{ data_get($promotionSnapshot, 'name', 'Buy X Get Y') }} · {{ (int) data_get($promotionSnapshot, 'free_reward_quantity') }} promotional free reward item(s)</span>@else<span class="mt-1 block text-xs font-semibold text-emerald-800">{{ data_get($promotionSnapshot, 'name', 'Seller offer') }} · promotional item</span>@endif @endforeach @if($item->shipment)<span class="mt-1 block text-sm">Tracking: <strong>{{ $item->shipment->tracking_number }}</strong> · {{ in_array((int) $item->shipment->id, $order['seller_dropoff_shipment_ids'], true) ? 'Waiting for Intake' : str($item->shipment->current_status)->replace('_', ' ')->title() }}</span>@if($order['can_print_waybills'])<a class="mt-2 inline-flex text-sm font-semibold text-red-900 underline" href="{{ route('seller.orders.waybill.item', [$order['db_id'], $item->id]) }}">Print this parcel waybill</a>@endif@else<span class="mt-1 block text-sm text-amber-800">Parcel label not created yet</span>@endif</div><strong>₱{{ number_format((float) $item->line_total, 2) }}</strong></li>@endforeach</ul></section>
             <section class="sl-card">
                 <header class="sl-card-head"><div><h2>Fulfillment Actions</h2><p>Mark parcels packed individually, then send 1 to 10 packed parcels to pickup at a time.</p></div></header>
                 @php
@@ -61,9 +61,11 @@
                         'placed' => ['Accept the order or cancel it with a reason.', 'Seller'],
                         'confirmed' => ['Begin preparing the ordered items.', 'Seller'],
                         'preparing' => ['Pack each parcel, then mark packed parcels ready for pickup.', 'Seller'],
-                        'ready-for-pickup' => (($order['pickup_status'] ?? '') === 'Pickup scheduled')
-                            ? ['Keep parcels ready for the assigned pickup rider.', 'Pickup rider']
-                            : ['Assign a pickup rider to collect the ready parcels.', 'Logistics'],
+                        'ready-for-pickup' => (($order['pickup_status'] ?? '') === 'Waiting for Intake')
+                            ? ['Bring the selected parcels and printed waybills to your assigned center for intake scanning.', 'Seller / Logistics']
+                            : ((($order['pickup_status'] ?? '') === 'Pickup scheduled')
+                                ? ['Keep parcels ready for the assigned pickup rider.', 'Pickup rider']
+                                : ['Assign a pickup rider to collect the ready parcels.', 'Logistics']),
                         'shipping' => ($order['buyer_receipt_pending'] ?? false)
                             ? ['Delivery is complete. The Buyer must confirm receipt before the order is completed.', 'Buyer']
                             : ['Deliver the parcel and record proof or an attempt outcome.', 'Delivery rider'],
@@ -74,7 +76,7 @@
                     };
                 @endphp
                 <x-shared.status-guidance :status="$order['status']" :next="$orderNextStep" :actor="$orderNextActor" />
-                <div class="sl-action-panel"><span class="sl-action-panel-icon">&#10003;</span><div><strong>{{ $order['status'] }}</strong><p>Ready parcels can be picked up while other parcels remain in preparation.</p></div>
+                <div class="sl-action-panel"><span class="sl-action-panel-icon">&#10003;</span><div><strong>{{ $order['status'] }}</strong><p>{{ ($order['pickup_status'] ?? '') === 'Waiting for Intake' ? 'Take the selected parcels and printed waybills to your assigned center for intake scanning.' : 'Ready parcels can be picked up while other parcels remain in preparation.' }}</p></div>
                     @if($order['status_key']==='placed')<form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="confirm"><button class="sl-btn sl-btn-primary" type="submit">Accept Order</button></form>@endif
                     @if($order['status_key']==='confirmed')<form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="prepare"><button class="sl-btn sl-btn-primary" type="submit">Begin Preparation</button></form>@endif
                     @if(in_array($order['status_key'], ['preparing', 'ready-for-pickup'], true))
@@ -87,12 +89,16 @@
                             </form>
                         @endif
                         @if($order['ready_parcels']->isNotEmpty() && $order['unpacked_parcels']->isEmpty())
-                            <form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}" class="w-full space-y-2">@csrf @method('PATCH')<input type="hidden" name="action" value="ready"><strong class="block">Ready for pickup ({{ $order['ready_parcels']->count() }} packed parcel(s) available)</strong>
+                            <form method="POST" action="{{ route('seller.logistics.pickup',$order['db_id']) }}" class="w-full space-y-2">@csrf<strong class="block">Choose handover for up to 10 packed parcels</strong>
+                                <div class="grid gap-2 sm:grid-cols-2">
+                                    <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-3 text-sm"><input type="radio" name="handover_method" value="logistics_pickup" checked><span><strong class="block">Request Logistics pickup</strong><small class="text-muted">Logistics assigns a rider to collect these parcels.</small></span></label>
+                                    <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-3 text-sm"><input type="radio" name="handover_method" value="seller_dropoff"><span><strong class="block">Seller drop-off</strong><small class="text-muted">Print the selected waybills and bring the parcels to your assigned center. They will appear in Incoming for intake scanning.</small></span></label>
+                                </div>
                                 @foreach($order['ready_parcels']->take(10) as $parcel)
-                                    <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}</span></label>
+                                    <label class="flex flex-wrap items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}</span><a target="_blank" rel="noopener" class="font-semibold text-primary underline" href="{{ route('seller.orders.waybill.item', [$order['db_id'], $parcel['item']->id]) }}">Print waybill</a></label>
                                 @endforeach
                                 <p class="text-xs text-stone-600">Select 1 to 10 parcels. You can send the remaining parcels in another pickup batch.</p>
-                                <button class="sl-btn sl-btn-primary" type="submit">Mark selected parcels ready for pickup</button>
+                                <button class="sl-btn sl-btn-primary" type="submit">Confirm handover method</button>
                             </form>
                         @endif
                     @endif
@@ -150,7 +156,84 @@
             @foreach(['all'=>'All Orders','placed'=>'Placed','confirmed'=>'Confirmed','preparing'=>'Preparing','ready-for-pickup'=>'Ready for Pickup','shipping'=>'Shipping','completed'=>'Completed','cancelled'=>'Cancelled','returns'=>'Returns/Refunds'] as $key=>$label)<a href="{{ route('seller.orders',['status'=>$key,'q'=>$search ?? null,'from_date'=>$fromDate ?? null,'to_date'=>$toDate ?? null]) }}" class="{{ $currentStatus===$key?'is-active':'' }}">{{ $label }} @if(($statusCounts[$key]??0)>0)<span>{{ $statusCounts[$key] }}</span>@endif</a>@endforeach
         </section>
         @if($currentStatus==='returns')
-            <section class="sl-card sl-order-filters"><form method="GET" action="{{ route('seller.orders') }}" class="sl-search-input"><input type="hidden" name="status" value="returns"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ request('q') }}" placeholder="Search request, order, buyer, or product"><select name="refund_status" class="sl-field"><option value="">All refund statuses</option>@foreach(['SELLER_REVIEW','APPROVED','REJECTED','REFUND_SENT','CONFIRMED','ESCALATED','ADMIN_REFUND_REQUIRED','DISPUTE_RESOLVED'] as $refundFilter)<option value="{{ $refundFilter }}" @selected(($refundStatus ?? '') === $refundFilter)>{{ str($refundFilter)->headline() }}</option>@endforeach</select><button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">Search</button></form></section>
+            <section class="sl-card sl-order-filters"><form method="GET" action="{{ route('seller.orders') }}" class="sl-search-input"><input type="hidden" name="status" value="returns"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ request('q') }}" placeholder="Search request, tracking, order, buyer, or product"><select name="refund_status" class="sl-field"><option value="">All refund statuses</option>@foreach(['SELLER_REVIEW','APPROVED','REJECTED','REFUND_SENT','CONFIRMED','ESCALATED','ADMIN_REFUND_REQUIRED','DISPUTE_RESOLVED'] as $refundFilter)<option value="{{ $refundFilter }}" @selected(($refundStatus ?? '') === $refundFilter)>{{ str($refundFilter)->headline() }}</option>@endforeach</select><button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">Search</button></form></section>
+            @if($returnWorkflowSchemaReady)
+                <section class="sl-card">
+                    <header class="sl-card-head">
+                        <div>
+                            <span class="sl-eyebrow">Failed-delivery returns</span>
+                            <h2>Return parcels</h2>
+                            <p>Review the return route and confirm receipt after the rider hands the parcel to you.</p>
+                        </div>
+                    </header>
+                    <div class="sl-table-wrap">
+                        <table class="sl-table">
+                            <thead><tr><th>Return tracking / order</th><th>Product / reason</th><th>Rider handoff</th><th>Status</th><th></th></tr></thead>
+                            <tbody>
+                                @forelse($sellerReturnWorkflows as $returnWorkflow)
+                                    @php
+                                        $returnShipment = $returnWorkflow->shipment;
+                                        $returnTrackingNumber = $returnWorkflow->return_tracking_number ?: $returnShipment?->tracking_number;
+                                        $awaitingSellerReceipt = $returnWorkflow->status === \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_SELLER_CONFIRMATION;
+                                        $sellerReceived = $returnWorkflow->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED;
+                                    @endphp
+                                    <tr>
+                                        <td>
+                                            <strong>{{ $returnTrackingNumber }}</strong>
+                                            <small>{{ $returnShipment?->sellerOrder?->seller_order_number }}</small>
+                                        </td>
+                                        <td>
+                                            {{ $returnShipment?->orderItem?->product_name ?: 'Return parcel' }}
+                                            <small>{{ $returnWorkflow->reason }}</small>
+                                        </td>
+                                        <td>
+                                            @if($returnWorkflow->seller_handoff_at)
+                                                <strong>{{ $returnWorkflow->sellerHandoffBy?->name ?: 'Return rider' }}</strong>
+                                                <small>Handed off {{ $returnWorkflow->seller_handoff_at->timezone('Asia/Manila')->format('M j, Y · g:i A') }}</small>
+                                            @else
+                                                <strong>{{ $returnWorkflow->logisticsCenter?->business_name ?: 'Return in transit' }}</strong>
+                                                <small>Waiting for the rider to hand over the parcel.</small>
+                                            @endif
+                                        </td>
+                                        <td>
+                                            <span class="sl-status {{ $sellerReceived ? 'is-success' : ($awaitingSellerReceipt ? 'is-warning' : 'is-info') }}">
+                                                {{ $sellerReceived ? 'Seller receipt confirmed' : ($awaitingSellerReceipt ? 'Awaiting your confirmation' : str($returnWorkflow->status)->replace('_', ' ')->title()) }}
+                                            </span>
+                                            @if($awaitingSellerReceipt)
+                                                <small>The rider recorded the handoff. Confirm after receiving the parcel.</small>
+                                            @elseif($sellerReceived)
+                                                <small>Confirmed by {{ $returnWorkflow->sellerReceivedBy?->name ?: 'the seller' }}@if($returnWorkflow->seller_received_at) · {{ $returnWorkflow->seller_received_at->timezone('Asia/Manila')->format('M j, Y · g:i A') }}@endif</small>
+                                            @else
+                                                <small>Waiting for the next return custody step.</small>
+                                            @endif
+                                        </td>
+                                        <td>
+                                            @if($awaitingSellerReceipt)
+                                                <form method="POST" action="{{ route('seller.logistics.returns.confirm', $returnWorkflow) }}" class="grid min-w-44 gap-1">
+                                                    @csrf
+                                                    <input name="notes" maxlength="1000" class="w-full rounded border border-line p-1 text-xs" placeholder="Optional receipt note" aria-label="Receipt note for {{ $returnTrackingNumber }}">
+                                                    <button class="sl-btn sl-btn-primary sl-btn-sm">Confirm seller receipt</button>
+                                                </form>
+                                            @elseif($sellerReceived)
+                                                <span class="text-sm text-green-700">Receipt confirmed</span>
+                                            @else
+                                                <span class="text-sm text-muted">No action yet</span>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="5">No failed-delivery return parcels are in progress.</td></tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                    @if($sellerReturnWorkflows->count() === 30)
+                        <p class="mt-3 text-sm text-muted">Showing the 30 most recently updated return parcels.</p>
+                    @endif
+                </section>
+            @else
+                <section class="sl-card border border-amber-200 bg-amber-50 text-sm text-amber-900">Failed-delivery return parcels will appear here after the return-workflow migration is installed.</section>
+            @endif
             <section class="sl-card"><header class="sl-card-head"><div><span class="sl-eyebrow">Seller-first workflow</span><h2>Returns & Refunds</h2><p>Only refund requests for your Seller-owned items are shown.</p></div></header><div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Request</th><th>Order / Buyer</th><th>Products</th><th>Requested</th><th>Status</th><th></th></tr></thead><tbody>@forelse($refundRequests ?? [] as $refund)<tr><td><strong>{{ $refund->request?->request_number }}</strong><small>{{ $refund->created_at?->format('M d, Y g:i A') }}</small></td><td>{{ $refund->request?->order?->order_number }}<small>{{ $refund->request?->order?->buyer?->name }}</small></td><td>{{ $refund->items->map(fn($item)=>$item->orderItem?->product_name)->filter()->join(', ') ?: 'Items' }}</td><td>PHP {{ number_format((float)$refund->requested_amount,2) }}</td><td><span class="sl-status is-warning">{{ str($refund->status)->headline() }}</span></td><td><a class="sl-btn sl-btn-ghost sl-btn-sm" href="{{ route('seller.orders.refunds.show',$refund) }}">View Request</a></td></tr>@empty<tr><td colspan="6">No Seller refund requests yet.</td></tr>@endforelse</tbody></table></div>@if($refundRequests?->hasPages())<div class="ad-card-body">{{ $refundRequests->links() }}</div>@endif</section>
         @else
             <section class="sl-card sl-order-filters"><form method="GET" action="{{ route('seller.orders') }}" class="sl-search-input"><input type="hidden" name="status" value="{{ $currentStatus }}"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input type="search" name="q" value="{{ $search ?? '' }}" placeholder="Search order, buyer, or product"><label class="sl-field"><span>From date</span><input type="date" name="from_date" value="{{ $fromDate ?? '' }}"></label><label class="sl-field"><span>To date</span><input type="date" name="to_date" value="{{ $toDate ?? '' }}"></label><button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">Apply Filters</button></form></section>

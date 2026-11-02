@@ -101,6 +101,14 @@
             <header class="sl-card-head"><div><span class="sl-eyebrow">Shipment history</span><h2 id="seller-tracking-timeline-title">Parcel timelines</h2><p>{{ $trackingShipments->count() }} {{ $trackingShipments->count() === 1 ? 'parcel' : 'parcels' }} linked to this order.</p></div></header>
             @forelse($trackingShipments as $shipment)
                 @php
+                    $currentStatus = strtoupper((string) $shipment->current_status);
+                    $sellerDropoffWaiting = $currentStatus === 'READY_FOR_PICKUP'
+                        && $shipment->pickupRequests->contains(fn ($pickup): bool => in_array($pickup->status, ['PENDING', 'APPROVED'], true)
+                            && str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:'));
+                    $shipmentTimelineLabels = $timelineLabels;
+                    if ($sellerDropoffWaiting) {
+                        $shipmentTimelineLabels['READY_FOR_PICKUP'] = 'Waiting for Intake';
+                    }
                     $timelineRows = collect();
                     foreach ($shipment->events as $event) {
                         $status = strtoupper((string) $event->status);
@@ -113,7 +121,7 @@
                                 ? str($event->notes)->after('RETURN_CUSTODY: ')->toString()
                                 : (str_starts_with((string) $event->notes, 'RETURN_TO_SELLER_INITIATED: ')
                                     ? 'Return to seller initiated after failed delivery'
-                                    : ($isCancellationEvent ? 'Shipment cancelled' : ($timelineLabels[$status] ?? null))));
+                                    : ($isCancellationEvent ? 'Shipment cancelled' : ($shipmentTimelineLabels[$status] ?? null))));
                         if ($status === 'COMPLETED') {
                             $label = str_starts_with((string) $event->notes, 'Order automatically confirmed received after 3 days')
                                 ? 'Receipt automatically confirmed'
@@ -124,12 +132,11 @@
                         if ($status !== 'DELIVERY_FAILED' && $previousRow && $previousRow['status'] === $status && $previousRow['label'] === $label) continue;
                         $timelineRows->push(['status' => $status, 'label' => $label, 'event' => $event]);
                     }
-                    $currentStatus = strtoupper((string) $shipment->current_status);
                     $lastTimelineRow = $timelineRows->last();
                     if (! $lastTimelineRow || $lastTimelineRow['status'] !== $currentStatus) {
                         $timelineRows->push([
                             'status' => $currentStatus,
-                            'label' => $timelineLabels[$currentStatus] ?? str($currentStatus)->replace('_', ' ')->title()->toString(),
+                            'label' => $shipmentTimelineLabels[$currentStatus] ?? str($currentStatus)->replace('_', ' ')->title()->toString(),
                             'event' => null,
                         ]);
                     }
@@ -144,7 +151,7 @@
                 <article class="sl-tracking-parcel">
                     <header class="sl-tracking-parcel__head">
                         <div><span class="sl-eyebrow">Parcel {{ $loop->iteration }} of {{ $trackingShipments->count() }}</span><h3>{{ $shipment->orderItem?->product_name ?: 'Shipment' }}</h3><p>Tracking <strong>{{ $shipment->tracking_number }}</strong></p></div>
-                        <span class="sl-status {{ $shipmentTone }}">{{ str($currentStatus)->replace('_', ' ')->title() }}</span>
+                        <span class="sl-status {{ $shipmentTone }}">{{ $sellerDropoffWaiting ? 'Waiting for Intake' : str($currentStatus)->replace('_', ' ')->title() }}</span>
                     </header>
                     @if($returnWorkflowSchemaReady && $shipment->returnWorkflow && (!($returnEnhancementsReady ?? false) || $shipment->returnWorkflow->return_disposition !== 'REDELIVERY'))
                         <div class="my-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -266,13 +273,14 @@
         @forelse($orders as $order)
             @foreach($order->shipments as $shipment)
                 @php($assignment = $shipment->riderAssignments?->whereIn('status',['ASSIGNED','ACCEPTED','IN_PROGRESS'])->sortByDesc('id')->first())
+                @php($sellerDropoffWaiting = $shipment->current_status === 'READY_FOR_PICKUP' && $shipment->pickupRequests->contains(fn ($pickup) => in_array($pickup->status, ['PENDING', 'APPROVED'], true) && str_starts_with((string) $pickup->notes, 'SELLER_DROPOFF:')))
                 <tr id="shipment-{{ $shipment->id }}">
                     <td><strong>{{ $shipment->tracking_number }}</strong><small class="block">{{ $shipment->orderItem?->product_name }}</small></td>
                     <td>{{ $order->seller_order_number }}</td>
                     <td>{{ $order->order?->address?->formatted() }}</td>
                     <td>{{ $assignment?->riderProfile?->user?->name ?? 'Awaiting assignment' }}</td>
                     <td>
-                        <span class="sl-status {{ $shipment->current_status === 'RETURNED' ? 'is-danger' : 'is-info' }}">{{ str($shipment->current_status)->headline() }}</span>
+                        <span class="sl-status {{ $shipment->current_status === 'RETURNED' ? 'is-danger' : 'is-info' }}">{{ $sellerDropoffWaiting ? 'Waiting for Intake' : str($shipment->current_status)->headline() }}</span>
                         @if($returnWorkflowSchemaReady && $shipment->returnWorkflow && (!($returnEnhancementsReady ?? false) || $shipment->returnWorkflow->return_disposition !== 'REDELIVERY'))
                             <small class="mt-1 block text-amber-800">Return: {{ str($shipment->returnWorkflow->status)->replace('_', ' ')->title() }}</small>
                             @if($shipment->returnWorkflow->status === 'AWAITING_SELLER_CONFIRMATION')

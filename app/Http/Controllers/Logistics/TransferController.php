@@ -28,7 +28,7 @@ class TransferController extends Controller
     {
         $center = $request->user()->logisticsCenter()->where('status', 'ACTIVE')->firstOrFail();
         if (! $this->schema->manifestReady()) {
-            return view('logistics.transfers.index', [
+            return view('Logistics.transfers.index', [
                 'center' => $center,
                 'transferReady' => false,
                 'outgoing' => collect(),
@@ -41,8 +41,28 @@ class TransferController extends Controller
         }
 
         ['available' => $drivers, 'unavailable' => $unavailableDrivers] = $this->driverOptionsForCenter((int) $center->id);
+        $readyLegsQuery = ShipmentTransferLeg::query()
+            ->where('origin_logistics_center_id', $center->id)
+            ->where('status', ShipmentTransferLeg::READY)
+            ->whereDoesntHave('manifestItems', fn ($items) => $items->whereHas('manifest', fn ($manifest) => $manifest->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])))
+            ->with(['shipment', 'destinationLogisticsCenter'])
+            ->orderBy('sequence_no')
+            ->limit(100);
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $readyLegsQuery->where(fn ($query) => $query
+                ->whereHas('shipment', fn ($shipment) => $shipment->where('logistics_center_id', $center->id))
+                ->orWhereHas('shipment.buyerReturnWorkflows', fn ($workflow) => $workflow
+                    ->where('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+                    ->where('logistics_center_id', $center->id)));
+        } else {
+            $readyLegsQuery->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $center->id));
+        }
+        $readyLegs = $readyLegsQuery->get();
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $readyLegs->load('shipment.buyerReturnWorkflows');
+        }
 
-        return view('logistics.transfers.index', [
+        return view('Logistics.transfers.index', [
             'center' => $center,
             'transferReady' => true,
             'outgoing' => TransferManifest::query()
@@ -60,15 +80,7 @@ class TransferController extends Controller
             'destinations' => LogisticsCenter::query()->active()->whereKeyNot($center->id)->orderBy('business_name')->get(['id', 'business_name', 'code']),
             'drivers' => $drivers,
             'unavailableDrivers' => $unavailableDrivers,
-            'readyLegs' => ShipmentTransferLeg::query()
-                ->where('origin_logistics_center_id', $center->id)
-                ->where('status', ShipmentTransferLeg::READY)
-                ->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $center->id))
-                ->whereDoesntHave('manifestItems', fn ($items) => $items->whereHas('manifest', fn ($manifest) => $manifest->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])))
-                ->with(['shipment', 'destinationLogisticsCenter'])
-                ->orderBy('sequence_no')
-                ->limit(100)
-                ->get(),
+            'readyLegs' => $readyLegs,
         ]);
     }
 
@@ -130,17 +142,31 @@ class TransferController extends Controller
             'items.transferLeg.shipment.sellerOrder.items',
             'items.transferLeg.shipment.orderItem.productVariant',
         ]);
-        $readyLegs = ShipmentTransferLeg::query()
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $manifest->load('items.transferLeg.shipment.buyerReturnWorkflows');
+        }
+        $readyLegsQuery = ShipmentTransferLeg::query()
             ->where('origin_logistics_center_id', $manifest->origin_logistics_center_id)
             ->where('destination_logistics_center_id', $manifest->destination_logistics_center_id)
             ->where('status', ShipmentTransferLeg::READY)
-            ->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $manifest->origin_logistics_center_id))
             ->whereDoesntHave('manifestItems', fn ($items) => $items
                 ->whereHas('manifest', fn ($manifestQuery) => $manifestQuery->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED])))
-            ->with('shipment')
+            ->with(['shipment'])
             ->orderBy('sequence_no')
-            ->limit(100)
-            ->get();
+            ->limit(100);
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $readyLegsQuery->where(fn ($query) => $query
+                ->whereHas('shipment', fn ($shipment) => $shipment->where('logistics_center_id', $manifest->origin_logistics_center_id))
+                ->orWhereHas('shipment.buyerReturnWorkflows', fn ($workflow) => $workflow
+                    ->where('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+                    ->where('logistics_center_id', $manifest->origin_logistics_center_id)));
+        } else {
+            $readyLegsQuery->whereHas('shipment', fn ($query) => $query->where('logistics_center_id', $manifest->origin_logistics_center_id));
+        }
+        $readyLegs = $readyLegsQuery->get();
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $readyLegs->load('shipment.buyerReturnWorkflows');
+        }
         $drivers = $isOriginCenter
             ? $this->manifests->eligibleDriversForCenter((int) $manifest->origin_logistics_center_id, (int) $manifest->id)
             : collect();
@@ -148,7 +174,7 @@ class TransferController extends Controller
             ? $this->driverOptionsForCenter((int) $manifest->origin_logistics_center_id, (int) $manifest->id)['unavailable']
             : collect();
 
-        return view('logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers', 'unavailableDrivers', 'isOriginCenter'));
+        return view('Logistics.transfers.show', compact('center', 'manifest', 'readyLegs', 'drivers', 'unavailableDrivers', 'isOriginCenter'));
     }
 
     public function addLeg(Request $request, int $manifest): RedirectResponse

@@ -378,7 +378,38 @@
 .lk-dashboard-finance-metric--attention strong { color: #A63127; }
 
 .lk-rider-profile { gap: 18px; }
-.lk-rider-profile__hero { min-height: 148px; }
+.lk-dashboard-heading.lk-rider-profile__hero { border: 0; background: transparent; box-shadow: none; }
+.lk-rider-profile__account-layout { display: grid; grid-template-columns: 218px minmax(0, 1fr); align-items: start; gap: 16px; }
+.lk-rider-profile__account-nav,
+.lk-rider-profile__account-panel { min-width: 0; overflow: hidden; border: 1px solid var(--ld-line); border-radius: 15px; background: var(--ld-paper); box-shadow: 0 1px 2px rgba(55, 32, 25, .06), 0 8px 24px rgba(55, 32, 25, .035); }
+.lk-rider-profile__account-nav { position: sticky; top: 78px; padding: 9px; }
+.lk-rider-profile__account-identity { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 8px 7px 13px; border-bottom: 1px solid var(--ld-line); }
+.lk-rider-profile__account-avatar { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; overflow: hidden; border: 1px solid var(--ld-line); border-radius: 50%; background: var(--ld-page); }
+.lk-rider-profile__account-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.lk-rider-profile__account-identity-copy { display: grid; min-width: 0; gap: 3px; }
+.lk-rider-profile__account-identity-copy strong,
+.lk-rider-profile__account-identity-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-rider-profile__account-identity-copy strong { color: var(--ld-ink); font-size: 11px; font-weight: 750; }
+.lk-rider-profile__account-identity-copy small { color: var(--ld-muted); font-size: 9px; }
+.lk-rider-profile__account-tabs { display: grid; gap: 3px; padding-top: 8px; }
+.lk-rider-profile__account-tab { display: flex; min-height: 42px; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 9px; color: var(--ld-ink); text-decoration: none; transition: color .16s ease, background-color .16s ease; }
+.lk-rider-profile__account-tab:hover,
+.lk-rider-profile__account-tab:focus-visible,
+.lk-rider-profile__account-tab.is-active { color: var(--ld-maroon); background: var(--ld-maroon-soft); }
+.lk-rider-profile__account-tab:focus-visible { outline: 2px solid var(--ld-maroon); outline-offset: 2px; }
+.lk-rider-profile__account-tab-icon { display: grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; }
+.lk-rider-profile__account-tab-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.lk-rider-profile__account-tab-copy { display: grid; gap: 2px; }
+.lk-rider-profile__account-tab-copy strong { color: inherit; font-size: 10px; font-weight: 750; line-height: 1.2; }
+.lk-rider-profile__account-tab-copy small { color: var(--ld-muted); font-size: 8px; line-height: 1.2; }
+.lk-rider-profile__account-logout { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ld-line); }
+.lk-rider-profile__account-logout button { display: flex; width: 100%; min-height: 38px; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-radius: 9px; color: #A63127; background: transparent; font: inherit; font-size: 10px; font-weight: 700; text-align: left; cursor: pointer; }
+.lk-rider-profile__account-logout button:hover { background: #FFF2EF; }
+.lk-rider-profile__account-panels { display: grid; min-width: 0; }
+.lk-rider-profile__account-panel { display: grid; gap: 15px; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; scroll-margin-top: 78px; }
+.lk-rider-profile__account-panel[hidden] { display: none !important; }
+.lk-rider-profile__payment-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.lk-rider-profile__text-link { align-self: center; color: var(--ld-maroon); font-size: 10px; font-weight: 750; text-decoration: underline; }
 .lk-rider-profile__status,
 .lk-rider-profile__document-status {
     display: inline-flex;
@@ -460,7 +491,6 @@
 .lk-rider-profile__history-row p { margin: 5px 0 0; color: var(--ld-muted); font-size: 9px; }
 .lk-rider-profile__address-content { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .lk-rider-profile__address-content > label { display: grid; min-width: 0; gap: 6px; color: var(--ld-ink); font-size: 11px; font-weight: 700; }
-.lk-rider-profile__address-pin { grid-column: 1 / -1; min-width: 0; }
 .lk-rider-profile__password-content { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 20px 22px 22px; }
 .lk-rider-profile__logout { display: flex; justify-content: flex-end; margin: 0; }
 .lk-rider-profile__logout-button { border-color: #E8B9B2; color: #A63127; }
@@ -468,6 +498,7 @@
 
 html.dark .lk-logistics-dashboard { --ld-ink: #F5EFE8; --ld-muted: #B8AAA1; --ld-line: #30231F; --ld-line-strong: #49342B; --ld-paper: #1B1513; --ld-paper-soft: #211A17; --ld-page: #130F0E; --ld-maroon: #E7A99C; --ld-maroon-soft: #3A1111; --ld-green: #7FC99D; --ld-amber: #E8B96A; --ld-red: #E6948C; }
 html.dark .lk-dashboard-heading { border-color: var(--ld-line); background: radial-gradient(ellipse at 94% 14%, rgba(168, 69, 56, .2), transparent 34%), linear-gradient(112deg, #211A17 0%, #1B1513 62%, #171210 100%); box-shadow: none; }
+html.dark .lk-dashboard-heading.lk-rider-profile__hero { border: 0; background: transparent; box-shadow: none; }
 html.dark .lk-dashboard-filter, html.dark .lk-dashboard-card, html.dark .lk-dashboard-kpi { box-shadow: none; }
 html.dark .lk-dashboard-card-head { background: linear-gradient(112deg, #211A17, #1B1513); }
 html.dark .lk-dashboard-kpi { border-color: var(--ld-line); background: linear-gradient(145deg, #211A17, #1B1513); }
@@ -489,6 +520,19 @@ html.dark .lk-dashboard-quicklink:hover { background: var(--ld-paper-soft); }
 html.dark .lk-dashboard-finance-metric { border-color: #30231F; background: #171210; }
 html.dark .lk-dashboard-finance-metric--attention { border-color: #59322E; background: #281816; }
 html.dark .lk-rider-profile__status { border-color: var(--ld-line-strong); background: rgba(27, 21, 19, .8); color: var(--ld-ink); }
+html.dark .lk-rider-profile__account-nav,
+html.dark .lk-rider-profile__account-panel { border-color: var(--ld-line); background: var(--ld-paper); box-shadow: none; }
+html.dark .lk-rider-profile__account-identity { border-color: var(--ld-line); }
+html.dark .lk-rider-profile__account-avatar { border-color: var(--ld-line); background: var(--ld-page); }
+html.dark .lk-rider-profile__account-identity-copy strong { color: var(--ld-ink); }
+html.dark .lk-rider-profile__account-tab { color: var(--ld-ink); }
+html.dark .lk-rider-profile__account-tab:hover,
+html.dark .lk-rider-profile__account-tab:focus-visible,
+html.dark .lk-rider-profile__account-tab.is-active { color: #F3C6BA; background: #3A1111; }
+html.dark .lk-rider-profile__account-logout { border-color: var(--ld-line); }
+html.dark .lk-rider-profile__account-logout button { color: #E6948C; }
+html.dark .lk-rider-profile__account-logout button:hover { background: #281816; }
+html.dark .lk-rider-profile__text-link { color: #E7A99C; }
 html.dark .lk-rider-profile__photo,
 html.dark .lk-rider-profile__protected-note,
 html.dark .lk-rider-profile__card-note,
@@ -512,6 +556,12 @@ html.dark .lk-rider-profile__logout-button:hover { background: #281816; }
 }
 
 @media (max-width: 980px) {
+    .lk-rider-profile__account-layout { grid-template-columns: 1fr; }
+    .lk-rider-profile__account-nav { position: static; overflow: visible; }
+    .lk-rider-profile__account-tabs { display: flex; gap: 5px; overflow-x: auto; padding: 8px 1px 2px; }
+    .lk-rider-profile__account-tab { min-width: max-content; }
+    .lk-rider-profile__account-logout { display: flex; justify-content: flex-end; }
+    .lk-rider-profile__account-logout button { width: auto; }
     .lk-rider-profile__overview { grid-template-columns: 1fr; }
     .lk-rider-profile__documents { grid-column: auto; }
 }
@@ -565,10 +615,10 @@ html.dark .lk-rider-profile__logout-button:hover { background: #281816; }
     .lk-rider-profile__fields,
     .lk-rider-profile__review-form,
     .lk-rider-profile__address-content,
+    .lk-rider-profile__payment-form,
     .lk-rider-profile__password-content,
     .lk-rider-profile__document-list { grid-template-columns: 1fr; }
-    .lk-rider-profile__field--wide,
-    .lk-rider-profile__address-pin { grid-column: auto; }
+    .lk-rider-profile__field--wide { grid-column: auto; }
     .lk-rider-profile__card-content,
     .lk-rider-profile__password-content { padding: 14px; }
     .lk-rider-profile__document-row { align-items: flex-start; flex-direction: column; }

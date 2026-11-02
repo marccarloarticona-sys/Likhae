@@ -16,11 +16,15 @@ class SellerReturnWorkflowController extends Controller
         $data = $request->validate(['notes' => ['nullable', 'string', 'max:1000']]);
 
         try {
-            $returns->confirmSellerReceipt($workflow, $request->user(), $data['notes'] ?? null);
+            $confirmed = $returns->confirmSellerReceipt($workflow, $request->user(), $data['notes'] ?? null);
         } catch (RuntimeException $exception) {
             return back()->withErrors(['return' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Seller receipt confirmed. The shipment is now marked RETURNED.');
+        $message = $confirmed->seller_return_refund_request_id
+            ? 'Seller receipt confirmed through the buyer return route. The original delivered shipment remains unchanged; inspect the items before refund payment.'
+            : 'Seller receipt confirmed. The shipment is now marked RETURNED.';
+
+        return back()->with('status', $message);
     }
 }

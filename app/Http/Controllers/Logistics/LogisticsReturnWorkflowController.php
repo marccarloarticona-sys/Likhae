@@ -32,8 +32,17 @@ class LogisticsReturnWorkflowController extends Controller
             $relations[] = 'handoffAuthorizedBy';
             $relations[] = 'returnExceptionRecordedBy';
         }
+        $buyerWaybillsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady();
+        if ($buyerWaybillsReady) {
+            $relations[] = 'sellerReturnRefundRequest.request';
+            $relations[] = 'sellerReturnRefundRequest.sellerProfile';
+            $relations[] = 'sellerReturnRefundRequest.items.orderItem';
+        }
         if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->transferReady()) {
             $relations[] = 'shipment.transferLegs.destinationLogisticsCenter';
+            if ($buyerWaybillsReady) {
+                $relations[] = 'shipment.buyerReturnWorkflows';
+            }
         }
 
         $workflows = ShipmentReturnWorkflow::query()
@@ -54,15 +63,33 @@ class LogisticsReturnWorkflowController extends Controller
             ->orderBy('id')
             ->get();
 
-        return view('logistics.returns.index', [
+        return view('Logistics.returns.index', [
             'active' => 'returns',
             'center' => $center,
             'workflows' => $workflows,
             'workflowCounts' => $workflowCounts,
             'riders' => $riders,
             'returnEnhancementsReady' => $returnEnhancementsReady,
+            'buyerWaybillsReady' => $buyerWaybillsReady,
             'transferReady' => app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->transferReady(),
         ]);
+    }
+
+    public function receiveBuyerDropoff(Request $request, ShipmentReturnWorkflowService $returns): RedirectResponse
+    {
+        $data = $request->validate([
+            'scan_method' => ['required', 'in:QR,BARCODE,MANUAL'],
+            'scanned_code' => ['required', 'string', 'max:150'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        try {
+            $returns->receiveBuyerReturnDropoff($request->user(), $data['scanned_code'], $data['scan_method'], $data['notes'] ?? null);
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['buyer_return' => $exception->getMessage()])->withInput();
+        }
+
+        return back()->with('status', 'Buyer return parcel received. Logistics has started the return-to-seller route.');
     }
 
     public function receive(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse

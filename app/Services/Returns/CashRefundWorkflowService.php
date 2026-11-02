@@ -11,8 +11,6 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Returns\CashRefundObligation;
-use App\Models\Returns\ReturnCustodyEvent;
-use App\Models\Returns\ReturnInspection;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
 use App\Services\ReturnRefundWorkflowService;
@@ -38,16 +36,9 @@ class CashRefundWorkflowService
             if (! self::isNewCashCase($locked->request?->refund_method)) {
                 throw new RuntimeException('The cash refund workflow is only available for new COD cash cases. Historical online refunds remain on the legacy payout path.');
             }
-            $hasReceipt = ReturnCustodyEvent::query()->where('seller_return_refund_request_id', $locked->id)->where('event_type', 'SELLER_RECEIVED')->exists();
-            $itemIds = $locked->items->pluck('id')->map(fn ($id): int => (int) $id)->values();
-            $inspectedCount = $itemIds->isEmpty() ? 0 : ReturnInspection::query()
-                ->where('seller_return_refund_request_id', $locked->id)
-                ->where('inspection_status', 'COMPLETED')
-                ->whereIn('return_refund_request_item_id', $itemIds)
-                ->distinct()
-                ->count('return_refund_request_item_id');
-            if (! $hasReceipt || $itemIds->isEmpty() || $inspectedCount !== $itemIds->count()) {
-                throw new RuntimeException('Record seller/facility receipt and complete inspection for every returned item before making cash ready.');
+            $physicalReturnRequired = app(PhysicalReturnCompletionService::class)->isRequired($locked);
+            if ($physicalReturnRequired) {
+                app(PhysicalReturnCompletionService::class)->assertComplete($locked);
             }
 
             $request = $locked->request;
@@ -139,6 +130,7 @@ class CashRefundWorkflowService
                 $fromStatus = $sellerRequest->status;
                 $sellerRequest->update(['status' => SellerReturnRefundRequest::STATUS_CONFIRMED]);
                 app(ReturnRefundWorkflowService::class)->recordEvent($sellerRequest->request, 'BUYER_CONFIRMED_CASH_RECEIPT', $buyer, $sellerRequest, $fromStatus, SellerReturnRefundRequest::STATUS_CONFIRMED, 'Buyer acknowledged cash refund receipt.', ['obligation_id' => $locked->id]);
+                app(ReturnRefundWorkflowService::class)->syncParentStatus($sellerRequest->request);
             }
 
             return $locked->refresh();

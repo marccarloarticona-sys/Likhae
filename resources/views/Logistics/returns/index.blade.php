@@ -5,13 +5,40 @@
     <header>
         <p class="text-xs font-bold uppercase text-primary">Reverse custody</p>
         <h1 class="mt-2 text-2xl font-bold text-ink">Return parcels to sellers</h1>
-        <p class="mt-2 max-w-3xl text-sm text-muted">Receive undelivered parcels after the rider completes the route, then route each parcel for redelivery or return to seller. Shipment status remains DELIVERY_FAILED until seller receipt is confirmed.</p>
+        <p class="mt-2 max-w-3xl text-sm text-muted">Receive failed-delivery parcels from riders or scan buyer-printed return waybills at the assigned center. Buyer returns follow the same seller-side transfer and return-rider route while the original delivery stays marked delivered.</p>
     </header>
+
+    <aside class="border border-line bg-surface p-4 text-sm text-muted">
+        <strong class="text-ink">Return transport accounting</strong>
+        <p class="mt-1">Admin reviews fault in Finance. The amount is two checkout shipping fees for the outbound and return trips. Buyer fault is a platform loss; Seller fault is deducted from Seller payables. This review does not change parcel custody or shipment status.</p>
+    </aside>
 
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
 
-    <section class="grid gap-4 md:grid-cols-3">
+    @if($buyerWaybillsReady)
+        <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.75fr)]">
+            <form method="POST" action="{{ route('logistics.returns.receive-buyer-dropoff') }}" class="grid gap-3 border border-line bg-surface p-5">
+                @csrf
+                <div>
+                    <h2 class="text-base font-bold text-ink">Receive a buyer return drop-off</h2>
+                    <p class="mt-1 text-sm text-muted">Scan the new return waybill after the Buyer hands over the parcel. This is separate from failed-delivery returns.</p>
+                </div>
+                <x-shared.parcel-scan-input name="scanned_code" method-name="scan_method" id="buyer-return-dropoff-scan" :value="old('scanned_code', '')" />
+                <label class="grid gap-1 text-sm font-semibold">Notes (optional)
+                    <input name="notes" value="{{ old('notes') }}" maxlength="1000" class="w-full border border-line p-3 text-sm" placeholder="Parcel condition or handover note">
+                </label>
+                <button class="justify-self-start bg-primary px-4 py-2 text-sm font-semibold text-white">Confirm buyer drop-off</button>
+            </form>
+            <aside class="border border-line bg-surface p-5 text-sm text-muted">
+                <strong class="text-ink">Return destination</strong>
+                <p class="mt-2">After receipt, the existing return-to-seller route moves the parcel to the seller-side center, assigns a return rider, and records seller receipt. The original delivery remains recorded as delivered.</p>
+            </aside>
+        </section>
+    @endif
+
+    <section class="grid gap-4 md:grid-cols-4">
+        @if($buyerWaybillsReady)<div class="border border-line bg-surface p-5"><p class="text-sm text-muted">Awaiting buyer drop-off</p><strong class="mt-2 block text-2xl text-ink">{{ $workflowCounts['AWAITING_BUYER_DROPOFF'] ?? 0 }}</strong></div>@endif
         <div class="border border-line bg-surface p-5"><p class="text-sm text-muted">Awaiting center handoff</p><strong class="mt-2 block text-2xl text-ink">{{ $workflowCounts['AWAITING_CENTER_HANDOFF'] ?? 0 }}</strong></div>
         <div class="border border-line bg-surface p-5"><p class="text-sm text-muted">Awaiting center receipt</p><strong class="mt-2 block text-2xl text-ink">{{ $workflowCounts['AWAITING_CENTER_RECEIPT'] ?? 0 }}</strong></div>
         <div class="border border-line bg-surface p-5"><p class="text-sm text-muted">Awaiting return rider assignment</p><strong class="mt-2 block text-2xl text-ink">{{ $workflowCounts['READY_FOR_RETURN_ASSIGNMENT'] ?? 0 }}</strong></div>
@@ -68,11 +95,17 @@
     <section class="grid gap-4">
         @forelse($workflows as $workflow)
             @php($shipment = $workflow->shipment)
+            @php($isBuyerReturn = $buyerWaybillsReady && (bool) $workflow->seller_return_refund_request_id)
+            @php($returnCode = $isBuyerReturn ? $workflow->return_tracking_number : $shipment?->tracking_number)
             <article class="border border-line bg-surface p-5">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <p class="text-xs font-bold uppercase text-primary">{{ str($workflow->status)->replace('_', ' ')->title() }}</p>
-                        <h2 class="mt-1 text-lg font-bold text-ink">{{ $shipment?->tracking_number }} <span class="text-sm font-normal text-muted">· {{ $shipment?->sellerOrder?->seller_order_number }}</span></h2>
+                        <h2 class="mt-1 text-lg font-bold text-ink">{{ $returnCode }} <span class="text-sm font-normal text-muted">· {{ $shipment?->sellerOrder?->seller_order_number }}</span></h2>
+                        @if($isBuyerReturn)
+                            <p class="mt-1 text-sm font-semibold text-primary">Buyer return waybill · {{ $workflow->sellerReturnRefundRequest?->request?->request_number }}</p>
+                            @if($workflow->sellerReturnRefundRequest?->items?->isNotEmpty())<p class="mt-1 text-sm text-muted">Items: {{ $workflow->sellerReturnRefundRequest->items->map(fn ($item) => ($item->orderItem?->product_name ?? 'Item').' × '.$item->quantity)->join(', ') }}</p>@endif
+                        @endif
                         <p class="mt-1 text-sm text-muted">Reason: {{ $workflow->reason }}</p>
                         @if($returnEnhancementsReady)
                             <p class="mt-1 text-sm">Disposition: <strong>{{ $workflow->return_disposition === 'REDELIVERY' ? 'Return to center for redelivery' : 'Return to seller' }}</strong></p>
@@ -83,8 +116,13 @@
                         <p class="mt-1 text-xs text-muted">Started {{ $workflow->initiated_at?->timezone('Asia/Manila')->format('M j, Y g:i A') ?? 'time unavailable' }} · Shipment status: {{ str($shipment?->current_status)->replace('_', ' ')->title() }}</p>
                         @if($workflow->status === 'AWAITING_CENTER_HANDOFF')
                             <p class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">The original rider still holds this parcel. It is expected back after the delivery route is completed.</p>
+                        @elseif($workflow->status === 'AWAITING_BUYER_DROPOFF')
+                            <p class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Waiting for the Buyer to print this return waybill and hand the parcel to the assigned drop-off center.</p>
                         @elseif($workflow->status === 'AWAITING_CENTER_RECEIPT')
                             <p class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">The rider presented the parcel. Confirm its matching scan below to transfer custody to this center.</p>
+                            @if($returnEnhancementsReady && $workflow->return_disposition === 'SELLER_RETURN' && $shipment?->current_status === 'LOST')
+                                <p class="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">This parcel has a prior lost status. A matching center scan confirms physical recovery, restores DELIVERY_FAILED for the return route, and keeps the prior loss history available for review.</p>
+                            @endif
                         @elseif($workflow->status === 'CENTER_RECEIVED_FOR_REDELIVERY')
                             <p class="mt-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">Center custody is confirmed. This parcel remains eligible for a delivery retry; it has not been returned to the seller.</p>
                         @elseif($workflow->status === 'AWAITING_CROSS_CENTER_TRANSFER')
@@ -131,7 +169,7 @@
                             @csrf
                             <label class="text-sm font-semibold">Center receipt scan</label>
                             <x-shared.parcel-scan-input name="scanned_code" method-name="scan_method" :id="'return-center-scan-'.$workflow->id" :value="old('scanned_code', '')" />
-                            <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Confirm parcel received</button>
+                            <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">{{ $returnEnhancementsReady && $workflow->return_disposition === 'SELLER_RETURN' && $shipment?->current_status === 'LOST' ? 'Confirm recovery & receipt' : 'Confirm parcel received' }}</button>
                         </form>
                     @elseif($workflow->status === 'AWAITING_CROSS_CENTER_TRANSFER')
                         <div class="grid w-full gap-2 lg:max-w-sm">

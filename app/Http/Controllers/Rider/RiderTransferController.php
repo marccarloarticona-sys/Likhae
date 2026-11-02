@@ -9,6 +9,7 @@ use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use RuntimeException;
 
@@ -23,12 +24,35 @@ class RiderTransferController extends Controller
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
+        $filters = $request->validate([
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d'],
+            'view' => ['nullable', 'in:all,active,history'],
+        ]);
+        if (filled($filters['from'] ?? null) && filled($filters['to'] ?? null) && $filters['to'] < $filters['from']) {
+            throw ValidationException::withMessages(['to' => 'The end date must be on or after the start date.']);
+        }
+        $filters = [
+            'from' => (string) ($filters['from'] ?? ''),
+            'to' => (string) ($filters['to'] ?? ''),
+            'view' => $filters['view'] ?? 'all',
+        ];
         $ready = $this->schema->transferReady();
-        $manifests = $ready
-            ? TransferManifest::query()->where('assigned_driver_rider_profile_id', $rider->id)->with('originLogisticsCenter', 'destinationLogisticsCenter')->latest()->paginate(20)
-            : collect();
+        $manifests = collect();
+        if ($ready) {
+            $query = TransferManifest::query()->where('assigned_driver_rider_profile_id', $rider->id)
+                ->with('originLogisticsCenter', 'destinationLogisticsCenter')->latest('created_at');
+            if ($filters['view'] === 'history') {
+                $query->whereIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
+            } elseif ($filters['view'] === 'active') {
+                $query->whereNotIn('status', [TransferManifest::RECEIVED, TransferManifest::CANCELLED]);
+            }
+            if ($filters['from'] !== '') $query->whereDate('created_at', '>=', $filters['from']);
+            if ($filters['to'] !== '') $query->whereDate('created_at', '<=', $filters['to']);
+            $manifests = $query->paginate(20)->withQueryString();
+        }
 
-        return view('rider.transfers', compact('rider', 'ready', 'manifests'));
+        return view('rider.transfers', compact('rider', 'ready', 'manifests', 'filters'));
     }
 
     public function show(Request $request, int $manifest): View

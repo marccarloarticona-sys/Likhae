@@ -7,9 +7,13 @@ use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderProfile;
+use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\User;
+use App\Services\ReturnRefundWorkflowService;
+use App\Services\Returns\ReturnCustodyService;
 use App\Support\RiderVehicleType;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 class ShipmentReturnWorkflowService
@@ -26,11 +30,15 @@ class ShipmentReturnWorkflowService
 
     public function hasOpenWorkflow(Shipment $shipment): bool
     {
-        return $this->available()
-            && ShipmentReturnWorkflow::query()
-                ->where('shipment_id', $shipment->id)
-                ->whereIn('status', ShipmentReturnWorkflow::OPEN_STATUSES)
-                ->exists();
+        if (! $this->available()) {
+            return false;
+        }
+        $query = ShipmentReturnWorkflow::query()->where('shipment_id', $shipment->id);
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $query->whereNull('seller_return_refund_request_id');
+        }
+
+        return $query->whereIn('status', ShipmentReturnWorkflow::OPEN_STATUSES)->exists();
     }
 
     public function initiateFromDeliveryFailure(
@@ -56,10 +64,11 @@ class ShipmentReturnWorkflowService
         }
 
         return DB::transaction(function () use ($shipment, $assignment, $actor, $reason, $centerId, $disposition): ShipmentReturnWorkflow {
-            $workflow = ShipmentReturnWorkflow::query()
-                ->where('shipment_id', $shipment->id)
-                ->lockForUpdate()
-                ->first();
+            $query = ShipmentReturnWorkflow::query()->where('shipment_id', $shipment->id);
+            if ($this->schema->buyerReturnWaybillsReady()) {
+                $query->whereNull('seller_return_refund_request_id');
+            }
+            $workflow = $query->lockForUpdate()->first();
             if ($workflow && in_array($workflow->status, ShipmentReturnWorkflow::OPEN_STATUSES, true)) {
                 return $workflow;
             }
@@ -113,6 +122,184 @@ class ShipmentReturnWorkflowService
         });
     }
 
+    public function issueBuyerReturnWaybill(SellerReturnRefundRequest $sellerRequest, User $buyer): ShipmentReturnWorkflow
+    {
+        if (! $this->schema->buyerReturnWaybillsReady() || ! $this->schema->shipmentReturnEnhancementsReady()) {
+            throw new RuntimeException('Buyer return waybills are unavailable until the return waybill migration is installed.');
+        }
+
+        $sellerRequest->loadMissing(['request', 'sellerOrder.shipments.riderAssignments']);
+        abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $buyer->id, 403);
+        if (trim((string) $sellerRequest->request?->solution) !== 'Return & Refund') {
+            throw new RuntimeException('This request is not eligible for a physical return waybill.');
+        }
+        if (! in_array($sellerRequest->status, [SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true)) {
+            throw new RuntimeException('The Seller or Admin must approve the return before a waybill can be issued.');
+        }
+
+        return DB::transaction(function () use ($sellerRequest, $buyer): ShipmentReturnWorkflow {
+            $lockedRequest = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with(['request', 'sellerOrder.shipments.riderAssignments'])->firstOrFail();
+            abort_unless((int) $lockedRequest->request?->buyer_user_id === (int) $buyer->id, 403);
+            if (trim((string) $lockedRequest->request?->solution) !== 'Return & Refund'
+                || ! in_array($lockedRequest->status, [SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true)) {
+                throw new RuntimeException('This return is no longer approved for a physical return waybill.');
+            }
+            $existing = ShipmentReturnWorkflow::query()
+                ->where('seller_return_refund_request_id', $lockedRequest->id)
+                ->lockForUpdate()
+                ->first();
+            if ($existing) {
+                return $existing;
+            }
+
+            $shipment = $lockedRequest->sellerOrder?->shipments
+                ->first(fn (Shipment $candidate): bool => in_array($candidate->current_status, ['DELIVERED', 'COMPLETED'], true));
+            if (! $shipment) {
+                throw new RuntimeException('A delivered shipment with a verified route is required before a return waybill can be printed.');
+            }
+            $deliveryAssignment = $shipment->riderAssignments
+                ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                ->where('status', 'COMPLETED')
+                ->sortByDesc(fn (RiderAssignment $assignment) => $assignment->completed_at?->getTimestamp() ?? 0)
+                ->first();
+            if (! $deliveryAssignment) {
+                throw new RuntimeException('The completed delivery assignment is missing, so Logistics cannot validate the return route.');
+            }
+            $dropoffCenterId = (int) ($shipment->destination_logistics_center_id ?: $shipment->logistics_center_id);
+            $sellerCenterId = (int) $shipment->origin_logistics_center_id;
+            if ($dropoffCenterId <= 0 || $sellerCenterId <= 0) {
+                throw new RuntimeException('The outbound route is missing a verified buyer or seller Logistics Center.');
+            }
+            if ($dropoffCenterId !== $sellerCenterId && ! $this->schema->transferReady()) {
+                throw new RuntimeException('The return-to-seller inter-center route is not ready yet, so a return waybill cannot be issued.');
+            }
+
+            $priorBuyerRoute = ShipmentReturnWorkflow::query()
+                ->where('shipment_id', $shipment->id)
+                ->whereNotNull('seller_return_refund_request_id')
+                ->where('seller_return_refund_request_id', '<>', $lockedRequest->id)
+                ->lockForUpdate()
+                ->first();
+            if ($priorBuyerRoute) {
+                throw new RuntimeException('This outbound parcel already has a buyer return waybill. Combine eligible items from the same parcel into one return request.');
+            }
+
+            $waybillCode = 'RET-'.now()->format('ymd').'-'.Str::upper(Str::random(10));
+            $workflow = ShipmentReturnWorkflow::query()->create([
+                'shipment_id' => $shipment->id,
+                'seller_return_refund_request_id' => $lockedRequest->id,
+                'return_tracking_number' => $waybillCode,
+                'buyer_dropoff_logistics_center_id' => $dropoffCenterId,
+                'logistics_center_id' => $dropoffCenterId,
+                'original_delivery_assignment_id' => $deliveryAssignment->id,
+                'status' => ShipmentReturnWorkflow::AWAITING_BUYER_DROPOFF,
+                'reason' => 'Buyer-approved return for refund request '.$lockedRequest->request?->request_number,
+                'initiated_by_user_id' => $buyer->id,
+                'initiated_at' => now(),
+                'return_disposition' => ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN,
+            ]);
+
+            app(ReturnRefundWorkflowService::class)->recordEvent(
+                $lockedRequest->request,
+                'BUYER_RETURN_WAYBILL_ISSUED',
+                $buyer,
+                $lockedRequest,
+                $lockedRequest->status,
+                $lockedRequest->status,
+                'Buyer return waybill issued. Buyer must print it and hand the parcel to the assigned Logistics Center.',
+                ['return_tracking_number' => $waybillCode, 'shipment_id' => $shipment->id, 'dropoff_center_id' => $dropoffCenterId],
+            );
+
+            return $workflow->refresh();
+        }, attempts: 3);
+    }
+
+    public function receiveBuyerReturnDropoff(User $actor, string $code, string $method = 'MANUAL', ?string $notes = null): ShipmentReturnWorkflow
+    {
+        if (! $this->schema->buyerReturnWaybillsReady() || ! $this->schema->shipmentReturnEnhancementsReady()) {
+            throw new RuntimeException('Buyer return waybills are unavailable until the return waybill migration is installed.');
+        }
+        $center = $this->assertLogisticsActor($actor);
+        $trimmedCode = trim($code);
+        if ($trimmedCode === '') {
+            throw new RuntimeException('Scan or enter the buyer return tracking number.');
+        }
+
+        return DB::transaction(function () use ($actor, $center, $trimmedCode, $method, $notes): ShipmentReturnWorkflow {
+            $locked = ShipmentReturnWorkflow::query()
+                ->whereRaw('UPPER(return_tracking_number) = ?', [Str::upper($trimmedCode)])
+                ->lockForUpdate()
+                ->first();
+            if (! $locked) {
+                throw new RuntimeException('No buyer return waybill matches that tracking number.');
+            }
+            if ((int) $locked->logistics_center_id !== (int) $center->id) {
+                throw new RuntimeException('This buyer return is assigned to a different Logistics Center.');
+            }
+            $this->assertStatus($locked, [ShipmentReturnWorkflow::AWAITING_BUYER_DROPOFF]);
+            $sellerRequest = $locked->sellerReturnRefundRequest()->with('request')->firstOrFail();
+            $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
+            $sellerCenterId = (int) $shipment->origin_logistics_center_id;
+            if ($sellerCenterId <= 0) {
+                throw new RuntimeException('The seller-side Logistics Center is missing from the verified return route.');
+            }
+
+            $this->shipments->recordScan($shipment, $actor, 'BUYER_RETURN_DROPOFF_RECEIVED', $method, $locked->return_tracking_number, 'SUCCESS', $center, null, $notes);
+            $locked->update([
+                'status' => (int) $center->id === $sellerCenterId
+                    ? ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT
+                    : ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER,
+                'center_received_by_user_id' => $actor->id,
+                'center_received_at' => now(),
+            ]);
+            $custody = app(ReturnCustodyService::class);
+            $custody->recordCustodyEvent($sellerRequest, $actor, 'BUYER_HANDOFF', [
+                'from_party' => 'BUYER', 'to_party' => 'LOGISTICS', 'shipment_id' => $shipment->id,
+                'location_label' => $center->business_name, 'notes' => 'Buyer presented the parcel with the printed return waybill.',
+                'metadata' => ['return_tracking_number' => $locked->return_tracking_number],
+            ]);
+            $custody->recordCustodyEvent($sellerRequest, $actor, 'LOGISTICS_RECEIVED', [
+                'from_party' => 'BUYER', 'to_party' => 'LOGISTICS', 'shipment_id' => $shipment->id,
+                'location_label' => $center->business_name, 'notes' => $notes ?: 'Logistics scanned and accepted the buyer return parcel.',
+                'metadata' => ['return_tracking_number' => $locked->return_tracking_number],
+            ]);
+            app(ReturnRefundWorkflowService::class)->recordEvent(
+                $sellerRequest->request,
+                'BUYER_RETURN_DROPPED_OFF',
+                $actor,
+                $sellerRequest,
+                $sellerRequest->status,
+                $sellerRequest->status,
+                'Logistics received the buyer-return parcel at its assigned drop-off center.',
+                ['return_tracking_number' => $locked->return_tracking_number, 'logistics_center_id' => $center->id],
+            );
+
+            if ((int) $center->id !== $sellerCenterId && $this->schema->transferReady()) {
+                $sellerCenter = LogisticsCenter::query()->with('address')->find($sellerCenterId);
+                if (! $sellerCenter) {
+                    $reason = 'The seller-side Logistics Center is unavailable after buyer drop-off.';
+                    $locked->update(['status' => ShipmentReturnWorkflow::RETURN_EXCEPTION]);
+                    $this->recordReturnException($locked, $actor, $reason);
+                    $this->recordReturnEvent($shipment, $actor, $center, 'Buyer return was received, but the seller-side center is unavailable. Logistics review is required.');
+                } else {
+                    try {
+                        $transfer = app(ShipmentTransferService::class);
+                        $leg = $transfer->createPlannedLeg($shipment, $center, $sellerCenter);
+                        if ($leg && $leg->status === \App\Models\Logistics\ShipmentTransferLeg::PLANNED) {
+                            $transfer->markReady($leg, $actor);
+                        }
+                    } catch (RuntimeException $exception) {
+                        $locked->update(['status' => ShipmentReturnWorkflow::RETURN_EXCEPTION]);
+                        $this->recordReturnException($locked, $actor, 'Cross-center buyer return transfer could not be planned: '.$exception->getMessage());
+                        $this->recordReturnEvent($shipment, $actor, $center, 'Buyer return was received, but transfer planning needs Logistics review. '.$exception->getMessage());
+                    }
+                }
+            }
+
+            return $locked->refresh();
+        }, attempts: 3);
+    }
+
     public function handoffToCenterAsOriginalRider(ShipmentReturnWorkflow $workflow, User $actor, string $method, string $code, ?string $notes = null): ShipmentReturnWorkflow
     {
         return DB::transaction(function () use ($workflow, $actor, $method, $code, $notes): ShipmentReturnWorkflow {
@@ -121,7 +308,7 @@ class ShipmentReturnWorkflowService
             $this->assertAssignedRider($assignment, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::AWAITING_CENTER_HANDOFF]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertTrackingCode($shipment, $code);
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
             $center = $locked->logisticsCenter()->firstOrFail();
 
             $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_CENTER_HANDOFF', $method, $shipment->tracking_number, 'SUCCESS', $center, $assignment, $notes);
@@ -143,11 +330,21 @@ class ShipmentReturnWorkflowService
             $this->assertLogisticsCenter($locked, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::AWAITING_CENTER_RECEIPT]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
-            $this->assertTrackingCode($shipment, $code);
+            $recoveringLostParcel = $shipment->current_status === 'LOST'
+                && $this->schema->shipmentReturnEnhancementsReady()
+                && $locked->return_disposition === ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN;
+            if ($shipment->current_status !== 'DELIVERY_FAILED' && ! $recoveringLostParcel) {
+                throw new RuntimeException('The parcel must be DELIVERY_FAILED, or be a seller return recorded as LOST, before Logistics can confirm receipt.');
+            }
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
             $center = $locked->logisticsCenter()->firstOrFail();
 
             $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_CENTER_RECEIVED', $method, $shipment->tracking_number, 'SUCCESS', $center, null, $notes);
+            if ($recoveringLostParcel) {
+                // A matching physical receipt scan proves recovery. Keep the loss event/dispute history
+                // intact while restoring the operational status needed by the return route.
+                $shipment->update(['current_status' => 'DELIVERY_FAILED']);
+            }
             $status = ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT;
             $note = 'Sorting center confirmed receipt of the returned parcel.';
             if ($this->schema->shipmentReturnEnhancementsReady()) {
@@ -187,6 +384,9 @@ class ShipmentReturnWorkflowService
                         }
                     }
                 }
+            }
+            if ($recoveringLostParcel) {
+                $note .= ' Matching center scan recovered a parcel previously recorded as lost; prior loss history is retained for review.';
             }
 
             $locked->update([
@@ -252,7 +452,7 @@ class ShipmentReturnWorkflowService
             $center = $this->assertLogisticsCenter($locked, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
+            $this->assertReturnRouteAllowed($locked, $shipment);
             $sellerCenter = LogisticsCenter::query()->with('address')->find((int) $shipment->origin_logistics_center_id);
             if (! $sellerCenter || (int) $sellerCenter->id === (int) $center->id) {
                 throw new RuntimeException('A different verified seller-side center is required for this transfer.');
@@ -346,7 +546,7 @@ class ShipmentReturnWorkflowService
             }
 
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
+            $this->assertReturnRouteAllowed($locked, $shipment);
             $locked->update([
                 'status' => ShipmentReturnWorkflow::RETURN_RIDER_HANDOFF_PENDING,
                 'pending_return_rider_profile_id' => $newRider->id,
@@ -376,10 +576,10 @@ class ShipmentReturnWorkflowService
                 throw new RuntimeException('The current rider has already confirmed this handoff.');
             }
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
-            $this->assertTrackingCode($shipment, $code);
+            $this->assertReturnRouteAllowed($locked, $shipment);
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
             $center = $locked->logisticsCenter()->firstOrFail();
-            $this->shipments->recordScan($shipment, $actor, 'RETURN_RIDER_HANDOFF_FROM', $method, $shipment->tracking_number, 'SUCCESS', $center);
+            $this->shipments->recordScan($shipment, $actor, 'RETURN_RIDER_HANDOFF_FROM', $method, $this->returnTrackingCode($locked, $shipment), 'SUCCESS', $center);
             $locked->update(['handoff_from_confirmed_at' => now()]);
             $this->completeReturnRiderHandoffIfVerified($locked, $shipment, $actor, $center);
 
@@ -406,7 +606,7 @@ class ShipmentReturnWorkflowService
             }
 
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
+            $this->assertReturnRouteAllowed($locked, $shipment);
             $locked->update([
                 'status' => ShipmentReturnWorkflow::RETURN_EXCEPTION,
                 'pending_return_rider_profile_id' => null,
@@ -435,9 +635,9 @@ class ShipmentReturnWorkflowService
             $center = $this->assertLogisticsCenter($locked, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::RETURN_EXCEPTION]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
+            $this->assertReturnRouteAllowed($locked, $shipment);
             $originCenterId = (int) $shipment->origin_logistics_center_id;
-            $currentCenterId = (int) $shipment->logistics_center_id;
+            $currentCenterId = (int) ($locked->seller_return_refund_request_id ? $locked->logistics_center_id : $shipment->logistics_center_id);
             if ($originCenterId <= 0) {
                 throw new RuntimeException('The shipment has no verified seller-side center. Correct its routing data before resolving this exception.');
             }
@@ -477,10 +677,10 @@ class ShipmentReturnWorkflowService
                 throw new RuntimeException('The receiving rider has already confirmed this handoff.');
             }
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
-            $this->assertTrackingCode($shipment, $code);
+            $this->assertReturnRouteAllowed($locked, $shipment);
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
             $center = $locked->logisticsCenter()->firstOrFail();
-            $this->shipments->recordScan($shipment, $actor, 'RETURN_RIDER_HANDOFF_TO', $method, $shipment->tracking_number, 'SUCCESS', $center);
+            $this->shipments->recordScan($shipment, $actor, 'RETURN_RIDER_HANDOFF_TO', $method, $this->returnTrackingCode($locked, $shipment), 'SUCCESS', $center);
             $locked->update(['handoff_to_confirmed_at' => now()]);
             $this->completeReturnRiderHandoffIfVerified($locked, $shipment, $actor, $center);
 
@@ -511,11 +711,11 @@ class ShipmentReturnWorkflowService
             $this->assertReturnRider($locked, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::RETURN_RIDER_ACCEPTED]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
-            $this->assertTrackingCode($shipment, $code);
+            $this->assertReturnRouteAllowed($locked, $shipment);
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
             $center = $locked->logisticsCenter()->firstOrFail();
 
-            $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_SELLER_PICKUP', $method, $shipment->tracking_number, 'SUCCESS', $center, null, $notes);
+            $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_SELLER_PICKUP', $method, $this->returnTrackingCode($locked, $shipment), 'SUCCESS', $center, null, $notes);
             $locked->update([
                 'status' => ShipmentReturnWorkflow::IN_TRANSIT_TO_SELLER,
                 'return_rider_picked_up_by_user_id' => $actor->id,
@@ -534,9 +734,9 @@ class ShipmentReturnWorkflowService
             $this->assertReturnRider($locked, $actor);
             $this->assertStatus($locked, [ShipmentReturnWorkflow::IN_TRANSIT_TO_SELLER]);
             $shipment = $locked->shipment()->lockForUpdate()->firstOrFail();
-            $this->assertDeliveryFailed($shipment);
-            $this->assertTrackingCode($shipment, $code);
-            $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_SELLER_HANDOFF', $method, $shipment->tracking_number, 'SUCCESS', null, null, $notes);
+            $this->assertReturnRouteAllowed($locked, $shipment);
+            $this->assertWorkflowTrackingCode($locked, $shipment, $code);
+            $this->shipments->recordScan($shipment, $actor, 'RETURN_TO_SELLER_HANDOFF', $method, $this->returnTrackingCode($locked, $shipment), 'SUCCESS', null, null, $notes);
             $locked->update([
                 'status' => ShipmentReturnWorkflow::AWAITING_SELLER_CONFIRMATION,
                 'seller_handoff_by_user_id' => $actor->id,
@@ -561,13 +761,13 @@ class ShipmentReturnWorkflowService
                 return $locked;
             }
             $this->assertStatus($locked, [ShipmentReturnWorkflow::AWAITING_SELLER_CONFIRMATION]);
-            $this->assertDeliveryFailed($shipment);
+            $this->assertReturnRouteAllowed($locked, $shipment);
             $this->shipments->recordScan(
                 $shipment,
                 $actor,
                 'RETURN_TO_SELLER_CONFIRMED',
                 'MANUAL',
-                $shipment->tracking_number,
+                $this->returnTrackingCode($locked, $shipment),
                 'SUCCESS',
                 null,
                 null,
@@ -579,8 +779,30 @@ class ShipmentReturnWorkflowService
                 'seller_received_at' => now(),
                 'seller_confirmation_notes' => $notes,
             ]);
-            $shipment->update(['current_status' => 'RETURNED']);
-            $this->shipments->recordEvent($shipment, 'RETURNED', $actor, 'RETURN_TO_SELLER_COMPLETED: Seller confirmed receipt after reverse custody handoff.', null, null, false);
+            if ($locked->seller_return_refund_request_id) {
+                $sellerRequest = $locked->sellerReturnRefundRequest()->with('request')->firstOrFail();
+                app(ReturnCustodyService::class)->recordCustodyEvent($sellerRequest, $actor, 'SELLER_RECEIVED', [
+                    'from_party' => 'LOGISTICS_OR_RIDER',
+                    'to_party' => 'SELLER_OR_FACILITY',
+                    'shipment_id' => $shipment->id,
+                    'location_label' => $shipment->sellerOrder?->sellerProfile?->business_name,
+                    'notes' => $notes ?: 'Seller confirmed receipt of the buyer return parcel.',
+                    'metadata' => ['return_tracking_number' => $locked->return_tracking_number],
+                ]);
+                app(ReturnRefundWorkflowService::class)->recordEvent(
+                    $sellerRequest->request,
+                    'RETURN_RECEIVED_BY_SELLER',
+                    $actor,
+                    $sellerRequest,
+                    $sellerRequest->status,
+                    $sellerRequest->status,
+                    'Seller confirmed receipt of the returned parcel. Inspection is now available before refund payment.',
+                    ['return_tracking_number' => $locked->return_tracking_number, 'shipment_id' => $shipment->id],
+                );
+            } else {
+                $shipment->update(['current_status' => 'RETURNED']);
+                $this->shipments->recordEvent($shipment, 'RETURNED', $actor, 'RETURN_TO_SELLER_COMPLETED: Seller confirmed receipt after reverse custody handoff.', null, null, false);
+            }
 
             return $locked->refresh();
         });
@@ -639,18 +861,34 @@ class ShipmentReturnWorkflowService
         }
     }
 
-    private function assertDeliveryFailed(Shipment $shipment): void
+    private function assertReturnRouteAllowed(ShipmentReturnWorkflow $workflow, Shipment $shipment): void
     {
+        if ($workflow->seller_return_refund_request_id) {
+            if (! in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true)) {
+                throw new RuntimeException('The original parcel must remain delivered while the buyer return follows its separate route.');
+            }
+
+            return;
+        }
+
         if ($shipment->current_status !== 'DELIVERY_FAILED') {
             throw new RuntimeException('The parcel must remain in DELIVERY_FAILED until the seller confirms return receipt.');
         }
     }
 
-    private function assertTrackingCode(Shipment $shipment, string $code): void
+    private function assertWorkflowTrackingCode(ShipmentReturnWorkflow $workflow, Shipment $shipment, string $code): void
     {
-        if (! hash_equals((string) $shipment->tracking_number, trim($code))) {
+        $expected = $this->returnTrackingCode($workflow, $shipment);
+        if (! hash_equals(Str::upper($expected), Str::upper(trim($code)))) {
             throw new RuntimeException('The scanned code does not match this parcel tracking number.');
         }
+    }
+
+    private function returnTrackingCode(ShipmentReturnWorkflow $workflow, Shipment $shipment): string
+    {
+        return filled($workflow->return_tracking_number)
+            ? (string) $workflow->return_tracking_number
+            : (string) $shipment->tracking_number;
     }
 
     private function assertLogisticsCenter(ShipmentReturnWorkflow $workflow, User $actor): LogisticsCenter
@@ -712,6 +950,34 @@ class ShipmentReturnWorkflowService
 
     private function recordReturnEvent(Shipment $shipment, User $actor, ?LogisticsCenter $center, string $notes, ?RiderAssignment $assignment = null, bool $useShipmentCenterFallback = true): void
     {
+        if (! $this->schema->buyerReturnWaybillsReady()) {
+            $this->shipments->recordEvent($shipment, 'DELIVERY_FAILED', $actor, 'RETURN_CUSTODY: '.$notes, $assignment, $center, $useShipmentCenterFallback);
+
+            return;
+        }
+        $buyerWorkflow = ShipmentReturnWorkflow::query()
+            ->where('shipment_id', $shipment->id)
+            ->whereNotNull('seller_return_refund_request_id')
+            ->whereIn('status', ShipmentReturnWorkflow::OPEN_STATUSES)
+            ->first();
+        if ($buyerWorkflow) {
+            $sellerRequest = $buyerWorkflow->sellerReturnRefundRequest()->with('request')->first();
+            if ($sellerRequest?->request) {
+                app(ReturnRefundWorkflowService::class)->recordEvent(
+                    $sellerRequest->request,
+                    'BUYER_RETURN_ROUTE_PROGRESS',
+                    $actor,
+                    $sellerRequest,
+                    $sellerRequest->status,
+                    $sellerRequest->status,
+                    $notes,
+                    ['return_tracking_number' => $buyerWorkflow->return_tracking_number, 'workflow_status' => $buyerWorkflow->status, 'logistics_center_id' => $center?->id],
+                );
+            }
+
+            return;
+        }
+
         $this->shipments->recordEvent($shipment, 'DELIVERY_FAILED', $actor, 'RETURN_CUSTODY: '.$notes, $assignment, $center, $useShipmentCenterFallback);
     }
 }

@@ -51,5 +51,52 @@
         </div>
     </section>
     <div>{{ $assignments->links() }}</div>
+
+    <section class="overflow-hidden rounded-3xl border border-line bg-surface">
+        <div class="border-b border-line px-8 py-6">
+            <h2 class="text-lg font-bold text-ink">Return custody history</h2>
+            <p class="mt-2 text-xs text-muted">Parcels you handled as the original delivery rider or a return rider, with each recorded custody step.</p>
+        </div>
+
+        <div class="divide-y divide-line">
+            @forelse($returnHistory as $return)
+                <article class="grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
+                    <div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <h3 class="text-base font-bold text-ink">{{ $return['tracking'] }}</h3>
+                            <span class="rounded-full bg-primary-soft px-3 py-1 text-xs font-semibold text-primary">{{ $return['status'] }}</span>
+                        </div>
+                        <p class="mt-2 text-sm text-muted">{{ $return['seller'] }} · {{ $return['order'] }}</p>
+                        <p class="mt-1 text-sm text-muted">Center: {{ $return['center'] }} · Your role: {{ $return['involvement'] }}</p>
+                        <p class="mt-1 text-sm text-ink">Disposition: <strong>{{ $return['disposition'] }}</strong></p>
+                        <p class="mt-1 text-sm text-muted">Reason: {{ $return['reason'] }}</p>
+                        <p class="mt-1 text-xs text-muted">Last updated {{ $return['updated'] }}</p>
+                        <p class="mt-3 rounded-xl border border-line bg-white px-4 py-3 text-sm font-medium text-ink">{{ $return['next_step'] }}</p>
+                    </div>
+
+                    <details class="self-start rounded-2xl border border-line bg-white p-4 text-sm">
+                        <summary class="cursor-pointer font-semibold text-primary">Custody history ({{ $return['steps']->count() }} steps)</summary>
+                        @if($return['steps']->isNotEmpty())
+                            <ol class="mt-3 space-y-3 border-l border-line pl-4">
+                                @foreach($return['steps'] as $step)
+                                    <li>
+                                        <strong class="block text-ink">{{ $step['label'] }}</strong>
+                                        <span class="text-xs text-muted">{{ $step['actor'] ?: 'Account unavailable' }} · {{ $step['at']->timezone('Asia/Manila')->format('M j, Y g:i A') }}</span>
+                                    </li>
+                                @endforeach
+                            </ol>
+                        @else
+                            <p class="mt-3 text-xs text-muted">No custody step has been recorded yet.</p>
+                        @endif
+                    </details>
+                </article>
+            @empty
+                <div class="p-8 text-sm text-muted">No return custody history found for your rider account.</div>
+            @endforelse
+        </div>
+    </section>
+    @if(method_exists($returnHistory, 'links'))
+        <div>{{ $returnHistory->links() }}</div>
+    @endif
 </div>
 @endsection

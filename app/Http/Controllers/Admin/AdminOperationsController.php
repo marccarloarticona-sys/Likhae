@@ -50,6 +50,7 @@ use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Finance\PlatformCampaignBudgetService;
+use App\Services\Finance\ReturnTransportLossService;
 use App\Support\FinancialRules;
 use App\Support\PayoutDestinationInput;
 use Illuminate\Http\JsonResponse;
@@ -454,7 +455,7 @@ class AdminOperationsController extends Controller
         return view('Admin.complaints.show', compact('dispute'));
     }
 
-    public function finance(Request $request, FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations): View
+    public function finance(Request $request, FinanceSchemaReadiness $schema, PayoutDestinationReadiness $destinations, ReturnTransportLossService $returnTransportLosses): View
     {
         $requestedToRules = ['nullable', 'date_format:Y-m-d'];
         if ($request->filled('requested_from')) {
@@ -500,6 +501,9 @@ class AdminOperationsController extends Controller
             'campaign_available' => 0.0,
             'campaign_setup_required' => 0,
             'campaign_reconciliation_mismatches' => 0,
+            'return_platform_loss' => 0.0,
+            'return_seller_charges' => 0.0,
+            'return_seller_outstanding' => 0.0,
         ];
         $sellerSettlements = null;
         $productProceeds = null;
@@ -508,6 +512,29 @@ class AdminOperationsController extends Controller
         $logisticsPayouts = null;
         $logisticsPayoutReceipts = null;
         $sellerPayoutSellers = collect();
+        $returnTransportAvailable = $returnTransportLosses->available();
+        $returnTransportReviews = $returnTransportLosses->pendingReviews();
+        if ($returnTransportAvailable) {
+            $financialTotals['return_platform_loss'] = (float) FinancialLedgerEntry::query()
+                ->where('entry_type', ReturnTransportLossService::ENTRY_TYPE)
+                ->where('status', 'POSTED')
+                ->sum('amount');
+            $financialTotals['return_seller_charges'] = (float) FinancialLedgerEntry::query()
+                ->where('entry_type', ReturnTransportLossService::SELLER_ENTRY_TYPE)
+                ->where('status', 'POSTED')
+                ->sum('amount');
+            $financialTotals['return_seller_outstanding'] = FinancialLedgerEntry::query()
+                ->where('account_type', 'SELLER')
+                ->where('entry_type', ReturnTransportLossService::SELLER_ENTRY_TYPE)
+                ->where('direction', 'DEBIT')
+                ->where('status', 'POSTED')
+                ->get(['amount', 'metadata'])
+                ->sum(fn (FinancialLedgerEntry $entry): int => max(
+                    0,
+                    FinancialRules::cents($entry->amount)
+                        - array_sum(array_map('intval', (array) data_get($entry->metadata, 'seller_settlement_adjustments', []))),
+                )) / 100;
+        }
         if ($schema->ready()) {
             $financialTotals['expected_cod'] = (float) CodCollection::query()->sum('expected_amount');
             $financialTotals['cash_collected'] = (float) CodCollection::query()
@@ -762,6 +789,8 @@ class AdminOperationsController extends Controller
             'payoutProofReady' => $schema->sellerPayoutProofReady(),
             'payoutDestinationReady' => $destinations->readyFor('seller_profiles') && $destinations->readyFor('logistics_centers'),
             'financialTotals' => $financialTotals,
+            'returnTransportAvailable' => $returnTransportAvailable,
+            'returnTransportReviews' => $returnTransportReviews,
             'totals' => [
                 'payments' => (float) Payment::where('status', 'PAID')->sum('amount'),
                 'commission' => (float) CommissionTransaction::sum('commission_amount'),

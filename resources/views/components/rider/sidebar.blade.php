@@ -105,7 +105,7 @@
         @if($canUseHubTransfers)
         <div class="sl-nav-section">
             <span class="sl-nav-label">Transfers</span>
-            <a href="{{ route('rider.transfers') }}"
+            <a href="{{ route('rider.transfers', ['view' => 'history']) }}"
                class="sl-nav-link {{ $active === 'transfers' ? 'is-active' : '' }}"
                data-title="Inter-Hub Transfers">
                 <span class="sl-nav-icon">{!! $icon('pickup') !!}</span>
@@ -114,25 +114,25 @@
         </div>
         @endif
 
-        @unless($canUseHubTransfers)
         <div class="sl-nav-section">
             <span class="sl-nav-label">Wallet</span>
 
             <a href="{{ route('rider.wallet') }}"
                class="sl-nav-link {{ $active === 'wallet' ? 'is-active' : '' }}"
-               data-title="Wallet &amp; Payouts">
+               data-title="{{ $canUseHubTransfers ? 'Wallet & Payroll' : 'Wallet & Payouts' }}">
                 <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
-                <span class="sl-nav-text">Wallet &amp; Payouts</span>
-                @if(($sidebarCounts['payout_requests'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['payout_requests'] }}</span>@endif
+                <span class="sl-nav-text">{{ $canUseHubTransfers ? 'Wallet & Payroll' : 'Wallet & Payouts' }}</span>
+                @if(!$canUseHubTransfers && ($sidebarCounts['payout_requests'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['payout_requests'] }}</span>@endif
             </a>
+            @unless($canUseHubTransfers)
             <a href="{{ route('rider.remittances') }}"
                class="sl-nav-link {{ $active === 'remittances' ? 'is-active' : '' }}"
                data-title="COD Remittances">
                 <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
                 <span class="sl-nav-text">COD Remittances</span>
             </a>
+            @endunless
         </div>
-        @endunless
 
         <div class="sl-nav-section">
             <span class="sl-nav-label">Account</span>

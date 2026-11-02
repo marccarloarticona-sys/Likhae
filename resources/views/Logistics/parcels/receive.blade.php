@@ -6,7 +6,7 @@
     <x-logistics.parcel-flow current="receive" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
-    <x-shared.parcel-scanner :action="route('logistics.parcels.receive.scan')" :tracking="old('tracking', request('tracking', ''))" :method="old('scan_method', request('scan_method', 'MANUAL'))" title="Scan Incoming Parcel" description="Scan a seller pickup or an arriving hub-transfer parcel. A valid hub-transfer scan records destination receipt and sends the parcel to sorting for local delivery assignment." button="Receive Parcel" form-method="POST" input-name="tracking" input-label="Parcel tracking number" input-placeholder="Scan or enter tracking number" />
+    <x-shared.parcel-scanner :action="route('logistics.parcels.receive.scan')" :tracking="old('tracking', request('tracking', ''))" :method="old('scan_method', request('scan_method', 'MANUAL'))" title="Scan Incoming Parcel" description="Scan a seller drop-off, rider pickup, or arriving hub-transfer parcel. A valid hub-transfer scan records destination receipt and sends the parcel to sorting for local delivery assignment." button="Receive Parcel" form-method="POST" input-name="tracking" input-label="Parcel tracking number" input-placeholder="Scan or enter tracking number" />
     <section class="space-y-4">
         <div><h2 class="text-lg font-bold text-ink">Incoming Hub Transfer Parcels</h2><p class="mt-1 text-sm text-muted">Scan these parcels with the incoming scanner above. The first valid scan also records the manifest arrival.</p></div>
         @forelse($incomingTransferItems as $item)
@@ -71,7 +71,8 @@
     </section>
 
     <section class="grid gap-4">
-        <h2 class="text-lg font-bold text-ink">Other Picked-Up Parcels</h2>
+        <h2 class="text-lg font-bold text-ink">Incoming Parcels</h2>
+        <p class="mt-1 text-sm text-muted">Seller drop-offs and rider pickups awaiting a waybill scan at this center.</p>
     @forelse($shipments as $shipment)
         <article class="border border-line bg-surface p-5" data-other-receive data-tracking="{{ $shipment->tracking_number }}"><div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div><a class="text-lg font-bold text-primary" href="{{ route('logistics.parcels.show',$shipment) }}">{{ $shipment->tracking_number }}</a><p class="mt-1 text-sm text-muted">{{ $shipment->sellerOrder?->sellerProfile?->business_name }} → {{ $shipment->sellerOrder?->order?->address?->formatted() }}</p><span class="text-xs font-semibold">{{ str($shipment->current_status)->headline() }}</span></div>

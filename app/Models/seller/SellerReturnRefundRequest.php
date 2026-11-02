@@ -104,6 +104,11 @@ class SellerReturnRefundRequest extends Model
         return $this->hasOne(\App\Models\Returns\CashRefundObligation::class, 'seller_return_refund_request_id');
     }
 
+    public function buyerReturnWorkflow(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(\App\Models\Logistics\ShipmentReturnWorkflow::class, 'seller_return_refund_request_id');
+    }
+
     public function events(): HasMany
     {
         return $this->hasMany(\App\Models\Buyer\ReturnRefundEvent::class, 'seller_return_refund_request_id');

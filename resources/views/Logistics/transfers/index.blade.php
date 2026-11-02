@@ -55,7 +55,8 @@
                                     <label class="flex cursor-pointer gap-2 rounded-lg border border-line bg-white p-3 text-xs hover:border-primary">
                                         <input class="mt-0.5" type="checkbox" name="transfer_leg_ids[]" value="{{ $leg->id }}" @checked(in_array((string) $leg->id, (array) old('transfer_leg_ids', []), true))>
                                         <span class="min-w-0">
-                                            <strong class="block text-ink">{{ $leg->shipment?->tracking_number ?? 'Shipment' }}</strong>
+                                            @php($buyerReturn = $leg->shipment?->buyerReturnWorkflows?->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER))
+                                            <strong class="block text-ink">{{ $buyerReturn?->return_tracking_number ?? $leg->shipment?->tracking_number ?? 'Shipment' }}</strong>
                                             <span class="mt-1 block text-[11px] text-muted">Buyer: {{ collect([$leg->shipment?->destination_barangay_name, $leg->shipment?->destination_municipality_name, $leg->shipment?->destination_province_name])->filter()->join(', ') ?: 'Address not recorded' }}</span>
                                         </span>
                                     </label>

@@ -78,6 +78,9 @@ class ReturnCustodyService
                 ->exists()) {
                 throw new RuntimeException('Inspection is blocked until seller/facility receipt is recorded.');
             }
+            if (ReturnInspection::query()->where('return_refund_request_item_id', $lockedItem->id)->where('inspection_status', 'COMPLETED')->exists()) {
+                throw new RuntimeException('This return item already has a completed inspection record.');
+            }
 
             $inspection = ReturnInspection::query()->create([
                 'seller_return_refund_request_id' => $sellerRequest->id,
@@ -94,6 +97,17 @@ class ReturnCustodyService
                 'received_at' => $data['received_at'] ?? now(),
                 'inspected_at' => now(),
                 'notes' => $data['notes'] ?? null,
+            ]);
+
+            $this->recordCustodyEvent($sellerRequest, $inspector, 'INSPECTION_COMPLETED', [
+                'from_party' => 'SELLER_OR_FACILITY',
+                'to_party' => 'SELLER_INVENTORY',
+                'notes' => 'Seller completed inspection of '.$lockedItem->quantity.' returned unit(s).',
+                'metadata' => [
+                    'return_refund_request_item_id' => $lockedItem->id,
+                    'quantity' => $lockedItem->quantity,
+                    'inventory_disposition' => $data['inventory_disposition'],
+                ],
             ]);
 
             if ($data['inventory_disposition'] !== ReturnInspection::RESTOCKABLE

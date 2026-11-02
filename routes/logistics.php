@@ -85,6 +85,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
 
         Route::get('/returns', [LogisticsReturnWorkflowController::class, 'index'])->name('returns');
+        Route::post('/returns/receive-buyer-dropoff', [LogisticsReturnWorkflowController::class, 'receiveBuyerDropoff'])->name('returns.receive-buyer-dropoff');
         Route::post('/returns/receive-batch', [LogisticsReturnWorkflowController::class, 'receiveBatch'])->name('returns.receive-batch');
         Route::post('/returns/{workflow}/receive', [LogisticsReturnWorkflowController::class, 'receive'])->whereNumber('workflow')->name('returns.receive');
         Route::post('/returns/{workflow}/assign', [LogisticsReturnWorkflowController::class, 'assign'])->whereNumber('workflow')->name('returns.assign');

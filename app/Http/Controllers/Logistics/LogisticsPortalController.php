@@ -100,6 +100,14 @@ class LogisticsPortalController extends Controller
                 'incoming' => (clone $base)->where(function ($query) use ($center, $ready): void {
                     $query->where(fn ($local) => $local->where('current_status', 'PICKED_UP')
                         ->where('logistics_center_id', $center->id));
+                    $query->orWhere(fn ($dropoff) => $dropoff
+                        ->where('current_status', 'READY_FOR_PICKUP')
+                        ->where(fn ($centerQuery) => $centerQuery->where('logistics_center_id', $center->id)
+                            ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
+                                ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id))))
+                        ->whereHas('pickupRequests', fn ($pickup) => $pickup
+                            ->whereIn('status', ['PENDING', 'APPROVED'])
+                            ->where('notes', 'like', 'SELLER_DROPOFF:%')));
                     if ($ready) {
                         $query->orWhereHas('transferLegs', fn ($leg) => $leg
                             ->where('destination_logistics_center_id', $center->id)

@@ -615,7 +615,7 @@ class SellerSettlementService
         return true;
     }
 
-    /** Apply posted seller refund debits to unpaid settlements, recording each allocation idempotently. */
+    /** Apply posted seller refund and return-transport debits to unpaid settlements idempotently. */
     public function applyRefundDebtToUnpaidSettlements(int $sellerProfileId, ?User $actor = null): int
     {
         if (! $this->schema->step7Ready()) {
@@ -625,7 +625,7 @@ class SellerSettlementService
         return DB::transaction(function () use ($sellerProfileId, $actor): int {
             $refundEntries = FinancialLedgerEntry::query()
                 ->where('account_type', 'SELLER')
-                ->where('entry_type', 'REFUND_SELLER_REVERSAL')
+                ->whereIn('entry_type', ['REFUND_SELLER_REVERSAL', ReturnTransportLossService::SELLER_ENTRY_TYPE])
                 ->where('direction', 'DEBIT')
                 ->where('status', 'POSTED')
                 ->whereHas('sellerOrder', fn ($query) => $query->where('seller_profile_id', $sellerProfileId))
@@ -638,7 +638,7 @@ class SellerSettlementService
 
             $settlements = SellerSettlement::query()
                 ->where('seller_profile_id', $sellerProfileId)
-                ->whereNotIn('payout_status', ['PAID', 'PAYOUT_PENDING_ACK'])
+                ->whereNotIn('payout_status', ['PAID', 'PAYOUT_PENDING_ACK', 'AUTHORIZED', 'PAYOUT_REQUESTED'])
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
@@ -670,9 +670,21 @@ class SellerSettlementService
                     ]);
                     $adjustments[(string) $settlement->id] = (int) ($adjustments[(string) $settlement->id] ?? 0) + $deductionCents;
                     $metadata['seller_settlement_adjustments'] = $adjustments;
-                    $metadata['unapplied_seller_refund_amount'] = FinancialRules::amount(max(0, FinancialRules::cents($refundEntry->amount) - array_sum(array_map('intval', $adjustments))));
+                    $unappliedKey = $refundEntry->entry_type === ReturnTransportLossService::SELLER_ENTRY_TYPE
+                        ? 'unapplied_seller_transport_amount'
+                        : 'unapplied_seller_refund_amount';
+                    $metadata[$unappliedKey] = FinancialRules::amount(max(0, FinancialRules::cents($refundEntry->amount) - array_sum(array_map('intval', $adjustments))));
                     $refundEntry->update(['metadata' => $metadata]);
-                    $this->audit('SELLER_REFUND_SETTLEMENT_ADJUSTED', $settlement, $actor?->id, $before, $settlement->fresh()->toArray(), 'Applied seller refund reversal of PHP '.FinancialRules::amount($deductionCents).'.');
+                    $isReturnTransport = $refundEntry->entry_type === ReturnTransportLossService::SELLER_ENTRY_TYPE;
+                    $this->audit(
+                        $isReturnTransport ? 'SELLER_RETURN_TRANSPORT_ADJUSTED' : 'SELLER_REFUND_SETTLEMENT_ADJUSTED',
+                        $settlement,
+                        $actor?->id,
+                        $before,
+                        $settlement->fresh()->toArray(),
+                        ($isReturnTransport ? 'Applied return transport charge' : 'Applied seller refund reversal')
+                            .' of PHP '.FinancialRules::amount($deductionCents).'.',
+                    );
                     $remainingCents -= $deductionCents;
                     $changedCents += $deductionCents;
                 }
@@ -687,6 +699,22 @@ class SellerSettlementService
         return FinancialLedgerEntry::query()
             ->where('account_type', 'SELLER')
             ->where('entry_type', 'REFUND_SELLER_REVERSAL')
+            ->where('direction', 'DEBIT')
+            ->where('status', 'POSTED')
+            ->whereHas('sellerOrder', fn ($query) => $query->where('seller_profile_id', $sellerProfileId))
+            ->get(['amount', 'metadata'])
+            ->sum(fn (FinancialLedgerEntry $entry): int => max(
+                0,
+                FinancialRules::cents($entry->amount)
+                    - array_sum(array_map('intval', (array) data_get($entry->metadata, 'seller_settlement_adjustments', []))),
+            ));
+    }
+
+    public function unappliedSellerReturnTransportDebtCents(int $sellerProfileId): int
+    {
+        return FinancialLedgerEntry::query()
+            ->where('account_type', 'SELLER')
+            ->where('entry_type', ReturnTransportLossService::SELLER_ENTRY_TYPE)
             ->where('direction', 'DEBIT')
             ->where('status', 'POSTED')
             ->whereHas('sellerOrder', fn ($query) => $query->where('seller_profile_id', $sellerProfileId))

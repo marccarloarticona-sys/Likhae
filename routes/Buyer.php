@@ -71,6 +71,8 @@ Route::prefix('buyer')
         Route::get('/returns', [BuyerReturnRefundController::class, 'index'])->name('returns');
         Route::get('/returns/request/{returnRequest}', [BuyerReturnRefundController::class, 'parentShow'])->name('returns.parent');
         Route::get('/returns/{sellerRequest}', [BuyerReturnRefundController::class, 'show'])->name('returns.show');
+        Route::post('/returns/{sellerRequest}/waybill', [BuyerReturnRefundController::class, 'createReturnWaybill'])->name('returns.waybill.create');
+        Route::get('/returns/{sellerRequest}/waybill/{workflow}', [BuyerReturnRefundController::class, 'returnWaybill'])->whereNumber('workflow')->name('returns.waybill');
         Route::post('/returns/{sellerRequest}/confirm', [BuyerReturnRefundController::class, 'confirm'])->name('returns.confirm');
         Route::post('/returns/cash-refunds/{obligation}/confirm', [BuyerReturnRefundController::class, 'confirmCash'])->name('returns.cash-confirm');
         Route::post('/returns/{sellerRequest}/escalate', [BuyerReturnRefundController::class, 'escalate'])->name('returns.escalate');

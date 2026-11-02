@@ -58,6 +58,7 @@ class SellerFinanceController extends Controller
             'available' => 0.0,
             'on_hold' => 0.0,
             'refund_debt' => 0.0,
+            'return_transport_debt' => 0.0,
             'requested' => 0.0,
             'processing' => 0.0,
             'awaiting_ack' => 0.0,
@@ -66,6 +67,7 @@ class SellerFinanceController extends Controller
         ];
         if ($ready) {
             $payoutBalances['refund_debt'] = $service->unappliedSellerRefundDebtCents((int) $seller->id) / 100;
+            $payoutBalances['return_transport_debt'] = $service->unappliedSellerReturnTransportDebtCents((int) $seller->id) / 100;
             $eligibleSettlements = SellerSettlement::query()
                 ->where('seller_profile_id', $seller->id)
                 ->whereIn('payout_status', ['AVAILABLE', 'FAILED'])

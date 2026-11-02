@@ -25,10 +25,15 @@ class RiderFinanceController extends Controller
             'payout_bank_name' => ['nullable', 'string', 'max:120', 'required_if:payout_method,Bank Transfer'],
             'payout_account_name' => ['required', 'string', 'max:150'],
             'payout_account_number' => ['required', 'string', 'max:150'],
+            'return_to' => ['nullable', 'string', 'in:wallet,profile'],
         ]);
+        $returnTo = $data['return_to'] ?? 'wallet';
+        unset($data['return_to']);
         $rider->forceFill($data)->save();
 
-        return back()->with('status', 'Online payout details saved securely.');
+        return $returnTo === 'profile'
+            ? redirect()->to(route('rider.profile').'#payment')->with('status', 'Online payout details saved securely.')
+            : back()->with('status', 'Online payout details saved securely.');
     }
 
     public function requestPayout(Request $request, EarningPayoutService $payouts): RedirectResponse

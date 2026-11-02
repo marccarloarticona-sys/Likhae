@@ -5,7 +5,7 @@
     <header>
         <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Reverse custody</span>
         <h1 class="mt-3 text-2xl font-bold tracking-tight text-ink">Return Parcels</h1>
-        <p class="mt-2 max-w-3xl text-sm text-muted">Finish your delivery route, then bring undelivered parcels to your Logistics Center. Your custody stays active until Logistics confirms each matching scan.</p>
+        <p class="mt-2 max-w-3xl text-sm text-muted">This screen carries return-to-seller parcels. Failed-delivery parcels come from your delivery route; buyer returns arrive at Logistics with a new printed return waybill and are assigned here after routing to the seller-side center.</p>
     </header>
     @if(session('status'))<div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">{{ $errors->first() }}</div>@endif
@@ -14,6 +14,7 @@
         @forelse($workflows as $workflow)
             @php
                 $shipment = $workflow->shipment;
+                $returnCode = $workflow->return_tracking_number ?: $shipment?->tracking_number;
                 $isOriginalRider = (int) $workflow->originalDeliveryAssignment?->rider_profile_id === (int) $rider->id;
                 $isReturnRider = (int) $workflow->return_rider_profile_id === (int) $rider->id;
                 $isPendingReturnRider = $returnEnhancementsReady && (int) $workflow->pending_return_rider_profile_id === (int) $rider->id;
@@ -24,7 +25,7 @@
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <span class="text-xs font-bold uppercase tracking-wide text-primary">{{ str($workflow->status)->replace('_', ' ')->title() }}</span>
-                        <h2 class="mt-2 text-xl font-bold text-ink">{{ $shipment?->tracking_number }}</h2>
+                        <h2 class="mt-2 text-xl font-bold text-ink">{{ $returnCode }}</h2>
                         <p class="mt-1 text-sm text-muted">Seller: {{ $sellerProfile?->business_name ?? 'Seller unavailable' }} · Order {{ $shipment?->sellerOrder?->seller_order_number }}</p>
                         <p class="mt-1 text-sm text-muted">Return reason: {{ $workflow->reason }}</p>
                         <p class="mt-1 text-sm text-muted">Center: {{ $workflow->logisticsCenter?->business_name ?? 'Sorting center' }}</p>

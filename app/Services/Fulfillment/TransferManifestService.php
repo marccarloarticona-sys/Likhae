@@ -107,7 +107,7 @@ final class TransferManifestService
                 throw new RuntimeException('The transfer leg endpoints do not match this manifest.');
             }
             if ($leg->status !== ShipmentTransferLeg::READY
-                || (int) $leg->shipment?->logistics_center_id !== (int) $manifest->origin_logistics_center_id) {
+                || $this->transfers->custodyCenterId($leg) !== (int) $manifest->origin_logistics_center_id) {
                 throw new RuntimeException('Only ready parcels in the origin hub custody may be loaded.');
             }
 
@@ -151,7 +151,7 @@ final class TransferManifestService
             $leg = $item->transferLeg;
             $shipment = $leg?->shipment()->lockForUpdate()->first();
             if ($item->status !== TransferManifestItem::EXPECTED || $leg?->status !== ShipmentTransferLeg::READY
-                || (int) $shipment?->logistics_center_id !== (int) $manifest->origin_logistics_center_id) {
+                || ! $leg || $this->transfers->custodyCenterId($leg) !== (int) $manifest->origin_logistics_center_id) {
                 throw new RuntimeException('Only a ready parcel in the origin hub may be measured.');
             }
             if (TransferManifestItem::query()
@@ -279,7 +279,7 @@ final class TransferManifestService
 
             $item = TransferManifestItem::query()->whereKey($item->id)->where('manifest_id', $locked->id)
                 ->with('transferLeg.shipment')->lockForUpdate()->firstOrFail();
-            $tracking = trim((string) $item->transferLeg?->shipment?->tracking_number);
+            $tracking = trim((string) ($item->transferLeg ? $this->transfers->expectedTrackingCode($item->transferLeg) : ''));
             $code = trim($scannedCode);
             if ($tracking === '' || $code === '' || strtoupper($code) !== strtoupper($tracking)) {
                 throw new RuntimeException('The scanned barcode does not match manifest parcel '.$tracking.'.');
@@ -552,7 +552,8 @@ final class TransferManifestService
                 || (int) $item->transferLeg?->origin_logistics_center_id !== (int) $manifest->origin_logistics_center_id
                 || (int) $item->transferLeg?->destination_logistics_center_id !== (int) $manifest->destination_logistics_center_id
                 || $item->status !== TransferManifestItem::EXPECTED
-                || (int) $item->transferLeg?->shipment?->logistics_center_id !== (int) $manifest->origin_logistics_center_id) {
+                || ! $item->transferLeg
+                || $this->transfers->custodyCenterId($item->transferLeg) !== (int) $manifest->origin_logistics_center_id) {
                 throw new RuntimeException('Every manifest item must be an eligible ready parcel in origin custody with matching endpoints.');
             }
         }
@@ -671,7 +672,7 @@ final class TransferManifestService
 
         foreach ($manifest->items as $item) {
             $code = trim((string) ($scannedCodes[$item->id] ?? ''));
-            $tracking = trim((string) $item->transferLeg?->shipment?->tracking_number);
+            $tracking = trim((string) ($item->transferLeg ? $this->transfers->expectedTrackingCode($item->transferLeg) : ''));
             if ($code === '' || $tracking === '' || strtoupper($code) !== strtoupper($tracking)) {
                 throw new RuntimeException('The scanned barcode does not match manifest parcel '.$tracking.'.');
             }

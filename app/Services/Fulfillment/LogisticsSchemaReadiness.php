@@ -86,6 +86,27 @@ final class LogisticsSchemaReadiness
         return $this->hasTable('shipment_return_workflows');
     }
 
+    public function riderReturnHistoryReady(): bool
+    {
+        return $this->hasColumns('shipment_return_workflows', [
+            'shipment_id',
+            'logistics_center_id',
+            'original_delivery_assignment_id',
+            'return_rider_profile_id',
+            'status',
+            'reason',
+            'initiated_at',
+            'center_handoff_at',
+            'center_received_at',
+            'return_rider_assigned_at',
+            'return_rider_accepted_at',
+            'return_rider_picked_up_at',
+            'seller_handoff_at',
+            'seller_received_at',
+            'updated_at',
+        ]);
+    }
+
     public function shipmentReturnEnhancementsReady(): bool
     {
         return $this->hasColumns('shipment_return_workflows', [
@@ -101,6 +122,26 @@ final class LogisticsSchemaReadiness
             'return_exception_recorded_by_user_id',
             'return_exception_recorded_at',
         ]);
+    }
+
+    public function buyerReturnWaybillsReady(): bool
+    {
+        return $this->hasColumns('shipment_return_workflows', [
+            'seller_return_refund_request_id',
+            'return_tracking_number',
+            'buyer_dropoff_logistics_center_id',
+        ])
+            && $this->hasColumns('shipments', [
+                'origin_logistics_center_id', 'destination_logistics_center_id',
+            ])
+            && $this->hasColumns('rider_assignments', ['assignment_type', 'status', 'completed_at'])
+            && $this->hasTables([
+                'seller_return_refund_requests',
+                'return_refund_requests',
+                'return_refund_events',
+                'return_custody_events',
+                'return_inspections',
+            ]);
     }
 
     private function hasTable(string $table): bool
@@ -126,6 +167,18 @@ final class LogisticsSchemaReadiness
     {
         foreach ($columns as $column) {
             if (! $this->hasColumn($table, $column)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** @param list<string> $tables */
+    private function hasTables(array $tables): bool
+    {
+        foreach ($tables as $table) {
+            if (! $this->hasTable($table)) {
                 return false;
             }
         }

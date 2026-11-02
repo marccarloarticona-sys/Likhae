@@ -6,6 +6,9 @@
 @php
     $parent = $sellerRequest->request;
     $isCashCase = strtoupper((string) $parent->refund_method) === 'CASH';
+    $isPhysicalReturn = $physicalReturnRequired;
+    $buyerReturnWorkflow = $sellerRequest->buyerReturnWorkflow;
+    $physicalReturnComplete = ! $isPhysicalReturn || ($buyerReturnWorkflow?->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED && $inspectionsByItem->count() === $sellerRequest->items->count());
     $cashState = $sellerRequest->cashRefundObligation?->state;
     [$returnNextStep, $returnNextActor] = match (true) {
         $sellerRequest->status === \App\Models\Seller\SellerReturnRefundRequest::STATUS_SELLER_REVIEW => ['Review the request and approve an eligible amount or reject it with a reason.', 'You, the Seller'],
@@ -24,6 +27,61 @@
 <div class="sl-page"><div class="sl-page-toolbar"><div><span class="sl-eyebrow">Returns & Refunds</span><h2>{{ $parent->request_number }}</h2><p>Order {{ $parent->order?->order_number }} &middot; submitted {{ $parent->submitted_at?->format('M d, Y g:i A') }}</p></div><a class="sl-btn sl-btn-ghost" href="{{ route('seller.orders',['status'=>'returns']) }}">Back to Returns</a></div>
 <x-shared.status-guidance :status="$returnStatusLabel" :next="$returnNextStep" :actor="$returnNextActor" />
 @if($responseDeadline)<section class="sl-card my-5"><strong>Seller response due:</strong> {{ $responseDeadline->format('M d, Y g:i A') }} <span class="text-stone-500">({{ config('app.timezone') }})</span><p class="mt-1 text-sm text-stone-600">Requests without a Seller response within three days are automatically approved. Return custody and the existing refund steps still apply.</p></section>@endif
+@if($isPhysicalReturn)
+    <section class="sl-card my-5">
+        <h2 class="font-bold">Buyer return to Seller</h2>
+        @if(!$physicalReturnReady)
+            <p class="mt-2 text-sm text-amber-800">The return waybill and Logistics route are waiting for the additive route migration.</p>
+        @elseif($buyerReturnWorkflow)
+            <p class="mt-2 text-sm">Return tracking <strong class="font-mono">{{ $buyerReturnWorkflow->return_tracking_number }}</strong> · {{ str($buyerReturnWorkflow->status)->replace('_', ' ')->title() }}</p>
+            <p class="mt-1 text-sm text-stone-600">The parcel follows the assigned Logistics Center, any required inter-center transfer, then the existing local return-rider route to your center.</p>
+            @if($buyerReturnWorkflow->status === \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_SELLER_CONFIRMATION)
+                <form method="POST" action="{{ route('seller.orders.refunds.receive', $sellerRequest) }}" class="mt-4 grid gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    @csrf
+                    <input type="hidden" name="confirm_received" value="1">
+                    <p class="text-sm text-amber-950">The return rider has handed the parcel to you. Confirm the physical parcel arrived, then inspect each affected item below.</p>
+                    <textarea name="notes" rows="2" maxlength="2000" class="sl-field" placeholder="Receipt notes (optional)">{{ old('notes') }}</textarea>
+                    <button class="sl-btn sl-btn-primary justify-self-start" type="submit">Confirm Seller received the parcel</button>
+                </form>
+            @elseif($buyerReturnWorkflow->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED)
+                <p class="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900">Seller receipt is recorded. Finish the inspection for every returned item before marking any refund ready.</p>
+            @else
+                <p class="mt-3 rounded-xl bg-blue-50 p-3 text-sm text-blue-900">The Buyer or Logistics still has the parcel. Seller receipt is not available yet.</p>
+            @endif
+        @else
+            <p class="mt-2 text-sm text-stone-600">The Buyer must receive approval, print a return waybill, and hand the parcel to Logistics before it can be routed to you.</p>
+        @endif
+    </section>
+    @if($buyerReturnWorkflow?->status === \App\Models\Logistics\ShipmentReturnWorkflow::SELLER_RECEIVED)
+        <section class="sl-card my-5">
+            <h3 class="font-bold">Inspect returned items</h3>
+            <div class="mt-4 grid gap-4">
+                @foreach($sellerRequest->items as $item)
+                    @php($inspection = $inspectionsByItem->get($item->id))
+                    <article class="rounded-xl border border-[#eadbce] p-4">
+                        <strong>{{ $item->orderItem?->product_name ?? 'Returned item' }}</strong><span class="ml-2 text-sm text-stone-500">Qty {{ $item->quantity }}</span>
+                        @if($inspection)
+                            <p class="mt-2 text-sm">Inspection complete · {{ str($inspection->inventory_disposition)->replace('_', ' ')->title() }} · {{ $inspection->inspected_at?->format('M d, Y g:i A') }}</p>
+                        @else
+                            <form method="POST" action="{{ route('seller.orders.refunds.inspect', [$sellerRequest, $item]) }}" class="mt-3 grid gap-3 sm:grid-cols-2">
+                                @csrf
+                                <label class="grid gap-1 text-sm font-semibold">Inventory disposition
+                                    <select class="sl-field" name="inventory_disposition" required><option value="">Choose disposition</option><option value="RESTOCKABLE">Restockable</option><option value="DAMAGED">Damaged</option><option value="QUARANTINED">Quarantined</option><option value="NON_RESELLABLE">Non-resellable</option></select>
+                                </label>
+                                <label class="grid gap-1 text-sm font-semibold">Received condition<input class="sl-field" name="received_condition" maxlength="80" placeholder="For example: sealed, used, scratched"></label>
+                                <label class="grid gap-1 text-sm font-semibold">Completeness<input class="sl-field" name="completeness_status" maxlength="80" placeholder="All parts / missing parts"></label>
+                                <label class="grid gap-1 text-sm font-semibold">Identifier check<input class="sl-field" name="identifier_result" maxlength="120" placeholder="SKU, serial, or variant match"></label>
+                                <label class="grid gap-1 text-sm font-semibold sm:col-span-2">Damage or missing-accessory notes<textarea class="sl-field" name="damage_notes" maxlength="2000" rows="2"></textarea></label>
+                                <label class="grid gap-1 text-sm font-semibold sm:col-span-2">Inspection notes<textarea class="sl-field" name="notes" maxlength="2000" rows="2"></textarea></label>
+                                <button class="sl-btn sl-btn-primary justify-self-start sm:col-span-2" type="submit">Save inspection</button>
+                            </form>
+                        @endif
+                    </article>
+                @endforeach
+            </div>
+        </section>
+    @endif
+@endif
 <div class="grid gap-5 lg:grid-cols-[1.25fr_.75fr]"><section class="sl-card"><header class="sl-card-head"><div><h2>Request overview</h2><p>Seller access is limited to this Seller's affected items.</p></div><span class="sl-status is-warning">{{ str($sellerRequest->status)->headline() }}</span></header><dl class="sl-detail-list"><div><dt>Buyer</dt><dd>{{ $parent->order?->buyer?->name }}</dd></div><div><dt>Issue</dt><dd>{{ $parent->issue_category }} / {{ $parent->issue_reason }}</dd></div><div><dt>Description</dt><dd>{{ $parent->description }}</dd></div><div><dt>{{ $isCashCase ? 'Refund method' : 'GCash recipient' }}</dt><dd>{{ $isCashCase ? 'Cash only — no online destination' : $parent->gcash_recipient_name }}<br><strong>{{ $isCashCase ? 'Pending return receipt, inspection, and authorized payer' : $parent->gcash_mobile }}</strong></dd></div><div><dt>Requested amount</dt><dd>PHP {{ number_format((float)$sellerRequest->requested_amount,2) }}</dd></div><div><dt>Approved amount</dt><dd>{{ $sellerRequest->approved_amount !== null ? 'PHP '.number_format((float)$sellerRequest->approved_amount,2) : 'Not approved' }}</dd></div></dl><h3 class="mt-6 font-bold">Affected products</h3><div class="mt-3 grid gap-2">@foreach($sellerRequest->items as $item)<div class="rounded-xl border border-[#eadbce] p-3 text-sm dark:border-[#4b3831]"><strong>{{ $item->orderItem?->product_name }}</strong><span class="ml-2">Qty {{ $item->quantity }} &middot; PHP {{ number_format((float)$item->refundable_amount,2) }}</span></div>@endforeach</div></section>
 <aside class="grid content-start gap-5">
     @if($sellerRequest->status === \App\Models\Seller\SellerReturnRefundRequest::STATUS_SELLER_REVIEW)
@@ -45,7 +103,7 @@
             </form>
         </section>
     @endif
-@if(in_array($sellerRequest->status, [\App\Models\Seller\SellerReturnRefundRequest::STATUS_APPROVED, \App\Models\Seller\SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true))<section class="sl-card"><h3>Cash refund obligation</h3><p class="mt-2 text-sm">New COD refunds stay cash-only. Record the physical return, inspection, and cash-ready state; do not use a GCash transfer.</p><dl class="sl-detail-list mt-4"><div><dt>Approved amount</dt><dd>PHP {{ number_format((float)$sellerRequest->approved_amount,2) }}</dd></div><div><dt>Cash state</dt><dd>{{ $sellerRequest->cashRefundObligation?->state ?: 'APPROVED / awaiting return receipt' }}</dd></div></dl>@if(!$sellerRequest->cashRefundObligation || $sellerRequest->cashRefundObligation->state === \App\Models\Returns\CashRefundObligation::APPROVED)<form method="POST" action="{{ route('seller.orders.refunds.cash-ready',$sellerRequest) }}" class="mt-4">@csrf<label class="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm_cash_ready" value="1" required><span>I confirm the parcel was received and inspected through the return custody process.</span></label><button class="sl-btn sl-btn-primary sl-btn-block mt-3" type="submit">Make Cash Ready</button></form>@endif</section>@endif
+@if($isCashCase && in_array($sellerRequest->status, [\App\Models\Seller\SellerReturnRefundRequest::STATUS_APPROVED, \App\Models\Seller\SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true))<section class="sl-card"><h3>Cash refund obligation</h3><p class="mt-2 text-sm">New COD refunds stay cash-only. The Buyer receives the refund after required return checks are complete.</p><dl class="sl-detail-list mt-4"><div><dt>Approved amount</dt><dd>PHP {{ number_format((float)$sellerRequest->approved_amount,2) }}</dd></div><div><dt>Cash state</dt><dd>{{ $sellerRequest->cashRefundObligation?->state ?: 'APPROVED / awaiting return receipt' }}</dd></div></dl>@if((!$sellerRequest->cashRefundObligation || $sellerRequest->cashRefundObligation->state === \App\Models\Returns\CashRefundObligation::APPROVED) && $physicalReturnComplete)<form method="POST" action="{{ route('seller.orders.refunds.cash-ready',$sellerRequest) }}" class="mt-4">@csrf<label class="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm_cash_ready" value="1" required><span>I confirm the approved refund is ready for the authorized payer.</span></label><button class="sl-btn sl-btn-primary sl-btn-block mt-3" type="submit">Make Cash Ready</button></form>@elseif(!$physicalReturnComplete)<p class="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Cash cannot be made ready until Seller confirms receipt and every returned item has an inspection record.</p>@endif</section>@endif
 @if($sellerRequest->payouts->isNotEmpty())@php($payout=$sellerRequest->payouts->sortByDesc('id')->first())<section class="sl-card"><h3>Payment proof</h3><p class="mt-2 text-sm">Seller-reported amount: PHP {{ number_format((float)$payout->amount_sent,2) }}<br>Reference: {{ $payout->transaction_reference }}<br>Sent: {{ $payout->sent_at?->format('M d, Y g:i A') }}</p><a class="sl-btn sl-btn-ghost sl-btn-block mt-4" href="{{ route('seller.orders.refunds.payout-proof',$payout) }}" target="_blank">View Protected Proof</a></section>@endif</aside></div>
 <section class="sl-card mt-5"><h3>History</h3><ol class="mt-4 grid gap-3">@forelse($parent->events->where('seller_return_refund_request_id',$sellerRequest->id)->sortByDesc('created_at') as $event)<li class="border-l-2 border-[#b24a3c] pl-3 text-sm"><strong>{{ str($event->event_type)->headline() }}</strong><span class="ml-2 text-stone-500">{{ $event->created_at?->format('M d, Y g:i A') }}</span>@if($event->details)<p class="mt-1">{{ $event->details }}</p>@endif</li>@empty<li class="text-sm text-stone-500">No history yet.</li>@endforelse</ol></section></div>
 @if($parent->evidence->isNotEmpty())<section class="sl-card mt-5"><header class="sl-card-head"><div><h3>Buyer evidence</h3><p>Files are private and can only be opened by an authorized participant in this Seller request.</p></div><span class="sl-status is-info">{{ $parent->evidence->count() }} {{ str('file')->plural($parent->evidence->count()) }}</span></header><div class="mt-3 grid gap-3 sm:grid-cols-2">@foreach($parent->evidence as $evidence)<article class="rounded-xl border border-[#eadbce] bg-[#fffdf9] p-4 dark:border-[#4b3831] dark:bg-[#241b18]"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block truncate" title="{{ $evidence->original_name }}">{{ $evidence->original_name ?: 'Protected evidence' }}</strong><small class="mt-1 block text-stone-500">{{ str($evidence->evidence_type)->headline() }} @if($evidence->mime_type) &middot; {{ $evidence->mime_type }} @endif</small></div><span aria-label="Protected file" title="Protected file">&#128274;</span></div><a class="sl-btn sl-btn-ghost sl-btn-block mt-4" href="{{ route('seller.orders.refunds.evidence',$evidence) }}" target="_blank" rel="noopener">Open Protected Evidence</a></article>@endforeach</div></section>@endif

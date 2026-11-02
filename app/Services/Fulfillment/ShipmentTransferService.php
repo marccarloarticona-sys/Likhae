@@ -49,7 +49,7 @@ final class ShipmentTransferService
             if ($last
                 && (int) $last->origin_logistics_center_id === (int) $origin->id
                 && (int) $last->destination_logistics_center_id === (int) $destination->id
-                && $last->status === ShipmentTransferLeg::PLANNED) {
+                && in_array($last->status, [ShipmentTransferLeg::PLANNED, ShipmentTransferLeg::READY], true)) {
                 return $last;
             }
 
@@ -67,6 +67,33 @@ final class ShipmentTransferService
         });
     }
 
+    public function expectedTrackingCode(ShipmentTransferLeg $leg): string
+    {
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $returnCode = ShipmentReturnWorkflow::query()
+                ->where('shipment_id', $leg->shipment_id)
+                ->whereNotNull('seller_return_refund_request_id')
+                ->where('status', ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+                ->where('logistics_center_id', $leg->origin_logistics_center_id)
+                ->value('return_tracking_number');
+            if (filled($returnCode)) {
+                return (string) $returnCode;
+            }
+        }
+
+        return (string) Shipment::query()->whereKey($leg->shipment_id)->value('tracking_number');
+    }
+
+    public function custodyCenterId(ShipmentTransferLeg $leg): int
+    {
+        $workflow = $this->pendingSellerReturnForLeg($leg);
+        if ($workflow?->seller_return_refund_request_id) {
+            return (int) $workflow->logistics_center_id;
+        }
+
+        return (int) Shipment::query()->whereKey($leg->shipment_id)->value('logistics_center_id');
+    }
+
     public function markReady(ShipmentTransferLeg $leg, User $actor): ShipmentTransferLeg
     {
         $this->assertReady();
@@ -76,6 +103,7 @@ final class ShipmentTransferService
             $shipment = Shipment::query()->whereKey($leg->shipment_id)->lockForUpdate()->firstOrFail();
             $this->assertActorAtCenter($actor, (int) $leg->origin_logistics_center_id);
             $this->assertPreviousLegReceived($leg);
+            $returnWorkflow = $this->pendingSellerReturnForLeg($leg);
 
             if ($leg->status === ShipmentTransferLeg::READY) {
                 return $leg;
@@ -83,7 +111,10 @@ final class ShipmentTransferService
             if ($leg->status !== ShipmentTransferLeg::PLANNED) {
                 throw new RuntimeException('Only a planned transfer leg can become ready.');
             }
-            if ((int) $shipment->logistics_center_id !== (int) $leg->origin_logistics_center_id) {
+            $currentCenterId = $returnWorkflow?->seller_return_refund_request_id
+                ? (int) $returnWorkflow->logistics_center_id
+                : (int) $shipment->logistics_center_id;
+            if ($currentCenterId !== (int) $leg->origin_logistics_center_id) {
                 throw new RuntimeException('The shipment is not in the transfer origin hub custody.');
             }
 
@@ -164,12 +195,15 @@ final class ShipmentTransferService
                 'received_at' => now(),
             ]);
             $returnWorkflow = $this->pendingSellerReturnForLeg($locked);
+            $isBuyerReturn = (bool) $returnWorkflow?->seller_return_refund_request_id;
             $isReturnTransfer = $returnWorkflow
-                && $shipment->current_status === 'DELIVERY_FAILED'
+                && ($isBuyerReturn || $shipment->current_status === 'DELIVERY_FAILED')
                 && (int) $locked->destination_logistics_center_id === (int) $shipment->origin_logistics_center_id;
 
             if ($isReturnTransfer) {
-                $shipment->update(['logistics_center_id' => $locked->destination_logistics_center_id]);
+                if (! $isBuyerReturn) {
+                    $shipment->update(['logistics_center_id' => $locked->destination_logistics_center_id]);
+                }
                 if ($completeReturnReception) {
                     $returnWorkflow->update([
                         'logistics_center_id' => $locked->destination_logistics_center_id,
@@ -178,7 +212,7 @@ final class ShipmentTransferService
                         'return_exception_recorded_by_user_id' => null,
                         'return_exception_recorded_at' => null,
                     ]);
-                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center confirmed receipt of the return parcel; final return-rider assignment is pending.');
+                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center confirmed receipt of the return parcel; final return-rider assignment is pending.', $returnWorkflow, $locked);
                 } else {
                     $returnWorkflow->update([
                         'logistics_center_id' => $locked->destination_logistics_center_id,
@@ -187,7 +221,7 @@ final class ShipmentTransferService
                         'return_exception_recorded_by_user_id' => $actor->id,
                         'return_exception_recorded_at' => now(),
                     ]);
-                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center scanned the return parcel with a condition exception; Logistics review is required.');
+                    $this->recordReturnTransferEvent($shipment, $actor, $locked->destinationLogisticsCenter()->first(), 'Seller-side center confirmed receipt with a condition exception; Logistics review is required.', $returnWorkflow, $locked);
                 }
             } else {
                 $shipment->update([
@@ -241,7 +275,10 @@ final class ShipmentTransferService
         if ($code === '') {
             throw new RuntimeException('A shipment tracking number is required for a transfer custody scan.');
         }
-        $expected = (string) Shipment::query()->whereKey($leg->shipment_id)->value('tracking_number');
+        $returnWorkflow = $this->pendingSellerReturnForLeg($leg);
+        $expected = filled($returnWorkflow?->return_tracking_number)
+            ? (string) $returnWorkflow->return_tracking_number
+            : (string) Shipment::query()->whereKey($leg->shipment_id)->value('tracking_number');
         if ($expected === '' || strtoupper($code) !== strtoupper(trim($expected))) {
             throw new RuntimeException('The scanned barcode does not match the shipment assigned to this transfer leg.');
         }
@@ -319,28 +356,67 @@ final class ShipmentTransferService
             return null;
         }
 
-        return ShipmentReturnWorkflow::query()
+        $query = ShipmentReturnWorkflow::query()
             ->where('shipment_id', $leg->shipment_id)
             ->where('status', ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
-            ->where('return_disposition', ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN)
-            ->where('logistics_center_id', $leg->origin_logistics_center_id)
-            ->lockForUpdate()
-            ->first();
+            ->where('logistics_center_id', $leg->origin_logistics_center_id);
+        if ($this->schema->buyerReturnWaybillsReady()) {
+            $query->where(fn ($pending) => $pending->whereNotNull('seller_return_refund_request_id')
+                ->orWhere('return_disposition', ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN));
+        } else {
+            $query->where('return_disposition', ShipmentReturnWorkflow::DISPOSITION_SELLER_RETURN);
+        }
+
+        return $query->lockForUpdate()->first();
     }
 
     private function recordReturnProgressForLeg(ShipmentTransferLeg $leg, User $actor, string $notes): void
     {
-        if (! $this->pendingSellerReturnForLeg($leg)) {
+        $workflow = $this->pendingSellerReturnForLeg($leg);
+        if (! $workflow) {
             return;
         }
 
         $shipment = $leg->shipment()->firstOrFail();
         $center = $leg->originLogisticsCenter()->first();
-        $this->recordReturnTransferEvent($shipment, $actor, $center, $notes);
+        $this->recordReturnTransferEvent($shipment, $actor, $center, $notes, $workflow, $leg);
     }
 
-    private function recordReturnTransferEvent(Shipment $shipment, User $actor, ?LogisticsCenter $center, string $notes): void
+    private function recordReturnTransferEvent(Shipment $shipment, User $actor, ?LogisticsCenter $center, string $notes, ?ShipmentReturnWorkflow $workflow = null, ?ShipmentTransferLeg $leg = null): void
     {
+        if ($workflow?->seller_return_refund_request_id) {
+            $sellerRequest = $workflow->sellerReturnRefundRequest()->with('request')->first();
+            if ($sellerRequest?->request) {
+                $lowerNotes = strtolower($notes);
+                $custodyEvent = str_contains($lowerNotes, 'released into')
+                    ? 'TRANSFER_RELEASED'
+                    : (str_contains($lowerNotes, 'confirmed receipt') ? 'TRANSFER_RECEIVED' : null);
+                if ($custodyEvent) {
+                    app(\App\Services\Returns\ReturnCustodyService::class)->recordCustodyEvent($sellerRequest, $actor, $custodyEvent, [
+                        'from_party' => 'LOGISTICS_CENTER',
+                        'to_party' => 'LOGISTICS_CENTER',
+                        'shipment_id' => $shipment->id,
+                        'transfer_reference' => $leg ? 'Shipment transfer leg '.$leg->sequence_no : null,
+                        'location_label' => $center?->business_name,
+                        'notes' => $notes,
+                        'metadata' => ['return_tracking_number' => $workflow->return_tracking_number, 'transfer_leg_id' => $leg?->id],
+                    ]);
+                }
+                app(\App\Services\ReturnRefundWorkflowService::class)->recordEvent(
+                    $sellerRequest->request,
+                    'BUYER_RETURN_TRANSFER_PROGRESS',
+                    $actor,
+                    $sellerRequest,
+                    $sellerRequest->status,
+                    $sellerRequest->status,
+                    $notes,
+                    ['return_tracking_number' => $workflow->return_tracking_number, 'workflow_status' => $workflow->status, 'transfer_leg_id' => $leg?->id],
+                );
+            }
+
+            return;
+        }
+
         ShipmentEvent::query()->create([
             'shipment_id' => $shipment->id,
             'status' => 'DELIVERY_FAILED',

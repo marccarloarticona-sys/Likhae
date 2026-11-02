@@ -21,7 +21,7 @@
         </section>
 
         <section class="rounded-xl border border-line bg-surface p-5">
-            <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="text-base font-semibold text-ink">Interhub attendance</h2><p class="mt-1 text-xs text-muted">Scan the Logistics QR to record Time In or Time Out. You can also generate your own QR for Logistics to scan.</p></div><a href="{{ route('rider.transfers') }}" class="text-xs font-semibold text-primary underline">View transfers</a></div>
+            <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="text-base font-semibold text-ink">Interhub attendance</h2><p class="mt-1 text-xs text-muted">Scan the Logistics QR to record Time In or Time Out. You can also generate your own QR for Logistics to scan.</p></div><div class="flex gap-4"><a href="{{ route('rider.transfers', ['view' => 'history']) }}" class="text-xs font-semibold text-primary underline">Transfer history</a><a href="{{ route('rider.wallet') }}" class="text-xs font-semibold text-primary underline">Wallet &amp; payroll</a></div></div>
             @if(! $effectiveRate && ! $openSession)<p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Ask Logistics to configure your {{ $regionType }} daily rate before Time In.</p>@endif
             <div class="mt-4 inline-flex rounded-lg border border-line bg-page-secondary p-1" role="group" aria-label="Interhub attendance method">
                 <button type="button" data-driver-attendance-mode-button="scanner" aria-pressed="true" class="min-h-9 rounded-md bg-primary px-4 text-xs font-semibold text-white">Scan Logistics QR</button>

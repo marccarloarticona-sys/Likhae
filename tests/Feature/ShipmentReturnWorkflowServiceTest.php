@@ -12,6 +12,7 @@ use App\Services\Fulfillment\ShipmentReturnWorkflowService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\ShipmentTransferService;
 use App\Services\Fulfillment\LocalRiderTripService;
+use App\Services\Finance\ReturnTransportLossService;
 use App\Services\Media\ImageOptimizationService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
@@ -154,6 +155,32 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
 
         $returns->confirmSellerReceipt($workflow->fresh(), $seller, 'Duplicate submit');
         $this->assertSame(5, DB::table('parcel_scans')->where('shipment_id', $shipment->id)->count(), 'Repeated confirmation must not duplicate custody scans.');
+    }
+
+    public function test_logistics_receipt_scan_recovers_lost_seller_return_without_erasing_loss_history(): void
+    {
+        [$centerUser, $originalRider, , , $workflow, $shipment] = $this->fixture();
+        $shipment->update(['current_status' => 'LOST']);
+        app(ShipmentWorkflowService::class)->recordEvent($shipment, 'LOST', $centerUser, 'Original loss exception for review.');
+        $returns = app(ShipmentReturnWorkflowService::class);
+
+        $returns->handoffToCenterAsOriginalRider($workflow, $originalRider, 'BARCODE', $shipment->tracking_number);
+        try {
+            $returns->receiveAtCenter($workflow->fresh(), $centerUser, 'QR', 'WRONG-CODE');
+            $this->fail('A mismatched scan must not recover or receive the parcel.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('does not match', $exception->getMessage());
+        }
+        $this->assertSame('LOST', $shipment->fresh()->current_status);
+        $this->assertSame(ShipmentReturnWorkflow::AWAITING_CENTER_RECEIPT, $workflow->fresh()->status);
+
+        $returns->receiveAtCenter($workflow->fresh(), $centerUser, 'QR', $shipment->tracking_number);
+
+        $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
+        $this->assertSame(ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT, $workflow->fresh()->status);
+        $this->assertSame(1, DB::table('shipment_events')->where('shipment_id', $shipment->id)->where('status', 'LOST')->count());
+        $this->assertSame(1, DB::table('parcel_scans')->where('shipment_id', $shipment->id)->where('scan_type', 'RETURN_TO_CENTER_RECEIVED')->count());
+        $this->assertStringContainsString('previously recorded as lost', (string) DB::table('shipment_events')->where('shipment_id', $shipment->id)->orderByDesc('id')->value('notes'));
     }
 
     public function test_refused_delivery_automatically_opens_a_return_case(): void
@@ -382,9 +409,11 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
         $this->assertNotNull($completed->handoff_completed_at);
     }
 
-    public function test_cross_center_return_transfer_preserves_failed_delivery_status(): void
+    public function test_cross_center_return_transfer_recovers_lost_parcel_and_preserves_loss_history(): void
     {
         [$centerAUser, $originalRider, , , $workflow, $shipment] = $this->fixture();
+        $shipment->update(['current_status' => 'LOST']);
+        app(ShipmentWorkflowService::class)->recordEvent($shipment, 'LOST', $centerAUser, 'Original loss exception for review.');
         DB::table('addresses')->insert([
             ['id' => 1, 'province_code' => '01', 'municipality_code' => '0101'],
             ['id' => 2, 'province_code' => '02', 'municipality_code' => '0202'],
@@ -421,12 +450,22 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
         $this->assertSame(ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT, $workflow->fresh()->status);
         $this->assertSame(2, (int) $shipment->fresh()->logistics_center_id);
         $this->assertSame('DELIVERY_FAILED', $shipment->fresh()->current_status);
+        $this->assertSame(1, DB::table('shipment_events')->where('shipment_id', $shipment->id)->where('status', 'LOST')->count());
         $this->assertSame(3, DB::table('parcel_scans')->where('transfer_leg_id', $leg->id)->count(), 'Origin release, transfer departure, and destination receipt are separately recorded custody scans.');
         $this->assertStringContainsString('Seller-side center confirmed receipt', (string) DB::table('shipment_events')->where('shipment_id', $shipment->id)->orderByDesc('id')->value('notes'));
     }
 
     public function test_return_routes_are_registered_and_return_templates_compile(): void
     {
+        [$centerUser] = $this->fixture();
+        $this->withoutMiddleware([
+            \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+            \App\Http\Middleware\EnsureApprovedProvider::class,
+        ]);
+        $this->actingAs($centerUser)
+            ->get(route('logistics.returns'))
+            ->assertOk();
+
         foreach ([
             'logistics.returns', 'logistics.returns.receive', 'logistics.returns.assign',
             'logistics.returns.receive-batch', 'logistics.returns.prepare-transfer', 'logistics.returns.handoff',
@@ -434,6 +473,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             'rider.returns', 'rider.returns.center-handoff', 'rider.returns.accept', 'rider.returns.pickup', 'rider.returns.seller-handoff',
             'rider.returns.handoff.from', 'rider.returns.handoff.to',
             'seller.logistics.returns.confirm',
+            'admin.finance.return-transport.classify',
         ] as $name) {
             $route = app('router')->getRoutes()->getByName($name);
             $this->assertNotNull($route, $name.' should be registered');
@@ -441,14 +481,92 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
         }
 
         foreach ([
-            'resources/views/logistics/returns/index.blade.php',
+            'resources/views/Logistics/returns/index.blade.php',
             'resources/views/rider/returns/index.blade.php',
             'resources/views/seller/logistics.blade.php',
             'resources/views/buyer/orders.blade.php',
+            'resources/views/Admin/finance/index.blade.php',
+            'resources/views/seller/settlements/index.blade.php',
         ] as $relativePath) {
             $compiled = app('blade.compiler')->compileString(file_get_contents(base_path($relativePath)));
             $this->assertNotSame('', $compiled, $relativePath.' should compile.');
         }
+    }
+
+    public function test_admin_posts_buyer_fault_as_platform_loss_once_using_two_checkout_shipping_fees(): void
+    {
+        [, , , , $workflow] = $this->fixture();
+        DB::table('users')->insert(['id' => 5, 'first_name' => 'Finance', 'last_name' => 'Admin', 'email' => 'finance.admin@test.invalid', 'account_type' => 'ADMIN', 'status' => 'ACTIVE']);
+        try {
+            app(ReturnTransportLossService::class)->classify($workflow, User::query()->findOrFail(5), 'BUYER', 'Buyer refused the parcel after the rider arrived.');
+            $this->fail('Return losses must not post before Seller receipt is confirmed.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('after the Seller confirms receipt', $exception->getMessage());
+        }
+        $this->assertSame(0, DB::table('financial_ledger_entries')->count());
+
+        $workflow->update(['status' => ShipmentReturnWorkflow::SELLER_RECEIVED]);
+        DB::table('seller_settlements')->insert(['seller_profile_id' => 1, 'seller_payable' => '100.00', 'outstanding_balance' => '100.00', 'payout_status' => 'AVAILABLE']);
+        $returnAccounting = app(ReturnTransportLossService::class);
+        $pending = $returnAccounting->pendingReviews();
+        $this->assertCount(1, $pending);
+        $this->assertSame(10000, $pending->first()->return_transport_quote['total_cents']);
+
+        $this->withoutMiddleware([
+            \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+            \App\Http\Middleware\EnsureWorkspaceRole::class,
+        ]);
+        $this->actingAs(User::query()->findOrFail(5))
+            ->from('/admin/finance')
+            ->post(route('admin.finance.return-transport.classify', $workflow), [
+                'fault_party' => 'BUYER',
+                'decision_notes' => 'Buyer refused the parcel after the rider arrived.',
+            ])
+            ->assertRedirect('/admin/finance')
+            ->assertSessionHas('status');
+        $entry = \App\Models\Finance\FinancialLedgerEntry::query()->where('idempotency_key', 'return-transport-loss-workflow-'.$workflow->id)->firstOrFail();
+        $retry = $returnAccounting->classify($workflow->fresh(), User::query()->findOrFail(5), 'BUYER', 'Retry after a network interruption.');
+
+        $this->assertSame($entry->id, $retry->id);
+        $this->assertSame('PLATFORM_OPERATING_EXPENSE', $entry->account_type);
+        $this->assertSame('RETURN_TRANSPORT_LOSS', $entry->entry_type);
+        $this->assertSame('100.00', $entry->amount);
+        $this->assertSame(2, data_get($entry->metadata, 'trip_count'));
+        $this->assertSame('50.00', data_get($entry->metadata, 'checkout_shipping_fee'));
+        $this->assertSame(100.0, (float) DB::table('seller_settlements')->value('seller_payable'));
+        $this->assertSame(1, DB::table('financial_ledger_entries')->where('idempotency_key', 'return-transport-loss-workflow-'.$workflow->id)->count());
+        $this->assertCount(0, $returnAccounting->pendingReviews());
+    }
+
+    public function test_admin_charges_seller_fault_to_unpaid_seller_payable_and_carries_any_unpaid_remainder(): void
+    {
+        [, , , , $workflow] = $this->fixture();
+        $workflow->update(['status' => ShipmentReturnWorkflow::SELLER_RECEIVED]);
+        DB::table('users')->insert(['id' => 5, 'first_name' => 'Finance', 'last_name' => 'Admin', 'email' => 'finance.admin@test.invalid', 'account_type' => 'ADMIN', 'status' => 'ACTIVE']);
+        DB::table('seller_settlements')->insert(['seller_profile_id' => 1, 'seller_payable' => '30.00', 'outstanding_balance' => '30.00', 'payout_status' => 'AVAILABLE']);
+
+        $entry = app(ReturnTransportLossService::class)->classify($workflow, User::query()->findOrFail(5), 'SELLER', 'Seller packed the wrong item for this order.');
+
+        $this->assertSame('SELLER', $entry->account_type);
+        $this->assertSame('RETURN_TRANSPORT_CHARGE', $entry->entry_type);
+        $this->assertSame('100.00', $entry->amount);
+        $this->assertSame(0.0, (float) DB::table('seller_settlements')->value('seller_payable'));
+        $this->assertSame(0.0, (float) DB::table('seller_settlements')->value('outstanding_balance'));
+        $this->assertSame(7000, app(\App\Services\Finance\SellerSettlementService::class)->unappliedSellerReturnTransportDebtCents(1));
+        $this->assertSame(1, DB::table('finance_audit_events')->where('event_type', 'SELLER_RETURN_TRANSPORT_ADJUSTED')->count());
+    }
+
+    public function test_admin_finance_page_renders_return_transport_review_without_a_server_error(): void
+    {
+        $this->fixture();
+        DB::table('users')->insert(['id' => 5, 'first_name' => 'Finance', 'last_name' => 'Admin', 'email' => 'finance.admin@test.invalid', 'account_type' => 'ADMIN', 'status' => 'ACTIVE']);
+        $this->withoutMiddleware(\Illuminate\Auth\Middleware\EnsureEmailIsVerified::class);
+
+        $this->actingAs(User::query()->findOrFail(5))
+            ->get(route('admin.finance'))
+            ->assertOk()
+            ->assertSee('Return transport losses')
+            ->assertSee('No seller returns are waiting for a transport loss decision.');
     }
 
     /** @return array{User, User, User, User, ShipmentReturnWorkflow, Shipment} */
@@ -473,7 +591,8 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
 
         DB::table('logistics_centers')->insert(['id' => 1, 'owner_user_id' => 1, 'business_name' => 'Test Center']);
         DB::table('seller_profiles')->insert(['id' => 1, 'user_id' => 4, 'business_name' => 'Test Seller']);
-        DB::table('seller_orders')->insert(['id' => 1, 'seller_profile_id' => 1, 'seller_order_number' => 'SO-1']);
+        DB::table('seller_orders')->insert(['id' => 1, 'seller_profile_id' => 1, 'seller_order_number' => 'SO-1', 'shipping_fee' => '50.00']);
+        $orderItemId = DB::table('order_items')->insertGetId(['seller_order_id' => 1, 'line_total' => '100.00', 'quantity' => 1]);
         DB::table('rider_profiles')->insert([
             ['id' => 1, 'user_id' => 2, 'logistics_center_id' => 1, 'status' => 'ACTIVE', 'vehicle_type' => 'motorcycle'],
             ['id' => 2, 'user_id' => 3, 'logistics_center_id' => 1, 'status' => 'ACTIVE', 'vehicle_type' => 'motorcycle'],
@@ -481,6 +600,7 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
 
         $shipment = Shipment::query()->create([
             'seller_order_id' => 1,
+            'order_item_id' => $orderItemId,
             'tracking_number' => 'LK-RETURN-1',
             'logistics_center_id' => 1,
             'origin_logistics_center_id' => 1,
@@ -521,11 +641,27 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->string('account_type')->nullable();
             $table->string('status')->nullable();
         });
+        $schema->create('notifications', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->string('type');
+            $table->string('title');
+            $table->text('message');
+            $table->string('reference_type')->nullable();
+            $table->unsignedBigInteger('reference_id')->nullable();
+            $table->string('action_url')->nullable();
+            $table->timestamp('read_at')->nullable();
+            $table->timestamps();
+        });
         $schema->create('logistics_centers', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('owner_user_id');
             $table->string('business_name')->nullable();
             $table->unsignedBigInteger('address_id')->nullable();
+        });
+        $schema->create('service_areas', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('logistics_center_id');
         });
         $schema->create('addresses', function (Blueprint $table): void {
             $table->id();
@@ -541,12 +677,88 @@ class ShipmentReturnWorkflowServiceTest extends TestCase
             $table->id();
             $table->unsignedBigInteger('seller_profile_id');
             $table->string('seller_order_number');
+            $table->unsignedBigInteger('order_id')->nullable();
+            $table->decimal('shipping_fee', 12, 2)->default(0);
+            $table->decimal('voucher_discount', 12, 2)->default(0);
+            $table->decimal('reward_points_discount', 12, 2)->default(0);
+            $table->decimal('shipping_voucher_discount', 12, 2)->default(0);
+            $table->decimal('protection_total', 12, 2)->nullable();
+            $table->json('shipping_rate_snapshot')->nullable();
+            $table->unsignedSmallInteger('funding_snapshot_version')->nullable();
+        });
+        $schema->create('order_items', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('seller_order_id');
+            $table->decimal('line_total', 12, 2)->default(0);
+            $table->unsignedInteger('quantity')->default(1);
+            $table->decimal('original_unit_price', 12, 2)->nullable();
+            $table->unsignedSmallInteger('funding_snapshot_version')->nullable();
+            $table->decimal('seller_voucher_discount', 12, 2)->default(0);
+            $table->decimal('platform_voucher_discount', 12, 2)->default(0);
+            $table->decimal('platform_shipping_voucher_discount', 12, 2)->default(0);
+            $table->decimal('reward_points_discount', 12, 2)->default(0);
+            $table->decimal('protection_fee', 12, 2)->default(0);
+        });
+        $schema->create('shipment_financial_allocations', fn (Blueprint $table) => $table->id());
+        $schema->create('seller_settlements', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('seller_profile_id');
+            $table->decimal('seller_payable', 12, 2)->nullable();
+            $table->decimal('outstanding_balance', 12, 2)->nullable();
+            $table->string('payout_status');
+            $table->timestamps();
+        });
+        $schema->create('logistics_earning_pools', fn (Blueprint $table) => $table->id());
+        $schema->create('rider_earning_pools', fn (Blueprint $table) => $table->id());
+        $schema->create('rider_earning_pool_participants', fn (Blueprint $table) => $table->id());
+        $schema->create('financial_ledger_entries', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('shipment_financial_allocation_id')->nullable();
+            $table->unsignedBigInteger('shipment_id')->nullable();
+            $table->unsignedBigInteger('seller_order_id')->nullable();
+            $table->unsignedBigInteger('order_id')->nullable();
+            $table->string('account_type', 32);
+            $table->string('entry_type', 64);
+            $table->string('direction', 16);
+            $table->decimal('amount', 12, 2);
+            $table->string('status', 32)->default('PENDING');
+            $table->string('idempotency_key', 180)->unique();
+            $table->unsignedBigInteger('actor_user_id')->nullable();
+            $table->timestamp('posted_at')->nullable();
+            $table->timestamp('paid_at')->nullable();
+            $table->json('metadata')->nullable();
+            $table->timestamps();
+        });
+        $schema->create('finance_audit_events', function (Blueprint $table): void {
+            $table->id();
+            $table->string('event_type', 64);
+            $table->string('auditable_type', 150);
+            $table->unsignedBigInteger('auditable_id');
+            $table->unsignedBigInteger('actor_user_id')->nullable();
+            $table->json('before_state')->nullable();
+            $table->json('after_state')->nullable();
+            $table->text('notes')->nullable();
+            $table->timestamps();
+        });
+        $schema->create('payments', function (Blueprint $table): void {
+            $table->id();
+            $table->string('status')->nullable();
+            $table->decimal('amount', 12, 2)->default(0);
+            $table->timestamps();
+        });
+        $schema->create('commission_transactions', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('seller_order_id')->nullable();
+            $table->decimal('commission_amount', 12, 2)->default(0);
+            $table->timestamps();
         });
         $schema->create('shipments', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('seller_order_id');
+            $table->unsignedBigInteger('order_item_id')->nullable();
             $table->string('tracking_number');
             $table->unsignedBigInteger('logistics_center_id')->nullable();
+            $table->unsignedBigInteger('service_area_id')->nullable();
             $table->unsignedBigInteger('destination_logistics_center_id')->nullable();
             $table->unsignedBigInteger('origin_logistics_center_id')->nullable();
             $table->string('origin_province_code')->nullable();

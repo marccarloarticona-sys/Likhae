@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class ShipmentReturnWorkflow extends Model
 {
     public const AWAITING_CENTER_HANDOFF = 'AWAITING_CENTER_HANDOFF';
+    public const AWAITING_BUYER_DROPOFF = 'AWAITING_BUYER_DROPOFF';
     public const AWAITING_CENTER_RECEIPT = 'AWAITING_CENTER_RECEIPT';
     public const READY_FOR_RETURN_ASSIGNMENT = 'READY_FOR_RETURN_ASSIGNMENT';
     public const ASSIGNED_TO_RETURN_RIDER = 'ASSIGNED_TO_RETURN_RIDER';
@@ -28,6 +29,7 @@ class ShipmentReturnWorkflow extends Model
 
     public const OPEN_STATUSES = [
         self::AWAITING_CENTER_HANDOFF,
+        self::AWAITING_BUYER_DROPOFF,
         self::AWAITING_CENTER_RECEIPT,
         self::READY_FOR_RETURN_ASSIGNMENT,
         self::ASSIGNED_TO_RETURN_RIDER,
@@ -40,7 +42,7 @@ class ShipmentReturnWorkflow extends Model
     ];
 
     protected $fillable = [
-        'shipment_id', 'logistics_center_id', 'original_delivery_assignment_id', 'return_rider_profile_id',
+        'shipment_id', 'seller_return_refund_request_id', 'return_tracking_number', 'buyer_dropoff_logistics_center_id', 'logistics_center_id', 'original_delivery_assignment_id', 'return_rider_profile_id',
         'status', 'reason', 'initiated_by_user_id', 'initiated_at', 'center_handoff_by_user_id',
         'center_handoff_at', 'center_received_by_user_id', 'center_received_at',
         'return_rider_assigned_by_user_id', 'return_rider_assigned_at', 'return_rider_accepted_at',
@@ -76,9 +78,19 @@ class ShipmentReturnWorkflow extends Model
         return $this->belongsTo(Shipment::class);
     }
 
+    public function sellerReturnRefundRequest(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Seller\SellerReturnRefundRequest::class, 'seller_return_refund_request_id');
+    }
+
     public function logisticsCenter(): BelongsTo
     {
         return $this->belongsTo(LogisticsCenter::class);
+    }
+
+    public function buyerDropoffCenter(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsCenter::class, 'buyer_dropoff_logistics_center_id');
     }
 
     public function originalDeliveryAssignment(): BelongsTo

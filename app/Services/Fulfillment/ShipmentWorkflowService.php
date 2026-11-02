@@ -1253,14 +1253,29 @@ class ShipmentWorkflowService
                 'logistics_center_id' => $shipment->logistics_center_id ?: $pickupArea?->logistics_center_id,
             ]);
 
-            PickupRequest::firstOrCreate(
-                ['shipment_id' => $shipment->id, 'status' => 'PENDING'],
-                [
+            $pickupNotes = ($sellerDropoff ? 'SELLER_DROPOFF:' : 'LOGISTICS_PICKUP:')
+                .($note ?: 'Seller marked parcel ready for pickup.');
+            $pendingPickupRequest = PickupRequest::query()
+                ->where('shipment_id', $shipment->id)
+                ->where('status', 'PENDING')
+                ->latest('id')
+                ->first();
+
+            if ($pendingPickupRequest) {
+                $pendingPickupRequest->update([
                     'requested_by_user_id' => $actor->id,
                     'requested_at' => now(),
-                    'notes' => ($sellerDropoff ? 'SELLER_DROPOFF:' : 'LOGISTICS_PICKUP:').($note ?: 'Seller marked parcel ready for pickup.'),
-                ],
-            );
+                    'notes' => $pickupNotes,
+                ]);
+            } else {
+                PickupRequest::query()->create([
+                    'shipment_id' => $shipment->id,
+                    'requested_by_user_id' => $actor->id,
+                    'status' => 'PENDING',
+                    'requested_at' => now(),
+                    'notes' => $pickupNotes,
+                ]);
+            }
 
             $this->generateWaybill($shipment, $actor);
             $eventNote = $sellerDropoff

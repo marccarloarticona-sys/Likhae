@@ -8,6 +8,7 @@ use App\Models\Admin\AuditLog;
 use App\Models\Admin\Notification;
 use App\Models\Buyer\ReturnRefundEvidence;
 use App\Models\Buyer\ReturnRefundRequest;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Seller\RefundPayout;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Returns\CashRefundObligation;
@@ -15,6 +16,8 @@ use App\Models\User;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
 use App\Services\Returns\CashRefundWorkflowService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\ShipmentReturnWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -61,8 +64,36 @@ class BuyerReturnRefundController extends Controller
             $sellerRequest->setRelation('cashRefundObligation', null);
         }
         abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
+        $buyerWaybillReady = app(LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady()
+            && app(LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+        if ($buyerWaybillReady) {
+            $sellerRequest->load('buyerReturnWorkflow.shipment.sellerOrder.sellerProfile', 'buyerReturnWorkflow.logisticsCenter.address', 'buyerReturnWorkflow.buyerDropoffCenter.address');
+        } else {
+            $sellerRequest->setRelation('buyerReturnWorkflow', null);
+        }
 
-        return view('buyer.return-refund-show', compact('sellerRequest'));
+        return view('Buyer.return-refund-show', compact('sellerRequest', 'buyerWaybillReady'));
+    }
+
+    public function createReturnWaybill(Request $request, SellerReturnRefundRequest $sellerRequest, ShipmentReturnWorkflowService $returns): RedirectResponse
+    {
+        try {
+            $workflow = $returns->issueBuyerReturnWaybill($sellerRequest, $request->user());
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['return_waybill' => $exception->getMessage()])->withInput();
+        }
+
+        return redirect()->route('buyer.returns.waybill', [$sellerRequest, $workflow]);
+    }
+
+    public function returnWaybill(Request $request, SellerReturnRefundRequest $sellerRequest, ShipmentReturnWorkflow $workflow): View
+    {
+        $sellerRequest->load(['request.order.address', 'sellerProfile.businessAddress', 'items.orderItem']);
+        abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
+        abort_unless((int) $workflow->seller_return_refund_request_id === (int) $sellerRequest->id, 404);
+        $workflow->load(['logisticsCenter.address', 'buyerDropoffCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress']);
+
+        return view('buyer.return-waybill', compact('sellerRequest', 'workflow'));
     }
 
     public function parentShow(Request $request, ReturnRefundRequest $returnRequest): View

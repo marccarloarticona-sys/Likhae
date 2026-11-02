@@ -188,7 +188,17 @@ class Shipment extends Model
 
     public function returnWorkflow(): HasOne
     {
-        return $this->hasOne(ShipmentReturnWorkflow::class);
+        $relation = $this->hasOne(ShipmentReturnWorkflow::class);
+        if (\Illuminate\Support\Facades\Schema::hasColumn('shipment_return_workflows', 'seller_return_refund_request_id')) {
+            $relation->whereNull('seller_return_refund_request_id');
+        }
+
+        return $relation;
+    }
+
+    public function buyerReturnWorkflows(): HasMany
+    {
+        return $this->hasMany(ShipmentReturnWorkflow::class)->whereNotNull('seller_return_refund_request_id');
     }
 
     public function deliveryAttempts(): HasMany

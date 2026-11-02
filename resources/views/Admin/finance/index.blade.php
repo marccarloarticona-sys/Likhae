@@ -14,6 +14,7 @@
     <a href="#finance-overview">Admin overview</a>
     @if($parcelSettlementReady && $productProceeds)<a href="#finance-settlements">COD settlements</a>@endif
     @if($logisticsPayouts || $logisticsPayoutReceipts)<a href="#finance-logistics">Logistics payouts</a>@endif
+    @if($returnTransportAvailable)<a href="#finance-return-transport">Return transport</a>@endif
     <a href="#finance-sellers">Seller payouts</a>
 </nav>
 
@@ -88,6 +89,59 @@
 @endif
 
 </section>
+
+@if($returnTransportAvailable)
+    <section id="finance-return-transport" class="ad-finance-section" aria-labelledby="finance-return-transport-title">
+        <header class="ad-finance-section__head"><div><span class="ad-overline">Reverse custody</span><h2 id="finance-return-transport-title">Return transport losses</h2><p>Admin reviews fault before posting a two-trip amount based on the checkout shipping fee. Buyer fault is a platform expense; Seller fault is charged against Seller payables.</p></div></header>
+        <div class="ad-finance-grid ad-finance-grid--three">
+            <div class="ad-card ad-card-body"><small>Platform losses posted</small><h2>PHP {{ number_format($financialTotals['return_platform_loss'], 2) }}</h2></div>
+            <div class="ad-card ad-card-body"><small>Seller return charges posted</small><h2>PHP {{ number_format($financialTotals['return_seller_charges'], 2) }}</h2></div>
+            <div class="ad-card ad-card-body"><small>Seller return charges outstanding</small><h2>PHP {{ number_format($financialTotals['return_seller_outstanding'], 2) }}</h2><span>Applied to future Seller payables.</span></div>
+        </div>
+        @error('return_transport')<p class="ad-note is-warning" role="alert">{{ $message }}</p>@enderror
+        <div class="ad-card" style="margin-top:16px">
+            <div class="ad-card-head"><div><span class="ad-overline">Admin decision required</span><h2>Unclassified seller returns</h2><p>Review the reason and supporting case details. Posting is idempotent; a posted decision cannot be changed from this form.</p></div></div>
+            <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Parcel / seller</th><th>Return reason</th><th>Checkout basis</th><th>Fault decision and notes</th></tr></thead><tbody>
+            @forelse($returnTransportReviews as $workflow)
+                @php($quote = $workflow->return_transport_quote)
+                <tr>
+                    <td><strong>{{ $workflow->shipment?->tracking_number ?? 'Parcel unavailable' }}</strong><br>{{ $workflow->shipment?->sellerOrder?->seller_order_number ?? 'Order unavailable' }}<br>{{ $workflow->shipment?->sellerOrder?->sellerProfile?->business_name ?? 'Seller unavailable' }}<br><small>{{ str($workflow->status)->replace('_', ' ')->headline() }}</small></td>
+                    <td>{{ $workflow->reason }}</td>
+                    <td>
+                        @if($quote['available'])
+                            PHP {{ number_format($quote['checkout_fee_cents'] / 100, 2) }} × {{ $quote['trip_count'] }} trips<br><strong>PHP {{ number_format($quote['total_cents'] / 100, 2) }}</strong>
+                        @else
+                            <span class="text-amber-800">{{ $quote['reason'] }}</span>
+                        @endif
+                    </td>
+                    <td>
+                        @if($quote['available'] && $quote['total_cents'] > 0)
+                            <form method="POST" action="{{ route('admin.finance.return-transport.classify', $workflow) }}" class="grid gap-2">
+                                @csrf
+                                <label class="text-sm font-semibold">Who caused the return?
+                                    <select name="fault_party" required class="mt-1 w-full border border-line bg-white px-3 py-2">
+                                        <option value="">Choose fault party</option>
+                                        <option value="BUYER" @selected(old('fault_party') === 'BUYER')>Buyer fault — platform expense</option>
+                                        <option value="SELLER" @selected(old('fault_party') === 'SELLER')>Seller fault — charge Seller</option>
+                                    </select>
+                                </label>
+                                <label class="text-sm font-semibold">Decision notes
+                                    <textarea name="decision_notes" required minlength="10" maxlength="1000" rows="2" class="mt-1 w-full border border-line p-2" placeholder="Summarize what evidence supports the fault decision">{{ old('decision_notes') }}</textarea>
+                                </label>
+                                <button class="ad-btn ad-btn-secondary">Post two-trip loss</button>
+                            </form>
+                        @elseif($quote['available'])
+                            <span class="text-muted">No charge: checkout shipping fee is PHP 0.00.</span>
+                        @else
+                            <span class="text-muted">Cannot post until the parcel has a reliable checkout fee.</span>
+                        @endif
+                    </td>
+                </tr>
+            @empty<tr><td colspan="4">No seller returns are waiting for a transport loss decision.</td></tr>@endforelse
+            </tbody></table></div>
+        </div>
+    </section>
+@endif
 
 <section id="finance-sellers" class="ad-finance-section" aria-labelledby="finance-sellers-title">
     <header class="ad-finance-section__head"><div><span class="ad-overline">Seller finance</span><h2 id="finance-sellers-title">Seller payouts and commissions</h2><p>Review commission history and move each seller payout through authorization, transfer, and receipt confirmation.</p></div></header>

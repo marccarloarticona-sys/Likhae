@@ -15,6 +15,7 @@ use App\Services\Finance\FinancialAllocationService;
 use App\Services\Finance\ProductProceedsService;
 use App\Services\Finance\RemittanceService;
 use App\Services\Finance\PayoutDestinationReadiness;
+use App\Services\Finance\ReturnTransportLossService;
 use App\Services\Finance\SellerSettlementService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,6 +26,26 @@ use Throwable;
 
 class AdminFinanceController extends Controller
 {
+    public function classifyReturnTransport(Request $request, \App\Models\Logistics\ShipmentReturnWorkflow $workflow, ReturnTransportLossService $service): RedirectResponse
+    {
+        $data = $request->validate([
+            'fault_party' => ['required', 'in:BUYER,SELLER'],
+            'decision_notes' => ['required', 'string', 'min:10', 'max:1000'],
+        ]);
+
+        try {
+            $entry = $service->classify($workflow, $request->user(), $data['fault_party'], $data['decision_notes']);
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages(['return_transport' => $exception->getMessage()]);
+        }
+
+        $liableParty = data_get($entry->metadata, 'fault_party') === ReturnTransportLossService::SELLER_FAULT
+            ? 'Seller'
+            : 'platform';
+
+        return back()->with('status', 'Return transport loss posted to the '.$liableParty.' account for PHP '.number_format((float) $entry->amount, 2).'.');
+    }
+
     public function payLogisticsShare(Request $request, LogisticsEarningPool $pool, EarningPayoutService $service, PayoutDestinationReadiness $destinations): RedirectResponse
     {
         $data = $request->validate([

@@ -102,6 +102,7 @@ Route::prefix('admin')
         Route::post('/finance/seller-settlements/{settlement}/confirm-legacy-markdown', [AdminFinanceController::class, 'confirmLegacySellerMarkdown'])->name('finance.seller-settlements.confirm-legacy-markdown');
         Route::post('/finance/seller-settlements/{settlement}/pay', [AdminFinanceController::class, 'paySeller'])->name('finance.seller-settlements.pay');
         Route::post('/finance/seller-settlements/{settlement}/fail', [AdminFinanceController::class, 'failSellerPayout'])->name('finance.seller-settlements.fail');
+        Route::post('/finance/return-transport/{workflow}/classify', [AdminFinanceController::class, 'classifyReturnTransport'])->whereNumber('workflow')->name('finance.return-transport.classify');
         Route::get('/finance/seller-settlements/{settlement}/proof', [PayoutProofController::class, 'adminSeller'])->name('finance.seller-settlements.proof');
         Route::post('/finance/logistics-pools/{pool}/pay', [AdminFinanceController::class, 'payLogisticsShare'])->name('finance.logistics-pools.pay');
         Route::post('/finance/logistics-payouts/{entry}/fail', [AdminFinanceController::class, 'failLogisticsPayout'])->whereNumber('entry')->name('finance.logistics-payouts.fail');

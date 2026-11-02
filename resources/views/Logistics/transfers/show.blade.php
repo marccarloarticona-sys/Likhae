@@ -89,7 +89,9 @@
                         </section>
                         @forelse($manifest->items as $item)
                             @php
-                                $trackingNumber = (string) $item->transferLeg?->shipment?->tracking_number;
+                                $shipment = $item->transferLeg?->shipment;
+                                $buyerReturn = $shipment?->buyerReturnWorkflows?->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER);
+                                $trackingNumber = (string) ($buyerReturn?->return_tracking_number ?: $shipment?->tracking_number);
                                 $isReleased = $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED;
                             @endphp
                             <form method="POST" action="{{ route('logistics.transfers.items.release', [$manifest, $item]) }}" data-transfer-parcel-row data-released="{{ $isReleased ? 'true' : 'false' }}" class="grid gap-2 border-b border-line pb-3 text-[10px] sm:grid-cols-[1fr_1fr_auto_auto] sm:items-center">
@@ -264,7 +266,8 @@
                         <tr class="border-b border-line">
                             <td class="px-2 py-3">#{{ $item->transfer_leg_id }} · {{ $item->transferLeg?->status }}</td>
                             <td class="px-2 py-3">
-                                <strong class="block">{{ $item->transferLeg?->shipment?->tracking_number }}</strong>
+                                @php($buyerReturn = $item->transferLeg?->shipment?->buyerReturnWorkflows?->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER))
+                                <strong class="block">{{ $buyerReturn?->return_tracking_number ?? $item->transferLeg?->shipment?->tracking_number }}</strong>
                                 @if($isOriginCenter && $manifest->status === 'DRAFT')
                                     @if($savedWeight !== null)
                                         <span class="mt-1 inline-block rounded bg-green-100 px-2 py-1 text-[9px] font-semibold text-green-900">Weight recorded</span>
@@ -296,7 +299,7 @@
                                     <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" data-transfer-parcel-row data-released="false" class="grid gap-2 sm:grid-cols-2">
                                         @csrf
                                         <select name="outcome" class="rounded border border-line px-2 py-2"><option value="RECEIVED">Received</option><option value="DAMAGED">Damaged</option><option value="MISSING">Missing</option></select>
-                                        <input name="scanned_code" data-expected-tracking="{{ $item->transferLeg?->shipment?->tracking_number }}" autocomplete="off" placeholder="Scan parcel barcode to receive" class="rounded border border-line px-2 py-2">
+                                        <input name="scanned_code" data-expected-tracking="{{ $buyerReturn?->return_tracking_number ?? $item->transferLeg?->shipment?->tracking_number }}" autocomplete="off" placeholder="Scan parcel barcode to receive" class="rounded border border-line px-2 py-2">
                                         <input type="hidden" name="scan_method" value="MANUAL">
                                         <input name="notes" placeholder="Notes / exception details" class="rounded border border-line px-2 py-2 sm:col-span-2">
                                         <span data-scan-verification class="text-xs font-semibold text-muted">Awaiting receipt scan</span>

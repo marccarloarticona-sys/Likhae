@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Rider;
 use App\Http\Controllers\Controller;
 use App\Models\Auth\RegistrationApplication;
 use App\Models\Rider\RiderAssignment;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderProfileUpdateRequest;
@@ -279,11 +280,11 @@ class RiderController extends Controller
         return view('rider.deliveries.show', compact('assignment', 'rider', 'parcel', 'delivery', 'deliveryTrip', 'mapMarkers', 'returnHandoffPending'));
     }
 
-    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations): View|RedirectResponse
+    public function earnings(Request $request, \App\Services\Finance\EarningPayoutService $payouts, \App\Services\Finance\PayoutDestinationReadiness $destinations, InterhubTimekeepingService $interhubTimekeeping): View|RedirectResponse
     {
         $rider = $this->rider($request);
         if (RiderVehicleType::isInterLogistics($rider->vehicle_type)) {
-            return redirect()->route('rider.dashboard')->with('status', 'Interhub pay is managed through timekeeping and payroll on your Dashboard.');
+            return $this->interhubWallet($request, $rider, $interhubTimekeeping);
         }
         $financeSchema = app(FinanceSchemaReadiness::class);
         $filters = $this->dateRange($request);
@@ -402,6 +403,36 @@ class RiderController extends Controller
         return view('rider.earnings.index', compact('rider', 'earnings', 'earningsRows', 'earningsTotal', 'earningsNotice', 'financeSummary', 'poolSummary', 'filters', 'dailyEarnings', 'weeklyEarnings', 'eligiblePayoutParticipants', 'riderPayoutReceipts', 'payoutDestinationReady', 'payoutDestinationSaved'));
     }
 
+    private function interhubWallet(Request $request, RiderProfile $rider, InterhubTimekeepingService $timekeeping): View
+    {
+        $filters = $this->dateRange($request);
+        $timekeepingReady = $timekeeping->ready();
+        $sessions = null;
+        $walletSummary = ['paid' => 0.0, 'pending' => 0.0, 'review' => 0.0, 'awaiting_payroll' => 0.0, 'accrued' => 0.0, 'hours' => 0.0];
+
+        if ($timekeepingReady) {
+            $sessionQuery = \App\Models\Rider\InterhubAttendanceSession::query()->where('rider_profile_id', $rider->id);
+            if ($filters['from'] !== '') $sessionQuery->whereDate('clock_in_at', '>=', $filters['from']);
+            if ($filters['to'] !== '') $sessionQuery->whereDate('clock_in_at', '<=', $filters['to']);
+
+            $walletSummary['accrued'] = (float) (clone $sessionQuery)->whereNotNull('clock_out_at')->sum('gross_pay');
+            $walletSummary['hours'] = round((float) (clone $sessionQuery)->whereNotNull('clock_out_at')->sum('worked_minutes') / 60, 2);
+            $walletSummary['awaiting_payroll'] = (float) (clone $sessionQuery)->whereNotNull('clock_out_at')->whereDoesntHave('payrollItem')->sum('gross_pay');
+            $items = \App\Models\Rider\InterhubPayrollItem::query()->where('rider_profile_id', $rider->id)
+                ->whereHas('session', function ($query) use ($filters): void {
+                    if ($filters['from'] !== '') $query->whereDate('clock_in_at', '>=', $filters['from']);
+                    if ($filters['to'] !== '') $query->whereDate('clock_in_at', '<=', $filters['to']);
+                });
+            $walletSummary['paid'] = (float) (clone $items)->where('status', 'PAID')->sum('amount');
+            $walletSummary['pending'] = (float) (clone $items)->where('status', 'PENDING')->sum('amount');
+            $walletSummary['review'] = (float) (clone $items)->where('status', 'REVIEW_REQUIRED')->sum('amount');
+            $sessions = (clone $sessionQuery)->with(['manifest', 'payrollItem.batch'])
+                ->latest('clock_in_at')->paginate(20)->withQueryString();
+        }
+
+        return view('rider.interhub.wallet', compact('rider', 'timekeepingReady', 'filters', 'walletSummary', 'sessions'));
+    }
+
     public function history(Request $request): View
     {
         $rider = $this->rider($request);
@@ -455,10 +486,101 @@ class RiderController extends Controller
             ];
         });
 
-        return view('rider.history.index', compact('rider', 'history', 'assignments', 'filters'));
+        $returnHistory = collect();
+        if (app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->riderReturnHistoryReady()) {
+            $returnRelations = [
+                'shipment.sellerOrder.sellerProfile',
+                'logisticsCenter',
+                'originalDeliveryAssignment.riderProfile.user',
+                'returnRider.user',
+                'initiatedBy',
+                'centerHandoffBy',
+                'centerReceivedBy',
+                'returnRiderAssignedBy',
+                'returnRiderPickedUpBy',
+                'sellerHandoffBy',
+                'sellerReceivedBy',
+            ];
+            $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+            if ($returnEnhancementsReady) {
+                $returnRelations[] = 'handoffAuthorizedBy';
+            }
+
+            $returnQuery = ShipmentReturnWorkflow::query()
+                ->with($returnRelations)
+                ->where(function ($query) use ($rider): void {
+                    $query->whereHas('originalDeliveryAssignment', fn ($assignment) => $assignment->where('rider_profile_id', $rider->id))
+                        ->orWhere('return_rider_profile_id', $rider->id);
+                });
+            if ($from || $to) {
+                $returnQuery->where(function ($dates) use ($from, $to): void {
+                    if ($from) {
+                        $dates->whereRaw('COALESCE(updated_at, initiated_at) >= ?', [$from]);
+                    }
+                    if ($to) {
+                        $dates->whereRaw('COALESCE(updated_at, initiated_at) <= ?', [$to]);
+                    }
+                });
+            }
+
+            $returnHistory = $returnQuery->latest('updated_at')
+                ->paginate(10, ['*'], 'returns_page')
+                ->withQueryString()
+                ->through(function (ShipmentReturnWorkflow $workflow) use ($returnEnhancementsReady, $rider): array {
+                    $shipment = $workflow->shipment;
+                    $isOriginalRider = (int) $workflow->originalDeliveryAssignment?->rider_profile_id === (int) $rider->id;
+                    $disposition = $workflow->return_disposition === ShipmentReturnWorkflow::DISPOSITION_REDELIVERY
+                        ? 'Return to center for redelivery'
+                        : 'Return to seller';
+                    $statusLabel = str($workflow->status)->replace('_', ' ')->title()->toString();
+                    $nextStep = match ($workflow->status) {
+                        ShipmentReturnWorkflow::AWAITING_CENTER_HANDOFF => 'Waiting for the original rider to hand the parcel to the center.',
+                        ShipmentReturnWorkflow::AWAITING_CENTER_RECEIPT => 'Waiting for the center to confirm parcel receipt.',
+                        ShipmentReturnWorkflow::READY_FOR_RETURN_ASSIGNMENT => 'Waiting for a return rider assignment.',
+                        ShipmentReturnWorkflow::ASSIGNED_TO_RETURN_RIDER => 'Waiting for the return rider to accept the assignment.',
+                        ShipmentReturnWorkflow::RETURN_RIDER_ACCEPTED => 'Waiting for the return rider to collect the parcel.',
+                        ShipmentReturnWorkflow::IN_TRANSIT_TO_SELLER => 'Return parcel is in transit to the seller.',
+                        ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER => 'Waiting for transfer to the seller-side center.',
+                        ShipmentReturnWorkflow::RETURN_RIDER_HANDOFF_PENDING => 'Waiting for both riders to confirm custody handoff.',
+                        ShipmentReturnWorkflow::RETURN_EXCEPTION => 'Waiting for Logistics to review a custody exception.',
+                        ShipmentReturnWorkflow::AWAITING_SELLER_CONFIRMATION => 'Waiting for the seller to confirm receipt.',
+                        ShipmentReturnWorkflow::SELLER_RECEIVED => 'Seller confirmed receipt.',
+                        ShipmentReturnWorkflow::CENTER_RECEIVED_FOR_REDELIVERY => 'Center received the parcel for redelivery.',
+                        ShipmentReturnWorkflow::AWAITING_BUYER_DROPOFF => 'Waiting for the buyer to hand the return parcel to a center.',
+                        default => 'Waiting for the next return custody step.',
+                    };
+                    $steps = collect([
+                        ['label' => 'Return initiated', 'actor' => $workflow->initiatedBy?->name, 'at' => $workflow->initiated_at],
+                        ['label' => 'Original rider handed parcel to center', 'actor' => $workflow->centerHandoffBy?->name, 'at' => $workflow->center_handoff_at],
+                        ['label' => 'Center confirmed receipt', 'actor' => $workflow->centerReceivedBy?->name, 'at' => $workflow->center_received_at],
+                        ['label' => 'Return rider handoff authorized', 'actor' => $returnEnhancementsReady ? $workflow->handoffAuthorizedBy?->name : null, 'at' => $returnEnhancementsReady ? $workflow->handoff_authorized_at : null],
+                        ['label' => 'Return rider assigned', 'actor' => $workflow->returnRiderAssignedBy?->name, 'at' => $workflow->return_rider_assigned_at],
+                        ['label' => 'Return rider accepted', 'actor' => $workflow->returnRider?->user?->name, 'at' => $workflow->return_rider_accepted_at],
+                        ['label' => 'Return rider collected parcel', 'actor' => $workflow->returnRiderPickedUpBy?->name, 'at' => $workflow->return_rider_picked_up_at],
+                        ['label' => 'Rider handed parcel to seller', 'actor' => $workflow->sellerHandoffBy?->name, 'at' => $workflow->seller_handoff_at],
+                        ['label' => 'Seller confirmed receipt', 'actor' => $workflow->sellerReceivedBy?->name, 'at' => $workflow->seller_received_at],
+                    ])->filter(fn (array $step): bool => $step['at'] !== null)->values();
+
+                    return [
+                        'tracking' => $shipment?->tracking_number ?? 'Tracking unavailable',
+                        'order' => $shipment?->sellerOrder?->seller_order_number ?? 'Order unavailable',
+                        'seller' => $shipment?->sellerOrder?->sellerProfile?->business_name ?? 'Seller unavailable',
+                        'center' => $workflow->logisticsCenter?->business_name ?? 'Center unavailable',
+                        'reason' => $workflow->reason,
+                        'disposition' => $disposition,
+                        'status' => $statusLabel,
+                        'next_step' => $nextStep,
+                        'involvement' => $isOriginalRider ? 'Original delivery rider' : 'Return rider',
+                        'updated' => $workflow->updated_at?->timezone('Asia/Manila')->format('M j, Y g:i A') ?? 'Date unavailable',
+                        'steps' => $steps,
+                    ];
+                });
+        }
+
+        return view('rider.history.index', compact('rider', 'history', 'assignments', 'filters', 'returnHistory'));
     }
 
-    public function profile(Request $request): View
+    public function profile(Request $request, \App\Services\Finance\PayoutDestinationReadiness $destinations): View
     {
         $rider = $this->rider($request)->load(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations']);
         $residentialAddress = $rider->user
@@ -479,6 +601,9 @@ class RiderController extends Controller
         $profileUpdateRequests = $profileUpdateSchemaReady
             ? $rider->profileUpdateRequests()->with('documents')->limit(5)->get()
             : collect();
+        $payoutDestinationReady = RiderVehicleType::isLocalBarangay($rider->vehicle_type)
+            && $destinations->readyFor('rider_profiles');
+        $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($rider);
 
         return view('rider.profile.index', compact(
             'rider',
@@ -486,6 +611,8 @@ class RiderController extends Controller
             'riderDocuments',
             'profileUpdateRequests',
             'profileUpdateSchemaReady',
+            'payoutDestinationReady',
+            'payoutDestinationSaved',
         ));
     }
 
@@ -505,7 +632,7 @@ class RiderController extends Controller
             $profilePhotos->replace($user, $request->file('profile_photo'));
         }
 
-        return back()->with('status', 'Account profile updated.');
+        return redirect()->to(route('rider.profile').'#personal')->with('status', 'Account profile updated.');
     }
 
     public function submitProfileUpdate(Request $request): RedirectResponse
@@ -599,15 +726,15 @@ class RiderController extends Controller
             throw $exception;
         }
 
-        return back()->with('status', 'Vehicle and document updates were sent to Logistics for re-verification.');
+        return redirect()->to(route('rider.profile').'#vehicle')->with('status', 'Vehicle and document updates were sent to Logistics for re-verification.');
     }
 
     public function updateResidentialAddress(Request $request): RedirectResponse
     {
         $rider = $this->rider($request);
-        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules());
+        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules(false));
         PhilippineAddressValidator::assertValid($data);
-        AddressCoordinateValidator::assertValid($data);
+        AddressCoordinateValidator::assertValid($data, false);
 
         $address = $rider->user->addresses()->orderByDesc('is_default')->latest()->first()
             ?: new Address([
@@ -622,12 +749,12 @@ class RiderController extends Controller
             'recipient_name' => $rider->user->name,
             'contact_number' => $rider->user->contact_number,
             ...PhilippineAddressValidator::storageAttributes($data),
-            'latitude' => $data['latitude'],
-            'longitude' => $data['longitude'],
+            'latitude' => $data['latitude'] ?? null,
+            'longitude' => $data['longitude'] ?? null,
         ]);
         $address->save();
 
-        return back()->with('status', 'Registered residential address updated.');
+        return redirect()->to(route('rider.profile').'#address')->with('status', 'Registered residential address updated.');
     }
 
     public function updatePassword(Request $request): RedirectResponse
@@ -640,7 +767,7 @@ class RiderController extends Controller
 
         $user->update(['password' => Hash::make($data['password'])]);
 
-        return back()->with('status', 'Account password updated.');
+        return redirect()->to(route('rider.profile').'#security')->with('status', 'Account password updated.');
     }
 
     public function messages(Request $request, ConversationService $conversationService): View|RedirectResponse
