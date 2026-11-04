@@ -111,6 +111,7 @@ class RegistrationMediaWorkflowTest extends TestCase
                 'seller_type' => 'sole_proprietorship',
                 'tin' => '123-456-789-002',
                 'valid_id' => UploadedFile::fake()->image('identity.png', 1200, 1200),
+                'business_permit' => UploadedFile::fake()->create('permit.pdf', 20, 'application/pdf'),
                 'dti_certificate' => UploadedFile::fake()->create('dti.pdf', 20, 'application/pdf'),
                 'bir_form_2303' => UploadedFile::fake()->create('bir.pdf', 20, 'application/pdf'),
                 'store_avatar' => UploadedFile::fake()->image('avatar.png', 1200, 1200),
@@ -121,7 +122,7 @@ class RegistrationMediaWorkflowTest extends TestCase
 
         $application = RegistrationApplication::query()->whereHas('user', fn ($query) => $query->where('email', $email))->sole();
         $this->assertEqualsCanonicalizing(
-            ['VALID_ID', 'DTI_CERTIFICATE', 'BIR_FORM_2303'],
+            ['VALID_ID', 'BUSINESS_PERMIT', 'DTI_CERTIFICATE', 'BIR_FORM_2303'],
             $application->documents()->pluck('document_type')->all(),
         );
         foreach ($application->documents as $document) {

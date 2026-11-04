@@ -183,7 +183,7 @@ class StoreRegistrationRequest extends FormRequest
             ],
 
             'valid_id' => [Rule::requiredIf(! $isBuyer), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
-            'business_permit' => [Rule::requiredIf($isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'business_permit' => [Rule::requiredIf($isSeller || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'dti_certificate' => [Rule::requiredIf($isSeller && $this->input('seller_type') === 'sole_proprietorship'), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'sec_certificate' => [Rule::requiredIf(($isSeller && $this->input('seller_type') === 'corporation') || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'bir_form_2303' => [Rule::requiredIf(($isSeller && in_array($this->input('seller_type'), ['sole_proprietorship', 'corporation'], true)) || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],

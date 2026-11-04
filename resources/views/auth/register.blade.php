@@ -1317,7 +1317,7 @@
                                     id="business_permit"
                                     name="business_permit"
                                     type="file"
-                                    accept=".jpg,.jpeg,.png,.pdf"
+                                    accept=".jpg,.jpeg,.png,.webp,.pdf"
                                     data-file-input
                                     data-seller-required
                                 >
@@ -1334,11 +1334,14 @@
 
                                     <strong>
                                         Upload Business Permit
+                                        <span data-business-permit-required-marker hidden aria-hidden="true">*</span>
                                     </strong>
 
                                     <span>
-                                        JPG, JPEG, PNG or PDF
+                                        JPG, JPEG, PNG, WebP or PDF (up to 5 MB)
                                     </span>
+
+                                    <small data-business-permit-hint>Required for Seller applications.</small>
 
                                     <small data-file-name>
                                         No file selected

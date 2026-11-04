@@ -61,6 +61,16 @@ final class RiderVehicleType
         return self::role($vehicleType) === self::ROLE_LOCAL_BARANGAY;
     }
 
+    public static function isVan(?string $vehicleType): bool
+    {
+        return self::normalize($vehicleType) === self::VAN;
+    }
+
+    public static function supportsAvailability(?string $vehicleType): bool
+    {
+        return self::isLocalBarangay($vehicleType) || self::isVan($vehicleType);
+    }
+
     public static function isInterLogistics(?string $vehicleType): bool
     {
         return self::role($vehicleType) === self::ROLE_INTER_LOGISTICS;

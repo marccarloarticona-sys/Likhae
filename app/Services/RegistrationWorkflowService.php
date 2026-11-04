@@ -818,6 +818,8 @@ class RegistrationWorkflowService
             } elseif ($sellerType === 'corporation') {
                 $required = array_merge($required, ['SEC_CERTIFICATE', 'BIR_FORM_2303']);
             }
+
+            $required[] = 'BUSINESS_PERMIT';
         }
 
         if ($expectedType === User::TYPE_LOGISTICS) {

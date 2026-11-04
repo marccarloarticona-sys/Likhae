@@ -429,15 +429,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (businessPermitUpload) {
 
             businessPermitUpload.hidden =
-                !logistics;
+                !(seller || logistics);
 
             const permitInput = businessPermitUpload.querySelector('input[type="file"]');
             if (permitInput) {
-                permitInput.required = logistics;
-                permitInput.disabled = !logistics;
+                permitInput.required = seller || logistics;
+                permitInput.disabled = !(seller || logistics);
             }
 
         }
+
+        const businessPermitRequiredMarker = document.querySelector('[data-business-permit-required-marker]');
+        if (businessPermitRequiredMarker) businessPermitRequiredMarker.hidden = !(seller || logistics);
+        const businessPermitHint = document.querySelector('[data-business-permit-hint]');
+        if (businessPermitHint) businessPermitHint.textContent = logistics
+            ? 'Required for Logistics Center applications.'
+            : 'Required for Seller applications.';
 
 
         sellerRequiredFields.forEach(
