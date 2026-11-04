@@ -13,6 +13,22 @@ document.addEventListener('DOMContentLoaded', () => {
             'registrationForm'
         );
 
+    document.querySelectorAll('[data-password-toggle]').forEach((button) => {
+        const input = document.getElementById(button.dataset.passwordToggle);
+        if (!input) return;
+        button.addEventListener('click', () => {
+            const visible = input.type === 'password';
+            input.type = visible ? 'text' : 'password';
+            button.textContent = visible ? 'Hide' : 'Show';
+            button.setAttribute('aria-pressed', String(visible));
+            button.setAttribute('aria-label', `${visible ? 'Hide' : 'Show'} ${input.id === 'password' ? 'password' : 'confirmation password'}`);
+        });
+    });
+
+    document.getElementById('password_confirmation')?.addEventListener('input', (event) => {
+        event.currentTarget.setCustomValidity('');
+    });
+
     const registrationStepInput = document.getElementById('registration_step');
     const registrationProgressStorageKey = 'likhae.registration.progress';
 
@@ -134,6 +150,15 @@ document.addEventListener('DOMContentLoaded', () => {
             'businessPermitUpload'
         );
 
+    const validIdUpload =
+        document.getElementById('valid_id')?.closest('.upload-box');
+
+    const businessDocumentTarget =
+        document.querySelector('[data-registration-business-uploads]');
+
+    const verificationDocumentTarget =
+        document.querySelector('[data-registration-verification-uploads]');
+
 
     const sellerRequiredFields =
         document.querySelectorAll(
@@ -151,6 +176,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelector(
             '[data-verification-step-number]'
         );
+
+    const profilePictureNumber =
+        document.querySelector('[data-profile-picture-number]');
 
 
     const submitLabel =
@@ -332,6 +360,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const rider =
             type === 'rider';
 
+        const registrationAddressPin = document.querySelector('[data-registration-address-pin]');
+        if (registrationAddressPin) registrationAddressPin.hidden = rider;
+
+        const businessApplicant = seller || logistics;
+
+        const uploadTarget = businessApplicant
+            ? businessDocumentTarget
+            : verificationDocumentTarget;
+
+        if (uploadTarget) {
+            [validIdUpload, businessPermitUpload].forEach((upload) => {
+                if (upload) uploadTarget.append(upload);
+            });
+        }
+
         if (accountTypeInput) {
 
             accountTypeInput.value =
@@ -348,35 +391,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 input.disabled = !seller;
             });
         }
-        const sellerTypeField = document.querySelector('[data-seller-type-field]');
-        const sellerTypeInput = document.getElementById('seller_type');
-        if (sellerTypeField) sellerTypeField.hidden = !seller;
-        if (sellerTypeInput) {
-            sellerTypeInput.required = seller;
-            sellerTypeInput.disabled = !seller;
-        }
-        const businessIdField = document.querySelector('[data-business-id-field]');
-        if (businessIdField) businessIdField.hidden = !(seller || logistics);
         const businessNameInput = document.getElementById('business_name');
         if (businessNameInput) businessNameInput.maxLength = seller ? 30 : 200;
-        const sellerDocuments = document.querySelector('[data-seller-documents]');
-        if (sellerDocuments) sellerDocuments.hidden = !(seller || logistics);
-        document.querySelectorAll('[data-logistics-field]').forEach((field) => { field.hidden = !logistics; });
-        const sellerTypeValue = sellerTypeInput?.value;
-        document.querySelectorAll('[data-seller-document]').forEach((wrapper) => {
-            const input = wrapper.querySelector('input[type="file"]');
-            const documentType = wrapper.dataset.sellerDocument;
-            const required = (seller && (
-                (documentType === 'dti_certificate' && sellerTypeValue === 'sole_proprietorship')
-                || (documentType === 'sec_certificate' && sellerTypeValue === 'corporation')
-                || (documentType === 'bir_form_2303' && ['sole_proprietorship', 'corporation'].includes(sellerTypeValue))
-            )) || (logistics && ['sec_certificate', 'bir_form_2303'].includes(documentType));
-            wrapper.hidden = !required;
-            if (input) {
-                input.required = required;
-                input.disabled = !required;
-            }
-        });
 
 
         accountButtons.forEach(
@@ -439,13 +455,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         }
 
-        const businessPermitRequiredMarker = document.querySelector('[data-business-permit-required-marker]');
-        if (businessPermitRequiredMarker) businessPermitRequiredMarker.hidden = !(seller || logistics);
-        const businessPermitHint = document.querySelector('[data-business-permit-hint]');
-        if (businessPermitHint) businessPermitHint.textContent = logistics
-            ? 'Required for Logistics Center applications.'
-            : 'Required for Seller applications.';
-
 
         sellerRequiredFields.forEach(
             (field) => {
@@ -455,6 +464,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
             }
         );
+
+        const validIdInput = document.getElementById('valid_id');
+        if (validIdInput) validIdInput.required = seller || logistics || rider;
+        const validIdRequiredMarker = document.querySelector('[data-valid-id-required-marker]');
+        if (validIdRequiredMarker) validIdRequiredMarker.hidden = !validIdInput?.required;
+        const validIdHint = document.querySelector('[data-valid-id-hint]');
+        if (validIdHint) validIdHint.textContent = validIdInput?.required
+            ? 'Required for this application.'
+            : 'Optional for Buyer applications.';
+        const businessPermitHint = document.querySelector('[data-business-permit-hint]');
+        if (businessPermitHint) businessPermitHint.textContent = logistics
+            ? 'Required for Logistics Center applications.'
+            : 'Required for Seller applications.';
+        const businessPermitRequiredMarker = document.querySelector('[data-business-permit-required-marker]');
+        if (businessPermitRequiredMarker) businessPermitRequiredMarker.hidden = !(seller || logistics);
+        const businessPermitLabel = document.querySelector('[data-business-permit-label]');
+        if (businessPermitLabel) businessPermitLabel.textContent = logistics
+            ? 'Upload Business / DTI Permit'
+            : 'Upload Business Permit';
+
+        const approvalHeading = document.querySelector('[data-approval-heading]');
+        const approvalCopy = document.querySelector('[data-approval-copy]');
+        if (approvalHeading) approvalHeading.textContent = rider ? 'Logistics center approval required' : 'Administrator approval required';
+        if (approvalCopy) approvalCopy.textContent = `After submitting your registration, please wait for the ${rider ? 'logistics center' : 'administrator'}'s approval. Sign in after approval to access your account.`;
 
         /*
         |--------------------------------------------------------------
@@ -601,6 +634,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         }
 
+        if (profilePictureNumber) {
+            profilePictureNumber.textContent = seller || logistics || rider ? '05' : '04';
+        }
+
 
         /*
         |--------------------------------------------------------------
@@ -673,11 +710,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         }
     );
-
-    document.getElementById('seller_type')?.addEventListener('change', () => {
-        setAccountType(accountTypeInput?.value || 'buyer', true);
-    });
-
 
     /*
     |--------------------------------------------------------------------------
@@ -940,61 +972,37 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
 
-        steps.forEach(
-            (step, index) => {
+        steps.forEach((step, index) => {
+            const selector = step.name === 'business' || step.name === 'rider-vehicle'
+                ? '[data-seller-progress-step]'
+                : step.name === 'profile-picture'
+                    ? '[data-profile-progress-step]'
+                    : step.name === 'verification'
+                        ? '[data-verification-progress-step]'
+                        : `[data-progress-step="${index}"]`;
+            const button = document.querySelector(selector);
 
-                let button;
+            if (!button) return;
 
-
-                if (
-                    step.name ===
-                    'verification'
-                ) {
-
-                    button =
-                        document.querySelector(
-                            '[data-verification-progress-step]'
-                        );
-
-                } else {
-
-                    button =
-                        document.querySelector(
-                            `[data-progress-step="${index}"]`
-                        );
-
-                }
+            button.dataset.progressStep = String(index);
+            const number = button.querySelector('span');
+            if (number) number.textContent = String(index + 1);
 
 
-                if (!button) {
-                    return;
-                }
+            if (index < currentStep) {
+
+                button.classList.add('is-complete');
+
+            }
 
 
-                if (
-                    index <
-                    currentStep
-                ) {
+            if (index === currentStep) {
 
-                    button.classList.add(
-                        'is-complete'
-                    );
+                button.classList.add('is-active');
 
-                }
+            }
 
-
-                if (
-                    index ===
-                    currentStep
-                ) {
-
-                    button.classList.add(
-                        'is-active'
-                    );
-
-                }
-
-            });
+        });
 
     }
 
@@ -1056,6 +1064,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     field.classList.remove(
                         'is-invalid'
                     );
+                    field.removeAttribute('aria-invalid');
 
 
                     return;
@@ -1080,6 +1089,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     field.classList.add(
                         'is-invalid'
                     );
+                    field.setAttribute('aria-invalid', 'true');
 
 
                     if (!firstInvalid) {
@@ -1094,6 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     field.classList.remove(
                         'is-invalid'
                     );
+                    field.removeAttribute('aria-invalid');
 
                 }
 
@@ -1102,8 +1113,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         if (!valid) {
-
-            showStepError('Please correct the highlighted field(s) before continuing.');
+            const fieldName = firstInvalid.closest('.register-field')?.querySelector('label')?.textContent?.replace('*', '').trim()
+                || firstInvalid.closest('.upload-box')?.querySelector('strong')?.textContent?.trim()
+                || firstInvalid.name?.replaceAll('_', ' ')
+                || 'This field';
+            showStepError(`${fieldName}: ${firstInvalid.validationMessage}`);
 
 
             firstInvalid?.focus();
@@ -1482,14 +1496,11 @@ document.addEventListener('DOMContentLoaded', () => {
             confirmation.setCustomValidity(password.value === confirmation.value ? '' : 'Passwords must match.');
             if (!validateCurrentStep()) {
                 event.preventDefault();
-                confirmation.reportValidity();
                 return;
             }
             if (window.likhaeRegistrationPolicyConsentedRole !== accountTypeInput?.value) {
                 event.preventDefault();
-                if (!window.likhaeOpenRegistrationPolicyReview?.()) {
-                    showStepError('Published Terms & Conditions and Privacy Policy are required for this account type before registration can continue.');
-                }
+                window.likhaeOpenRegistrationPolicyReview?.();
                 return;
             }
             if (!hasSelectedStorePhotos() || storePhotoCropComplete) {
@@ -1538,6 +1549,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ||
             !birthday.value
         ) {
+
+            birthday?.setCustomValidity('');
 
             if (age) {
 
@@ -1596,6 +1609,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 0,
                 calculatedAge
             );
+
+        birthday.setCustomValidity(
+            calculatedAge < 18
+                ? 'You must be at least 18 years old to register.'
+                : ''
+        );
 
     }
 
@@ -1864,14 +1883,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     }
 
-    function resetPostalCode(placeholder = '') {
+    function resetPostalCode(value = '') {
 
         if (!postalCode) {
             return;
         }
 
-        postalCode.value =
-            placeholder;
+        postalCode.value = value === 'Loading...' ? '' : (value ?? '');
+        postalCode.placeholder = value === 'Loading...'
+            ? 'Looking up postal code...'
+            : 'Auto-filled or enter 4 digits';
 
     }
 
@@ -2373,8 +2394,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         `${form.dataset.addressBase}/postal-code?${params.toString()}`
                     );
 
-                postalCode.value =
-                    result.postal_code ?? packagePostalCode;
+                if (!postalCode.value) postalCode.value = result.postal_code ?? packagePostalCode ?? '';
+                postalCode.placeholder = 'Auto-filled or enter 4 digits';
 
             } catch (error) {
 
@@ -2383,12 +2404,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 console.error('Postal Code API:', error);
-                resetPostalCode(postalCodeFromAddress({
+                if (!postalCode.value) postalCode.value = postalCodeFromAddress({
                     region: selectedLabel(region),
                     province: selectedLabel(province),
                     municipality: selectedLabel(municipality),
                     barangay: selectedLabel(barangay),
-                }));
+                }) ?? '';
+                postalCode.placeholder = 'Auto-filled or enter 4 digits';
 
             }
 
@@ -2450,8 +2472,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const serverErrors = JSON.parse(document.getElementById('registration-validation-errors')?.textContent || '{}');
     let firstInvalid = null;
+    const serverFieldAliases = {
+        region_code: 'region',
+        province_code: 'province',
+        municipality_code: 'municipality',
+        barangay_code: 'barangay',
+    };
     Object.entries(serverErrors).forEach(([name, messages]) => {
-        const fields = [...form.querySelectorAll('[name]')].filter((field) => field.name === name && field.type !== 'hidden');
+        let fields = [...form.querySelectorAll('[name]')].filter((field) => field.name === name && field.type !== 'hidden');
+        if (!fields.length && serverFieldAliases[name]) {
+            fields = [...form.querySelectorAll('[name]')].filter((field) => field.name === serverFieldAliases[name]);
+        }
         if (!fields.length) return;
         const message = Array.isArray(messages) ? messages[0] : String(messages);
         fields.forEach((field) => {

@@ -30,7 +30,6 @@ class MobileAuthController extends Controller
     public function register(
         StoreRegistrationRequest $request,
         RegistrationWorkflowService $workflow,
-        PolicyAcceptanceService $policies,
     ): JsonResponse {
         if (! (bool) PlatformSetting::valueOf('registration_enabled', true)) {
             return response()->json([
@@ -81,12 +80,7 @@ class MobileAuthController extends Controller
             $registrationOverrides['postal_code'] = $expectedPostalCode;
         }
 
-        $acceptedPolicies = $policies->validateRegistrationConsent(
-            $request->accountTypeConstant(),
-            $request->validated(),
-        );
         $application = $workflow->submit($request, $registrationOverrides);
-        $policies->recordRegistrationAcceptances($application->user, $acceptedPolicies, $request);
         Cache::forget($this->emailVerificationTokenCacheKey($email));
 
         return response()->json([

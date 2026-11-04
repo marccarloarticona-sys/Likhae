@@ -5,7 +5,7 @@ namespace App\Services\Moderation;
 class ProductModerationRiskEngine
 {
     /** @return array<string, mixed> */
-    public function decide(array $text, array $image, bool $hasImages, bool $completeImages = true): array
+    public function decide(array $text, array $image, bool $hasImages, bool $completeImages = true, array $alignment = []): array
     {
         if (! ($text['available'] ?? false) || ! ($image['available'] ?? false) || ! $hasImages || ! $completeImages) {
             return [
@@ -60,6 +60,23 @@ class ProductModerationRiskEngine
             ...array_keys(array_filter((array) ($image['category_probabilities'] ?? []), fn ($score, $key): bool => in_array($key, $imageCategories, true) && (float) $score >= 0.20, ARRAY_FILTER_USE_BOTH)),
         ])->unique()->values()->all();
 
+        // Category fit is a review signal, never a prohibited-item score or an automatic hold.
+        if ($overall === 'LOW') {
+            $overall = ($alignment['requires_review'] ?? false) ? 'MEDIUM'
+                : (($alignment['incomplete'] ?? false) ? 'UNKNOWN' : 'LOW');
+        }
+
+        $summary = $mismatchRisk
+            ? 'AI signals suggest the product text and images may be inconsistent or the listing presentation unclear. Admin review is required.'
+            : ($categories === []
+                ? 'No strong prohibited-item signal was identified by the configured models.'
+                : 'Possible policy concern detected. This is an AI review signal, not a legal conclusion.');
+        if ($alignment['requires_review'] ?? false) {
+            $summary .= ' The product may not match the seller’s line of business or selected category. Admin review is required.';
+        } elseif ($alignment['incomplete'] ?? false) {
+            $summary .= ' Business and category alignment could not be fully assessed. Manual review is required.';
+        }
+
         return [
             'overall_risk' => $overall,
             'text_risk' => $textRisk,
@@ -73,11 +90,7 @@ class ProductModerationRiskEngine
                 'CRITICAL' => 'ESCALATE',
                 default => 'MANUAL_REVIEW',
             },
-            'evidence_summary' => $mismatchRisk
-                ? 'AI signals suggest a possible mismatch or unclear presentation. Admin review is required.'
-                : ($categories === []
-                    ? 'No strong prohibited-item signal was identified by the configured models.'
-                    : 'Possible policy concern detected. This is an AI review signal, not a legal conclusion.'),
+            'evidence_summary' => $summary,
         ];
     }
 

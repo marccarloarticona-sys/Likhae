@@ -23,8 +23,15 @@ class AdminProductModerationController extends Controller
 
         $minutes = max(1, (int) config('product_moderation.queue.manual_rescan_cooldown_minutes', 10));
         $key = 'product-moderation-manual-rescan:'.$product->id;
-        if (! Cache::add($key, true, now()->addMinutes($minutes))) {
-            return back()->withErrors(['moderation' => 'A manual scan was requested recently. Try again after the cooldown.']);
+        $requestedAt = now();
+        if (! Cache::add($key, $requestedAt->timestamp, $requestedAt->copy()->addMinutes($minutes))) {
+            $previousRequestAt = Cache::get($key);
+            $remainingSeconds = is_numeric($previousRequestAt)
+                ? max(1, ($minutes * 60) - ($requestedAt->timestamp - (int) $previousRequestAt))
+                : $minutes * 60;
+            $remainingMinutes = max(1, (int) ceil($remainingSeconds / 60));
+
+            return back()->withErrors(['moderation' => 'Manual rescan cooldown is active. Try again in about '.$remainingMinutes.' minute'.($remainingMinutes === 1 ? '' : 's').'.']);
         }
 
         try {

@@ -37,11 +37,13 @@ class RegistrationWorkflowService
     {
         $data = array_replace($request->validated(), $overrides);
         $this->ensureRiderCenterEligibility($request, $data);
+        $policies = app(PolicyAcceptanceService::class);
+        $acceptedPolicies = $policies->validateRegistrationConsent($request->accountTypeConstant(), $data);
         $storedPaths = [];
         $publicPaths = [];
 
         try {
-            $application = DB::transaction(function () use ($request, $data, &$storedPaths, &$publicPaths): RegistrationApplication {
+            $application = DB::transaction(function () use ($request, $data, $policies, $acceptedPolicies, &$storedPaths, &$publicPaths): RegistrationApplication {
                 $accountType = $request->accountTypeConstant();
                 $email = mb_strtolower(trim($data['email']));
                 $existingUser = User::query()
@@ -277,6 +279,8 @@ class RegistrationWorkflowService
                         request: $request,
                     );
                 }
+
+                $policies->recordRegistrationAcceptances($user, $acceptedPolicies, $request);
 
                 return $application->load(['user', 'documents', 'sellerData', 'logisticsData', 'riderData']);
             });

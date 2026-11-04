@@ -449,6 +449,8 @@
 
             </section>
 
+            <p class="register-policy-availability" data-registration-policy-availability role="status" hidden></p>
+
 
             {{-- =================================================
                 PROGRESS
@@ -474,7 +476,7 @@
                         class="progress-counter"
                         data-progress-counter
                     >
-                        Step 1 of 4
+                        Step 1 of 5
                     </span>
 
                 </div>
@@ -540,11 +542,22 @@
                     <button
                         type="button"
                         class="progress-step"
+                        data-progress-step="3"
+                        data-profile-progress-step
+                    >
+                        <span data-profile-progress-number>4</span>
+                        <small>Profile</small>
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="progress-step"
                         data-progress-step="verification"
                         data-verification-progress-step
                     >
                         <span data-verification-step-number>
-                            4
+                            5
                         </span>
 
                         <small>
@@ -655,7 +668,7 @@
                             <div class="register-field">
 
                                 <label for="middle_initial">
-                                    Middle Name
+                                    Middle Initial
                                 </label>
 
                                 <input
@@ -663,8 +676,8 @@
                                     name="middle_initial"
                                     type="text"
                                     value="{{ old('middle_initial') }}"
-                                    maxlength="80"
-                                    placeholder="Santos"
+                                    maxlength="10"
+                                    placeholder="S"
                                     autocomplete="additional-name"
                                 >
 
@@ -837,6 +850,13 @@
                         <div class="register-grid">
 
                             {{-- EMAIL --}}
+                            @php
+                                $registrationEmail = old('email', data_get($googleBuyerRegistration ?? null, 'email') ?: session('registration_email_verified'));
+                                $registrationEmailVerified = filled($registrationEmail) && (
+                                    mb_strtolower(trim($registrationEmail)) === session('registration_email_verified')
+                                    || mb_strtolower(trim($registrationEmail)) === data_get($googleBuyerRegistration ?? null, 'email')
+                                );
+                            @endphp
                             <div
                                 class="register-field"
                                 data-registration-email-verification
@@ -853,14 +873,14 @@
                                     id="email"
                                     name="email"
                                     type="email"
-                                    value="{{ old('email', data_get($googleBuyerRegistration ?? null, 'email')) }}"
-                                    @if(!empty($googleBuyerRegistration)) readonly @endif
+                                    value="{{ $registrationEmail }}"
+                                    @readonly($registrationEmailVerified)
                                     placeholder="juan@email.com"
                                     autocomplete="email"
                                     required
                                 >
 
-                                @if (empty($googleBuyerRegistration))
+                                @if (! $registrationEmailVerified)
                                     <div class="register-email-verification">
                                         <button type="button" class="register-email-verification__button" data-send-email-code>
                                             Send verification code
@@ -887,7 +907,7 @@
                                     </div>
                                 @else
                                     <small class="register-email-verification__status is-success">
-                                        This Google email address is already verified.
+                                        {{ !empty($googleBuyerRegistration) ? 'This Google email address is already verified.' : 'Email verified. You can continue your registration.' }}
                                     </small>
                                 @endif
 
@@ -1021,8 +1041,8 @@
                             {{-- POSTAL --}}
                             <div class="register-field">
                                 <label for="postal_code">Postal Code</label>
-                                <input id="postal_code" name="postal_code" type="text" inputmode="numeric"
-                                    value="{{ old('postal_code') }}" placeholder="Auto-filled after barangay" readonly data-address-postal data-old-value="{{ old('postal_code') }}">
+                                <input id="postal_code" name="postal_code" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+                                    value="{{ old('postal_code') }}" placeholder="Auto-filled or enter 4 digits" data-address-postal data-old-value="{{ old('postal_code') }}">
                             </div>
 
                             {{-- LANDMARK --}}
@@ -1032,8 +1052,12 @@
                                     value="{{ old('landmark') }}" placeholder="e.g. Near barangay hall">
                             </div>
 
-                            <div class="register-field register-field--full">
-                                <x-shared.address-pin height="240px" />
+                            <div
+                                class="register-field register-field--full"
+                                data-registration-address-pin
+                                @if(($preselectedRole ?? 'buyer') === 'rider') hidden @endif
+                            >
+                                <x-shared.address-pin height="240px" :required="false" />
                             </div>
 
                         </div>
@@ -1136,6 +1160,8 @@
 
                         </div>
 
+                        <div class="upload-grid registration-business-uploads" data-registration-business-uploads aria-label="Business registration documents"></div>
+
                     </div>
 
                 </section>
@@ -1152,10 +1178,11 @@
                                 <label for="vehicle_type">Vehicle Type <span>*</span></label>
                                 <select id="vehicle_type" name="vehicle_type" data-rider-required>
                                     <option value="">Select vehicle type</option>
-                                    @foreach(['motorcycle' => 'Motorcycle', 'car' => 'Car', 'van' => 'Van', 'truck' => 'Truck'] as $value => $label)
+                                    @foreach(\App\Support\RiderVehicleType::registrationOptions() as $value => $label)
                                         <option value="{{ $value }}" @selected(old('vehicle_type') === $value)>{{ $label }}</option>
                                     @endforeach
                                 </select>
+                                <small>Motorcycles and tricycles serve local deliveries; four wheel vehicles serve interhub trips.</small>
                             </div>
                             <div class="register-field">
                                 <label for="plate_number">Plate Number <span>*</span></label>
@@ -1166,9 +1193,16 @@
                                 <select id="target_logistics_center_id" name="target_logistics_center_id" data-rider-required>
                                     <option value="">Choose logistics center</option>
                                     @foreach($logisticsCenters ?? collect() as $center)
-                                        <option value="{{ $center->id }}" @selected((string) old('target_logistics_center_id') === (string) $center->id)>{{ $center->business_name }} ({{ $center->code }})</option>
+                                        <option
+                                            value="{{ $center->id }}"
+                                            data-logistics-center-option="true"
+                                            data-province-code="{{ $center->address->province_code }}"
+                                            data-municipality-code="{{ $center->address->municipality_code }}"
+                                            @selected((string) old('target_logistics_center_id') === (string) $center->id)
+                                        >{{ $center->business_name }} ({{ $center->code }})</option>
                                     @endforeach
                                 </select>
+                                <small data-logistics-center-status aria-live="polite">Select your province and municipality to see eligible active logistics centers.</small>
                             </div>
                             <div class="register-field">
                                 <label for="drivers_license_number">Driver's License Number <span>*</span></label>
@@ -1185,7 +1219,7 @@
                     <div class="register-section">
                         <div class="register-section__head">
                             <span class="register-section__number">
-                                <span data-profile-picture-number>05</span>
+                                <span data-profile-picture-number>04</span>
                             </span>
                             <div>
                                 <h3>Profile Picture</h3>
@@ -1209,13 +1243,13 @@
                                     id="profile_picture"
                                     name="profile_picture"
                                     type="file"
-                                    accept=".jpg,.jpeg,.png,.gif,.webp"
+                                    accept=".jpg,.jpeg,.png,.webp"
                                     data-file-input
                                 >
                                 <label for="profile_picture" class="upload-box__label">
                                     <span class="upload-box__icon">↑</span>
                                     <strong>Upload Profile Picture</strong>
-                                    <span>JPG, JPEG, PNG, GIF or WEBP (Max 2 MB)</span>
+                                    <span>JPG, JPEG, PNG or WEBP (Max 5 MB)</span>
                                     <small data-file-name>No file selected</small>
                                 </label>
                             </div>
@@ -1245,7 +1279,7 @@
 
                             <span class="register-section__number">
                                 <span data-verification-number>
-                                    04
+                                    05
                                 </span>
                             </span>
 
@@ -1266,7 +1300,7 @@
                         </div>
 
 
-                        <div class="upload-grid">
+                        <div class="upload-grid" data-registration-verification-uploads>
 
                             {{-- VALID ID --}}
                             <div class="upload-box">
@@ -1277,6 +1311,7 @@
                                     type="file"
                                     accept=".jpg,.jpeg,.png,.webp,.pdf"
                                     data-file-input
+                                    data-id-required
                                 >
 
 
@@ -1289,13 +1324,9 @@
                                         ↑
                                     </span>
 
-                                    <strong>
-                                        Upload Valid ID
-                                    </strong>
+                                    <strong>Upload ID <span data-valid-id-required-marker hidden aria-hidden="true">*</span></strong>
 
-                                    <span>
-                                        JPG, JPEG, PNG or PDF
-                                    </span>
+                                    <span data-valid-id-hint>Required for this application.</span>
 
                                     <small data-file-name>
                                         No file selected
@@ -1319,7 +1350,6 @@
                                     type="file"
                                     accept=".jpg,.jpeg,.png,.webp,.pdf"
                                     data-file-input
-                                    data-seller-required
                                 >
 
 
@@ -1333,7 +1363,7 @@
                                     </span>
 
                                     <strong>
-                                        Upload Business Permit
+                                        <span data-business-permit-label>Upload Business Permit</span>
                                         <span data-business-permit-required-marker hidden aria-hidden="true">*</span>
                                     </strong>
 
@@ -1374,32 +1404,39 @@
                                 <label for="password">
                                     Password <span>*</span>
                                 </label>
-                                <input
-                                    id="password"
-                                    name="password"
-                                    type="password"
-                                    minlength="8"
-                                    maxlength="72"
-                                    pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9]).{8,72}"
-                                    title="Use 8–72 characters with uppercase and lowercase letters and a number."
-                                    placeholder="Min. 8 chars, uppercase, number"
-                                    autocomplete="new-password"
-                                    required
-                                >
+                                <div class="register-password-field">
+                                    <input
+                                        id="password"
+                                        name="password"
+                                        type="password"
+                                        minlength="8"
+                                        maxlength="72"
+                                        pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,72}"
+                                        title="Use 8 to 72 characters with uppercase and lowercase letters, a number, and a symbol."
+                                        placeholder="Min. 8 chars, uppercase, number, symbol"
+                                        autocomplete="new-password"
+                                        required
+                                    >
+                                    <button type="button" class="register-password-toggle" data-password-toggle="password" aria-label="Show password" aria-pressed="false">Show</button>
+                                </div>
+                                <small>Use 8 to 72 characters with uppercase and lowercase letters, a number, and a symbol.</small>
                             </div>
 
                             <div class="register-field">
                                 <label for="password_confirmation">
                                     Confirm Password <span>*</span>
                                 </label>
-                                <input
-                                    id="password_confirmation"
-                                    name="password_confirmation"
-                                    type="password"
-                                    placeholder="Re-enter your password"
-                                    autocomplete="new-password"
-                                    required
-                                >
+                                <div class="register-password-field">
+                                    <input
+                                        id="password_confirmation"
+                                        name="password_confirmation"
+                                        type="password"
+                                        placeholder="Re-enter your password"
+                                        autocomplete="new-password"
+                                        required
+                                    >
+                                    <button type="button" class="register-password-toggle" data-password-toggle="password_confirmation" aria-label="Show confirmation password" aria-pressed="false">Show</button>
+                                </div>
                             </div>
 
                         </div>
@@ -1412,35 +1449,18 @@
                             </span>
 
                             <div>
-                                <strong>
-                                    Administrator approval required
-                                </strong>
-                                <p>
-                                    After submitting your registration,
-                                    please wait for the administrator's
-                                    approval. Sign in after approval to access your account.
-                                </p>
+                                <strong data-approval-heading>Administrator approval required</strong>
+                                <p data-approval-copy>After submitting your registration, please wait for the administrator's approval. Sign in after approval to access your account.</p>
                             </div>
 
                         </div>
 
                         {{-- TERMS --}}
-                        <label class="register-terms">
-
-                            <input
-                                type="checkbox"
-                                name="terms"
-                                value="1"
-                                required
-                            >
-
-                            <span>
-                                I confirm that the information provided
-                                is correct and I agree to LIKHAE's terms
-                                and marketplace policies.
-                            </span>
-
-                        </label>
+                        <div class="register-policy-prompt">
+                            <p>Check that your information is correct, then review the required registration policies before submitting.</p>
+                            <button type="button" data-review-registration-policies>Review registration policies</button>
+                            <span data-registration-policy-status aria-live="polite">Policy review required.</span>
+                        </div>
 
                     </div>
 
@@ -1553,7 +1573,7 @@
     .register-policy-dialog{display:flex;flex-direction:column;width:min(100%,780px);max-height:min(92vh,940px);overflow:hidden;border:1px solid #eadbd1;border-radius:22px;background:#fffdf9;color:#2d1b15;box-shadow:0 28px 90px rgba(0,0,0,.32)}
     .register-policy-header{padding:22px 26px 16px;border-bottom:1px solid #eee3dc}.register-policy-header small{color:#994638;font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.register-policy-header h2{margin:7px 0 4px;font-size:22px}.register-policy-header p{margin:0;color:#725d54;font-size:13px;line-height:1.5}
     .register-policy-content{overflow:auto;overscroll-behavior:contain;padding:6px 26px 18px}.register-policy-document{padding:15px 0;border-bottom:1px solid #eee3dc}.register-policy-document:last-child{border:0}.register-policy-document h3{margin:0;font-size:16px}.register-policy-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin:5px 0 12px;color:#806b61;font-size:11px;font-weight:700}.register-policy-body{white-space:pre-wrap;overflow-wrap:anywhere;color:#43322c;font-size:13px;line-height:1.68}
-    .register-policy-footer{padding:16px 26px 19px;border-top:1px solid #eee3dc;background:#fffaf5}.register-policy-ack{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;color:#43322c;font-size:12px;line-height:1.5}.register-policy-ack input{width:16px;height:16px;margin:1px 0 0;accent-color:#963d31;flex:0 0 auto}.register-policy-error{margin:0 0 12px;color:#aa2e27;font-size:12px;line-height:1.5}.register-policy-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:15px}.register-policy-actions a{color:#795f54;font-size:12px;font-weight:700;text-underline-offset:3px}.register-policy-actions button{border:0;border-radius:11px;background:#963d31;color:#fff;padding:11px 16px;font-size:12px;font-weight:800;cursor:pointer}.register-policy-actions button:disabled{background:#d9c6bc;cursor:not-allowed}
+    .register-policy-footer{padding:16px 26px 19px;border-top:1px solid #eee3dc;background:#fffaf5}.register-policy-ack{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;color:#43322c;font-size:12px;line-height:1.5}.register-policy-ack[hidden]{display:none}.register-policy-ack input{width:16px;height:16px;margin:1px 0 0;accent-color:#963d31;flex:0 0 auto}.register-policy-error{margin:0 0 12px;color:#aa2e27;font-size:12px;line-height:1.5}.register-policy-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:15px}.register-policy-actions a{color:#795f54;font-size:12px;font-weight:700;text-underline-offset:3px}.register-policy-actions button{border:0;border-radius:11px;background:#963d31;color:#fff;padding:11px 16px;font-size:12px;font-weight:800;cursor:pointer}.register-policy-actions button:disabled{background:#d9c6bc;cursor:not-allowed}
     .dark .register-policy-dialog{border-color:#4b3831;background:#211916;color:#f8eee9}.dark .register-policy-header,.dark .register-policy-footer,.dark .register-policy-document{border-color:#49352d}.dark .register-policy-header p,.dark .register-policy-meta{color:#c2aba0}.dark .register-policy-body,.dark .register-policy-ack{color:#eadbd3}.dark .register-policy-footer{background:#261c18}
     @media(max-width:600px){.register-policy-backdrop{padding:9px}.register-policy-dialog{max-height:95vh;border-radius:17px}.register-policy-header{padding:18px 17px 14px}.register-policy-content{padding:5px 17px 14px}.register-policy-footer{padding:13px 17px 16px}.register-policy-actions{align-items:stretch;flex-direction:column-reverse}.register-policy-actions button{width:100%}.register-policy-actions a{align-self:center}}
 </style>
@@ -1561,8 +1581,8 @@
     <section class="register-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="register-policy-title" aria-describedby="register-policy-description" tabindex="-1">
         <header class="register-policy-header">
             <small>Registration agreements</small>
-            <h2 id="register-policy-title">Review Terms &amp; Conditions and Privacy Policy</h2>
-            <p id="register-policy-description">Review the policies for your selected account type. Scroll to the end of each policy to enable its checkbox. Acknowledging both is the final step before submitting your registration.</p>
+            <h2 id="register-policy-title">Review registration policies</h2>
+            <p id="register-policy-description">Review the policies for your selected account type. Scroll to the end of each available policy to enable its checkbox, then acknowledge each one before submitting.</p>
         </header>
         <div class="register-policy-content" data-registration-policy-content tabindex="0" aria-label="Scrollable policy contents">
             @foreach(($registrationPoliciesByRole[$preselectedRole ?? 'buyer'] ?? []) as $policy)
@@ -1579,12 +1599,12 @@
             @endif
             <p class="register-policy-error" data-registration-policy-error @if(($policySchemaReady ?? false) && !empty($registrationPoliciesByRole[$preselectedRole ?? 'buyer'])) hidden @endif>
                 @if(!($policySchemaReady ?? false)) Policy storage is not available yet. Registration can continue after the policy update is installed.
-                @else Published Terms &amp; Conditions and Privacy Policy are required for this account type before registration can continue. @endif
+                @else Published Terms &amp; Conditions are required for this account type before registration can continue. @endif
             </p>
             <label class="register-policy-ack"><input type="checkbox" form="registrationForm" name="terms_acknowledged" value="1" required disabled data-registration-terms-ack data-policy-acknowledgement-type="TERMS"><span>I have read and agree to the applicable Terms &amp; Conditions.</span></label>
-            <label class="register-policy-ack"><input type="checkbox" form="registrationForm" name="privacy_acknowledged" value="1" required disabled data-registration-privacy-ack data-policy-acknowledgement-type="PRIVACY"><span>I have read and acknowledge the applicable Privacy Policy.</span></label>
+            <label class="register-policy-ack" data-registration-privacy-ack-label><input type="checkbox" form="registrationForm" name="privacy_acknowledged" value="1" disabled data-registration-privacy-ack data-policy-acknowledgement-type="PRIVACY"><span>I have read and acknowledge the applicable Privacy Policy.</span></label>
             <div data-registration-policy-hidden-inputs></div>
-            <div class="register-policy-actions"><a href="{{ route('home') }}">Decline &amp; exit</a><button type="button" data-registration-policy-agree disabled>I agree</button></div>
+            <div class="register-policy-actions"><div><a href="{{ route('home') }}">Decline &amp; exit</a><a href="#registrationForm" data-registration-policy-close>Back to registration</a></div><button type="button" data-registration-policy-agree disabled>I agree</button></div>
         </footer>
     </section>
 </div>
@@ -1597,6 +1617,11 @@
         const error=backdrop?.querySelector('[data-registration-policy-error]');
         const terms=backdrop?.querySelector('[data-registration-terms-ack]');
         const privacy=backdrop?.querySelector('[data-registration-privacy-ack]');
+        const privacyLabel=backdrop?.querySelector('[data-registration-privacy-ack-label]');
+        const status=document.querySelector('[data-registration-policy-status]');
+        const availability=document.querySelector('[data-registration-policy-availability]');
+        let activeHasPrivacy=false;
+        let previousFocus=null;
         if(!backdrop||!dialog||!content||!agree)return;
         window.likhaeRenderRegistrationPolicySet=function(role,docs){
             const list=Array.isArray(docs)?docs:[];
@@ -1612,16 +1637,23 @@
                 const body=document.createElement('div');body.className='register-policy-body';body.textContent=policy.body;
                 meta.append(version,date);article.append(title,meta,body);content.append(article);
             });
+            if(!list.length){const empty=document.createElement('p');empty.className='register-policy-empty';empty.textContent='No registration policies are published for this account type yet.';content.append(empty)}
             content.scrollTop=0;
-            const ready=Boolean(window.likhaePolicySchemaReady&&hasTerms&&hasPrivacy);
-            if(error){error.hidden=ready;if(!ready&&window.likhaePolicySchemaReady)error.textContent='Published Terms & Conditions and Privacy Policy are required for this account type before registration can continue.'}
+            activeHasPrivacy=hasPrivacy;
+            const ready=Boolean(window.likhaePolicySchemaReady&&hasTerms);
+            const unavailableMessage=!window.likhaePolicySchemaReady?'Policy storage is not available yet. Please try again later.':'Registration is waiting for a published Terms & Conditions for this account type.';
+            if(error){error.hidden=ready;if(!ready)error.textContent=unavailableMessage}
+            if(availability){availability.hidden=ready;availability.textContent=ready?'':unavailableMessage}
+            if(status)status.textContent=ready?'Policy review required.':'Required registration policies are not yet published.';
             backdrop.dataset.activeRole=role;backdrop.dataset.policyReady=ready?'true':'false';
-            if(terms){terms.checked=false;terms.disabled=true}if(privacy){privacy.checked=false;privacy.disabled=true}
+            if(terms){terms.checked=false;terms.disabled=true}
+            if(privacy){privacy.checked=false;privacy.required=hasPrivacy;privacy.disabled=true}
+            if(privacyLabel)privacyLabel.hidden=!hasPrivacy;
             backdrop.querySelector('[data-registration-policy-hidden-inputs]')?.replaceChildren();
             window.likhaeRegistrationPolicyConsentedRole=null;
             updateAgree();
         };
-        function updateAgree(){agree.disabled=backdrop.dataset.policyReady!=='true'||!terms||!privacy||terms.disabled||privacy.disabled||!terms.checked||!privacy.checked}
+        function updateAgree(){agree.disabled=backdrop.dataset.policyReady!=='true'||!terms||terms.disabled||!terms.checked||(activeHasPrivacy&&(!privacy||privacy.disabled||!privacy.checked))}
         function unlockReachedPolicies(){
             const contentBottom=content.getBoundingClientRect().bottom;
             [terms,privacy].forEach(input=>{
@@ -1633,8 +1665,13 @@
         terms?.addEventListener('change',updateAgree);privacy?.addEventListener('change',updateAgree);
         content.addEventListener('scroll',unlockReachedPolicies,{passive:true});
         window.addEventListener('resize',unlockReachedPolicies);
+        function closeReview(){
+            backdrop.hidden=true;
+            document.querySelectorAll('body > *:not([data-registration-policy-modal])').forEach(node=>node.inert=false);
+            previousFocus?.focus();
+        }
         window.likhaeOpenRegistrationPolicyReview=function(){
-            if(backdrop.dataset.policyReady!=='true')return false;
+            previousFocus=document.activeElement;
             backdrop.hidden=false;
             document.querySelectorAll('body > *:not([data-registration-policy-modal])').forEach(node=>node.inert=true);
             dialog.focus();
@@ -1645,15 +1682,18 @@
             if(agree.disabled)return;
             const role=backdrop.dataset.activeRole;const docs=window.likhaeRegistrationPolicies?.[role]||[];const fields=backdrop.querySelector('[data-registration-policy-hidden-inputs]');
             fields.replaceChildren();docs.forEach(policy=>{const input=document.createElement('input');input.type='hidden';input.name=`policy_acceptances[${policy.id}]`;input.value=policy.version;input.setAttribute('form','registrationForm');fields.append(input)});
-            terms.disabled=false;privacy.disabled=false;terms.checked=true;privacy.checked=true;
+            terms.disabled=false;terms.checked=true;
+            if(activeHasPrivacy&&privacy){privacy.disabled=false;privacy.checked=true}
             window.likhaeRegistrationPolicyConsentedRole=role;
-            backdrop.hidden=true;document.querySelectorAll('body > *:not([data-registration-policy-modal])').forEach(node=>node.inert=false);
+            if(status)status.textContent='Current policies accepted.';
+            closeReview();
             const form=document.getElementById('registrationForm');const submitButton=form?.querySelector('[data-submit-button]');
             if(submitButton)form.requestSubmit(submitButton);else form?.requestSubmit();
         });
+        backdrop.querySelector('[data-registration-policy-close]')?.addEventListener('click',event=>{event.preventDefault();closeReview()});
         document.addEventListener('keydown',event=>{
             if(backdrop.hidden)return;
-            if(event.key==='Escape'){event.preventDefault();event.stopPropagation();return}
+            if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeReview();return}
             if(event.key!=='Tab')return;
             const focusable=[...dialog.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),[tabindex="0"]')];
             if(!focusable.length)return;const first=focusable[0],last=focusable[focusable.length-1];
@@ -1666,6 +1706,7 @@
             window.likhaeRenderRegistrationPolicySet(role,docs);
             if(!backdrop.hidden){unlockReachedPolicies();dialog.focus()}
         };
+        document.querySelector('[data-review-registration-policies]')?.addEventListener('click',()=>window.likhaeOpenRegistrationPolicyReview());
         const initialRole=document.getElementById('accountType')?.value||'buyer';
         window.likhaeRenderRegistrationPolicySet(initialRole,window.likhaeRegistrationPolicies?.[initialRole]||[]);
     })();

@@ -62,6 +62,13 @@
 .dark .lk-shared-empty-state__icon { color: #dbc0a7; background: #3b2c25; }
 .dark .lk-shared-empty-state h3 { color: #f5eee8; }
 .dark .lk-shared-empty-state p { color: #c2b2a7; }
+.dark .lk-feedback-toast { border-color: #315d40; color: #b9e8c4; background: #17271d; }
+.dark .lk-feedback-toast.is-error { border-color: #78453f; color: #ffc5bd; background: #432320; }
+.dark .lk-feedback-toast.is-info { border-color: #54433a; color: #e7d9ce; background: #30231f; }
+.dark .lk-feedback-toast__icon { background: #24402e; }
+.dark .is-error .lk-feedback-toast__icon { color: #ffc5bd; background: #5a302b; }
+.dark .is-info .lk-feedback-toast__icon { color: #e7d9ce; background: #46342b; }
+.dark .lk-feedback-toast__close:hover { background: rgb(255 255 255 / 10%); }
 
 @media (max-width: 600px) {
     .lk-feedback-region { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); width: calc(100vw - 24px); }

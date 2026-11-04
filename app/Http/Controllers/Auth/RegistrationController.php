@@ -56,7 +56,7 @@ class RegistrationController extends Controller
                 ->orderBy('name')
                 ->get(['id', 'name']),
             'logisticsCenters' => LogisticsCenter::query()
-                ->active()
+                ->approvedActive()
                 ->whereHas('address')
                 ->with('address:id,province_code,municipality_code')
                 ->orderBy('business_name')
@@ -146,7 +146,7 @@ class RegistrationController extends Controller
         ]);
     }
 
-    public function store(StoreRegistrationRequest $request, PolicyAcceptanceService $policies): RedirectResponse
+    public function store(StoreRegistrationRequest $request): RedirectResponse
     {
         abort_unless(
             (bool) PlatformSetting::valueOf('registration_enabled', true),
@@ -168,11 +168,6 @@ class RegistrationController extends Controller
                 'email' => 'Verify your email address before submitting your registration.',
             ]);
         }
-
-        $acceptedPolicies = $policies->validateRegistrationConsent(
-            $request->accountTypeConstant(),
-            $data,
-        );
 
         $addressIsValid = PhilippineAddressController::selectionIsValid(
             (string) $data['region_code'],
@@ -207,7 +202,6 @@ class RegistrationController extends Controller
         AddressCoordinateValidator::assertValid($data, required: false);
 
         $application = $this->workflow->submit($request);
-        $policies->recordRegistrationAcceptances($application->user, $acceptedPolicies, $request);
         $request->session()->forget(['google_buyer_registration', 'registration_email_verified']);
 
         $type = strtolower((string) $application->user->account_type);

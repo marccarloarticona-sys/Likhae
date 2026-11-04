@@ -4,7 +4,7 @@
 @section('active', 'messages')
 @section('content')
 @php($supportRoles = ['BUYER' => 'Buyer', 'SELLER' => 'Seller', 'LOGISTICS' => 'Logistics', 'RIDER' => 'Rider'])
-<div style="max-width:1100px;margin:0 auto;padding:20px">
+<div class="ad-support-faq-page" style="max-width:1100px;margin:0 auto;padding:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px">
         <div><h1 style="margin:0;font-size:24px;font-weight:800">Support FAQs</h1><p style="margin:5px 0;color:#876958">Manage approved answers for Buyer, Seller, Logistics, and Rider support chats.</p></div>
         <a href="{{ route('admin.messages') }}" style="color:#5b2018;font-weight:800">Back to messages</a>

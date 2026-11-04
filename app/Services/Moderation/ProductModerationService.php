@@ -210,18 +210,23 @@ class ProductModerationService
                 }
             }
 
+            $alignment = ProductModerationAlignment::assess(
+                $productState['classification_context'], $textResult, $imageResult,
+                $completeImages && $preparedImages !== [],
+            );
             $decision = $this->riskEngine->decide(
                 $textResult,
                 $imageResult,
                 $preparedImages !== [],
                 $completeImages,
+                $alignment,
             );
             $imageHashes = collect($preparedImages)->map(fn (array $image): array => [
                 'image_id' => $image['image_id'],
                 'sha256' => $image['sha256'],
             ])->all();
 
-            DB::transaction(function () use ($scan, $product, $decision, $textResult, $imageResult, $objectDetections, $imageHashes, $unavailableImages): void {
+            DB::transaction(function () use ($scan, $product, $decision, $textResult, $imageResult, $objectDetections, $imageHashes, $unavailableImages, $alignment): void {
                 $lockedProduct = Product::query()->whereKey($product->id)->lockForUpdate()->first();
                 if (! $lockedProduct || ! hash_equals((string) $scan->revision_hash, $this->hasher->hash($lockedProduct))) {
                     $scan->update(['scan_status' => 'SUPERSEDED', 'failure_code' => null, 'scanned_at' => now()]);
@@ -247,6 +252,7 @@ class ProductModerationService
                     'image_findings' => $this->safeEvaluation($imageResult) + ['unavailable_images' => $unavailableImages],
                     'object_detections' => $objectDetections,
                     'model_results' => [
+                        'alignment' => $alignment,
                         'image_hashes' => $imageHashes,
                         'classification_sources' => [
                             'text' => [
@@ -280,7 +286,9 @@ class ProductModerationService
             }
             $obfuscationSignal = (float) data_get($scan->text_findings, 'disguised_probability', 0)
                 >= (float) config('product_moderation.risk.medium', 0.30);
-            if (in_array($scan->overall_risk, ['HIGH', 'CRITICAL'], true) || $obfuscationSignal) {
+            $alignmentSignal = (bool) data_get($scan->model_results, 'alignment.requires_review')
+                || (bool) data_get($scan->model_results, 'alignment.incomplete');
+            if (in_array($scan->overall_risk, ['HIGH', 'CRITICAL'], true) || $obfuscationSignal || $alignmentSignal) {
                 $this->notifyAdmins($scan, $product);
             }
 
@@ -724,6 +732,8 @@ class ProductModerationService
         $obfuscationSignal = (float) data_get($scan->text_findings, 'disguised_probability', 0)
             >= (float) config('product_moderation.risk.medium', 0.30);
         $highRisk = in_array($scan->overall_risk, ['HIGH', 'CRITICAL'], true);
+        $alignmentSignal = (bool) data_get($scan->model_results, 'alignment.requires_review')
+            || (bool) data_get($scan->model_results, 'alignment.incomplete');
         $admins = User::query()->where('account_type', User::TYPE_ADMIN)->where('status', User::STATUS_ACTIVE)->get(['id']);
         foreach ($admins as $admin) {
             if (Notification::query()
@@ -739,10 +749,14 @@ class ProductModerationService
                 'type' => 'PRODUCT_AI_MODERATION_ALERT',
                 'title' => $scan->overall_risk === 'CRITICAL'
                     ? 'Urgent AI product review'
-                    : ($obfuscationSignal && ! $highRisk ? 'Possible listing evasion needs review' : 'AI product review required'),
-                'message' => $obfuscationSignal && ! $highRisk
-                    ? 'Product #'.$product->id.' has an AI signal of possible evasive or unusually unclear listing text. Verify the listing context before deciding; the signal is advisory.'
-                    : 'Product #'.$product->id.' requires human review for a possible prohibited item ('.$scan->overall_risk.').',
+                    : ($alignmentSignal && ! $highRisk && ! $obfuscationSignal
+                        ? 'Product category alignment needs review'
+                        : ($obfuscationSignal && ! $highRisk ? 'Possible listing evasion needs review' : 'AI product review required')),
+                'message' => $alignmentSignal && ! $highRisk && ! $obfuscationSignal
+                    ? 'Product #'.$product->id.' may not fit the seller’s registered line of business or selected product category. Review the recorded category path and AI signals before deciding; this is an advisory signal.'
+                    : ($obfuscationSignal && ! $highRisk
+                        ? 'Product #'.$product->id.' has an AI signal of possible evasive or unusually unclear listing text. Verify the listing context before deciding; the signal is advisory.'
+                        : 'Product #'.$product->id.' requires human review for a possible prohibited item ('.$scan->overall_risk.').'),
                 'reference_type' => ProductModerationScan::class,
                 'reference_id' => $scan->id,
                 'action_url' => route('admin.products.show', ['product' => $product->id]),
@@ -801,6 +815,7 @@ class ProductModerationService
 
         return [
             'title' => $title,
+            'classification_context' => ProductModerationAlignment::context($product),
             'description' => mb_substr($description, 0, 10_000),
             'category' => $this->cleanText((string) ($category?->parent?->name ?? '')),
             'subcategory' => $this->cleanText((string) ($category?->name ?? '')),
@@ -855,6 +870,9 @@ class ProductModerationService
             'used_fallback' => (bool) ($evaluation['used_fallback'] ?? false),
             'mismatch_probability' => $evaluation['mismatch_probability'] ?? null,
             'disguised_probability' => $evaluation['disguised_probability'] ?? null,
+            'business_mismatch_probability' => $evaluation['business_mismatch_probability'] ?? null,
+            'category_mismatch_probability' => $evaluation['category_mismatch_probability'] ?? null,
+            'subcategory_mismatch_probability' => $evaluation['subcategory_mismatch_probability'] ?? null,
         ];
     }
 

@@ -101,17 +101,21 @@ class PolicyAcceptanceService
         $policies = $this->registrationPolicies($accountType);
         $types = $policies->pluck('policy_type')->unique()->all();
 
-        if (! in_array('TERMS', $types, true) || ! in_array('PRIVACY', $types, true)) {
+        if (! in_array('TERMS', $types, true)) {
             throw ValidationException::withMessages([
-                'policy_acceptances' => 'Registration is unavailable until Terms & Conditions and Privacy Policy are published for this account type.',
+                'policy_acceptances' => 'Registration is unavailable until Terms & Conditions are published for this account type.',
             ]);
         }
 
-        if (! $this->acceptedCheckbox($data['terms_acknowledged'] ?? false)
-            || ! $this->acceptedCheckbox($data['privacy_acknowledged'] ?? false)) {
-            throw ValidationException::withMessages([
-                'terms_acknowledged' => 'Acknowledge both Terms & Conditions and Privacy Policy to continue.',
-            ]);
+        $consentErrors = [];
+        if (! $this->acceptedCheckbox($data['terms_acknowledged'] ?? false)) {
+            $consentErrors['terms_acknowledged'] = 'Acknowledge the Terms & Conditions to continue.';
+        }
+        if (in_array('PRIVACY', $types, true) && ! $this->acceptedCheckbox($data['privacy_acknowledged'] ?? false)) {
+            $consentErrors['privacy_acknowledged'] = 'Acknowledge the Privacy Policy to continue.';
+        }
+        if ($consentErrors !== []) {
+            throw ValidationException::withMessages($consentErrors);
         }
 
         $submitted = $this->normalizeVersionMap($data['policy_acceptances'] ?? []);

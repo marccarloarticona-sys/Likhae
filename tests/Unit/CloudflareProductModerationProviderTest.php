@@ -33,6 +33,9 @@ class CloudflareProductModerationProviderTest extends TestCase
                     'answers' => [
                         'text_category' => ['SAFE' => 0.91, 'FIREARM' => 0.03],
                         'disguised' => 0.02,
+                        'business_mismatch_probability' => 0.01,
+                        'category_mismatch_probability' => 0.75,
+                        'subcategory_mismatch_probability' => 0.82,
                     ],
                 ],
             ]),
@@ -42,10 +45,16 @@ class CloudflareProductModerationProviderTest extends TestCase
 
         $this->assertSame('SAFE', $result['top_category']);
         $this->assertSame(0.91, $result['confidence']);
+        $this->assertSame(0.01, $result['business_mismatch_probability']);
+        $this->assertSame(0.75, $result['category_mismatch_probability']);
+        $this->assertSame(0.82, $result['subcategory_mismatch_probability']);
         Http::assertSent(function (ClientRequest $request): bool {
             return str_contains($request->url(), '/ai/run/@cf/cloudflare/clef-flash')
                 && $request->hasHeader('Authorization', 'Bearer test-only-token-value')
-                && ($request->data()['model'] ?? null) === 'clef-flash';
+                && ($request->data()['model'] ?? null) === 'clef-flash'
+                && isset($request->data()['questions']['business_mismatch_probability'])
+                && isset($request->data()['questions']['category_mismatch_probability'])
+                && isset($request->data()['questions']['subcategory_mismatch_probability']);
         });
     }
 

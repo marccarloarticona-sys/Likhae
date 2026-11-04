@@ -71,7 +71,7 @@ class StoreRegistrationRequest extends FormRequest
         $logisticsCenterId = $rejectedApplicant?->logisticsCenter?->getKey();
         $riderProfileId = $rejectedApplicant?->riderProfile?->getKey();
 
-        $businessRegistrationRules = [Rule::requiredIf($isLogistics), 'nullable', 'string', 'max:100'];
+        $businessRegistrationRules = ['nullable', 'string', 'max:100'];
         if ($isSeller) {
             $businessRegistrationRule = Rule::unique('seller_profiles', 'business_registration_number');
             $businessRegistrationRules[] = $sellerProfileId ? $businessRegistrationRule->ignore($sellerProfileId) : $businessRegistrationRule;
@@ -92,7 +92,7 @@ class StoreRegistrationRequest extends FormRequest
             $businessNameRules[] = $logisticsCenterId ? $businessNameRule->ignore($logisticsCenterId) : $businessNameRule;
         }
 
-        $tinRules = [Rule::requiredIf($isSeller || $isLogistics), 'nullable', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{3}$/'];
+        $tinRules = ['nullable', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{3}$/'];
         if ($isSeller || $isLogistics) {
             $sellerTinRule = Rule::unique('seller_profiles', 'tin');
             $logisticsTinRule = Rule::unique('logistics_centers', 'tin');
@@ -135,7 +135,7 @@ class StoreRegistrationRequest extends FormRequest
             'municipality_code' => ['required', 'string', 'max:50'],
             'barangay' => ['required', 'string', 'max:150'],
             'barangay_code' => ['required', 'string', 'max:50'],
-            'postal_code' => ['required', 'string', 'regex:/^\d{4}$/'],
+            'postal_code' => ['nullable', 'string', 'regex:/^\d{4}$/'],
             'house_number' => ['nullable', 'string', 'max:100'],
             'street' => ['required', 'string', 'max:255'],
             'landmark' => ['nullable', 'string', 'max:255'],
@@ -146,7 +146,7 @@ class StoreRegistrationRequest extends FormRequest
 
             'business_name' => $businessNameRules,
             'line_of_business' => [Rule::requiredIf($isSeller), 'nullable', 'integer', Rule::exists('categories', 'id')->where('is_active', true)->whereNull('archived_at')],
-            'seller_type' => [Rule::requiredIf($isSeller), 'nullable', Rule::in(['individual', 'sole_proprietorship', 'corporation'])],
+            'seller_type' => ['nullable', Rule::in(['individual', 'sole_proprietorship', 'corporation'])],
             'tin' => $tinRules,
             'business_registration_number' => $businessRegistrationRules,
             'dti_registration_number' => [
@@ -184,9 +184,9 @@ class StoreRegistrationRequest extends FormRequest
 
             'valid_id' => [Rule::requiredIf(! $isBuyer), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'business_permit' => [Rule::requiredIf($isSeller || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
-            'dti_certificate' => [Rule::requiredIf($isSeller && $this->input('seller_type') === 'sole_proprietorship'), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
-            'sec_certificate' => [Rule::requiredIf(($isSeller && $this->input('seller_type') === 'corporation') || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
-            'bir_form_2303' => [Rule::requiredIf(($isSeller && in_array($this->input('seller_type'), ['sole_proprietorship', 'corporation'], true)) || $isLogistics), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'dti_certificate' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'sec_certificate' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
+            'bir_form_2303' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'or_cr' => [Rule::requiredIf($isRider), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'drivers_license' => [Rule::requiredIf($isRider), 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:5120'],
             'profile_picture' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
@@ -195,9 +195,60 @@ class StoreRegistrationRequest extends FormRequest
 
             'password' => ['required', 'confirmed', 'max:72', Password::min(8)->mixedCase()->numbers()->symbols()],
             'terms_acknowledged' => ['required', 'accepted'],
-            'privacy_acknowledged' => ['required', 'accepted'],
-            'policy_acceptances' => ['required', 'array', 'min:2'],
+            'privacy_acknowledged' => ['sometimes', 'accepted'],
+            'policy_acceptances' => ['required', 'array', 'min:1'],
             'policy_acceptances.*' => ['required', 'string', 'max:50'],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'first_name.required' => 'Enter your first name.',
+            'last_name.required' => 'Enter your last name.',
+            'sex.required' => 'Select your sex.',
+            'email.required' => 'Enter your email address.',
+            'contact_number.required' => 'Enter your contact number.',
+            'birthday.required' => 'Enter your birthday.',
+            'birthday.before_or_equal' => 'You must be at least 18 years old to register.',
+            'age.required' => 'Your age could not be calculated. Enter a valid birthday.',
+            'age.between' => 'You must be at least 18 years old to register.',
+            'region.required' => 'Select your region.',
+            'province.required' => 'Select your province.',
+            'municipality.required' => 'Select your municipality or city.',
+            'barangay.required' => 'Select your barangay.',
+            'street.required' => 'Enter your street or purok.',
+            'business_name.required' => 'Enter your business name.',
+            'line_of_business.required' => 'Select your line of business.',
+            'vehicle_type.required' => 'Select your rider vehicle type.',
+            'plate_number.required' => 'Enter your vehicle plate number.',
+            'target_logistics_center_id.required' => 'Select a logistics center for your rider application.',
+            'drivers_license_number.required' => 'Enter your driver’s license number.',
+            'valid_id.required' => 'Upload your ID.',
+            'business_permit.required' => 'Upload your business permit.',
+            'or_cr.required' => 'Upload your vehicle OR/CR.',
+            'drivers_license.required' => 'Upload your driver’s license.',
+            'password.required' => 'Create a password.',
+            'password.confirmed' => 'The password confirmation does not match.',
+        ];
+    }
+
+    public function attributes(): array
+    {
+        return [
+            'middle_initial' => 'middle initial',
+            'contact_number' => 'contact number',
+            'region_code' => 'region selection',
+            'province_code' => 'province selection',
+            'municipality_code' => 'municipality or city selection',
+            'barangay_code' => 'barangay selection',
+            'line_of_business' => 'line of business',
+            'target_logistics_center_id' => 'logistics center',
+            'drivers_license_number' => 'driver’s license number',
+            'valid_id' => 'ID',
+            'business_permit' => 'business permit',
+            'or_cr' => 'vehicle OR/CR',
+            'drivers_license' => 'driver’s license',
         ];
     }
 

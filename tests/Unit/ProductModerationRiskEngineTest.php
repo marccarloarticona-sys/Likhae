@@ -73,6 +73,6 @@ class ProductModerationRiskEngineTest extends TestCase
         );
 
         $this->assertSame('MEDIUM', $result['overall_risk']);
-        $this->assertStringContainsString('mismatch', strtolower($result['evidence_summary']));
+        $this->assertStringContainsString('inconsistent', strtolower($result['evidence_summary']));
     }
 }

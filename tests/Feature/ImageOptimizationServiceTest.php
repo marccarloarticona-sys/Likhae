@@ -24,4 +24,22 @@ class ImageOptimizationServiceTest extends TestCase
         [$width, $height] = getimagesize(Storage::disk('public')->path($path));
         $this->assertLessThanOrEqual(1920, max($width, $height));
     }
+
+    public function test_it_stores_the_original_when_there_is_not_enough_memory_to_optimize(): void
+    {
+        Storage::fake('public');
+        $image = UploadedFile::fake()->image('identity.jpg', 1200, 1200)->size(500);
+        $originalLimit = (string) ini_get('memory_limit');
+        $constrainedLimit = (string) (memory_get_usage(false) + 8 * 1024 * 1024);
+
+        try {
+            ini_set('memory_limit', $constrainedLimit);
+            $path = app(ImageOptimizationService::class)->store($image, 'optimized-images');
+        } finally {
+            ini_set('memory_limit', $originalLimit);
+        }
+
+        Storage::disk('public')->assertExists($path);
+        $this->assertStringEndsWith('.jpg', $path);
+    }
 }

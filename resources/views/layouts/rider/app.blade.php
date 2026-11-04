@@ -845,9 +845,9 @@
         }
 
         html.dark .rider-topbar-status {
-            border-color: #28543D;
-            background: #16291F;
-            color: #79C79D;
+            border-color: #28543D !important;
+            background: #16291F !important;
+            color: #79C79D !important;
         }
 
         html.dark .rider-header-action {

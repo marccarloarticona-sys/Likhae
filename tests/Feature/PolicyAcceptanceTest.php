@@ -8,6 +8,7 @@ use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\PolicyAcceptanceService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class PolicyAcceptanceTest extends TestCase
@@ -31,6 +32,42 @@ class PolicyAcceptanceTest extends TestCase
             ->assertSee('I agree')
             ->assertDontSee('data-registration-terms-ack checked', false)
             ->assertDontSee('data-registration-privacy-ack checked', false);
+    }
+
+    public function test_registration_can_proceed_with_terms_when_no_privacy_policy_is_published(): void
+    {
+        $terms = $this->termsPolicy();
+
+        $this->get(route('register', ['role' => 'buyer']))
+            ->assertOk()
+            ->assertSee('Review registration policies')
+            ->assertDontSee('waiting for a published Privacy Policy');
+
+        $accepted = app(PolicyAcceptanceService::class)->validateRegistrationConsent('BUYER', [
+            'terms_acknowledged' => '1',
+            'policy_acceptances' => [$terms->id => $terms->version],
+        ]);
+
+        $this->assertSame([$terms->id], $accepted->pluck('id')->all());
+    }
+
+    public function test_privacy_acknowledgement_is_required_when_privacy_policy_is_published(): void
+    {
+        $terms = $this->termsPolicy();
+        $privacy = $this->privacyPolicy();
+
+        try {
+            app(PolicyAcceptanceService::class)->validateRegistrationConsent('BUYER', [
+                'terms_acknowledged' => '1',
+                'policy_acceptances' => [
+                    $terms->id => $terms->version,
+                    $privacy->id => $privacy->version,
+                ],
+            ]);
+            $this->fail('Privacy acknowledgement should be required when a Privacy Policy is published.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('privacy_acknowledged', $exception->errors());
+        }
     }
 
     public function test_pending_policies_block_protected_routes_until_exact_versions_are_accepted(): void

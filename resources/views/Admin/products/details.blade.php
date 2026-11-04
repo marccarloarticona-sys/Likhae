@@ -150,6 +150,7 @@
                     <form method="POST" action="{{ route('admin.products.ai.rescan', $product) }}" style="margin:0 0 18px;">
                         @csrf
                         <button class="ad-btn ad-btn-secondary" type="submit">Queue manual rescan</button>
+                        <small style="display:block;margin-top:6px;">Manual rescans have a {{ max(1, (int) config('product_moderation.queue.manual_rescan_cooldown_minutes', 10)) }}-minute per-listing cooldown.</small>
                     </form>
                 @endif
 
@@ -180,7 +181,26 @@
                                         @php $topSignal = collect($findings['category_probabilities'])->sortDesc()->first(); $topCategory = collect($findings['category_probabilities'])->sortDesc()->keys()->first(); @endphp
                                         <p><strong>{{ $signalName }} signal:</strong> {{ config('product_moderation.categories.'.$topCategory, config('product_moderation.image_categories.'.$topCategory, str($topCategory)->replace('_', ' ')->headline())) }} ({{ number_format((float) $topSignal * 100, 1) }}% model score)</p>
                                     @endif
+                                    @if(is_numeric($findings['mismatch_probability'] ?? null))
+                                        <p><strong>{{ $signalName }} text/image consistency signal:</strong> {{ number_format((float) $findings['mismatch_probability'] * 100, 1) }}% mismatch score</p>
+                                    @endif
                                 @endforeach
+                                @php $alignment = data_get($scan->model_results, 'alignment'); @endphp
+                                <div style="margin:12px 0;">
+                                    <h3>Product-to-category fit (AI assessment)</h3>
+                                    @if(is_array($alignment))
+                                        <p><strong>Seller line of business:</strong> {{ data_get($alignment, 'context.seller_line_of_business.name') ?: 'Not recorded' }}</p>
+                                        <p><strong>Selected category / subcategory:</strong> {{ collect([data_get($alignment, 'context.selected_parent_category.name'), data_get($alignment, 'context.selected_category.name')])->filter()->implode(' / ') ?: 'Not recorded' }}</p>
+                                        <p><strong>Selected category path check:</strong> {{ match ($alignment['hierarchy_status'] ?? 'UNKNOWN') { 'MATCH' => 'The selected category is listed under the seller’s registered line of business. This checks the category tree only; it does not assess the product.', 'MISMATCH' => 'The selected category is outside the seller’s registered line of business. Admin review required.', 'UNAVAILABLE' => 'The selected category is unavailable. Admin review required.', default => 'Unable to check the category tree.' } }}</p>
+                                        @foreach(['business_mismatch_probability' => 'Product content vs seller line of business', 'category_mismatch_probability' => 'Product content vs selected category', 'subcategory_mismatch_probability' => 'Product content vs selected subcategory'] as $key => $label)
+                                            @php $check = data_get($alignment, 'checks.'.$key, []); @endphp
+                                            <p><strong>{{ $label }}:</strong> {{ match ($check['status'] ?? 'UNKNOWN') { 'POSSIBLE_MISMATCH' => 'Model flagged a possible mismatch; Admin review required', 'NO_MISMATCH_SIGNAL' => 'Model found no mismatch', 'NOT_APPLICABLE' => 'No subcategory is selected', default => 'Unable to assess; manual review required' } }}@if(is_numeric($check['probability'] ?? null)) ({{ number_format($check['probability'] * 100, 1) }}% mismatch score)@endif</p>
+                                        @endforeach
+                                        <small>Product-fit checks compare the listing text and images with the recorded business and category names. AI scores are review signals only; a human Admin decides the outcome.</small>
+                                    @else
+                                        <p>Not assessed in this scan. Queue a manual rescan to compare the actual listing with the seller’s business, category, and subcategory.</p>
+                                    @endif
+                                </div>
                                 @if($scan->evidence_summary)<p>{{ $scan->evidence_summary }}</p>@endif
                                 @if($scan->failure_code)<p class="ad-product-moderation-note">Scan status: {{ $scan->failure_code }}</p>@endif
                                 @if($scan->decision_reason)<p><strong>Admin decision note:</strong> {!! nl2br(e($scan->decision_reason)) !!}</p>@endif

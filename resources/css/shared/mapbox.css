@@ -106,3 +106,49 @@
     .lk-address-pin-footer { align-items: flex-start; flex-direction: column; }
     .lk-map-shell.is-fullscreen { inset: 0; border-radius: 0; }
 }
+
+/* Shared live maps are used by Buyer, Seller, Logistics, and Rider pages. */
+html.dark .lk-map-shell {
+    border-color: var(--lk-border, #3b2e27);
+    background: var(--lk-card, #211b17);
+    box-shadow: 0 10px 28px rgb(0 0 0 / 24%);
+}
+
+html.dark .lk-map-toolbar,
+html.dark .lk-address-pin-search,
+html.dark .lk-address-pin-footer,
+html.dark .lk-order-route-legend {
+    border-color: var(--lk-border, #3b2e27);
+    background: var(--lk-card, #211b17);
+    color: var(--lk-text, #f5efe8);
+}
+
+html.dark .lk-map-kicker,
+html.dark .lk-order-route-legend,
+html.dark .lk-map-navigation__status,
+html.dark .lk-map-navigation__metrics span,
+html.dark .lk-map-navigation__destination span,
+html.dark .lk-map-status { color: var(--lk-muted, #c8b7ad); }
+
+html.dark .lk-map-toolbar h2,
+html.dark .lk-map-navigation,
+html.dark .lk-map-popup { color: var(--lk-text, #f5efe8); }
+
+html.dark .lk-map-button,
+html.dark .lk-map-navigation__metrics div,
+html.dark .lk-address-pin-search input {
+    border-color: var(--lk-border, #3b2e27);
+    background: var(--lk-bg-soft, #1e1a17);
+    color: var(--lk-text, #f5efe8);
+}
+
+html.dark .lk-map-button:hover { border-color: #8a5a4d; background: var(--lk-bg-alt, #2d211c); }
+html.dark .lk-map-navigation { border-color: var(--lk-border, #3b2e27); background: var(--lk-bg-soft, #1e1a17); }
+html.dark .lk-map-navigation__metrics strong { color: #f0aa9d; }
+html.dark .lk-map-status.is-error { color: #ffaaa0; }
+html.dark .lk-map-canvas { background: #26211d; }
+html.dark .mapboxgl-popup-content { border: 1px solid var(--lk-border, #3b2e27); border-radius: 10px; background: var(--lk-card, #211b17); color: var(--lk-text, #f5efe8); }
+html.dark .mapboxgl-popup-tip { border-top-color: var(--lk-card, #211b17); border-bottom-color: var(--lk-card, #211b17); }
+html.dark .mapboxgl-ctrl-group { border-color: var(--lk-border, #3b2e27); background: var(--lk-card, #211b17); }
+html.dark .mapboxgl-ctrl-group button { filter: invert(.86) hue-rotate(180deg); }
+html.dark .mapboxgl-ctrl-group button + button { border-top-color: var(--lk-border, #3b2e27); }

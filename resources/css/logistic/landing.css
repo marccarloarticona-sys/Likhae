@@ -394,3 +394,52 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
 
     .lp-workspaces { padding-block: 48px 36px; }
 }
+
+/* Full dark palette for the public logistics landing and parcel tracking pages. */
+html.dark .lp-page {
+    --lp-paper: #161210;
+    --lp-ink: #f5efe8;
+    --lp-muted: #c8b7ad;
+    --lp-red: #f0aa9d;
+    --lp-red-dark: #e58f83;
+    --lp-line: #3b2e27;
+    background: var(--lp-paper);
+    color: var(--lp-ink);
+}
+
+html.dark .lp-nav,
+html.dark .lp-hero__description,
+html.dark .lp-role__features,
+html.dark .lp-tracking__form > label { color: #d7c8bd; }
+
+html.dark .lp-hero { border-color: var(--lp-line); background: #211b17; }
+html.dark .lp-hero__scene::before { background: linear-gradient(90deg, rgb(22 18 16 / 98%), rgb(22 18 16 / 90%) 27%, rgb(22 18 16 / 45%) 50%, transparent 72%); }
+html.dark .lp-hero__caption { border-color: #4a3930; background: rgb(33 27 23 / 94%); box-shadow: 0 8px 24px rgb(0 0 0 / 24%); }
+html.dark .lp-highlights { border-color: var(--lp-line); background: #1e1a17; }
+html.dark .lp-highlight__icon,
+html.dark .lp-role__icon { background: #3b2c25; color: #f0aa9d; }
+html.dark .lp-role { border-color: var(--lp-line); background: #211b17; }
+html.dark .lp-role--rider { background: #2d211c; }
+html.dark .lp-role__label { color: #c8b7ad; }
+html.dark .lp-role__actions { border-color: var(--lp-line); }
+html.dark .lp-page .lp-button--secondary { border-color: #60463a; background: #211b17; color: var(--lp-ink); }
+html.dark .lp-page .lp-button--secondary:hover { border-color: #8a5a4d; background: #2d211c; }
+html.dark .lp-workflow { border-color: var(--lp-line); background: #211b17; }
+html.dark .lp-step__number { border-color: #60463a; background: #2d211c; color: #f0aa9d; }
+html.dark .lp-steps li:not(:last-child)::after { border-top-color: #60463a; }
+html.dark .lp-tracking__form--hero { border-color: var(--lp-line); background: rgb(33 27 23 / 92%); box-shadow: 0 10px 26px rgb(0 0 0 / 22%); }
+html.dark .lp-tracking__control input,
+html.dark .lp-tracking__dialog,
+html.dark .lp-tracking__dialog-close { border-color: var(--lp-line); background: #211b17; color: var(--lp-ink); }
+html.dark .lp-tracking__control input::placeholder { color: #a99386; }
+html.dark .lp-tracking__result { border-color: var(--lp-line); background: #2d211c; }
+html.dark .lp-tracking__result .lp-tracking__status { color: #f0aa9d; }
+html.dark .lp-page > footer.lp-footer.lp-container { border-color: var(--lp-line); background: #100e0d; color: #c8b7ad; }
+html.dark .lp-page > footer.lp-footer strong,
+html.dark .lp-page > footer.lp-footer a:hover { color: #f0aa9d; }
+
+@media (max-width: 600px) {
+    html.dark .lp-hero__scene::before {
+        background: linear-gradient(180deg, #161210 calc(100% - 285px), rgb(22 18 16 / 88%) calc(100% - 255px), transparent calc(100% - 200px));
+    }
+}

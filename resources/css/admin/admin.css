@@ -1,10 +1,12 @@
 @import "tailwindcss";
 @import "../shared/feedback.css";
 @import "../shared/payout-destination.css";
+@import "../shared/dark-utility-compat.css";
 
 @source "../../views/Admin/**/*.blade.php";
 @source "../../views/components/admin/**/*.blade.php";
 @source "../../views/layouts/admin.blade.php";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
     --ad-navy: #3B211B;
@@ -548,6 +550,166 @@ a.ad-stat:hover { border-color: var(--ad-blue-border); transform: translateY(-1p
     .ad-inline-actions .ad-btn { flex: 1; }
     .ad-donut-wrap { align-items: flex-start; flex-direction: column; }
     .ad-complaint-meta { grid-template-columns: 1fr 1fr; }
+}
+
+/* Tablet and phone layouts: keep admin records readable without table scrolling. */
+@media (max-width: 1023px) {
+    .lk-admin-main,
+    .lk-admin-main > *,
+    .ad-page,
+    .ad-card,
+    .ad-card-body,
+    .ad-table-wrap {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .ad-page-head,
+    .ad-card-head,
+    .ad-section-head,
+    .ad-table-toolbar,
+    .ad-filter-bar,
+    .ad-inline-actions,
+    .ad-card-actions {
+        flex-wrap: wrap;
+    }
+
+    .ad-table-wrap {
+        overflow: visible;
+    }
+
+    #main-content table:not([role="presentation"]) {
+        display: grid;
+        width: 100%;
+        min-width: 0 !important;
+        border: 0;
+        border-spacing: 0;
+        table-layout: auto;
+    }
+
+    #main-content table:not([role="presentation"]) > thead {
+        display: block;
+        margin-bottom: 9px;
+        padding: 8px 10px;
+        border: 1px solid var(--ad-border);
+        border-radius: 11px;
+        background: #FBF7F2;
+    }
+
+    #main-content table:not([role="presentation"]) > thead > tr {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+        gap: 4px 8px;
+    }
+
+    #main-content table:not([role="presentation"]) > thead th {
+        min-width: 0;
+        padding: 4px 5px;
+        border: 0;
+        color: var(--ad-muted);
+        background: transparent;
+        font-size: 8px;
+        line-height: 1.35;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    #main-content table:not([role="presentation"]) > tbody {
+        display: grid;
+        gap: 9px;
+    }
+
+    #main-content table:not([role="presentation"]) > tbody > tr {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+        align-items: start;
+        gap: 7px;
+        padding: 9px;
+        border: 1px solid var(--ad-border);
+        border-radius: 12px;
+        background: var(--ad-card);
+        box-shadow: 0 5px 16px rgba(86, 28, 23, .045);
+    }
+
+    #main-content table:not([role="presentation"]) > thead th:first-child,
+    #main-content table:not([role="presentation"]) > tbody > tr > td:first-child,
+    #main-content table:not([role="presentation"]) > tbody > tr > th:first-child {
+        grid-column: 1 / -1;
+    }
+
+    #main-content table:not([role="presentation"]) > tbody > tr > td,
+    #main-content table:not([role="presentation"]) > tbody > tr > th {
+        min-width: 0;
+        padding: 7px 8px;
+        border: 1px solid var(--ad-border);
+        border-radius: 8px;
+        color: var(--ad-text);
+        background: #FBF7F2;
+        font-size: 10px;
+        line-height: 1.45;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        vertical-align: top;
+    }
+
+    #main-content table:not([role="presentation"]) td[colspan],
+    #main-content table:not([role="presentation"]) th[colspan] {
+        grid-column: 1 / -1;
+    }
+
+    #main-content table:not([role="presentation"]) td[data-label]::before {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ad-muted);
+        content: attr(data-label);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+    }
+
+    #main-content table.ad-registration-table > thead {
+        display: none;
+    }
+
+    #main-content table .ad-row-actions,
+    #main-content table form,
+    #main-content table select,
+    #main-content table input,
+    #main-content table button {
+        max-width: 100%;
+    }
+
+    html.dark #main-content table:not([role="presentation"]) > thead,
+    html.dark #main-content table:not([role="presentation"]) > tbody > tr > td,
+    html.dark #main-content table:not([role="presentation"]) > tbody > tr > th {
+        border-color: var(--ad-border);
+        color: var(--ad-text);
+        background: #211B17;
+    }
+}
+
+@media (max-width: 560px) {
+    .lk-admin-main { padding: 13px 11px 22px; }
+    .ad-page { gap: 13px; }
+    .ad-page-head h1,
+    .ad-page-head h2 { max-width: 100%; overflow-wrap: anywhere; }
+    .ad-page-head .ad-btn,
+    .ad-heading-actions .ad-btn,
+    .ad-card-actions .ad-btn { min-height: 40px; }
+    .ad-filter-bar input,
+    .ad-filter-bar select,
+    .ad-form-grid input,
+    .ad-form-grid select,
+    .ad-form-grid textarea { min-width: 0; max-width: 100%; }
+    #main-content table:not([role="presentation"]) > thead > tr,
+    #main-content table:not([role="presentation"]) > tbody > tr {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+    }
+    #main-content table:not([role="presentation"]) > tbody > tr > td,
+    #main-content table:not([role="presentation"]) > tbody > tr > th { padding: 7px; }
+    .ad-pagination { align-items: flex-start; flex-direction: column; }
+    .ad-pagination nav { max-width: 100%; overflow-x: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5195,4 +5357,50 @@ html.dark .ad-campaign-budget-history > summary { color: var(--ad-blue); }
     .ad-platform-policy-form__actions .ad-btn,
     .ad-platform-settings__actions .ad-btn { width: 100%; }
     .ad-platform-policy > summary { align-items: flex-start; flex-direction: column; }
+}
+
+/* Keep the admin account avatar visible in the compact mobile header. */
+@media (max-width: 760px) {
+    .lk-admin-topbar .ad-profile {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        margin-left: 0;
+        padding: 0;
+    }
+
+    .lk-admin-topbar .ad-profile > span:not(.ad-avatar),
+    .lk-admin-topbar .ad-profile > svg {
+        display: none;
+    }
+
+    .lk-admin-topbar .ad-profile .ad-avatar {
+        width: 35px;
+        height: 35px;
+        flex: 0 0 35px;
+        border-radius: 50%;
+    }
+}
+/* Support FAQs still uses inline light colors for its panels and controls. */
+html.dark .ad-support-faq-page :is(section, article, div):not([role="alert"])[style*="background:#fff"] {
+    background: var(--ad-card) !important;
+    border-color: var(--ad-border) !important;
+    color: var(--ad-text) !important;
+}
+
+html.dark .ad-support-faq-page :is(input:not([type="checkbox"]), select, textarea) {
+    background: #211b17 !important;
+    border-color: var(--ad-border) !important;
+    color: var(--ad-text) !important;
+}
+
+html.dark .ad-support-faq-page fieldset { border-color: var(--ad-border) !important; }
+html.dark .ad-support-faq-page [style*="color:#876958"],
+html.dark .ad-support-faq-page [style*="color:#76594b"] { color: var(--ad-muted) !important; }
+html.dark .ad-support-faq-page [style*="color:#5b2018"] { color: #f0aaa0 !important; }
+html.dark .ad-support-faq-page button[style*="background:#fff"] {
+    background: #2a1e1a !important;
+    border-color: var(--ad-border) !important;
+    color: #f0aaa0 !important;
 }

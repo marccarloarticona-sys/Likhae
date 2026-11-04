@@ -1482,35 +1482,91 @@ select.is-invalid {
 
 
 /* =========================================================
-   TERMS
+   PASSWORD AND POLICY REVIEW
 ========================================================= */
 
-.register-terms {
+.register-password-field {
+    position: relative;
+}
+
+.register-password-field input {
+    padding-right: 68px;
+}
+
+.register-password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 7px;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--reg-red);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 7px;
+}
+
+.register-password-toggle:hover,
+.register-password-toggle:focus-visible {
+    background: var(--reg-red-soft);
+    outline: 2px solid transparent;
+}
+
+.register-policy-prompt {
     display: flex;
-
-    align-items: flex-start;
-
-    gap: 9px;
-
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
     margin-top: 15px;
-
     color: var(--reg-muted);
-
-    font-size: 10px;
-
+    font-size: 11px;
     line-height: 1.55;
 }
 
+.register-policy-availability {
+    margin: 16px 0;
+    border: 1px solid #f0c9c3;
+    border-radius: 9px;
+    background: #fff5f3;
+    color: var(--reg-error);
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 11px 13px;
+}
 
-.register-terms input {
-    width: 15px;
-    height: 15px;
+.register-policy-prompt p {
+    flex-basis: 100%;
+    margin: 0;
+}
 
-    margin-top: 1px;
+.register-policy-prompt button {
+    border: 1px solid var(--reg-red);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--reg-red);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 8px 12px;
+}
 
-    flex: none;
+.register-policy-prompt button:hover,
+.register-policy-prompt button:focus-visible {
+    background: var(--reg-red-soft);
+}
 
-    accent-color: var(--reg-red);
+.register-policy-empty {
+    color: #725d54;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.register-policy-actions > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
 }
 
 
@@ -2006,3 +2062,92 @@ select.is-invalid {
 .register-field [aria-invalid="true"] { border-color: #b42318; }
 .upload-box .register-inline-error { display: block; margin-top: 6px; color: #b42318; font-size: 10px; font-weight: 600; }
 .upload-box input[aria-invalid="true"] + .upload-box__label { border-color: #b42318; }
+
+/* Keep registration readable when the saved workspace theme is dark. */
+html.dark {
+    --reg-red: #f0aa9d;
+    --reg-red-dark: #e58f83;
+    --reg-red-soft: #3b2421;
+    --reg-bg: #161210;
+    --reg-surface: #211b17;
+    --reg-beige: #2d211c;
+    --reg-text: #f5efe8;
+    --reg-muted: #c8b7ad;
+    --reg-border: #3b2e27;
+    --reg-border-dark: #60463a;
+    --reg-success: #75d49a;
+    --reg-warning: #edc878;
+    --reg-error: #ffaaa0;
+    --reg-shadow: 0 22px 60px rgb(0 0 0 / 24%);
+}
+
+html.dark body { background: var(--reg-bg); color: var(--reg-text); }
+html.dark .register-side {
+    border-color: var(--reg-border);
+    color: var(--reg-text);
+    background:
+        linear-gradient(180deg, rgb(22 18 16 / 96%) 0%, rgb(22 18 16 / 84%) 24%, rgb(22 18 16 / 24%) 52%, rgb(22 18 16 / 70%) 100%),
+        var(--lk-register-bg-image) center bottom / cover no-repeat,
+        #211b17;
+}
+html.dark .register-side::before { border-color: rgb(245 239 232 / 15%); }
+html.dark .register-side h1,
+html.dark .register-feature strong,
+html.dark .register-side__tagline,
+html.dark .register-prep { color: var(--reg-text); }
+html.dark .register-side__content > p,
+html.dark .register-feature > span,
+html.dark .register-prep__head p,
+html.dark .register-prep__list span,
+html.dark .register-prep__note { color: var(--reg-muted); }
+html.dark .register-side__features,
+html.dark .register-side__tagline,
+html.dark .register-prep {
+    border-color: var(--reg-border);
+    background: rgb(33 27 23 / 94%);
+}
+html.dark .register-prep { background: linear-gradient(135deg, #211b17, #2d211c); }
+html.dark .register-prep__note { border-color: var(--reg-border); }
+html.dark .register-main { color: var(--reg-text); }
+html.dark .account-type-label,
+html.dark .register-field label { color: #e2d6cc; }
+html.dark .account-type-option,
+html.dark .registration-progress,
+html.dark .register-section,
+html.dark .register-field input,
+html.dark .register-field select,
+html.dark .register-field textarea,
+html.dark .register-email-verification__button,
+html.dark .register-policy-prompt button,
+html.dark .register-back {
+    border-color: var(--reg-border);
+    background: var(--reg-surface);
+    color: var(--reg-text);
+}
+html.dark .account-type-option.is-active { border-color: #a75a4f; background: #2d211c; }
+html.dark .progress-label,
+html.dark .progress-step,
+html.dark .progress-step span { color: #c8b7ad; }
+html.dark .progress-track { background: #3b2e27; }
+html.dark .progress-step span { border-color: var(--reg-border); background: #2d211c; }
+html.dark .progress-step.is-active,
+html.dark .progress-step.is-complete { color: var(--reg-red); }
+html.dark .register-section { border-color: var(--reg-border); box-shadow: 0 5px 18px rgb(0 0 0 / 12%); }
+html.dark .seller-section { border-color: var(--reg-border); background: linear-gradient(180deg, #211b17, #261d1a); }
+html.dark .register-field input::placeholder,
+html.dark .register-field textarea::placeholder { color: #a99386; }
+html.dark .register-field input:disabled,
+html.dark .register-field select:disabled,
+html.dark .register-field input[readonly] { border-color: var(--reg-border); background: #2d211c; color: #c8b7ad; }
+html.dark .upload-box__label { border-color: #60463a; background: #1e1a17; color: var(--reg-text); }
+html.dark .upload-box__label:hover { border-color: #a75a4f; background: #2d211c; }
+html.dark .approval-notice { border-color: #77632e; background: #423816; color: #f5dc91; }
+html.dark .register-policy-availability,
+html.dark .step-validation-message,
+html.dark .register-alert--error { border-color: #78453f; background: #432320; color: #ffc5bd; }
+html.dark .register-policy-empty { color: var(--reg-muted); }
+html.dark .register-back:hover,
+html.dark .register-policy-prompt button:hover,
+html.dark .register-policy-prompt button:focus-visible { border-color: #8a5a4d; background: #2d211c; }
+html.dark .register-alert--success { border-color: #315d40; background: #17271d; color: #b9e8c4; }
+html.dark .profile-picture-preview { border-color: var(--reg-border); background: #2d211c; }

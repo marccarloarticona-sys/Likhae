@@ -59,6 +59,9 @@ class FallbackProductModerationProviderTest extends TestCase
                         'text' => json_encode([
                             'category_probabilities' => ['SAFE' => 0.91, 'FIREARM' => 0.02],
                             'disguised_probability' => 0.01,
+                            'business_mismatch_probability' => 0.8,
+                            'category_mismatch_probability' => 0.7,
+                            'subcategory_mismatch_probability' => 0.85,
                         ]),
                     ]]],
                 ]],
@@ -69,6 +72,9 @@ class FallbackProductModerationProviderTest extends TestCase
 
         $this->assertSame('Google Gemini', $result['provider_source']);
         $this->assertSame('gemini-flash-lite-latest', $result['model_source']);
+        $this->assertSame(0.8, $result['business_mismatch_probability']);
+        $this->assertSame(0.7, $result['category_mismatch_probability']);
+        $this->assertSame(0.85, $result['subcategory_mismatch_probability']);
         $this->assertTrue($result['used_fallback']);
         Http::assertSent(fn (ClientRequest $request): bool => str_contains($request->url(), 'generativelanguage.googleapis.com')
             && ! str_contains($request->url(), 'key=')
@@ -85,6 +91,9 @@ class FallbackProductModerationProviderTest extends TestCase
                         'text' => json_encode([
                             'category_probabilities' => ['ORDINARY_PRODUCT' => 0.90, 'REAL_FIREARM' => 0.01],
                             'mismatch_probability' => 0.02,
+                            'business_mismatch_probability' => 0.03,
+                            'category_mismatch_probability' => 0.85,
+                            'subcategory_mismatch_probability' => 0.9,
                         ]),
                     ]]],
                 ]],
@@ -98,6 +107,8 @@ class FallbackProductModerationProviderTest extends TestCase
 
         $this->assertSame('Google Gemini', $result['provider_source']);
         $this->assertTrue($result['used_fallback']);
+        $this->assertSame(0.85, $result['category_mismatch_probability']);
+        $this->assertSame(0.9, $result['subcategory_mismatch_probability']);
         Http::assertSent(fn (ClientRequest $request): bool => str_contains($request->url(), 'generativelanguage.googleapis.com')
             && data_get($request->data(), 'contents.0.parts.0.inline_data.mime_type') === 'image/jpeg'
             && data_get($request->data(), 'contents.0.parts.0.inline_data.data') === base64_encode('sample-image-bytes'));

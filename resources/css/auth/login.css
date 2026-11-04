@@ -1537,3 +1537,77 @@ html.dark .likhae-logo {
     }
 
 }
+
+/* Dark palette for sign-in and account recovery pages. */
+html.dark {
+    --likhae-red: #f0aa9d;
+    --likhae-red-dark: #e58f83;
+    --likhae-red-soft: #3b2421;
+    --likhae-paper: #161210;
+    --likhae-cream: #2d211c;
+    --likhae-white: #211b17;
+    --likhae-ink: #f5efe8;
+    --likhae-muted: #c8b7ad;
+    --likhae-border: #3b2e27;
+    --likhae-success: #75d49a;
+    --likhae-error: #ffaaa0;
+    --likhae-shadow: 0 24px 70px rgb(0 0 0 / 28%);
+}
+
+html.dark body { background: radial-gradient(circle at 5% 90%, rgb(143 23 25 / 12%), transparent 30%), var(--likhae-paper); color: var(--likhae-ink); }
+html.dark .auth-shell,
+html.dark .auth-panel { background: var(--likhae-paper); color: var(--likhae-ink); }
+html.dark .auth-hero {
+    border-color: var(--likhae-border);
+    background-color: #211b17;
+    background:
+        linear-gradient(180deg, rgb(22 18 16 / 96%) 0%, rgb(22 18 16 / 82%) 25%, rgb(22 18 16 / 24%) 52%, rgb(22 18 16 / 72%) 100%),
+        var(--lk-auth-bg-image) center bottom / cover no-repeat,
+        #211b17;
+}
+html.dark .auth-hero::before { border-color: rgb(245 239 232 / 14%); }
+html.dark .auth-hero__copy h1,
+html.dark .auth-workspace-logistics .auth-hero__copy h1,
+html.dark .auth-workspace-logistics .auth-hero__benefits strong,
+html.dark .auth-workspace-logistics .auth-hero__tagline { color: var(--likhae-ink); }
+html.dark .auth-hero__copy p,
+html.dark .auth-hero__benefits span,
+html.dark .auth-workspace-logistics .auth-hero__copy p,
+html.dark .auth-workspace-logistics .auth-hero__benefits span { color: var(--likhae-muted); }
+html.dark .auth-hero__benefits,
+html.dark .auth-workspace-logistics .auth-hero__benefits { border-color: var(--likhae-border); background: rgb(33 27 23 / 94%); }
+html.dark .auth-workspace-logistics .auth-eyebrow { border-color: var(--likhae-border); background: rgb(33 27 23 / 88%); color: #f0aa9d; }
+html.dark .auth-workspace-logistics .auth-hero__copy h1 em { color: #f0aa9d; }
+html.dark .auth-panel__head h2,
+html.dark .auth-saved-account__details strong,
+html.dark .auth-selected-account__details strong,
+html.dark .auth-field label { color: var(--likhae-ink); }
+html.dark .auth-alert--error { border-color: #78453f; background: #432320; color: #ffc5bd; }
+html.dark .auth-alert--success { border-color: #315d40; background: #17271d; color: #b9e8c4; }
+html.dark .auth-saved-accounts__label,
+html.dark .auth-security-text,
+html.dark .auth-divider,
+html.dark .auth-trust { color: #c8b7ad; }
+html.dark .auth-saved-account,
+html.dark .auth-selected-account,
+html.dark .auth-field input,
+html.dark .auth-social {
+    border-color: var(--likhae-border);
+    background: #211b17;
+    color: var(--likhae-ink);
+}
+html.dark .auth-saved-account:hover,
+html.dark .auth-saved-account:focus-visible,
+html.dark .auth-social:hover { border-color: #8a5a4d; background: #2d211c; }
+html.dark .auth-input-icon,
+html.dark .auth-eye { color: #c8b7ad; }
+html.dark .auth-field input::placeholder { color: #a99386; }
+html.dark .auth-field input:hover { border-color: #60463a; }
+html.dark .auth-field input:focus { border-color: #a75a4f; }
+html.dark .auth-eye:hover { color: #f0aa9d; background: #3b2421; }
+html.dark .auth-security-text { color: #a99386; }
+html.dark .auth-trust { border-color: var(--likhae-border); }
+
+@media (max-width: 520px) {
+    html.dark body { background: var(--likhae-paper); }
+}

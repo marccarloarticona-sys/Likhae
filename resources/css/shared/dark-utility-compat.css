@@ -1,0 +1,118 @@
+/* Dark counterparts for light Tailwind utilities used by workspace pages. */
+html.dark {
+    color-scheme: dark;
+}
+
+html.dark :is(.bg-white, [class~="bg-white/70"], [class~="bg-white/80"]):not(img):not([class*="dark:bg-"]),
+html.dark :is(.bg-stone-50, .bg-stone-100, .bg-slate-50, .bg-gray-50, .bg-gray-100, [class~="bg-stone-50/60"]):not([class*="dark:bg-"]),
+html.dark :is([class~="hover:bg-white"], [class~="hover:bg-stone-50"]):hover {
+    background-color: #211b17 !important;
+}
+
+html.dark :is(.bg-red-50, .bg-red-100, [class~="bg-red-50/40"], [class~="bg-red-50/60"]):not([class*="dark:bg-"]),
+html.dark :is([class~="hover:bg-red-50"], [class~="hover:bg-red-100"]):hover {
+    background-color: #36211e !important;
+}
+
+html.dark :is(.bg-amber-50, .bg-amber-100, .bg-yellow-50, [class~="bg-amber-50/60"], [class~="bg-amber-50/70"]):not([class*="dark:bg-"]),
+html.dark :is([class~="hover:bg-amber-50"], [class~="hover:bg-yellow-50"]):hover {
+    background-color: #332a1d !important;
+}
+
+html.dark :is(.bg-green-50, .bg-green-100, .bg-emerald-50, [class~="bg-emerald-50/50"]):not([class*="dark:bg-"]),
+html.dark :is([class~="hover:bg-green-50"], [class~="hover:bg-emerald-50"]):hover {
+    background-color: #1d3026 !important;
+}
+
+html.dark .bg-blue-50:not([class*="dark:bg-"]) {
+    background-color: #20303d !important;
+}
+
+html.dark :is(.text-black, .text-stone-700, .text-stone-800, .text-stone-900, .text-stone-950,
+              .text-slate-700, .text-slate-800, .text-slate-900, .text-gray-700, .text-gray-800, .text-gray-900):not([class*="dark:text-"]) {
+    color: #f5efe8 !important;
+}
+
+html.dark :is(.text-stone-400, .text-stone-500, .text-stone-600, .text-slate-500, .text-slate-600,
+              .text-gray-500, .text-gray-600):not([class*="dark:text-"]) {
+    color: #c8b7ad !important;
+}
+
+html.dark :is(.text-red-600, .text-red-700, .text-red-800, .text-red-900, .text-red-950,
+              .text-rose-700, .text-rose-800):not([class*="dark:text-"]) {
+    color: #f0aaa0 !important;
+}
+
+html.dark [class~="text-red-900/80"]:not([class*="dark:text-"]) { color: #f0aaa0 !important; }
+
+html.dark :is(.text-amber-700, .text-amber-800, .text-amber-900, .text-amber-950,
+              .text-yellow-950):not([class*="dark:text-"]) {
+    color: #f1d08e !important;
+}
+
+html.dark [class~="text-amber-900/80"]:not([class*="dark:text-"]) { color: #f1d08e !important; }
+
+html.dark :is(.text-green-700, .text-green-800, .text-green-900, .text-emerald-700,
+              .text-emerald-800, .text-emerald-900):not([class*="dark:text-"]) {
+    color: #b5e0c3 !important;
+}
+
+html.dark :is(.text-blue-700, .text-blue-800, .text-blue-900, .text-blue-950):not([class*="dark:text-"]) {
+    color: #bbd8f0 !important;
+}
+
+html.dark :is(.border-stone-100, .border-stone-200, .border-stone-300,
+              .border-slate-100, .border-slate-200, .border-gray-100, .border-gray-200):not([class*="dark:border-"]) {
+    border-color: #4b3831 !important;
+}
+
+html.dark :is(.border-red-200, .border-red-300):not([class*="dark:border-"]) { border-color: #75433e !important; }
+html.dark :is(.border-amber-200, .border-amber-300, .border-yellow-200):not([class*="dark:border-"]) { border-color: #705a33 !important; }
+html.dark :is(.border-green-200, .border-emerald-200, .border-emerald-300):not([class*="dark:border-"]) { border-color: #3f654d !important; }
+html.dark .border-blue-200:not([class*="dark:border-"]) { border-color: #3f5c72 !important; }
+
+/* A few pages use fixed palette values as Tailwind class names. */
+html.dark :is([class~="bg-[#fffdf9]"], [class~="bg-[#fcf8f4]"]):not([class*="dark:bg-"]),
+html.dark :is([class~="bg-[#f6efe7]"], [class~="bg-[#f4e6df]"], [class~="bg-[#fff7f2]"],
+              [class~="bg-[#fbf7f2]"], [class~="bg-[#f7f3ec]"]):not([class*="dark:bg-"]) {
+    background-color: #211b17 !important;
+}
+
+html.dark [class~="bg-[#fff0e8]"]:not([class*="dark:bg-"]) {
+    background-color: #432821 !important;
+}
+
+html.dark [class~="text-[#3b211b]"]:not([class*="dark:text-"]) { color: #f5efe8 !important; }
+html.dark :is([class~="text-[#765f51]"], [class~="text-[#987865]"], [class~="text-[#6c4936]"]):not([class*="dark:text-"]) {
+    color: #c8b7ad !important;
+}
+
+html.dark :is([class~="text-[#561c17]"], [class~="text-[#8f382d]"], [class~="text-[#7a2a22]"],
+              [class~="text-[#7b2c23]"], [class~="text-[#8a5b3c]"]):not([class*="dark:text-"]) {
+    color: #f0aaa0 !important;
+}
+
+html.dark :is([class~="border-[#eadbce]"], [class~="border-[#eadccc]"], [class~="border-[#dbcec1]"]):not([class*="dark:border-"]) {
+    border-color: #4b3831 !important;
+}
+
+/* Inline status notices in older workspace views. */
+html.dark [style*="background:#f0fdf4"],
+html.dark [style*="background:#effaf2"] {
+    background: #1d3026 !important;
+    border-color: #3f654d !important;
+    color: #b5e0c3 !important;
+}
+
+html.dark [style*="background:#fef2f2"],
+html.dark [style*="background:#fff1ef"] {
+    background: #36211e !important;
+    border-color: #75433e !important;
+    color: #f0aaa0 !important;
+}
+
+html.dark [style*="background:#fff8e8"] {
+    background: #332a1d !important;
+    border-color: #705a33 !important;
+    color: #f1d08e !important;
+}

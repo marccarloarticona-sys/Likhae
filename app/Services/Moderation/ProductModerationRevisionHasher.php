@@ -51,6 +51,7 @@ class ProductModerationRevisionHasher
             ->all();
 
         $state = [
+            'classification_context' => ProductModerationAlignment::context($product),
             'title' => (string) $product->name,
             'description' => (string) ($product->description ?? ''),
             'category' => $product->category?->parent?->name,
