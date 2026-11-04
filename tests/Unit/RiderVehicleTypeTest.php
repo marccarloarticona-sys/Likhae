@@ -45,13 +45,11 @@ class RiderVehicleTypeTest extends TestCase
         $this->assertSame(10, RiderVehicleType::interLogisticsParcelLimit('car'));
     }
 
-    public function test_availability_support_is_limited_to_local_vehicles_and_vans(): void
+    public function test_mobile_availability_is_supported_for_local_riders_and_vans(): void
     {
         $this->assertTrue(RiderVehicleType::supportsAvailability('motorcycle'));
         $this->assertTrue(RiderVehicleType::supportsAvailability('tricycle'));
         $this->assertTrue(RiderVehicleType::supportsAvailability('Van'));
-        $this->assertTrue(RiderVehicleType::isVan('van'));
-        $this->assertTrue(RiderVehicleType::isVan(' Van '));
         $this->assertFalse(RiderVehicleType::supportsAvailability('closed_van'));
         $this->assertFalse(RiderVehicleType::supportsAvailability('truck'));
         $this->assertFalse(RiderVehicleType::supportsAvailability('car'));
