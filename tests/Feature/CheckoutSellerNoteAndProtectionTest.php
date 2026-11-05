@@ -292,6 +292,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(0, $shippingBudget['spent_cents'], 'Pending COD must not recognize shipping campaign expense.');
         $this->assertSame(9997000, $shippingBudget['available_cents']);
 
+        $cancelledSellerOrder = $order->sellerOrders()->where('seller_profile_id', $fixture['sellerA']->id)->firstOrFail();
+        $campaignBudgets->releaseForSellerOrder($cancelledSellerOrder, $fixture['buyer']);
+        $this->assertSame(1379, $campaignBudgets->summary($platformVoucher->fresh())['reserved_cents']);
+        $this->assertSame(1500, $campaignBudgets->summary($shippingVoucher->fresh())['reserved_cents']);
+
         $this->actingAs($fixture['buyer'])
             ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
             ->assertOk();

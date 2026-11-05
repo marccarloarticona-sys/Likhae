@@ -762,6 +762,7 @@ class ParcelSettlementFlowTest extends TestCase
         $this->assertSame('CAMPAIGN_SUBSIDY_RESERVED', $reservation->entry_type);
         $this->assertSame('RESERVED', $reservation->status);
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumn('financial_ledger_entries', 'order_item_id'));
+        $voucher->update(['is_active' => false, 'campaign_status' => 'PAUSED']);
         app(PlatformCampaignBudgetService::class)->consumeForOrderItem($fixture['item']->fresh(), $fixture['buyer']);
         app(PlatformCampaignBudgetService::class)->consumeForOrderItem($fixture['item']->fresh(), $fixture['buyer']);
         $this->recordCollection($fixture, '1310.00');
