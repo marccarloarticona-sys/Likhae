@@ -22,11 +22,37 @@ class ConversationService
     /** @var array<string, true>|null */
     private ?array $messageColumnNames = null;
 
-    public function listFor(User $user, bool $includeMessages = true, ?int $limit = null, bool $includeSellerProfiles = false): Collection
+    public function listFor(
+        User $user,
+        bool $includeMessages = true,
+        ?int $limit = null,
+        bool $includeSellerProfiles = false,
+        bool $preloadAuthorizationContext = false,
+    ): Collection
     {
-        $relations = ['participants', 'latestMessage'];
+        $relations = [
+            'participants',
+            'participantRecords' => fn ($query) => $query
+                ->whereNull('left_at')
+                ->with('user'),
+            'latestMessage',
+        ];
         if ($includeSellerProfiles) {
             $relations[] = 'participants.sellerProfile';
+        }
+        if ($preloadAuthorizationContext) {
+            $relations = array_merge($relations, [
+                'order',
+                'sellerOrder.order',
+                'sellerOrder.sellerProfile',
+                'shipment.sellerOrder.order',
+                'shipment.sellerOrder.sellerProfile',
+                'shipment.logisticsCenter.owner',
+                'shipment.originLogisticsCenter.owner',
+                'shipment.destinationLogisticsCenter.owner',
+                'shipment.serviceArea.logisticsCenter.owner',
+                'shipment.riderAssignments.riderProfile.user',
+            ]);
         }
 
         $query = Conversation::query()
@@ -94,9 +120,6 @@ class ConversationService
     public function headerPreviewFor(User $user, int $limit = 6): array
     {
         $conversations = $this->listFor($user, false, max(1, min($limit, 20)));
-        $conversations->load([
-            'participantRecords' => fn ($query) => $query->whereNull('left_at')->with('user'),
-        ]);
         $unreadCounts = $this->unreadCountsFor($user, $conversations);
 
         $items = $conversations->map(function (Conversation $conversation) use ($user, $unreadCounts): array {

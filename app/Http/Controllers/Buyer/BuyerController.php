@@ -1893,7 +1893,7 @@ class BuyerController extends Controller
             ], static fn ($value) => filled($value)));
         }
 
-        $conversations = $this->conversations->listFor($request->user(), false, null, true);
+        $conversations = $this->conversations->listFor($request->user(), false, null, true, true);
         $rows = $conversations->map(function ($conversation) use ($request): array {
             $other = $conversation->participants->first(fn ($participant) => (int) $participant->id !== (int) $request->user()->id);
             $seller = $other?->sellerProfile;

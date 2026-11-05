@@ -25,16 +25,22 @@ class ConversationAuthorizationService
     {
         abort_unless($user->isActive(), 403);
 
-        $participants = $conversation->participantRecords()
-            ->whereNull('left_at')
-            ->with('user')
-            ->get();
+        $participants = $conversation->relationLoaded('participantRecords')
+            ? $conversation->getRelation('participantRecords')->whereNull('left_at')->values()
+            : $conversation->participantRecords()
+                ->whereNull('left_at')
+                ->with('user')
+                ->get();
+        $participants->loadMissing('user');
         abort_unless($participants->contains(fn ($participant): bool => (int) $participant->user_id === (int) $user->id), 403);
 
         $participantIds = $participants->pluck('user_id')->map(fn ($id): int => (int) $id)->all();
         if ($conversation->seller_order_id && ! $conversation->shipment_id) {
-            $sellerOrder = $conversation->sellerOrder()->with(['order', 'sellerProfile'])->first();
+            $sellerOrder = $conversation->relationLoaded('sellerOrder')
+                ? $conversation->getRelation('sellerOrder')
+                : $conversation->sellerOrder()->with(['order', 'sellerProfile'])->first();
             if ($sellerOrder) {
+                $sellerOrder->loadMissing(['order', 'sellerProfile']);
                 abort_unless(! $conversation->order_id || (int) $sellerOrder->order_id === (int) $conversation->order_id, 403);
                 $this->assertParticipantsIn($participants, [
                     (int) $sellerOrder->order?->buyer_user_id,
@@ -42,14 +48,16 @@ class ConversationAuthorizationService
                 ], allowAdmin: true);
             }
         } elseif ($conversation->order_id && ! $conversation->shipment_id) {
-            $order = $conversation->order()->first();
+            $order = $conversation->relationLoaded('order')
+                ? $conversation->getRelation('order')
+                : $conversation->order()->first();
             if ($order) {
                 $this->assertParticipantsIn($participants, [(int) $order->buyer_user_id], allowAdmin: true);
             }
         }
 
         if ($conversation->shipment_id) {
-            $shipment = Shipment::query()->with([
+            $shipmentRelations = [
                 'sellerOrder.order',
                 'sellerOrder.sellerProfile',
                 'logisticsCenter.owner',
@@ -57,9 +65,13 @@ class ConversationAuthorizationService
                 'destinationLogisticsCenter.owner',
                 'serviceArea.logisticsCenter.owner',
                 'riderAssignments.riderProfile.user',
-            ])->find($conversation->shipment_id);
+            ];
+            $shipment = $conversation->relationLoaded('shipment')
+                ? $conversation->getRelation('shipment')
+                : Shipment::query()->with($shipmentRelations)->find($conversation->shipment_id);
 
             if ($shipment) {
+                $shipment->loadMissing($shipmentRelations);
                 abort_unless(! $conversation->seller_order_id || (int) $shipment->seller_order_id === (int) $conversation->seller_order_id, 403);
                 abort_unless(! $conversation->order_id || (int) $shipment->sellerOrder?->order_id === (int) $conversation->order_id, 403);
                 $eligibleIds = collect([

@@ -16,6 +16,10 @@ class ConversationContextPresenter
         if (! $conversation) {
             return null;
         }
+        if (! $conversation->shipment_id && ! $conversation->seller_order_id && ! $conversation->order_id) {
+            return null;
+        }
+
         $this->authorization->assertCanAccess($user, $conversation);
 
         if ($conversation->shipment_id) {
