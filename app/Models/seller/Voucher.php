@@ -34,6 +34,23 @@ class Voucher extends Model
         'is_active',
         'requires_review',
         'review_reason',
+        'homepage_carousel_enabled',
+        'homepage_carousel_desktop_image_path',
+        'homepage_carousel_mobile_image_path',
+        'homepage_carousel_headline',
+        'homepage_carousel_description',
+        'homepage_carousel_cta_label',
+        'homepage_carousel_cta_destination',
+        'homepage_carousel_priority',
+        'distribution_mode',
+        'target_mode',
+        'target_category_ids',
+        'target_product_ids',
+        'target_seller_ids',
+        'buyer_audience',
+        'stack_with_seller',
+        'stack_with_shipping',
+        'campaign_status',
     ];
 
     protected function casts(): array
@@ -49,6 +66,13 @@ class Voucher extends Model
             'is_active' => 'boolean',
             'requires_review' => 'boolean',
             'visibility' => 'string',
+            'homepage_carousel_enabled' => 'boolean',
+            'homepage_carousel_priority' => 'integer',
+            'target_category_ids' => 'array',
+            'target_product_ids' => 'array',
+            'target_seller_ids' => 'array',
+            'stack_with_seller' => 'boolean',
+            'stack_with_shipping' => 'boolean',
         ];
     }
 

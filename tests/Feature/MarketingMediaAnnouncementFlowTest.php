@@ -120,6 +120,186 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
             ->assertSee('NOARTWORK2026');
     }
 
+    public function test_buyer_home_uses_original_hero_and_only_active_ordered_public_carousel_campaigns(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        Storage::fake('public');
+        $admin = User::query()->where('email', 'admin@likhae.com')->sole();
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+
+        $emptyHome = $this->actingAs($buyer)->get(route('buyer.home'))->assertOk();
+        $emptyHome->assertSee('Everything<br>for your', false)
+            ->assertSee('Shop all products')
+            ->assertDontSee('<button class="lk-home-hero-arrow" type="button" data-home-hero-previous', false)
+            ->assertDontSee('No scheduled events right now');
+        $this->assertStringNotContainsString('home/platform-events', $emptyHome->getContent());
+
+        $first = $this->makeHomepageCarouselCampaign($admin, 'HEROFIRST2026', [
+            'homepage_carousel_priority' => 1,
+            'homepage_carousel_headline' => 'First campaign headline',
+        ]);
+        $singleEventHome = $this->get(route('buyer.home'))->assertOk()
+            ->assertSee('First campaign headline')
+            ->assertSee('data-home-hero-previous')
+            ->assertSee(route('buyer.platform-events.show', $first), false);
+        $this->assertSame(2, substr_count($singleEventHome->getContent(), '<article class="lk-home-editorial-hero lk-home-hero-slide'));
+
+        $second = $this->makeHomepageCarouselCampaign($admin, 'HEROSCOND2026', [
+            'homepage_carousel_priority' => 2,
+            'homepage_carousel_headline' => 'Second campaign headline',
+            'homepage_carousel_cta_label' => 'See all offers',
+            'homepage_carousel_cta_destination' => 'OFFERS',
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HEROFUTURE2026', [
+            'homepage_carousel_priority' => 3,
+            'homepage_carousel_headline' => 'Future campaign hidden',
+            'starts_at' => now()->addHour(),
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HEROEXPIRED2026', [
+            'homepage_carousel_priority' => 4,
+            'homepage_carousel_headline' => 'Expired campaign hidden',
+            'ends_at' => now()->subHour(),
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HEROPAUSED2026', [
+            'homepage_carousel_priority' => 5,
+            'homepage_carousel_headline' => 'Unpublished campaign hidden',
+            'is_active' => false,
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HEROOFF2026', [
+            'homepage_carousel_priority' => 6,
+            'homepage_carousel_headline' => 'Opted out campaign hidden',
+            'homepage_carousel_enabled' => false,
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HEROPRIVATE2026', [
+            'homepage_carousel_priority' => 7,
+            'homepage_carousel_headline' => 'Private campaign hidden',
+            'visibility' => 'CODE_ONLY',
+        ]);
+        $this->makeHomepageCarouselCampaign($admin, 'HERONOART2026', [
+            'homepage_carousel_priority' => 8,
+            'homepage_carousel_headline' => 'Artwork missing campaign hidden',
+            'homepage_carousel_desktop_image_path' => null,
+        ]);
+
+        $multipleEventHome = $this->get(route('buyer.home'))->assertOk()
+            ->assertSee('First campaign headline')
+            ->assertSee('Second campaign headline')
+            ->assertSee(route('buyer.platform-events.index'), false)
+            ->assertDontSee('Future campaign hidden')
+            ->assertDontSee('Expired campaign hidden')
+            ->assertDontSee('Unpublished campaign hidden')
+            ->assertDontSee('Opted out campaign hidden')
+            ->assertDontSee('Private campaign hidden')
+            ->assertDontSee('Artwork missing campaign hidden')
+            ->assertSee('touchstart')
+            ->assertSee('prefers-reduced-motion');
+        $html = $multipleEventHome->getContent();
+        $this->assertSame(3, substr_count($html, '<article class="lk-home-editorial-hero lk-home-hero-slide'));
+        $this->assertLessThan(strpos($html, 'Second campaign headline'), strpos($html, 'First campaign headline'));
+        $this->assertNotSame($first->id, $second->id);
+
+        $previous = libxml_use_internal_errors(true);
+        $document = new \DOMDocument();
+        $document->loadHTML($html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($document);
+        $this->assertSame(0, $xpath->query('//article[contains(concat(" ", normalize-space(@class), " "), " lk-event-card ")]')->length);
+        $offerSlide = $xpath->query('//article[@data-home-hero-slide][.//h2[contains(., "Second campaign headline")]]')->item(0);
+        $this->assertNotNull($offerSlide);
+        $offerCta = $xpath->query('.//a[contains(@class, "lk-home-editorial-cta")]', $offerSlide)->item(0);
+        $this->assertNotNull($offerCta);
+        $this->assertSame(route('buyer.platform-events.index'), $offerCta->getAttribute('href'));
+        $this->assertStringContainsString('See all offers', trim($offerCta->textContent));
+        $this->assertStringContainsString('}, 7000);', $html);
+        $this->assertStringContainsString('pointerenter', $html);
+        $this->assertStringContainsString('focusin', $html);
+        $this->assertStringContainsString('visibilitychange', $html);
+
+        $this->get(route('buyer.platform-events.index'))->assertOk();
+        $this->get(route('buyer.platform-events.show', $first))->assertOk();
+    }
+
+    public function test_admin_can_enable_and_update_desktop_and_mobile_homepage_artwork(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        Storage::fake('public');
+        $admin = User::query()->where('email', 'admin@likhae.com')->sole();
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        $desktop = UploadedFile::fake()->image('desktop-event.png', 1400, 520);
+        $mobile = UploadedFile::fake()->image('mobile-event.png', 700, 900);
+
+        $this->actingAs($admin)
+            ->get(route('admin.marketing', ['section' => 'campaigns']))
+            ->assertOk()
+            ->assertSee('Show in Buyer Hero Carousel')
+            ->assertSee('Desktop promotional image');
+
+        $this->post(route('admin.marketing.campaigns.store'), $this->campaignPayload('HERONOIMAGE2026', [
+            'homepage_carousel_enabled' => '1',
+        ]))->assertSessionHasErrors('homepage_carousel_desktop_image');
+        $this->assertDatabaseMissing('vouchers', ['code' => 'HERONOIMAGE2026']);
+
+        $this->post(route('admin.marketing.campaigns.store'), $this->campaignPayload('HEROURL2026', [
+            'homepage_carousel_enabled' => '1',
+            'homepage_carousel_cta_destination' => 'https://example.com',
+            'homepage_carousel_desktop_image' => UploadedFile::fake()->image('invalid-destination.png'),
+        ]))->assertSessionHasErrors('homepage_carousel_cta_destination');
+        $this->assertDatabaseMissing('vouchers', ['code' => 'HEROURL2026']);
+
+        $this->post(route('admin.marketing.campaigns.store'), $this->campaignPayload('HEROEDIT2026', [
+            'homepage_carousel_enabled' => '1',
+            'homepage_carousel_headline' => 'Artwork before update',
+            'homepage_carousel_description' => 'An event description for buyers.',
+            'homepage_carousel_cta_label' => 'Explore this event',
+            'homepage_carousel_cta_destination' => 'EVENT',
+            'homepage_carousel_priority' => 4,
+            'homepage_carousel_desktop_image' => $desktop,
+            'homepage_carousel_mobile_image' => $mobile,
+        ]))->assertRedirect(route('admin.marketing', ['section' => 'campaigns']));
+
+        $campaign = Voucher::query()->where('code', 'HEROEDIT2026')->sole();
+        $oldDesktopPath = $campaign->homepage_carousel_desktop_image_path;
+        $oldMobilePath = $campaign->homepage_carousel_mobile_image_path;
+        Storage::disk('public')->assertExists($oldDesktopPath);
+        Storage::disk('public')->assertExists($oldMobilePath);
+        $initialBuyerHome = $this->actingAs($buyer)->get(route('buyer.home'))
+            ->assertOk()
+            ->assertSee('Artwork before update')
+            ->assertSee('An event description for buyers.')
+            ->assertSee('Explore this event')
+            ->assertSee(route('buyer.platform-events.show', $campaign), false)
+            ->assertSee(Storage::disk('public')->url($oldMobilePath), false);
+        $this->assertStringContainsString(
+            'media="(max-width: 640px)" srcset="'.Storage::disk('public')->url($oldMobilePath).'"',
+            $initialBuyerHome->getContent(),
+        );
+        $this->assertStringContainsString('@media (prefers-reduced-motion: reduce)', $initialBuyerHome->getContent());
+
+        $updatedDesktop = UploadedFile::fake()->image('updated-desktop-event.png', 1400, 520);
+        $this->actingAs($admin)
+            ->patch(route('admin.marketing.campaigns.update', $campaign), $this->campaignPayload('HEROEDIT2026', [
+                'name' => $campaign->name,
+                'homepage_carousel_enabled' => '1',
+                'homepage_carousel_headline' => 'Updated campaign headline',
+                'homepage_carousel_description' => 'Updated event copy.',
+                'homepage_carousel_cta_label' => 'See all offers',
+                'homepage_carousel_cta_destination' => 'OFFERS',
+                'homepage_carousel_priority' => 2,
+                'homepage_carousel_desktop_image' => $updatedDesktop,
+            ]))->assertRedirect(route('admin.marketing', ['section' => 'campaigns']));
+
+        $campaign->refresh();
+        Storage::disk('public')->assertMissing($oldDesktopPath);
+        Storage::disk('public')->assertExists($campaign->homepage_carousel_desktop_image_path);
+        Storage::disk('public')->assertExists($oldMobilePath);
+        $this->actingAs($buyer)->get(route('buyer.home'))
+            ->assertOk()
+            ->assertSee('Updated campaign headline')
+            ->assertSee(route('buyer.platform-events.index'), false)
+            ->assertDontSee('Artwork before update');
+    }
+
     public function test_campaign_image_validation_rejects_executable_oversized_and_invalid_mime_files(): void
     {
         Storage::fake('public');
@@ -734,5 +914,44 @@ class MarketingMediaAnnouncementFlowTest extends TestCase
             'starts_at' => now()->subHour()->format('Y-m-d H:i:s'),
             'ends_at' => now()->addDay()->format('Y-m-d H:i:s'),
         ], $overrides);
+    }
+
+    private function makeHomepageCarouselCampaign(User $admin, string $code, array $overrides = []): Voucher
+    {
+        $desktopPath = array_key_exists('homepage_carousel_desktop_image_path', $overrides)
+            ? $overrides['homepage_carousel_desktop_image_path']
+            : UploadedFile::fake()->image('hero-'.$code.'.png', 1400, 520)->store('marketing/platform-events', 'public');
+        $campaign = Voucher::query()->create(array_merge([
+            'seller_profile_id' => null,
+            'platform_code_key' => $code,
+            'benefit_scope' => 'PRODUCT',
+            'visibility' => 'PUBLIC',
+            'code' => $code,
+            'name' => 'Campaign '.$code,
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+            'minimum_order_amount' => 100,
+            'maximum_discount_amount' => 20,
+            'usage_limit' => 50,
+            'per_user_limit' => 1,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+            'requires_review' => false,
+            'campaign_budget_total' => null,
+            'homepage_carousel_enabled' => true,
+            'homepage_carousel_desktop_image_path' => $desktopPath,
+            'homepage_carousel_mobile_image_path' => null,
+            'homepage_carousel_headline' => 'Campaign headline '.$code,
+            'homepage_carousel_description' => 'A short description for '.$code,
+            'homepage_carousel_cta_label' => 'View Offer',
+            'homepage_carousel_cta_destination' => 'EVENT',
+            'homepage_carousel_priority' => 0,
+        ], $overrides));
+
+        app(\App\Services\Finance\PlatformCampaignBudgetService::class)
+            ->setAllocation($campaign, 100000, 'Homepage carousel test allocation', $admin);
+
+        return $campaign->fresh();
     }
 }

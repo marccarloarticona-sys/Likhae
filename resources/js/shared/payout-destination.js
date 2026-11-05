@@ -15,6 +15,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const submitButton = form.querySelector('[data-payout-submit]');
         const cancelEdit = form.querySelector('[data-payout-cancel-edit]');
         const section = form.closest('.payout-section');
+        const saveLabel = form.dataset.payoutSaveLabel || 'Save payout details';
+        const updateLabel = form.dataset.payoutUpdateLabel || 'Update payout details';
+        const editTitle = form.dataset.payoutEditTitle || 'Update destination';
 
         if (!method && !bankField && !type) return;
 
@@ -84,8 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 defaultCheckbox.checked = isDefault;
                 defaultCheckbox.disabled = isDefault;
             }
-            if (editorTitle) editorTitle.textContent = 'Update destination';
-            if (submitButton) submitButton.textContent = 'Update payout details';
+            if (editorTitle) editorTitle.textContent = editTitle;
+            if (submitButton) submitButton.textContent = updateLabel;
             if (cancelEdit) cancelEdit.hidden = false;
             form.scrollIntoView({ behavior: 'smooth', block: 'center' });
         };
@@ -107,7 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 defaultCheckbox.checked = form.dataset.payoutHasDefault !== '1';
             }
             if (editorTitle) editorTitle.textContent = form.dataset.payoutAddTitle || 'Add a destination';
-            if (submitButton) submitButton.textContent = 'Save payout details';
+            if (submitButton) submitButton.textContent = saveLabel;
             cancelEdit.hidden = true;
             updateFromMethod();
         });

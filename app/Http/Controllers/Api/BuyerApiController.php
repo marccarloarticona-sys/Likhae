@@ -1262,7 +1262,7 @@ class BuyerApiController extends Controller
                 'occurred_at' => $event->occurred_at?->toIso8601String(),
             ]),
             'created_at' => $order->placed_at?->toIso8601String(),
-            'allow_cancel' => in_array($order->status, ['PLACED', 'PROCESSING'], true),
+            'allow_cancel' => $actionState['can_cancel'],
             'allow_mark_received' => $actionState['can_confirm_received'],
             'allow_review' => $order->status === 'COMPLETED',
             'allow_return_request' => $actionState['can_request_return'],

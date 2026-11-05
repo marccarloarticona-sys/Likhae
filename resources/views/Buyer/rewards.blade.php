@@ -668,7 +668,7 @@
         @if($platformVoucherCards->isNotEmpty())
             <section class="lk-reward-panel">
                 <h2>Admin Platform Campaigns</h2>
-                <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">These campaigns are managed by LIKHAE and are separate from Seller voucher claims.</p>
+                <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">Collect claimable LIKHAE vouchers here. Checkout checks eligibility again before applying any discount.</p>
                 <div class="lk-reward-voucher-grid mt-4">
                     @foreach($platformVoucherCards as $voucher)
                         <article class="lk-voucher-card">
@@ -685,7 +685,13 @@
                                     <code class="lk-voucher-code">{{ $voucher['code'] }}</code>
                                     <small class="lk-voucher-expiry">Expires {{ $voucher['expires'] }}</small>
                                 </div>
-                                <a href="{{ $voucher['use_url'] }}" class="lk-btn lk-btn-red">Use Now</a>
+                                @if($voucher['distribution'] === 'CLAIMABLE' && ! $voucher['collected'])
+                                    <form method="POST" action="{{ $voucher['claim_url'] }}">@csrf<button type="submit" class="lk-btn lk-btn-red">Collect</button></form>
+                                @elseif($voucher['distribution'] === 'AUTO')
+                                    <span class="lk-voucher-status">Auto at checkout</span>
+                                @else
+                                    <a href="{{ $voucher['use_url'] }}" class="lk-btn lk-btn-red">{{ $voucher['collected'] ? 'Use Collected' : 'Use Now' }}</a>
+                                @endif
                             </div>
                         </article>
                     @endforeach

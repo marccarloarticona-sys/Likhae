@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "../shared/feedback.css";
 @import "../shared/dark-utility-compat.css";
+@import "../shared/payout-destination.css";
 
 @source "../../views/**/*.blade.php";
 @custom-variant dark (&:where(.dark, .dark *));

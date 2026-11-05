@@ -64,7 +64,14 @@
 }
 .lk-map-button:hover { border-color: #8a3d32; background: #fff7f0; }
 .lk-map-button:focus-visible { outline: 3px solid rgba(122, 42, 34, .2); outline-offset: 2px; }
-.lk-map-canvas { min-height: var(--lk-map-height); height: var(--lk-map-height); background: #efe8df; }
+.lk-map-canvas { position: relative; min-height: var(--lk-map-height); height: var(--lk-map-height); overflow: hidden; background: #efe8df; }
+.lk-map-shell:not(.is-map-ready) .lk-map-canvas::after {
+    position: absolute; inset: 0; z-index: 20; display: grid; place-items: center;
+    padding: 20px; background: linear-gradient(135deg, #f5efe8, #ebe2d8);
+    color: #806356; content: "Preparing interactive map…"; font-size: 12px; font-weight: 700;
+    pointer-events: none;
+}
+.lk-map-shell.is-map-error:not(.is-map-ready) .lk-map-canvas::after { content: "Map preview unavailable"; }
 .lk-map-shell.is-fullscreen .lk-map-canvas { flex: 1; height: auto; min-height: 0; }
 .lk-order-route-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 16px; border-top: 1px solid #f0e4da; background: #fffdf9; color: #806356; font-size: 11px; font-weight: 700; }
 .lk-order-route-legend span { display: inline-flex; align-items: center; gap: 7px; }
@@ -84,7 +91,7 @@
 .lk-map-navigation__destination { display: grid; gap: 2px; margin-top: 10px; }
 .lk-map-navigation__destination strong { font-size: 12px; }
 .lk-map-navigation__destination span { color: #806356; font-size: 11px; line-height: 1.35; }
-.lk-map-status { margin: 0; padding: 8px 16px 10px; color: #806356; font-size: 11px; }
+.lk-map-status { box-sizing: border-box; min-height: 40px; margin: 0; padding: 8px 16px 10px; color: #806356; font-size: 11px; }
 .lk-map-status.is-error { color: #a33d35; }
 .lk-address-pin-search { display: flex; gap: 8px; padding: 0 16px 10px; background: #fffdf9; }
 .lk-address-pin-search input { width: 100%; min-height: 34px; padding: 7px 11px; border: 1px solid #decfc3; border-radius: 10px; color: #321d17; font-size: 12px; }
@@ -98,6 +105,7 @@
 .lk-map-popup strong { display: block; margin-bottom: 2px; }
 .lk-map-popup span { color: #806356; }
 @media (max-width: 640px) {
+    .lk-map-status { min-height: 52px; }
     .lk-map-toolbar { align-items: flex-start; flex-direction: column; }
     .lk-map-actions { width: 100%; justify-content: flex-start; }
     .lk-map-navigation__head { flex-direction: column; gap: 4px; }

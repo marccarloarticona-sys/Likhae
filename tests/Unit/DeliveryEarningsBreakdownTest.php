@@ -44,6 +44,8 @@ class DeliveryEarningsBreakdownTest extends TestCase
             'transfer_cents' => 5270,
             'rider_reserve_cents' => 3162,
         ], $split);
+        $this->assertSame(0, DeliveryEarningsBreakdown::forShipment($shipment, $allocation)['pickup_rider_cents']);
+        $this->assertSame(3162, DeliveryEarningsBreakdown::forShipment($shipment, $allocation)['delivery_rider_cents']);
     }
 
     public function test_inter_hub_transfer_splits_rider_sixty_origin_thirty_and_destination_ten(): void
@@ -75,7 +77,7 @@ class DeliveryEarningsBreakdownTest extends TestCase
             'transfer_cents' => 7350,
             'rider_reserve_cents' => 6300,
         ], $destination);
-        $this->assertSame(10500, $origin['transfer_cents'] + $destination['net_share_cents'] + $destination['rider_reserve_cents']);
+        $this->assertSame(10500, $origin['transfer_cents'] + $destination['transfer_cents']);
     }
 
     public function test_inter_hub_shipping_split_and_existing_additional_care_split_are_rounded_separately(): void
@@ -117,9 +119,9 @@ class DeliveryEarningsBreakdownTest extends TestCase
         $origin = DeliveryEarningsBreakdown::forLegacyLogisticsCenter($shipment, $allocation, 4);
         $destination = DeliveryEarningsBreakdown::forLegacyLogisticsCenter($shipment, $allocation, 8);
 
-        $this->assertSame(3150, $origin['transfer_cents']);
+        $this->assertSame(5250, $origin['transfer_cents']);
         $this->assertSame(1050, $destination['net_share_cents']);
-        $this->assertSame(6300, $destination['rider_reserve_cents']);
+        $this->assertSame(4200, $destination['rider_reserve_cents']);
         $this->assertSame(10500, $origin['transfer_cents'] + $destination['transfer_cents']);
     }
 

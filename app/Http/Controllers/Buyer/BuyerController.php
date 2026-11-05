@@ -37,9 +37,12 @@ use App\Services\Marketplace\ProductPriceResolver;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Marketplace\SellerPromotionBuyerService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\Finance\PayoutDestinationManager;
+use App\Services\Finance\PayoutDestinationReadiness;
 use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\BuyerNameRules;
+use App\Support\PayoutDestinationInput;
 use App\Support\PhilippineMobileNumber;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
@@ -73,12 +76,32 @@ class BuyerController extends Controller
 
     public function home(Request $request): View
     {
-        $products = $this->catalog->paginated($request, 12);
-        $bestSellingProducts = $this->catalog->applySort(
-            $this->catalog->visibleQuery(),
-            'best-selling'
-        )->limit(2)->get()
-            ->map(fn (Product $product) => $this->catalog->productPayload($product));
+        $products = $this->catalog->applySort(
+            $this->catalog->applyFilters($this->catalog->visibleQuery(), $request),
+            $request->query('sort')
+        )->limit(6)->get();
+        $featuredProductIds = $products
+            ->take(6)
+            ->pluck('id')
+            ->map(fn ($id): int => (int) $id)
+            ->values()
+            ->all();
+
+        $homeCarouselEvents = $this->platformCampaigns->homepageCarousel()
+            ->filter(fn ($campaign): bool => Storage::disk('public')->exists((string) $campaign->homepage_carousel_desktop_image_path))
+            ->values();
+
+        return view('buyer.home', [
+            'products' => $products,
+            'buyerProducts' => $products->map(fn (Product $product) => $this->catalog->productPayload($product)),
+            'recommendationExcludedProductIds' => $featuredProductIds,
+            'homeCarouselEvents' => $homeCarouselEvents,
+            'categories' => $this->catalog->categories(),
+        ]);
+    }
+
+    public function homeMarketing(Request $request): JsonResponse
+    {
         $dealProducts = $this->productDiscountsQuery()
             ->limit(6)
             ->get()
@@ -92,19 +115,61 @@ class BuyerController extends Controller
             ->filter()
             ->values();
         $marketplacePromotions = $this->sellerPromotions->forMarketplace($request->user(), 8);
+        $bundleOffers = $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUNDLE)->take(3)->values();
+        $freeGiftOffers = $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y)->take(3)->values();
+        $homeVoucherPreviews = $this->homepageVoucherPreviews($request->user());
 
-        return view('buyer.home', [
-            'products' => $products,
-            'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
-            'heroProducts' => $bestSellingProducts,
-            'dealProducts' => $dealProducts,
-            'flashDealProducts' => $flashDealProducts,
-            'bundleOffers' => $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUNDLE)->take(3)->values(),
-            'freeGiftOffers' => $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y)->take(3)->values(),
-            'homeVoucherPreviews' => $this->homepageVoucherPreviews($request->user()),
-            'platformCampaigns' => $this->platformCampaigns->homePreview(),
-            'categories' => $this->catalog->categories(),
+        return response()->json([
+            'html' => view('buyer.partials.home-marketing', compact(
+                'dealProducts',
+                'flashDealProducts',
+                'bundleOffers',
+                'freeGiftOffers',
+                'homeVoucherPreviews',
+            ))->render(),
         ]);
+    }
+
+    public function homeRecommendations(Request $request): JsonResponse
+    {
+        $excludedProductIds = collect(explode(',', (string) $request->query('exclude', '')))
+            ->filter(fn ($id): bool => preg_match('/^\d+$/', trim((string) $id)) === 1)
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->take(12)
+            ->values()
+            ->all();
+        $pageNumber = max(1, (int) $request->query('recommendation_page', 1));
+        $recommendationPage = $this->homepageRecommendationPage($excludedProductIds, $pageNumber);
+        $recommendedProducts = $recommendationPage['products']
+            ->map(fn (Product $product): array => $this->catalog->productPayload($product));
+
+        return response()->json([
+            'html' => view('buyer.partials.home-recommendation-cards', compact('recommendedProducts'))->render(),
+            'has_more' => $recommendationPage['has_more'],
+        ]);
+    }
+
+    /** @return array{products: Collection<int, Product>, has_more: bool} */
+    private function homepageRecommendationPage(array $excludedProductIds, int $page): array
+    {
+        $query = $this->catalog->visibleQuery()
+            ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+            ->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true)->where('stock', '>', 0));
+
+        if ($excludedProductIds !== []) {
+            $query->whereNotIn('products.id', $excludedProductIds);
+        }
+
+        $rows = $this->catalog->applySort($query, 'best-selling')
+            ->offset((max(1, $page) - 1) * 6)
+            ->limit(7)
+            ->get();
+
+        return [
+            'products' => $rows->take(6)->values(),
+            'has_more' => $rows->count() > 6,
+        ];
     }
 
     public function discounts(Request $request): View
@@ -2067,6 +2132,10 @@ class BuyerController extends Controller
             ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
             ->get();
+        $campaignEligibility = app(\App\Services\Marketplace\PlatformCampaignEligibility::class);
+        $platformClaimIds = BuyerVoucherClaim::query()->where('buyer_user_id', $buyer->id)
+            ->whereIn('voucher_id', $platformVouchers->pluck('id'))
+            ->pluck('voucher_id')->map(fn ($id): int => (int) $id)->all();
         $redemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers);
         $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id);
         $platformVoucherCards = $platformVouchers
@@ -2075,6 +2144,9 @@ class BuyerController extends Controller
                 && ($voucher->per_user_limit === null
                     || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
                 && ! $voucher->requiresReview()
+                && $campaignEligibility->status($voucher) === 'ACTIVE'
+                && $campaignEligibility->audienceEligible($voucher, $buyer)
+                && (! Schema::hasColumn('vouchers', 'visibility') || $voucher->visibility === 'PUBLIC')
                 && app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($voucher))
             ->map(fn (Voucher $voucher): array => [
                 'id' => (int) $voucher->id,
@@ -2088,7 +2160,9 @@ class BuyerController extends Controller
                     : 'No minimum spend',
                 'code' => $voucher->code,
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
-                'collected' => false,
+                'distribution' => $campaignEligibility->distribution($voucher),
+                'collected' => in_array((int) $voucher->id, $platformClaimIds, true),
+                'claim_url' => route('buyer.vouchers.claim', $voucher),
                 'use_url' => route('buyer.products'),
             ])
             ->values();
@@ -2151,6 +2225,23 @@ class BuyerController extends Controller
                 ->latest('created_at')
                 ->latest('id')
                 ->paginate(20),
+        ]);
+    }
+
+    public function notificationPreview(Request $request): JsonResponse
+    {
+        $buyer = $request->user();
+        abort_unless($buyer?->isAccountType(User::TYPE_BUYER), 403);
+
+        $notifications = $buyer->notifications()->latest()->limit(8)->get();
+        $unreadCount = $buyer->notifications()->whereNull('read_at')->count();
+
+        return response()->json([
+            'html' => view('components.shared.notification-popover-items', [
+                'notifications' => $notifications,
+                'notificationUser' => $buyer,
+            ])->render(),
+            'unread_count' => $unreadCount,
         ]);
     }
 
@@ -2242,6 +2333,8 @@ class BuyerController extends Controller
 
     public function account(
         Request $request,
+        PayoutDestinationReadiness $walletReadiness,
+        PayoutDestinationManager $walletManager,
         BuyerEmailChangeOtpService $emailChanges,
         BuyerMobileChangeOtpService $mobileChanges,
     ): View
@@ -2264,6 +2357,10 @@ class BuyerController extends Controller
                 ->withQueryString();
         }
 
+        $walletDestinationReady = $request->query('tab') === 'wallet'
+            && $walletReadiness->supportsMultipleFor('users');
+        $walletDestinations = $walletDestinationReady ? $walletManager->accounts($buyer) : [];
+
         return view('buyer.account', [
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
@@ -2273,6 +2370,8 @@ class BuyerController extends Controller
             'followingStores' => $followingStores,
             'pendingEmail' => $emailChanges->pendingEmail($buyer),
             'pendingPhone' => $mobileChanges->pendingPhone($buyer),
+            'walletDestinationReady' => $walletDestinationReady,
+            'walletDestinations' => $walletDestinations,
             'reviews' => Review::query()
                 ->where('buyer_user_id', $buyer->id)
                 ->with('orderItem')
@@ -2280,6 +2379,45 @@ class BuyerController extends Controller
                 ->paginate(10)
                 ->withQueryString(),
         ]);
+    }
+
+    public function updateWalletPaymentDestination(
+        Request $request,
+        PayoutDestinationReadiness $readiness,
+        PayoutDestinationManager $manager,
+        PayoutDestinationInput $input,
+    ): RedirectResponse {
+        $buyer = $request->user();
+        abort_unless($buyer->isAccountType(User::TYPE_BUYER), 403);
+        abort_unless($readiness->supportsMultipleFor('users'), 503, 'Wallet details are unavailable until the payment destination migration is installed.');
+
+        $action = (string) $request->input('destination_action', 'add');
+        if (in_array($action, ['set_default', 'remove', 'update'], true)) {
+            $data = $request->validate(['destination_id' => ['required', 'string', 'max:80']]);
+            if ($action === 'set_default') {
+                $manager->setDefault($buyer, $data['destination_id']);
+
+                return back()->with('status', 'Default wallet payment method updated.');
+            }
+
+            if ($action === 'remove') {
+                $manager->remove($buyer, $data['destination_id']);
+
+                return back()->with('status', 'Wallet payment method removed.');
+            }
+
+            $destination = $input->validate($request, true);
+            $manager->update($buyer, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
+
+            return back()->with('status', 'Wallet payment method updated.');
+        }
+
+        abort_unless($action === 'add', 422, 'Unsupported wallet payment method action.');
+
+        $destination = $input->validate($request, true);
+        $manager->add($buyer, $destination, (bool) ($destination['make_default'] ?? false));
+
+        return back()->with('status', 'Wallet payment method saved securely.');
     }
 
     public function settings(Request $request): View

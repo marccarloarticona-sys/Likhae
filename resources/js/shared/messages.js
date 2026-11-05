@@ -995,40 +995,93 @@ const initializeSmartMessaging = () => {
                 window.clearTimeout(timeout);
             }
         };
-        const setHumanHandoff = (message) => {
+        const setHumanHandoff = (message, isInProgress = false) => {
             humanHandoff = true;
             panel.dataset.humanHandoff = 'true';
+            const tools = panel.querySelector('[data-smart-help-tools]');
+            const liveStatus = panel.querySelector('[data-smart-help-live-status]');
+            const liveTitle = panel.querySelector('[data-smart-help-live-title]');
+            const liveDescription = panel.querySelector('[data-smart-help-live-description]');
             lockControls();
             if (feedback) feedback.hidden = true;
             if (feedbackNote) feedbackNote.hidden = true;
             if (handoffRow) handoffRow.hidden = true;
             if (askForm) askForm.hidden = true;
-            setStatus(message);
+            if (tools) tools.hidden = true;
+            if (liveStatus) liveStatus.hidden = false;
+            if (status) status.hidden = true;
+            panel.classList.add('is-live');
+            if (liveStatus) liveStatus.setAttribute('aria-label', message);
+            if (liveTitle) liveTitle.textContent = `${isInProgress ? 'Live chat with' : 'Live chat requested with'} ${panel.dataset.smartHelpRecipientName || 'Seller'}`;
+            if (liveDescription) liveDescription.textContent = isInProgress
+                ? 'Replies appear in this conversation.'
+                : 'Your message stays in this conversation while they join.';
         };
         const appendExchange = (result) => {
             const stream = panel.closest('.lk-chat-stream');
-            const exchanges = panel.querySelector('[data-smart-help-exchanges]');
-            if (!stream || !exchanges) return;
-            const exchange = document.createElement('article');
-            exchange.className = 'lk-smart-help-exchange';
+            if (!stream) return;
 
-            const question = document.createElement('div');
-            question.className = 'lk-smart-help-question-bubble';
-            question.textContent = result.question || 'Suggested question';
+            const questionRow = document.createElement('div');
+            questionRow.className = 'lk-message-row is-buyer lk-smart-help-exchange-row lk-smart-help-question-row';
+            questionRow.setAttribute('aria-label', 'Your question to automated help');
+            const questionWrapper = document.createElement('div');
+            const questionBubble = document.createElement('div');
+            questionBubble.className = 'lk-message-bubble';
+            questionBubble.textContent = result.question || 'Suggested question';
+            const questionMeta = document.createElement('div');
+            questionMeta.className = 'lk-message-meta';
+            const questionTime = document.createElement('span');
+            questionTime.className = 'lk-message-time';
+            questionTime.textContent = 'Just now';
+            questionMeta.appendChild(questionTime);
+            questionWrapper.append(questionBubble, questionMeta);
+            questionRow.appendChild(questionWrapper);
 
+            const answerRow = document.createElement('div');
+            answerRow.className = 'lk-message-row lk-smart-help-exchange-row lk-smart-help-answer-row';
+            answerRow.dataset.automatedAnswer = 'true';
+            answerRow.setAttribute('aria-label', `Automated answer from ${panel.dataset.smartHelpRecipientName || 'Seller'}`);
+            const avatar = document.createElement('img');
+            avatar.className = 'lk-message-small-avatar';
+            avatar.src = panel.dataset.smartHelpAvatar || '';
+            avatar.alt = '';
+            avatar.setAttribute('aria-hidden', 'true');
+            avatar.loading = 'lazy';
+            avatar.decoding = 'async';
+            const answerWrapper = document.createElement('div');
+            const sender = document.createElement('div');
+            sender.className = 'lk-smart-help-sender';
+            const recipientName = document.createElement('strong');
+            recipientName.textContent = panel.dataset.smartHelpRecipientName || 'Seller';
+            const automatedBadge = document.createElement('span');
+            automatedBadge.className = 'lk-smart-help-automated-badge';
+            automatedBadge.textContent = 'Automated';
+            sender.append(recipientName, automatedBadge);
             const answerBubble = document.createElement('div');
-            answerBubble.className = 'lk-smart-help-answer-bubble';
+            answerBubble.className = 'lk-message-bubble lk-smart-help-answer-bubble';
             const source = document.createElement('small');
+            source.className = 'lk-smart-help-source';
             source.textContent = result.answer_source || 'Automated answer';
             const answerText = document.createElement('p');
+            answerText.className = 'lk-smart-help-answer-text';
             answerText.textContent = result.answer || 'No answer is available right now.';
             answerBubble.append(source, answerText);
-            exchange.append(question, answerBubble);
-            exchanges.appendChild(exchange);
+            const answerMeta = document.createElement('div');
+            answerMeta.className = 'lk-message-meta';
+            const answerTime = document.createElement('span');
+            answerTime.className = 'lk-message-time';
+            answerTime.textContent = 'Just now';
+            answerMeta.appendChild(answerTime);
+            answerWrapper.append(sender, answerBubble, answerMeta);
+            answerRow.append(avatar, answerWrapper);
+            stream.insertBefore(questionRow, panel);
+            stream.insertBefore(answerRow, panel);
             hasAnswer = true;
             panel.dataset.hasAnswer = 'true';
             if (feedback) feedback.hidden = false;
             if (feedbackNote) feedbackNote.hidden = true;
+            const tools = panel.querySelector('[data-smart-help-tools]');
+            if (tools) tools.open = false;
             if (stream) stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' });
         };
 
@@ -1107,7 +1160,8 @@ const initializeSmartMessaging = () => {
                 });
                 setHumanHandoff(result.already_requested
                     ? 'Live help is already requested. Continue in this conversation.'
-                    : 'Live help requested in this conversation. Send your message below to share the details.');
+                    : 'Live help requested in this conversation. Send your message below to share the details.',
+                    result.status === 'IN_PROGRESS');
                 if (conversationInput) {
                     conversationInput.focus({ preventScroll: true });
                     conversationInput.closest('form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

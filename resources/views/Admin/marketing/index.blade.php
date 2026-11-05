@@ -40,6 +40,9 @@
                 @unless($campaignBudgetReady)
                     <div class="ad-note is-warning" role="status">Campaign budgets are awaiting the additive finance migration. Existing campaigns remain visible; new platform voucher redemptions are held until budgets can be tracked.</div>
                 @endunless
+            @unless($homepageCarouselReady)
+                <div class="ad-note is-warning" role="status">Buyer Hero Carousel placement is unavailable until the prepared additive voucher migration is applied. Existing campaigns and event pages remain available.</div>
+            @endunless
                 <div class="ad-table-wrap ad-marketing-table-wrap">
                     <table class="ad-table">
                         <thead><tr><th>Campaign</th><th>Benefit</th><th>Minimum</th><th>Usage</th><th>Budget & history</th><th>Validity</th><th>Status</th><th>Actions</th></tr></thead>
@@ -64,12 +67,22 @@
                                         && \Illuminate\Support\Facades\Storage::disk('public')->exists($campaign->image_path)
                                             ? \Illuminate\Support\Facades\Storage::disk('public')->url($campaign->image_path)
                                             : null;
+                                    $homepageDesktopImageUrl = $homepageCarouselReady
+                                        && $campaign->homepage_carousel_desktop_image_path
+                                        && \Illuminate\Support\Facades\Storage::disk('public')->exists($campaign->homepage_carousel_desktop_image_path)
+                                            ? \Illuminate\Support\Facades\Storage::disk('public')->url($campaign->homepage_carousel_desktop_image_path)
+                                            : null;
+                                    $homepageMobileImageUrl = $homepageCarouselReady
+                                        && $campaign->homepage_carousel_mobile_image_path
+                                        && \Illuminate\Support\Facades\Storage::disk('public')->exists($campaign->homepage_carousel_mobile_image_path)
+                                            ? \Illuminate\Support\Facades\Storage::disk('public')->url($campaign->homepage_carousel_mobile_image_path)
+                                            : null;
                                 @endphp
                                 <tr>
                                     <td>
                                         <div class="ad-marketing-campaign-name">
                                             @if($campaignImageUrl)<img src="{{ $campaignImageUrl }}" alt="{{ $campaign->image_alt ?: $campaign->name }}">@endif
-                                                <span><strong>{{ $campaign->name }}</strong><small>{{ $campaign->code }} · {{ $campaign->benefit_scope === 'SHIPPING' ? 'Shipping voucher' : 'Product voucher' }}</small></span>
+                                                <span><strong>{{ $campaign->name }}</strong><small>{{ $campaign->code }} · {{ $campaign->benefit_scope === 'SHIPPING' ? 'Shipping voucher' : 'Product voucher' }}</small>@if($homepageCarouselReady && $campaign->homepage_carousel_enabled)<small>Buyer hero · Priority {{ $campaign->homepage_carousel_priority }}</small>@endif</span>
                                         </div>
                                     </td>
                                     <td>@if($campaign->requiresReview()) Terms need review<small>{{ $campaign->reviewReason() }}</small>@else{{ $campaign->discount_type === 'PERCENT' ? number_format((float) $campaign->discount_value, 2).'%' : '₱'.number_format((float) $campaign->discount_value, 2) }} off<small>Max discount: {{ $campaign->maximum_discount_amount === null ? 'No cap' : '₱'.number_format((float) $campaign->maximum_discount_amount, 2) }}</small>@endif</td>
@@ -100,7 +113,17 @@
                                                 data-usage-limit="{{ $campaign->usage_limit }}" data-per-user-limit="{{ $campaign->per_user_limit }}"
                                                 data-starts-at="{{ $campaign->starts_at?->format('Y-m-d\TH:i') }}" data-ends-at="{{ $campaign->ends_at?->format('Y-m-d\TH:i') }}"
                                                 @if($campaignBudgetReady) data-budget="{{ $campaign->campaign_budget_total }}" @endif
-                                                data-image-url="{{ $campaignImageUrl }}" data-image-alt="{{ $campaign->image_alt }}" data-theme-color="{{ $campaign->theme_color }}">Edit</button>
+                                                data-image-url="{{ $campaignImageUrl }}" data-image-alt="{{ $campaign->image_alt }}" data-theme-color="{{ $campaign->theme_color }}"
+                                                @if($homepageCarouselReady)
+                                                    data-homepage-carousel-enabled="{{ $campaign->homepage_carousel_enabled ? '1' : '0' }}"
+                                                    data-homepage-carousel-desktop-url="{{ $homepageDesktopImageUrl }}"
+                                                    data-homepage-carousel-mobile-url="{{ $homepageMobileImageUrl }}"
+                                                    data-homepage-carousel-headline="{{ $campaign->homepage_carousel_headline }}"
+                                                    data-homepage-carousel-description="{{ $campaign->homepage_carousel_description }}"
+                                                    data-homepage-carousel-cta-label="{{ $campaign->homepage_carousel_cta_label }}"
+                                                    data-homepage-carousel-cta-destination="{{ $campaign->homepage_carousel_cta_destination ?: 'EVENT' }}"
+                                                    data-homepage-carousel-priority="{{ $campaign->homepage_carousel_priority }}"
+                                                @endif>Edit</button>
                                             <form method="POST" action="{{ route('admin.marketing.campaigns.toggle', $campaign) }}">
                                                 @csrf @method('PATCH')
                                                 <button class="ad-btn {{ $campaign->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" type="submit" @disabled(!$campaign->is_active && $campaign->requiresReview())>{{ $campaign->is_active ? 'Pause' : ($campaign->requiresReview() ? 'Review required' : 'Resume') }}</button>
@@ -163,6 +186,39 @@
                                 <label class="ad-marketing-remove-image"><input id="campaign-remove-image" type="checkbox" name="remove_image" value="1"> Remove current campaign image</label>
                                 <div class="ad-marketing-media-preview" id="campaign-image-preview" hidden><img id="campaign-image-preview-img" alt=""><span id="campaign-image-preview-label"></span></div>
                             </div>
+                        @endif
+                        @if($homepageCarouselReady)
+                            <section class="ad-marketing-media-fields" aria-labelledby="campaign-homepage-carousel-heading">
+                                <div class="ad-marketing-media-intro">
+                                    <strong id="campaign-homepage-carousel-heading">Buyer Hero Carousel placement</strong>
+                                    <span>Carousel slides use this campaign’s schedule and show only while it is active, public, and funded. The CTA opens this campaign or the offers list.</span>
+                                </div>
+                                <input type="hidden" name="homepage_carousel_enabled" value="0">
+                                <label class="ad-marketing-popup-toggle">
+                                    <input id="campaign-homepage-carousel-enabled" type="checkbox" name="homepage_carousel_enabled" value="1" @checked(old('homepage_carousel_enabled', false))>
+                                    <span><strong>Show in Buyer Hero Carousel</strong><small>Uncheck to keep this campaign off the homepage.</small></span>
+                                </label>
+                                <div class="ad-form-grid">
+                                    <label class="ad-field"><span>Promotional headline</span><input id="campaign-homepage-carousel-headline" name="homepage_carousel_headline" value="{{ old('homepage_carousel_headline') }}" maxlength="150" placeholder="Defaults to campaign name"></label>
+                                    <label class="ad-field"><span>CTA label</span><input id="campaign-homepage-carousel-cta-label" name="homepage_carousel_cta_label" value="{{ old('homepage_carousel_cta_label', 'View Offer') }}" maxlength="60" placeholder="View Offer"></label>
+                                    <label class="ad-field"><span>CTA destination</span><select id="campaign-homepage-carousel-cta-destination" name="homepage_carousel_cta_destination"><option value="EVENT" @selected(old('homepage_carousel_cta_destination', 'EVENT') === 'EVENT')>This campaign</option><option value="OFFERS" @selected(old('homepage_carousel_cta_destination') === 'OFFERS')>All platform offers</option></select></label>
+                                    <label class="ad-field"><span>Display order / priority</span><input id="campaign-homepage-carousel-priority" name="homepage_carousel_priority" type="number" min="0" max="65535" value="{{ old('homepage_carousel_priority', 0) }}" required><small>Lower numbers appear first.</small></label>
+                                </div>
+                                <label class="ad-field"><span>Short description</span><textarea id="campaign-homepage-carousel-description" name="homepage_carousel_description" rows="3" maxlength="280" placeholder="A short message shown beneath the headline">{{ old('homepage_carousel_description') }}</textarea></label>
+                                <div class="ad-form-grid">
+                                    <div>
+                                        <label class="ad-field"><span>Desktop promotional image <small>(required to enable)</small></span><input id="campaign-homepage-carousel-desktop-image" name="homepage_carousel_desktop_image" type="file" accept="image/jpeg,image/png,image/webp"></label>
+                                        <label class="ad-marketing-remove-image"><input id="campaign-homepage-carousel-remove-desktop" type="checkbox" name="remove_homepage_carousel_desktop_image" value="1" @checked(old('remove_homepage_carousel_desktop_image'))> Remove desktop image</label>
+                                        <div class="ad-marketing-media-preview" id="campaign-homepage-carousel-desktop-preview" hidden><img id="campaign-homepage-carousel-desktop-preview-img" alt=""><span id="campaign-homepage-carousel-desktop-preview-label"></span></div>
+                                    </div>
+                                    <div>
+                                        <label class="ad-field"><span>Mobile promotional image <small>(optional)</small></span><input id="campaign-homepage-carousel-mobile-image" name="homepage_carousel_mobile_image" type="file" accept="image/jpeg,image/png,image/webp"></label>
+                                        <label class="ad-marketing-remove-image"><input id="campaign-homepage-carousel-remove-mobile" type="checkbox" name="remove_homepage_carousel_mobile_image" value="1" @checked(old('remove_homepage_carousel_mobile_image'))> Remove mobile image</label>
+                                        <div class="ad-marketing-media-preview" id="campaign-homepage-carousel-mobile-preview" hidden><img id="campaign-homepage-carousel-mobile-preview-img" alt=""><span id="campaign-homepage-carousel-mobile-preview-label"></span></div>
+                                    </div>
+                                </div>
+                                <small class="ad-marketing-cta-help">Artwork must be JPG, PNG, or WebP and up to 5 MB. Future and expired campaigns follow their existing start and end times.</small>
+                            </section>
                         @endif
                         <div class="ad-btn-bar">
                             <button type="button" class="ad-btn ad-btn-secondary" data-marketing-modal-close>Cancel</button>
@@ -349,12 +405,43 @@
                 budgetReason: document.getElementById('campaign-budget-reason'),
                 startsAt: document.getElementById('campaign-starts-at'),
                 endsAt: document.getElementById('campaign-ends-at'),
+                homepageHeadline: document.getElementById('campaign-homepage-carousel-headline'),
+                homepageDescription: document.getElementById('campaign-homepage-carousel-description'),
+                homepageCtaLabel: document.getElementById('campaign-homepage-carousel-cta-label'),
+                homepageCtaDestination: document.getElementById('campaign-homepage-carousel-cta-destination'),
+                homepagePriority: document.getElementById('campaign-homepage-carousel-priority'),
             };
             const initial = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field?.value || '']));
             const initialMedia = {
                 imageAlt: document.getElementById('campaign-image-alt')?.value || '',
                 themeColor: document.getElementById('campaign-theme-color')?.value || '',
                 removeImage: @json((bool) old('remove_image')),
+                removeHomepageDesktopImage: @json((bool) old('remove_homepage_carousel_desktop_image')),
+                removeHomepageMobileImage: @json((bool) old('remove_homepage_carousel_mobile_image')),
+            };
+            const homepageEnabledField = document.getElementById('campaign-homepage-carousel-enabled');
+            const initialHomepageEnabled = @json((bool) old('homepage_carousel_enabled'));
+            const homepageImageControls = {
+                desktop: {
+                    field: document.getElementById('campaign-homepage-carousel-desktop-image'),
+                    remove: document.getElementById('campaign-homepage-carousel-remove-desktop'),
+                    preview: document.getElementById('campaign-homepage-carousel-desktop-preview'),
+                    image: document.getElementById('campaign-homepage-carousel-desktop-preview-img'),
+                    label: document.getElementById('campaign-homepage-carousel-desktop-preview-label'),
+                    objectUrl: null,
+                    currentUrl: '',
+                    currentLabel: '',
+                },
+                mobile: {
+                    field: document.getElementById('campaign-homepage-carousel-mobile-image'),
+                    remove: document.getElementById('campaign-homepage-carousel-remove-mobile'),
+                    preview: document.getElementById('campaign-homepage-carousel-mobile-preview'),
+                    image: document.getElementById('campaign-homepage-carousel-mobile-preview-img'),
+                    label: document.getElementById('campaign-homepage-carousel-mobile-preview-label'),
+                    objectUrl: null,
+                    currentUrl: '',
+                    currentLabel: '',
+                },
             };
             const method = document.getElementById('marketing-campaign-method');
             const campaignId = document.getElementById('marketing-campaign-id');
@@ -384,6 +471,39 @@
                 imagePreviewLabel.textContent = label;
                 imagePreview.hidden = false;
             };
+
+            const setHomepageImagePreview = (imageControl, url, label = '') => {
+                if (!imageControl.preview) return;
+                if (imageControl.objectUrl && imageControl.objectUrl !== url) URL.revokeObjectURL(imageControl.objectUrl);
+                imageControl.objectUrl = url.startsWith('blob:') ? url : null;
+                if (!url) {
+                    imageControl.preview.hidden = true;
+                    imageControl.image.removeAttribute('src');
+                    imageControl.label.textContent = '';
+                    return;
+                }
+                imageControl.image.src = url;
+                imageControl.label.textContent = label;
+                imageControl.preview.hidden = false;
+            };
+
+            Object.values(homepageImageControls).forEach((imageControl) => {
+                imageControl.field?.addEventListener('change', () => {
+                    const file = imageControl.field.files?.[0];
+                    if (!file) return;
+                    if (imageControl.objectUrl) URL.revokeObjectURL(imageControl.objectUrl);
+                    imageControl.objectUrl = URL.createObjectURL(file);
+                    setHomepageImagePreview(imageControl, imageControl.objectUrl, file.name);
+                    if (imageControl.remove) imageControl.remove.checked = false;
+                });
+                imageControl.remove?.addEventListener('change', () => {
+                    if (imageControl.remove.checked && !imageControl.field?.files?.length) {
+                        setHomepageImagePreview(imageControl, '', '');
+                    } else if (!imageControl.remove.checked && imageControl.currentUrl) {
+                        setHomepageImagePreview(imageControl, imageControl.currentUrl, imageControl.currentLabel);
+                    }
+                });
+            });
 
             imageField?.addEventListener('change', () => {
                 const file = imageField.files?.[0];
@@ -426,18 +546,43 @@
                     if (fields.budgetReason) fields.budgetReason.value = '';
                     fields.startsAt.value = button.dataset.startsAt || '';
                     fields.endsAt.value = button.dataset.endsAt || '';
+                    if (fields.homepageHeadline) fields.homepageHeadline.value = button.dataset.homepageCarouselHeadline || '';
+                    if (fields.homepageDescription) fields.homepageDescription.value = button.dataset.homepageCarouselDescription || '';
+                    if (fields.homepageCtaLabel) fields.homepageCtaLabel.value = button.dataset.homepageCarouselCtaLabel || 'View Offer';
+                    if (fields.homepageCtaDestination) fields.homepageCtaDestination.value = button.dataset.homepageCarouselCtaDestination || 'EVENT';
+                    if (fields.homepagePriority) fields.homepagePriority.value = button.dataset.homepageCarouselPriority || '0';
+                    if (homepageEnabledField) homepageEnabledField.checked = button.dataset.homepageCarouselEnabled === '1';
                     if (imageField) imageField.value = '';
                     if (imageAltField) imageAltField.value = button.dataset.imageAlt || '';
                     if (themeColorField) themeColorField.value = button.dataset.themeColor || '';
                     if (removeImageField) removeImageField.checked = false;
                     setImagePreview(button.dataset.imageUrl || '', button.dataset.imageUrl ? 'Current campaign image' : '');
+                    ['desktop', 'mobile'].forEach((kind) => {
+                        const imageControl = homepageImageControls[kind];
+                        if (imageControl.field) imageControl.field.value = '';
+                        if (imageControl.remove) imageControl.remove.checked = false;
+                        imageControl.currentUrl = kind === 'desktop'
+                            ? (button.dataset.homepageCarouselDesktopUrl || '')
+                            : (button.dataset.homepageCarouselMobileUrl || '');
+                        imageControl.currentLabel = imageControl.currentUrl ? ('Current ' + kind + ' artwork') : '';
+                        setHomepageImagePreview(imageControl, imageControl.currentUrl, imageControl.currentLabel);
+                    });
                 } else {
                     Object.entries(fields).forEach(([key, field]) => { if (field) field.value = initial[key]; });
+                    if (homepageEnabledField) homepageEnabledField.checked = initialHomepageEnabled;
                     if (imageField) imageField.value = '';
                     if (imageAltField) imageAltField.value = initialMedia.imageAlt;
                     if (themeColorField) themeColorField.value = initialMedia.themeColor;
                     if (removeImageField) removeImageField.checked = false;
                     setImagePreview('', '');
+                    ['desktop', 'mobile'].forEach((kind) => {
+                        const imageControl = homepageImageControls[kind];
+                        if (imageControl.field) imageControl.field.value = '';
+                        if (imageControl.remove) imageControl.remove.checked = false;
+                        imageControl.currentUrl = '';
+                        imageControl.currentLabel = '';
+                        setHomepageImagePreview(imageControl, '', '');
+                    });
                 }
                 modal.classList.add('is-open');
                 modal.setAttribute('aria-hidden', 'false');
@@ -449,7 +594,7 @@
             modal.querySelectorAll('[data-marketing-modal-close]').forEach((button) => button.addEventListener('click', close));
             modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
             document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal.classList.contains('is-open')) close(); });
-            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('campaign_budget_total') || $errors->has('campaign_budget_reason') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color'))
+            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('campaign_budget_total') || $errors->has('campaign_budget_reason') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color') || $errors->has('homepage_carousel_enabled') || $errors->has('homepage_carousel_headline') || $errors->has('homepage_carousel_description') || $errors->has('homepage_carousel_cta_label') || $errors->has('homepage_carousel_cta_destination') || $errors->has('homepage_carousel_priority') || $errors->has('homepage_carousel_desktop_image') || $errors->has('homepage_carousel_mobile_image') || $errors->has('remove_homepage_carousel_desktop_image') || $errors->has('remove_homepage_carousel_mobile_image'))
                 const failedCampaignId = @json(old('editing_campaign'));
                 const editButton = Array.from(document.querySelectorAll('[data-marketing-campaign-open="edit"]'))
                     .find((button) => button.dataset.campaignId === String(failedCampaignId));
@@ -462,6 +607,11 @@
                     if (themeColorField) themeColorField.value = initialMedia.themeColor;
                     if (removeImageField) removeImageField.checked = initialMedia.removeImage;
                     if (initialMedia.removeImage) setImagePreview('', '');
+                    if (homepageEnabledField) homepageEnabledField.checked = initialHomepageEnabled;
+                    if (homepageImageControls.desktop.remove) homepageImageControls.desktop.remove.checked = initialMedia.removeHomepageDesktopImage;
+                    if (homepageImageControls.mobile.remove) homepageImageControls.mobile.remove.checked = initialMedia.removeHomepageMobileImage;
+                    if (initialMedia.removeHomepageDesktopImage) setHomepageImagePreview(homepageImageControls.desktop, '', '');
+                    if (initialMedia.removeHomepageMobileImage) setHomepageImagePreview(homepageImageControls.mobile, '', '');
                 }
             @endif
         })();

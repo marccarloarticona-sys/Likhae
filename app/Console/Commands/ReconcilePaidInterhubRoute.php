@@ -446,7 +446,7 @@ class ReconcilePaidInterhubRoute extends Command
                     'to_logistics_center_id' => $plan['to_center_id'],
                     'amount_expected' => FinancialRules::amount($plan['amount_cents']),
                     'transfer_reference' => null,
-                    'policy' => 'Pickup Rider 20%, Delivery Rider 40%, Origin Logistics 30%, Destination Logistics 10% of base shipping fee',
+                    'policy' => 'Delivery Rider 60%, Origin Logistics 30%, Destination Logistics 10% of base shipping fee',
                     'confirmed_payout_ids_preserved' => $sourcePayouts->pluck('id')->all(),
                 ],
             ]);

@@ -58,7 +58,7 @@ class BuyerReturnRefundApiTest extends TestCase
         $this->assertSame('The delivered item is not working correctly.', $dispute->description);
     }
 
-    public function test_legacy_return_refund_payload_is_rejected_outside_the_delivery_window(): void
+    public function test_legacy_return_refund_payload_is_rejected_outside_the_seven_day_delivery_window(): void
     {
         [$buyer, $order, $shipment] = $this->createDeliveredOrder();
         $token = $this->issueToken($buyer);
@@ -74,7 +74,7 @@ class BuyerReturnRefundApiTest extends TestCase
             ->assertConflict();
 
         $shipment->update(['current_status' => 'DELIVERED']);
-        $shipment->events()->firstOrFail()->update(['occurred_at' => now()->subDays(6)]);
+        $shipment->events()->firstOrFail()->update(['occurred_at' => now()->subDays(8)]);
         $this->withToken($token)
             ->postJson(route('api.v1.buyer.orders.return-refund', $order), $payload)
             ->assertConflict();

@@ -311,26 +311,26 @@ class AppServiceProvider extends ServiceProvider
             $view->with('sellerMessagePreview', $messagePreview);
         });
 
-        View::composer(['components.buyer.sidebar', 'components.buyer.header'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {
+        View::composer(['components.buyer.sidebar', 'components.buyer.header'], function ($view) use ($memo, $hasTable, $unreadMessageCount, $unreadNotificationCount): void {
             /** @var User|null $buyer */
             $buyer = auth()->user();
 
             $counts = ['cart' => 0, 'orders' => 0, 'messages' => 0, 'notifications' => 0];
 
             if ($buyer?->isAccountType(User::TYPE_BUYER)) {
-                if (Schema::hasTable('carts') && Schema::hasTable('cart_items')) {
-                    $counts['cart'] = (int) ($buyer->carts()
+                if ($hasTable('carts') && $hasTable('cart_items')) {
+                    $counts['cart'] = $memo('_likhae_buyer_cart_count_'.$buyer->id, fn (): int => (int) ($buyer->carts()
                         ->where('status', 'ACTIVE')
                         ->with('items:id,cart_id,quantity')
                         ->latest('id')
-                        ->first()?->items?->sum('quantity') ?? 0);
+                        ->first()?->items?->sum('quantity') ?? 0));
                 }
 
-                if (Schema::hasTable('orders')) {
-                    $counts['orders'] = Order::query()
+                if ($hasTable('orders')) {
+                    $counts['orders'] = $memo('_likhae_buyer_open_order_count_'.$buyer->id, fn (): int => Order::query()
                         ->where('buyer_user_id', $buyer->id)
                         ->whereNotIn('status', ['COMPLETED', 'CANCELLED', 'PARTIALLY_CANCELLED', 'RETURNED'])
-                        ->count();
+                        ->count());
                 }
 
                 $counts['messages'] = $unreadMessageCount($buyer);

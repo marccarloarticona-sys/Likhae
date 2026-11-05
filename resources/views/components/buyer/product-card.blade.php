@@ -68,9 +68,10 @@
         (int) data_get($product, 'sold', 0)
     );
 
+    $placeholderImage = asset('images/product-placeholder.svg');
     $image = $availabilityRestricted
-        ? 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'
-        : (data_get($product, 'primary_image.url') ?? 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80');
+        ? $placeholderImage
+        : (data_get($product, 'primary_image.url') ?? $placeholderImage);
 
     $detailsUrl = $availabilityRestricted
         ? null
@@ -759,11 +760,11 @@
     <div class="lk-product-media">
         @if($detailsUrl)
             <a href="{{ $detailsUrl }}" class="lk-product-image-link" aria-label="View {{ $name }}">
-                <img src="{{ $image }}" alt="{{ $name }}" width="600" height="552" loading="lazy" decoding="async">
+                <img src="{{ $image }}" data-fallback-src="{{ $placeholderImage }}" alt="{{ $name }}" width="600" height="552" loading="lazy" decoding="async">
             </a>
         @else
             <div class="lk-product-image-link" aria-hidden="true">
-                <img src="{{ $image }}" alt="" width="600" height="552" loading="lazy" decoding="async">
+                <img src="{{ $image }}" data-fallback-src="{{ $placeholderImage }}" alt="" width="600" height="552" loading="lazy" decoding="async">
             </div>
         @endif
 

@@ -20,9 +20,10 @@ class BuyerHomeDealsTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_recommendations_render_all_available_cards_and_loop_controls(): void
+    public function test_home_recommendations_load_in_pages_after_the_initial_render(): void
     {
         $buyer = $this->seededBuyer();
+        SellerProfile::query()->where('status', 'ACTIVE')->update(['vacation_mode' => false]);
         for ($index = 1; $index <= 11; $index++) {
             $this->product('Recommendation '.$index, 'none', 0, 100, 3);
         }
@@ -31,11 +32,20 @@ class BuyerHomeDealsTest extends TestCase
         $document = new \DOMDocument;
         @$document->loadHTML($response->getContent());
         $xpath = new \DOMXPath($document);
-        $this->assertSame(8, $xpath->query('//*[@data-recommendation-loop]/article[@data-product-card]')->length);
-        $this->assertSame(1, $xpath->query('//*[@data-recommendation-previous]')->length);
-        $this->assertSame(1, $xpath->query('//*[@data-recommendation-next]')->length);
-        $this->assertSame(1, $xpath->query('//*[@data-recommendation-pause]')->length);
-        $this->assertSame(8, $xpath->query('//*[@data-recommendation-loop]/article//form[@data-cart-add-form]')->length);
+        $this->assertSame(1, $xpath->query('//*[@data-home-recommendation-grid]')->length);
+        $this->assertSame(0, $xpath->query('//*[@data-home-recommendation-grid]/article[@data-product-card]')->length);
+
+        $firstPage = $this->getJson(route('buyer.home.recommendations', ['recommendation_page' => 1]))->assertOk();
+        $this->assertTrue($firstPage->json('has_more'));
+        $firstDocument = new \DOMDocument;
+        @$firstDocument->loadHTML($firstPage->json('html'));
+        $this->assertSame(6, (new \DOMXPath($firstDocument))->query('//article[@data-product-card]')->length);
+
+        $secondPage = $this->getJson(route('buyer.home.recommendations', ['recommendation_page' => 2]))->assertOk();
+        $this->assertIsBool($secondPage->json('has_more'));
+        $secondDocument = new \DOMDocument;
+        @$secondDocument->loadHTML($secondPage->json('html'));
+        $this->assertSame(6, (new \DOMXPath($secondDocument))->query('//article[@data-product-card]')->length);
     }
 
     public function test_home_shows_available_discounted_products_and_no_fake_countdown(): void
@@ -43,25 +53,34 @@ class BuyerHomeDealsTest extends TestCase
         $buyer = $this->seededBuyer();
         $discounted = $this->product('Home Discount Product', 'percentage', 15, 200, 5);
 
-        $this->actingAs($buyer)
+        $home = $this->actingAs($buyer)
             ->get(route('buyer.home'))
             ->assertOk()
-            ->assertSee('Save on your next find')
-            ->assertSee('Discounts For You')
+            ->assertSee('data-home-deferred-slot')
+            ->assertSee(route('buyer.home.marketing'), escape: false)
             ->assertSee('Flash Deals')
-            ->assertDontSee('Deals For You')
-            ->assertDontSee('Current Deals')
-            ->assertSee('Platform Events')
-            ->assertSee('No scheduled events right now')
+            ->assertDontSee('Save on your next find')
+            ->assertDontSee('Discounts For You')
             ->assertDontSee('11.11 MEGA SALE')
-            ->assertSee($discounted->name)
-            ->assertSee('₱170.00')
-            ->assertSee('₱200.00')
             ->assertDontSee('data-flash-countdown')
             ->assertSee(route('buyer.products', ['category' => 'womens-apparel']), escape: false)
             ->assertSee(route('buyer.products', ['category' => 'electronics-and-gadgets']), escape: false)
             ->assertSee(route('buyer.rewards'), escape: false)
             ->assertSee(route('buyer.flash-deals'), escape: false);
+
+        $marketing = $this->getJson(route('buyer.home.marketing'))->assertOk();
+        $marketingHtml = $marketing->json('html');
+        $this->assertStringContainsString('Save on your next find', $marketingHtml);
+        $this->assertStringContainsString('Discounts For You', $marketingHtml);
+        $this->assertStringContainsString($discounted->name, $marketingHtml);
+        $this->assertStringContainsString('₱170.00', $marketingHtml);
+        $this->assertStringContainsString('₱200.00', $marketingHtml);
+        $this->assertStringNotContainsString('Deals For You', $marketingHtml);
+        $this->assertStringNotContainsString('Current Deals', $marketingHtml);
+        $this->assertStringNotContainsString('data-flash-countdown', $marketingHtml);
+
+        $platformEvents = $this->getJson(route('buyer.home.platform-events'))->assertOk();
+        $this->assertStringContainsString('No scheduled events right now', $platformEvents->json('html'));
 
         foreach ([
             'womens-apparel',
@@ -193,11 +212,11 @@ class BuyerHomeDealsTest extends TestCase
             ->assertDontSee($active->name)
             ->assertDontSee($upcoming->name);
 
-        $this->get(route('buyer.home'))
-            ->assertOk()
-            ->assertSee($active->name)
-            ->assertSee('Homepage Buy One Get One')
-            ->assertSee(route('buyer.cart.offer-claim', $giftOffer), escape: false);
+        $marketing = $this->getJson(route('buyer.home.marketing'))->assertOk();
+        $marketingHtml = $marketing->json('html');
+        $this->assertStringContainsString($active->name, $marketingHtml);
+        $this->assertStringContainsString('Homepage Buy One Get One', $marketingHtml);
+        $this->assertStringContainsString(route('buyer.cart.offer-claim', $giftOffer), $marketingHtml);
 
         $this->get(route('buyer.free-gifts'))
             ->assertOk()
@@ -263,11 +282,15 @@ class BuyerHomeDealsTest extends TestCase
             ->get(route('buyer.home'))
             ->assertOk()
             ->assertDontSee('data-flash-countdown')
-            ->assertSee('Platform Events')
-            ->assertSee('Platform voucher campaign')
-            ->assertSee('10%')
-            ->assertSee('No minimum spend')
-            ->assertSee('No discount cap');
+            ->assertSee(route('buyer.home.platform-events'), escape: false);
+
+        $platformEvents = $this->getJson(route('buyer.home.platform-events'))->assertOk();
+        $eventsHtml = $platformEvents->json('html');
+        $this->assertStringContainsString('Platform Events', $eventsHtml);
+        $this->assertStringContainsString('Platform voucher campaign', $eventsHtml);
+        $this->assertStringContainsString('10%', $eventsHtml);
+        $this->assertStringContainsString('No minimum spend', $eventsHtml);
+        $this->assertStringContainsString('No discount cap', $eventsHtml);
     }
 
     public function test_public_seller_voucher_is_visible_on_home_store_catalog_and_product_details(): void
@@ -291,8 +314,13 @@ class BuyerHomeDealsTest extends TestCase
         $this->actingAs($buyer)
             ->get(route('buyer.home'))
             ->assertOk()
-            ->assertSee('10% OFF voucher')
-            ->assertSee('Min ₱150.00');
+            ->assertSee(route('buyer.home.marketing'), escape: false)
+            ->assertDontSee('10% OFF voucher');
+
+        $marketing = $this->getJson(route('buyer.home.marketing'))->assertOk();
+        $marketingHtml = $marketing->json('html');
+        $this->assertStringContainsString('10% OFF voucher', $marketingHtml);
+        $this->assertStringContainsString('Min ₱150.00', $marketingHtml);
 
         $this->get(route('buyer.shop', ['seller' => $product->seller_profile_id]))
             ->assertOk()

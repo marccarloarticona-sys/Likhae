@@ -2,6 +2,66 @@ import '../shared/feedback.js';
 import '../shared/shop-share.js';
 import { startRealtimeFallback } from '../shared/realtime-fallback.js';
 
+document.addEventListener('error', (event) => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement)) return;
+    const fallback = image.dataset.fallbackSrc;
+    if (!fallback || image.src === fallback) return;
+    image.src = fallback;
+}, true);
+
+if (document.querySelector('[data-payout-destination-form]')) {
+    import('../shared/payout-destination.js').catch((error) => console.error('Payout destination controls could not be initialized.', error));
+}
+
+const buyerAiWidget = document.querySelector('[data-likhae-buyer-ai]');
+const buyerAiHead = buyerAiWidget?.querySelector('#likhaeBuyerAiHead');
+const buyerAiPreferences = new Map();
+let buyerAiModulePromise = null;
+
+const loadBuyerAi = () => {
+    if (!buyerAiWidget || buyerAiWidget.dataset.aiModuleLoaded === 'true') return Promise.resolve();
+    if (!buyerAiModulePromise) {
+        buyerAiModulePromise = import('./likhae-buyer-ai.js')
+            .then(() => {
+                buyerAiWidget.dataset.aiModuleLoaded = 'true';
+                buyerAiPreferences.forEach((enabled, key) => {
+                    window.dispatchEvent(new CustomEvent('likhae:buyer-ai-preference', {
+                        detail: { key, enabled },
+                    }));
+                });
+            })
+            .catch((error) => {
+                buyerAiModulePromise = null;
+                console.error('LIKHAE AI could not be initialized.', error);
+                throw error;
+            });
+    }
+
+    return buyerAiModulePromise;
+};
+
+buyerAiHead?.addEventListener('click', () => {
+    if (buyerAiWidget.dataset.aiModuleLoaded === 'true' || buyerAiHead.dataset.aiLoading === 'true') return;
+    buyerAiHead.dataset.aiLoading = 'true';
+    loadBuyerAi()
+        .then(() => {
+            buyerAiHead.dataset.aiLoading = 'false';
+            buyerAiHead.click();
+        })
+        .catch(() => {
+            buyerAiHead.dataset.aiLoading = 'false';
+            window.lkBuyerToast?.('LIKHAE AI could not be loaded. Please try again.');
+        });
+});
+
+window.addEventListener('likhae:buyer-ai-preference', (event) => {
+    const preference = event.detail || {};
+    if (!preference.key) return;
+    buyerAiPreferences.set(preference.key, Boolean(preference.enabled));
+    if (preference.key === 'ai_assistant_enabled' && preference.enabled) loadBuyerAi().catch(() => {});
+});
+
 if (document.querySelector('[data-postal-address]')) {
     import('../address/forms.js').catch((error) => console.error('Buyer address fields could not be initialized.', error));
 }
@@ -89,38 +149,39 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     window.lkBuyerToast = showToast;
 
-    all('[data-home-voucher-claim]').forEach((form) => {
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const button = one('button[type="submit"]', form);
-            const card = form.closest('.lk-home-voucher-card');
-            const feedback = one('[data-voucher-feedback]', card || form);
-            if (!button || button.disabled) return;
+    document.addEventListener('submit', async (event) => {
+        const form = event.target.closest('[data-home-voucher-claim]');
+        if (!form) return;
 
-            const originalLabel = button.textContent;
-            button.disabled = true;
-            button.textContent = 'Claiming…';
-            if (feedback) feedback.textContent = '';
+        event.preventDefault();
+        const button = one('button[type="submit"]', form);
+        const card = form.closest('.lk-home-voucher-card');
+        const feedback = one('[data-voucher-feedback]', card || form);
+        if (!button || button.disabled) return;
 
-            try {
-                const response = await fetch(form.action, {
-                    method: 'POST',
-                    body: new FormData(form),
-                    credentials: 'same-origin',
-                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                });
-                const result = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(result.message || 'This voucher could not be claimed. Refresh and try again.');
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Claiming…';
+        if (feedback) feedback.textContent = '';
 
-                button.textContent = 'Claimed';
-                if (feedback) feedback.textContent = result.message || 'Voucher collected. Checkout will confirm eligibility.';
-                showToast('Voucher collected');
-            } catch (error) {
-                button.disabled = false;
-                button.textContent = originalLabel;
-                if (feedback) feedback.textContent = error.message || 'This voucher could not be claimed. Try again.';
-            }
-        });
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.message || 'This voucher could not be claimed. Refresh and try again.');
+
+            button.textContent = 'Claimed';
+            if (feedback) feedback.textContent = result.message || 'Voucher collected. Checkout will confirm eligibility.';
+            showToast('Voucher collected');
+        } catch (error) {
+            button.disabled = false;
+            button.textContent = originalLabel;
+            if (feedback) feedback.textContent = error.message || 'This voucher could not be claimed. Try again.';
+        }
     });
 
     let marketplaceSearchOptionId = 0;

@@ -399,6 +399,57 @@ class PlatformCampaignBudgetService
             && ! $summary['reconciliation_mismatch'];
     }
 
+    /** @return Collection<int, int> IDs of vouchers with an available campaign budget. */
+    public function selectableIds(Collection $vouchers): Collection
+    {
+        if ($vouchers->isEmpty()
+            || ! Schema::hasColumn('vouchers', 'campaign_budget_total')
+            || ! $this->ledgerReady()) {
+            return collect();
+        }
+
+        $entriesByVoucher = FinancialLedgerEntry::query()
+            ->whereIn('voucher_id', $vouchers->pluck('id')->filter()->values())
+            ->whereIn('entry_type', [
+                'CAMPAIGN_SUBSIDY_RESERVED',
+                'CAMPAIGN_SUBSIDY_RELEASED',
+                'CAMPAIGN_SUBSIDY_RESERVATION_CONSUMED',
+                'PLATFORM_PROMOTIONAL_EXPENSE',
+                'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL',
+            ])
+            ->whereIn('status', ['RESERVED', 'POSTED'])
+            ->get(['voucher_id', 'entry_type', 'amount'])
+            ->groupBy('voucher_id');
+
+        $sum = static fn (Collection $entries, string $type): int => $entries
+            ->where('entry_type', $type)
+            ->sum(fn (FinancialLedgerEntry $entry): int => FinancialRules::cents($entry->amount));
+
+        return $vouchers
+            ->filter(function (Voucher $voucher) use ($entriesByVoucher, $sum): bool {
+                if ($voucher->campaign_budget_total === null) {
+                    return false;
+                }
+
+                $entries = $entriesByVoucher->get($voucher->id, collect());
+                $reserved = max(0,
+                    $sum($entries, 'CAMPAIGN_SUBSIDY_RESERVED')
+                    - $sum($entries, 'CAMPAIGN_SUBSIDY_RELEASED')
+                    - $sum($entries, 'CAMPAIGN_SUBSIDY_RESERVATION_CONSUMED'),
+                );
+                $spent = max(0,
+                    $sum($entries, 'PLATFORM_PROMOTIONAL_EXPENSE')
+                    - $sum($entries, 'PLATFORM_PROMOTIONAL_EXPENSE_REVERSAL'),
+                );
+                $available = FinancialRules::cents($voucher->campaign_budget_total) - $reserved - $spent;
+
+                return $available > 0;
+            })
+            ->pluck('id')
+            ->map(fn ($id): int => (int) $id)
+            ->values();
+    }
+
     private function status(Voucher $voucher, ?int $availableCents, ?int $allocatedCents): string
     {
         if (! $voucher->is_active) {

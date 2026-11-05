@@ -467,15 +467,15 @@ class BuyerOrderController extends Controller
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $order->loadMissing('sellerOrders.shipments', 'payments');
         if ($order->status !== 'CANCELLED') {
-            abort_unless(in_array($order->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true), 409, 'This order can no longer be cancelled.');
+            abort_unless($order->status === 'PLACED', 409, 'Buyer cancellation is unavailable after a seller accepts the order.');
             abort_if($order->payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID'), 409, 'A paid online order must use the approved refund workflow before cancellation.');
             $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
             abort_if($activeSellerOrders->isEmpty(), 409, 'This order has no remaining cancellable seller orders.');
             abort_if(
-                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => ! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)
-                    || $sellerOrder->shipments->contains(fn ($shipment): bool => ! in_array($shipment->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true))),
+                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => $sellerOrder->status !== 'PLACED'
+                    || $sellerOrder->shipments->contains(fn ($shipment): bool => $shipment->current_status !== 'PLACED')),
                 409,
-                'Buyer cancellation is unavailable once a seller order or parcel is Ready for Pickup or later.'
+                'Buyer cancellation is unavailable after a seller accepts the order.'
             );
         }
         $request->merge([
@@ -508,7 +508,7 @@ class BuyerOrderController extends Controller
             if ($lockedOrder->status === 'CANCELLED') {
                 return true;
             }
-            abort_unless(in_array($lockedOrder->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true), 409, 'This order can no longer be cancelled.');
+            abort_unless($lockedOrder->status === 'PLACED', 409, 'Buyer cancellation is unavailable after a seller accepts the order.');
             abort_if(
                 $lockedOrder->payments()->where('method', 'ONLINE')->where('status', 'PAID')->exists(),
                 409,
@@ -517,11 +517,10 @@ class BuyerOrderController extends Controller
 
             $activeSellerOrders = $sellerOrders->where('status', '!=', 'CANCELLED')->values();
             abort_if($activeSellerOrders->isEmpty(), 409, 'This order has no remaining cancellable seller orders.');
-            $allowedSellerStatuses = ['PLACED', 'CONFIRMED', 'PREPARING'];
             abort_if(
-                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => ! in_array($sellerOrder->status, $allowedSellerStatuses, true)),
+                $activeSellerOrders->contains(fn (SellerOrder $sellerOrder): bool => $sellerOrder->status !== 'PLACED'),
                 409,
-                'Buyer cancellation is unavailable once a seller order is Ready for Pickup or later.'
+                'Buyer cancellation is unavailable after a seller accepts the order.'
             );
 
             $sellerOrderIds = $activeSellerOrders->pluck('id')->map(fn ($id): int => (int) $id)->all();
@@ -530,11 +529,10 @@ class BuyerOrderController extends Controller
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
-            $allowedShipmentStatuses = ['PLACED', 'CONFIRMED', 'PREPARING'];
             abort_if(
-                $shipments->contains(fn (Shipment $shipment): bool => ! in_array($shipment->current_status, $allowedShipmentStatuses, true)),
+                $shipments->contains(fn (Shipment $shipment): bool => $shipment->current_status !== 'PLACED'),
                 409,
-                'Buyer cancellation is unavailable once a parcel is Ready for Pickup or later.'
+                'Buyer cancellation is unavailable after a seller accepts the order.'
             );
 
             $items = OrderItem::query()
@@ -990,8 +988,8 @@ class BuyerOrderController extends Controller
             ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
-        $deadline = $deliveredAt?->copy()->addDays(5);
-        abort_unless($deadline && now()->lte($deadline), 409, 'The five-day return and refund window has expired.');
+        $deadline = $deliveredAt?->copy()->addDays(BuyerOrderActionService::RETURN_WINDOW_DAYS);
+        abort_unless($deadline && now()->lte($deadline), 409, 'The seven-day return and refund window has expired.');
 
         return [$deliveredAt, $deadline];
     }
@@ -1075,7 +1073,11 @@ class BuyerOrderController extends Controller
             ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
-        abort_unless($deliveredAt && now()->lte($deliveredAt->copy()->addDays(5)), 409, 'The five-day return and refund window has expired.');
+        abort_unless(
+            $deliveredAt && now()->lte($deliveredAt->copy()->addDays(BuyerOrderActionService::RETURN_WINDOW_DAYS)),
+            409,
+            'The seven-day return and refund window has expired.'
+        );
 
         $data = $request->validate([
             'request_type' => ['sometimes', 'required', Rule::in(['Return and refund', 'Refund only'])],

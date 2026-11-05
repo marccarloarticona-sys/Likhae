@@ -6,9 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin\Announcement;
 use App\Models\Admin\Notification;
 use App\Models\Seller\Voucher;
+use App\Models\Seller\Category;
+use App\Models\Seller\Product;
+use App\Models\Seller\SellerProfile;
+use App\Models\Finance\FinanceAuditEvent;
 use App\Services\Notifications\AnnouncementDestination;
 use App\Services\Notifications\AnnouncementNotificationPublisher;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\Marketplace\PlatformCampaignEligibility;
+use Illuminate\Http\JsonResponse;
 use App\Services\Finance\PlatformCampaignBudgetService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -47,6 +53,8 @@ class AdminMarketingController extends Controller
             'campaigns' => $campaigns,
             'campaignsReady' => $campaignsReady,
             'campaignBudgetReady' => $campaignBudgetReady,
+            'homepageCarouselReady' => $this->homepageCarouselSchemaReady(),
+            'campaignControlsReady' => app(PlatformCampaignEligibility::class)->controlsReady(),
             'campaignBudgetSummaries' => $budgetSummaries,
             'campaignBudgetHistory' => $budgetHistory,
             'marketingMediaReady' => $this->marketingMediaSchemaReady(),
@@ -66,6 +74,7 @@ class AdminMarketingController extends Controller
         }
 
         $data = $this->validatedCampaign($request);
+        $data = $this->campaignControlAttributes($data, null);
 
         $code = mb_strtoupper(trim($data['code']));
         if (Voucher::query()->whereRaw('UPPER(code) = ?', [$code])->exists()) {
@@ -80,6 +89,12 @@ class AdminMarketingController extends Controller
             unset($data['campaign_image'], $data['remove_image']);
             $newPath = $data['image_path'];
         }
+        $newHomepageImagePaths = [];
+        if ($this->homepageCarouselSchemaReady()) {
+            $homepageMedia = $this->homepageCarouselMediaAttributes($data, null);
+            $data = array_merge($data, $homepageMedia);
+            $newHomepageImagePaths = array_values(array_filter($homepageMedia));
+        }
 
         try {
             DB::transaction(function () use ($data, $code, $request): void {
@@ -91,7 +106,7 @@ class AdminMarketingController extends Controller
                     'platform_code_key' => $code,
                     'code' => $code,
                     'campaign_budget_total' => null,
-                    'is_active' => true,
+                    'is_active' => ($data['campaign_status'] ?? 'ACTIVE') === 'ACTIVE',
                 ]));
                 app(PlatformCampaignBudgetService::class)->setAllocation($campaign, $budget, $reason, $request->user());
             });
@@ -99,6 +114,7 @@ class AdminMarketingController extends Controller
             if ($newPath && $newPath !== $existingPath) {
                 Storage::disk('public')->delete($newPath);
             }
+            $this->deleteHomepageCarouselImages($newHomepageImagePaths);
 
             throw $exception;
         }
@@ -112,7 +128,8 @@ class AdminMarketingController extends Controller
         abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
 
         $campaignBudgetReady = $this->campaignBudgetSchemaReady();
-        $data = $this->validatedCampaign($request);
+        $data = $this->validatedCampaign($request, $voucher);
+        $data = $this->campaignControlAttributes($data, $voucher);
         $code = mb_strtoupper(trim($data['code']));
         if (Voucher::query()->whereRaw('UPPER(code) = ?', [$code])->whereKeyNot($voucher->getKey())->exists()) {
             throw ValidationException::withMessages(['code' => 'This code is already used by a seller or platform voucher. Choose a unique code.']);
@@ -124,6 +141,16 @@ class AdminMarketingController extends Controller
             $data = array_merge($data, $this->campaignMediaAttributes($data, $oldPath));
             unset($data['campaign_image'], $data['remove_image']);
             $newPath = $data['image_path'];
+        }
+        $oldHomepageImagePaths = [
+            $voucher->homepage_carousel_desktop_image_path,
+            $voucher->homepage_carousel_mobile_image_path,
+        ];
+        $newHomepageImagePaths = [];
+        if ($this->homepageCarouselSchemaReady()) {
+            $homepageMedia = $this->homepageCarouselMediaAttributes($data, $voucher);
+            $data = array_merge($data, $homepageMedia);
+            $newHomepageImagePaths = array_values(array_filter($homepageMedia));
         }
 
         try {
@@ -143,6 +170,7 @@ class AdminMarketingController extends Controller
             if ($newPath && $newPath !== $oldPath) {
                 Storage::disk('public')->delete($newPath);
             }
+            $this->deleteHomepageCarouselImages(array_values(array_diff($newHomepageImagePaths, $oldHomepageImagePaths)));
 
             throw $exception;
         }
@@ -150,11 +178,12 @@ class AdminMarketingController extends Controller
         if ($oldPath && $oldPath !== $newPath) {
             $this->deleteMarketingImageIfUnused($oldPath);
         }
+        $this->deleteHomepageCarouselImages(array_values(array_diff($oldHomepageImagePaths, $newHomepageImagePaths)));
 
         return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign updated. Existing orders and funding history are unchanged.');
     }
 
-    private function validatedCampaign(Request $request): array
+    private function validatedCampaign(Request $request, ?Voucher $campaign = null): array
     {
         $rules = [
             'name' => ['required', 'string', 'max:150'],
@@ -170,6 +199,19 @@ class AdminMarketingController extends Controller
             'ends_at' => ['nullable', 'date'],
         ];
 
+        if (app(PlatformCampaignEligibility::class)->controlsReady()) {
+            $rules += [
+                'distribution_mode' => ['sometimes', Rule::in(['CODE', 'CLAIMABLE', 'AUTO'])],
+                'target_mode' => ['sometimes', Rule::in(['ALL', 'CATEGORIES', 'PRODUCTS', 'SELLERS'])],
+                'target_ids' => ['sometimes', 'array', 'max:500'],
+                'target_ids.*' => ['integer', 'distinct', 'min:1'],
+                'buyer_audience' => ['sometimes', Rule::in(['ALL', 'FIRST_TIME', 'EXISTING'])],
+                'stack_with_seller' => ['sometimes', 'boolean'],
+                'stack_with_shipping' => ['sometimes', 'boolean'],
+                'campaign_status' => ['sometimes', Rule::in(['DRAFT', 'ACTIVE', 'PAUSED', 'ENDED'])],
+            ];
+        }
+
         if ($this->campaignBudgetSchemaReady()) {
             $rules['campaign_budget_total'] = ['required', 'numeric', 'min:0.01', 'max:9999999999.99'];
             $rules['campaign_budget_reason'] = ['required', 'string', 'max:500'];
@@ -179,7 +221,38 @@ class AdminMarketingController extends Controller
             $rules += $this->marketingMediaRules('campaign_image');
         }
 
+        $homepageCarouselReady = $this->homepageCarouselSchemaReady();
+        if ($homepageCarouselReady) {
+            $rules += [
+                'homepage_carousel_enabled' => ['sometimes', 'boolean'],
+                'homepage_carousel_headline' => ['sometimes', 'nullable', 'string', 'max:150'],
+                'homepage_carousel_description' => ['sometimes', 'nullable', 'string', 'max:280'],
+                'homepage_carousel_cta_label' => ['sometimes', 'nullable', 'string', 'max:60'],
+                'homepage_carousel_cta_destination' => ['sometimes', 'required', Rule::in(['EVENT', 'OFFERS'])],
+                'homepage_carousel_priority' => ['sometimes', 'required', 'integer', 'min:0', 'max:65535'],
+                'homepage_carousel_desktop_image' => ['sometimes', ...$this->marketingImageFileRules()],
+                'homepage_carousel_mobile_image' => ['sometimes', ...$this->marketingImageFileRules()],
+                'remove_homepage_carousel_desktop_image' => ['sometimes', 'boolean'],
+                'remove_homepage_carousel_mobile_image' => ['sometimes', 'boolean'],
+            ];
+        }
+
         $data = $request->validate($rules);
+
+        if ($homepageCarouselReady) {
+            $enabled = array_key_exists('homepage_carousel_enabled', $data)
+                ? filter_var($data['homepage_carousel_enabled'], FILTER_VALIDATE_BOOLEAN)
+                : (bool) $campaign?->homepage_carousel_enabled;
+            $desktopImageWillRemain = $request->hasFile('homepage_carousel_desktop_image')
+                || ($campaign?->homepage_carousel_desktop_image_path
+                    && ! $request->boolean('remove_homepage_carousel_desktop_image')
+                    && Storage::disk('public')->exists($campaign->homepage_carousel_desktop_image_path));
+            if ($enabled && ! $desktopImageWillRemain) {
+                throw ValidationException::withMessages([
+                    'homepage_carousel_desktop_image' => 'Add desktop promotional artwork before enabling this campaign in the Buyer Hero Carousel.',
+                ]);
+            }
+        }
 
         if (! empty($data['starts_at']) && ! empty($data['ends_at'])
             && Carbon::parse($data['ends_at'])->lessThan(Carbon::parse($data['starts_at']))) {
@@ -198,17 +271,122 @@ class AdminMarketingController extends Controller
         return $data;
     }
 
+    private function campaignControlAttributes(array $data, ?Voucher $campaign): array
+    {
+        if (! app(PlatformCampaignEligibility::class)->controlsReady()) {
+            return $data;
+        }
+        $mode = $data['target_mode'] ?? $campaign?->target_mode ?? 'ALL';
+        $existingIds = match ($mode) {
+            'CATEGORIES' => $campaign?->target_category_ids,
+            'PRODUCTS' => $campaign?->target_product_ids,
+            'SELLERS' => $campaign?->target_seller_ids,
+            default => [],
+        };
+        $ids = array_values(array_unique(array_map('intval', (array) ($data['target_ids'] ?? $existingIds ?? []))));
+        if (($data['benefit_scope'] ?? $campaign?->benefit_scope) === 'SHIPPING' && $mode !== 'ALL') {
+            throw ValidationException::withMessages(['target_mode' => 'Shipping campaigns apply to shipping fees only.']);
+        }
+        if ($mode !== 'ALL' && $ids === []) {
+            throw ValidationException::withMessages(['target_ids' => 'Choose at least one eligible target.']);
+        }
+        if ($ids !== []) {
+            $query = match ($mode) {
+                'CATEGORIES' => Category::query()->where('is_active', true)->whereNull('archived_at'),
+                'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->whereNull('deleted_at'),
+                'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE'),
+                default => null,
+            };
+            if (! $query || $query->whereIn('id', $ids)->count() !== count($ids)) {
+                throw ValidationException::withMessages(['target_ids' => 'One or more selected targets are unavailable.']);
+            }
+        }
+        unset($data['target_ids']);
+        $data['target_mode'] = $mode;
+        foreach (['CATEGORIES' => 'target_category_ids', 'PRODUCTS' => 'target_product_ids', 'SELLERS' => 'target_seller_ids'] as $targetMode => $column) {
+            $data[$column] = $mode === $targetMode ? $ids : null;
+        }
+        $data['distribution_mode'] ??= $campaign?->distribution_mode ?? 'CODE';
+        $data['buyer_audience'] ??= $campaign?->buyer_audience ?? 'ALL';
+        $data['stack_with_seller'] = filter_var($data['stack_with_seller'] ?? $campaign?->stack_with_seller ?? true, FILTER_VALIDATE_BOOLEAN);
+        $data['stack_with_shipping'] = filter_var($data['stack_with_shipping'] ?? $campaign?->stack_with_shipping ?? true, FILTER_VALIDATE_BOOLEAN);
+        $data['campaign_status'] ??= $campaign?->campaign_status ?? 'ACTIVE';
+        $data['is_active'] = $data['campaign_status'] === 'ACTIVE';
+
+        return $data;
+    }
+
+    public function campaignTargets(Request $request): JsonResponse
+    {
+        abort_unless(app(PlatformCampaignEligibility::class)->controlsReady(), 404);
+        $data = $request->validate([
+            'mode' => ['required', Rule::in(['CATEGORIES', 'PRODUCTS', 'SELLERS'])],
+            'q' => ['nullable', 'string', 'max:80'],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+        $term = trim((string) ($data['q'] ?? ''));
+        $query = match ($data['mode']) {
+            'CATEGORIES' => Category::query()->where('is_active', true)->whereNull('archived_at')->select(['id', 'name']),
+            'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->select(['id', 'name']),
+            'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE')->select(['id', 'business_name']),
+        };
+        $column = $data['mode'] === 'SELLERS' ? 'business_name' : 'name';
+        $results = $query->when($term !== '', fn ($builder) => $builder->where($column, 'like', '%'.$term.'%'))
+            ->orderBy($column)->orderBy('id')->paginate(20);
+
+        return response()->json([
+            'data' => $results->getCollection()->map(fn ($record): array => ['id' => (int) $record->id, 'label' => (string) $record->{$column}])->values(),
+            'current_page' => $results->currentPage(),
+            'last_page' => $results->lastPage(),
+        ]);
+    }
+
     public function toggleCampaign(Request $request, Voucher $voucher): RedirectResponse
     {
         abort_unless($this->campaignSchemaReady(), 404);
         abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
 
-        if (! $voucher->is_active) {
-            abort_unless(! $voucher->requiresReview(), 409, 'This campaign needs review. Correct or replace its discount terms before reactivation.');
-            abort_unless($this->campaignBudgetSchemaReady(), 409, 'Campaign budget finance fields are not installed.');
-            abort_unless(app(PlatformCampaignBudgetService::class)->selectable($voucher), 409, 'Allocate additional budget before resuming this campaign.');
-        }
-        $voucher->update(['is_active' => ! $voucher->is_active]);
+        return $this->setCampaignStatus($request, $voucher, $voucher->is_active ? 'PAUSED' : 'ACTIVE');
+    }
+
+    public function updateCampaignStatus(Request $request, Voucher $voucher): RedirectResponse
+    {
+        abort_unless($this->campaignSchemaReady(), 404);
+        abort_unless($voucher->seller_profile_id === null && $voucher->platform_code_key !== null, 404);
+        abort_unless(app(PlatformCampaignEligibility::class)->controlsReady(), 409);
+        $data = $request->validate(['status' => ['required', Rule::in(['DRAFT', 'ACTIVE', 'PAUSED', 'ENDED'])]]);
+
+        return $this->setCampaignStatus($request, $voucher, $data['status']);
+    }
+
+    private function setCampaignStatus(Request $request, Voucher $voucher, string $status): RedirectResponse
+    {
+        DB::transaction(function () use ($request, $voucher, $status): void {
+            $locked = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
+            if ($status === 'ACTIVE') {
+                abort_unless(! $locked->requiresReview(), 409, 'This campaign needs review before activation.');
+                abort_unless($this->campaignBudgetSchemaReady(), 409, 'Campaign budget finance fields are not installed.');
+                abort_unless(app(PlatformCampaignBudgetService::class)->selectable($locked), 409, 'Allocate additional budget before activation.');
+                abort_unless(! $locked->ends_at || $locked->ends_at->gte(now()), 409, 'Extend the campaign end date before activation.');
+            }
+            $before = ['status' => app(PlatformCampaignEligibility::class)->status($locked), 'is_active' => (bool) $locked->is_active];
+            $attributes = ['is_active' => $status === 'ACTIVE'];
+            if (app(PlatformCampaignEligibility::class)->controlsReady()) {
+                $attributes['campaign_status'] = $status;
+            }
+            $locked->update($attributes);
+            if (Schema::hasTable('finance_audit_events')) {
+                FinanceAuditEvent::query()->create([
+                    'event_type' => 'PLATFORM_CAMPAIGN_STATUS_CHANGED',
+                    'auditable_type' => Voucher::class,
+                    'auditable_id' => $locked->id,
+                    'actor_user_id' => $request->user()->id,
+                    'before_state' => $before,
+                    'after_state' => ['status' => $status, 'is_active' => (bool) $locked->is_active],
+                    'notes' => 'Admin campaign status action',
+                ]);
+            }
+        });
 
         return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign status updated. Existing redemptions and orders are unchanged.');
     }
@@ -395,18 +573,7 @@ class AdminMarketingController extends Controller
     private function marketingMediaRules(string $fileField): array
     {
         return [
-            $fileField => [
-                'nullable',
-                'file',
-                'image',
-                'mimes:jpg,jpeg,png,webp',
-                'max:5120',
-                static function (string $attribute, mixed $value, \Closure $fail): void {
-                    if ($value instanceof UploadedFile && @getimagesize($value->getRealPath()) === false) {
-                        $fail('The uploaded file must contain valid image data.');
-                    }
-                },
-            ],
+            $fileField => $this->marketingImageFileRules(),
             'image_alt' => ['nullable', 'string', 'max:255'],
             'theme_color' => ['nullable', 'string', 'regex:/^#[a-fA-F0-9]{6}$/'],
             'remove_image' => ['sometimes', 'boolean'],
@@ -416,6 +583,79 @@ class AdminMarketingController extends Controller
     private function campaignMediaAttributes(array $data, ?string $existingPath): array
     {
         return $this->mediaAttributes($data, 'campaign_image', 'marketing/campaigns', $existingPath);
+    }
+
+    /** @return list<mixed> */
+    private function marketingImageFileRules(): array
+    {
+        return [
+            'nullable',
+            'file',
+            'image',
+            'mimes:jpg,jpeg,png,webp',
+            'max:5120',
+            static function (string $attribute, mixed $value, \Closure $fail): void {
+                if ($value instanceof UploadedFile && @getimagesize($value->getRealPath()) === false) {
+                    $fail('The uploaded file must contain valid image data.');
+                }
+            },
+        ];
+    }
+
+    /** @return array{homepage_carousel_desktop_image_path: ?string, homepage_carousel_mobile_image_path: ?string} */
+    private function homepageCarouselMediaAttributes(array &$data, ?Voucher $existing): array
+    {
+        $images = [
+            'homepage_carousel_desktop_image' => [
+                'path' => 'homepage_carousel_desktop_image_path',
+                'remove' => 'remove_homepage_carousel_desktop_image',
+                'existing' => $existing?->homepage_carousel_desktop_image_path,
+            ],
+            'homepage_carousel_mobile_image' => [
+                'path' => 'homepage_carousel_mobile_image_path',
+                'remove' => 'remove_homepage_carousel_mobile_image',
+                'existing' => $existing?->homepage_carousel_mobile_image_path,
+            ],
+        ];
+        $attributes = [];
+
+        foreach ($images as $field => $config) {
+            $image = $data[$field] ?? null;
+            $remove = filter_var($data[$config['remove']] ?? false, FILTER_VALIDATE_BOOLEAN);
+            unset($data[$field], $data[$config['remove']]);
+
+            $path = $config['existing'];
+            if ($image instanceof UploadedFile) {
+                $path = $image->store('marketing/platform-events', 'public');
+                if (! is_string($path) || $path === '') {
+                    throw new \RuntimeException('The uploaded homepage campaign artwork could not be stored.');
+                }
+            } elseif ($remove) {
+                $path = null;
+            }
+
+            $attributes[$config['path']] = $path;
+        }
+
+        return $attributes;
+    }
+
+    /** @param list<string> $paths */
+    private function deleteHomepageCarouselImages(array $paths): void
+    {
+        foreach (array_unique(array_filter($paths)) as $path) {
+            if (! str_starts_with($path, 'marketing/platform-events/')) {
+                continue;
+            }
+
+            $desktopStillUsed = Schema::hasColumn('vouchers', 'homepage_carousel_desktop_image_path')
+                && DB::table('vouchers')->where('homepage_carousel_desktop_image_path', $path)->exists();
+            $mobileStillUsed = Schema::hasColumn('vouchers', 'homepage_carousel_mobile_image_path')
+                && DB::table('vouchers')->where('homepage_carousel_mobile_image_path', $path)->exists();
+            if (! $desktopStillUsed && ! $mobileStillUsed) {
+                Storage::disk('public')->delete($path);
+            }
+        }
     }
 
     private function announcementMediaAttributes(array $data, ?string $existingPath): array
@@ -455,8 +695,12 @@ class AdminMarketingController extends Controller
 
         $announcementUsesImage = DB::table('announcements')->where('image_path', $path)->exists();
         $campaignUsesImage = DB::table('vouchers')->where('image_path', $path)->exists();
+        $homepageCarouselUsesImage = (Schema::hasColumn('vouchers', 'homepage_carousel_desktop_image_path')
+                && DB::table('vouchers')->where('homepage_carousel_desktop_image_path', $path)->exists())
+            || (Schema::hasColumn('vouchers', 'homepage_carousel_mobile_image_path')
+                && DB::table('vouchers')->where('homepage_carousel_mobile_image_path', $path)->exists());
 
-        if (! $announcementUsesImage && ! $campaignUsesImage) {
+        if (! $announcementUsesImage && ! $campaignUsesImage && ! $homepageCarouselUsesImage) {
             Storage::disk('public')->delete($path);
         }
     }
@@ -490,5 +734,25 @@ class AdminMarketingController extends Controller
             && Schema::hasColumn('order_items', 'seller_voucher_discount')
             && Schema::hasColumn('financial_ledger_entries', 'voucher_id')
             && Schema::hasColumn('financial_ledger_entries', 'order_item_id');
+    }
+
+    private function homepageCarouselSchemaReady(): bool
+    {
+        foreach ([
+            'homepage_carousel_enabled',
+            'homepage_carousel_desktop_image_path',
+            'homepage_carousel_mobile_image_path',
+            'homepage_carousel_headline',
+            'homepage_carousel_description',
+            'homepage_carousel_cta_label',
+            'homepage_carousel_cta_destination',
+            'homepage_carousel_priority',
+        ] as $column) {
+            if (! Schema::hasColumn('vouchers', $column)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

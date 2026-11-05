@@ -6,6 +6,7 @@ use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\Voucher;
 use App\Models\User;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,34 @@ use Illuminate\Validation\ValidationException;
 
 class BuyerVoucherClaimService
 {
+    /** @return Collection<int, Voucher> */
+    public function claimablePlatformVouchers(User $buyer): Collection
+    {
+        if (! app(PlatformCampaignEligibility::class)->controlsReady()) {
+            return collect();
+        }
+        $vouchers = Voucher::query()
+            ->whereNull('seller_profile_id')->whereNotNull('platform_code_key')
+            ->where('distribution_mode', 'CLAIMABLE')->where('visibility', 'PUBLIC')
+            ->where('is_active', true)
+            ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
+            ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
+            ->orderBy('name')->get();
+        $claimed = BuyerVoucherClaim::query()->where('buyer_user_id', $buyer->id)
+            ->whereIn('voucher_id', $vouchers->modelKeys())->pluck('voucher_id')->map(fn ($id): int => (int) $id)->all();
+        $global = VoucherRedemptionCounter::countsFor($vouchers);
+        $buyerUses = VoucherRedemptionCounter::countsFor($vouchers, (int) $buyer->id);
+        $eligibility = app(PlatformCampaignEligibility::class);
+
+        return $vouchers->reject(fn (Voucher $voucher): bool => in_array((int) $voucher->id, $claimed, true)
+            || $eligibility->status($voucher) !== 'ACTIVE'
+            || ! $eligibility->audienceEligible($voucher, $buyer)
+            || $voucher->requiresReview()
+            || ($voucher->usage_limit !== null && $global->get($voucher->id, 0) >= $voucher->usage_limit)
+            || ($voucher->per_user_limit !== null && $buyerUses->get($voucher->id, 0) >= $voucher->per_user_limit)
+            || ! app(PlatformCampaignBudgetService::class)->selectable($voucher))->values();
+    }
+
     /**
      * Seller vouchers available to claim now. Upcoming vouchers are not claimable:
      * this matches the existing Rewards policy, which lists only started vouchers.
@@ -102,7 +131,11 @@ class BuyerVoucherClaimService
                     ->lockForUpdate()
                     ->firstOrFail();
 
-                abort_unless($this->isSellerVoucher($voucher), 404);
+                $platform = $voucher->seller_profile_id === null && $voucher->platform_code_key !== null;
+                abort_unless($platform || $this->isSellerVoucher($voucher), 404);
+                if ($platform) {
+                    abort_unless(app(PlatformCampaignEligibility::class)->distribution($voucher) === 'CLAIMABLE', 404);
+                }
 
                 $existing = BuyerVoucherClaim::query()
                     ->where('buyer_user_id', $buyer->id)
@@ -113,7 +146,11 @@ class BuyerVoucherClaimService
                     return $existing;
                 }
 
-                $this->assertClaimable($voucher, $buyer);
+                if ($platform) {
+                    $this->assertPlatformClaimable($voucher, $buyer);
+                } else {
+                    $this->assertClaimable($voucher, $buyer);
+                }
 
                 return BuyerVoucherClaim::query()->create([
                     'buyer_user_id' => $buyer->id,
@@ -199,6 +236,21 @@ class BuyerVoucherClaimService
         $usage = VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, (int) $buyer->id);
         $reason = $this->unavailableReason($voucher, $buyer, $usage['redemptions'], $usage['buyer_redemptions']);
 
+        if ($reason !== null) {
+            throw ValidationException::withMessages(['voucher' => $reason]);
+        }
+    }
+
+    private function assertPlatformClaimable(Voucher $voucher, User $buyer): void
+    {
+        $eligibility = app(PlatformCampaignEligibility::class);
+        $usage = VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, (int) $buyer->id);
+        $reason = $eligibility->status($voucher) !== 'ACTIVE' ? 'This LIKHAE voucher is not active.' : null;
+        $reason ??= ! $eligibility->audienceEligible($voucher, $buyer) ? 'This LIKHAE voucher is unavailable for your order history.' : null;
+        $reason ??= $voucher->requiresReview() ? 'This LIKHAE voucher needs review.' : null;
+        $reason ??= $voucher->usage_limit !== null && $usage['redemptions'] >= $voucher->usage_limit ? 'This LIKHAE voucher has reached its usage limit.' : null;
+        $reason ??= $voucher->per_user_limit !== null && $usage['buyer_redemptions'] >= $voucher->per_user_limit ? 'You have reached the usage limit for this LIKHAE voucher.' : null;
+        $reason ??= ! app(PlatformCampaignBudgetService::class)->selectable($voucher) ? 'This LIKHAE voucher has no available funding.' : null;
         if ($reason !== null) {
             throw ValidationException::withMessages(['voucher' => $reason]);
         }

@@ -19,6 +19,7 @@
 <section
     class="lk-map-shell {{ $class }}"
     data-likhae-map
+    aria-busy="true"
     data-geoapify-key="{{ config('services.geoapify.key') }}"
     data-map-style="{{ config('maps.style') }}"
     data-map-markers="{{ json_encode(array_values($markers), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) }}"

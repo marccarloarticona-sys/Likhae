@@ -9,28 +9,55 @@ use Illuminate\Support\Facades\Schema;
 
 class PlatformCampaignCatalog
 {
-    /** @return Collection<int, Voucher> A compact Home preview that includes upcoming events when present. */
-    public function homePreview(int $limit = 4): Collection
+    private const HOMEPAGE_CAROUSEL_LIMIT = 8;
+
+    /** @return Collection<int, Voucher> Published, active campaigns explicitly placed in the homepage carousel. */
+    public function homepageCarousel(): Collection
     {
-        $campaigns = $this->available();
-        $upcoming = $campaigns->filter(fn (Voucher $campaign): bool => $campaign->starts_at?->isFuture() ?? false);
-
-        if ($upcoming->isEmpty() || $limit < 2) {
-            return $campaigns->take($limit)->values();
+        $requiredColumns = [
+            'id', 'name', 'seller_profile_id', 'platform_code_key', 'visibility', 'is_active', 'starts_at', 'ends_at',
+            'discount_type', 'discount_value', 'minimum_order_amount', 'maximum_discount_amount',
+            'usage_limit', 'requires_review', 'review_reason', 'campaign_budget_total',
+            'homepage_carousel_enabled', 'homepage_carousel_desktop_image_path',
+            'homepage_carousel_mobile_image_path', 'homepage_carousel_headline',
+            'homepage_carousel_description', 'homepage_carousel_cta_label',
+            'homepage_carousel_cta_destination', 'homepage_carousel_priority',
+        ];
+        if (! Schema::hasTable('vouchers')
+            || collect($requiredColumns)->contains(fn (string $column): bool => ! Schema::hasColumn('vouchers', $column))) {
+            return collect();
         }
 
-        $active = $campaigns->reject(fn (Voucher $campaign): bool => $campaign->starts_at?->isFuture() ?? false);
-        $featured = $active->take(max(1, $limit - 1))->concat($upcoming->take(1));
+        $now = now();
+        $campaigns = Voucher::query()
+            ->whereNull('seller_profile_id')
+            ->whereNotNull('platform_code_key')
+            ->where('visibility', 'PUBLIC')
+            ->where('is_active', true)
+            ->where('homepage_carousel_enabled', true)
+            ->whereNotNull('homepage_carousel_desktop_image_path')
+            ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', $now))
+            ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', $now))
+            ->orderBy('homepage_carousel_priority')
+            ->orderBy('starts_at')
+            ->orderBy('id')
+            ->limit(self::HOMEPAGE_CAROUSEL_LIMIT)
+            ->get($requiredColumns);
 
-        if ($featured->count() < $limit) {
-            $featured = $featured->concat(
-                $campaigns
-                    ->reject(fn (Voucher $campaign): bool => $featured->contains('id', $campaign->id))
-                    ->take($limit - $featured->count()),
-            );
+        if ($campaigns->isEmpty()) {
+            return collect();
         }
 
-        return $featured->values();
+        $redemptionCounts = VoucherRedemptionCounter::countsFor($campaigns);
+        $budgets = app(PlatformCampaignBudgetService::class);
+        $selectableCampaignIds = $budgets->selectableIds($campaigns);
+
+        return $campaigns
+            ->filter(fn (Voucher $campaign): bool => ! $campaign->requiresReview()
+                && ($campaign->usage_limit === null
+                    || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit)
+                && $selectableCampaignIds->contains($campaign->id))
+            ->values();
     }
 
     /**

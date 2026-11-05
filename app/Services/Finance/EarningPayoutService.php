@@ -896,7 +896,18 @@ final class EarningPayoutService
                 ->where('shipment_financial_allocation_id', $allocation->id)
                 ->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE')->first();
             $this->assertFullCodReceived($logisticsPool, $proceeds);
-            $expected = $logisticsPool->payoutBreakdown()['transfer_cents'];
+            $breakdown = $logisticsPool->payoutBreakdown();
+            $expected = $breakdown['transfer_cents'];
+            $requiredShares = RiderEarningPoolParticipant::query()
+                ->where('rider_earning_pool_id', $pool->id);
+            if ($breakdown['role'] === 'ORIGIN') {
+                $requiredShares->where('participant_role', 'PICKUP');
+            } elseif ($breakdown['role'] === 'DESTINATION') {
+                $requiredShares->where('participant_role', 'DELIVERY');
+            }
+            if (FinancialRules::cents((string) $requiredShares->sum('share_amount')) > $breakdown['rider_reserve_cents']) {
+                return false;
+            }
         } catch (\RuntimeException) {
             return false;
         }

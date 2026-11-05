@@ -1,10 +1,16 @@
+@props(['defer' => false])
+
 @php
     $notificationUser = auth()->user();
-    $recentNotifications = $notificationUser
+    $deferBuyerPreview = (bool) $defer
+        && $notificationUser?->isAccountType(\App\Models\User::TYPE_BUYER);
+    $recentNotifications = $notificationUser && ! $deferBuyerPreview
         ? $notificationUser->notifications()->latest()->limit(8)->get()
         : collect();
     $unreadNotifications = $notificationUser
-        ? $notificationUser->notifications()->whereNull('read_at')->count()
+        ? ($deferBuyerPreview
+            ? (int) request()->attributes->get('_likhae_unread_notifications_'.$notificationUser->id, 0)
+            : $notificationUser->notifications()->whereNull('read_at')->count())
         : 0;
     $notificationSoundKey = match (strtoupper((string) $notificationUser?->account_type)) {
         'SELLER' => 'seller_notification_sounds',
@@ -28,15 +34,25 @@
 
 <script>window.LIKHAE_NOTIFICATION_SOUND_CONFIG = @json(['userId' => $notificationUser?->id, 'enabled' => $notificationSoundsEnabled, 'loginUrl' => $sessionLoginUrl]); window.LIKHAE_MESSAGES_URL = @json($messagesUrl); window.LIKHAE_MESSAGE_PRESENCE_URL = @json(route('messages.presence'));</script>
 
-<section id="notificationPopover" class="lk-notification-popover" data-notification-popover hidden aria-label="Notifications">
+<section
+    id="notificationPopover"
+    class="lk-notification-popover"
+    data-notification-popover
+    @if($deferBuyerPreview)
+        data-notification-preview-url="{{ route('buyer.notifications.preview') }}"
+        data-notification-preview-loaded="false"
+    @endif
+    hidden
+    aria-label="Notifications"
+>
     <div class="lk-notification-popover__head">
         <div>
             <strong>Notifications</strong>
             <span data-notification-unread-label>{{ $unreadNotifications ? $unreadNotifications.' unread' : 'You are all caught up' }}</span>
         </div>
         <div class="lk-notification-popover__actions">
-            @if($unreadNotifications)
-                <form method="POST" action="{{ route('notifications.read-all') }}">
+            @if($unreadNotifications || $deferBuyerPreview)
+                <form method="POST" action="{{ route('notifications.read-all') }}" data-notification-mark-all @if(!$unreadNotifications) hidden @endif>
                     @csrf
                     <button type="submit">Mark all read</button>
                 </form>
@@ -51,28 +67,17 @@
     </label>
 
     <div class="lk-notification-popover__list" data-notification-list>
-        @forelse($recentNotifications as $notification)
-            @php($isSellerNotification = $notificationUser?->isAccountType(\App\Models\User::TYPE_SELLER))
-            @if($isSellerNotification)
-                <form method="POST" action="{{ route('seller.notifications.open', $notification) }}" class="lk-notification-popover__form">@csrf
-                <button type="submit" class="lk-notification-popover__item {{ is_null($notification->read_at) ? 'is-unread' : '' }}" data-notification-item>
-            @else
-                <a href="{{ $notification->action_url ?: route('notifications.index') }}" class="lk-notification-popover__item {{ is_null($notification->read_at) ? 'is-unread' : '' }}" data-notification-item>
-            @endif
-                <span class="lk-notification-popover__dot" aria-hidden="true"></span>
-                <span class="lk-notification-popover__copy">
-                    <strong>{{ $notification->title }}</strong>
-                    @if($notification->message)<span>{{ \Illuminate\Support\Str::limit($notification->message, 98) }}</span>@endif
-                    <small>{{ optional($notification->created_at)->diffForHumans() }}</small>
-                </span>
-            @if($isSellerNotification)</button></form>@else</a>@endif
-        @empty
-            <div class="lk-notification-popover__empty">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>
-                <strong>No notifications yet</strong>
-                <span>Updates for your account will appear here.</span>
+        @if($deferBuyerPreview)
+            <div class="lk-notification-popover__empty" role="status" aria-live="polite">
+                <strong>Notifications load when opened.</strong>
+                <span>Your unread count is ready above.</span>
             </div>
-        @endforelse
+        @else
+            @include('components.shared.notification-popover-items', [
+                'notifications' => $recentNotifications,
+                'notificationUser' => $notificationUser,
+            ])
+        @endif
     </div>
 </section>
 
@@ -150,11 +155,84 @@
             const popover = document.querySelector('[data-notification-popover]');
             if (!popover) return;
             const triggers = Array.from(document.querySelectorAll('[data-notification-toggle]'));
+            const list = popover.querySelector('[data-notification-list]');
+            const search = popover.querySelector('[data-notification-search]');
+            const previewUrl = popover.dataset.notificationPreviewUrl;
+            let previewLoaded = popover.dataset.notificationPreviewLoaded === 'true';
+            let previewLoading = false;
+
+            const filterNotifications = function () {
+                const query = (search?.value || '').trim().toLowerCase();
+                list?.querySelectorAll('[data-notification-item]').forEach((item) => {
+                    item.hidden = query !== '' && !item.textContent.toLowerCase().includes(query);
+                });
+            };
+
+            const loadPreview = async function () {
+                if (!previewUrl || previewLoaded || previewLoading || !list) return;
+                previewLoading = true;
+                list.setAttribute('aria-busy', 'true');
+                list.replaceChildren();
+                const loading = document.createElement('div');
+                loading.className = 'lk-notification-popover__empty';
+                loading.setAttribute('role', 'status');
+                loading.textContent = 'Loading notifications…';
+                list.append(loading);
+
+                try {
+                    const response = await fetch(previewUrl, {
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!response.ok) throw new Error('Notifications could not be loaded.');
+                    const payload = await response.json();
+                    if (typeof payload.html !== 'string' || !Number.isFinite(Number(payload.unread_count))) {
+                        throw new Error('Notifications could not be loaded.');
+                    }
+
+                    const template = document.createElement('template');
+                    template.innerHTML = payload.html;
+                    template.content.querySelectorAll('style').forEach((style) => style.remove());
+                    list.replaceChildren(template.content);
+                    previewLoaded = true;
+                    popover.dataset.notificationPreviewLoaded = 'true';
+
+                    const unreadCount = Math.max(0, Number(payload.unread_count));
+                    const unreadLabel = popover.querySelector('[data-notification-unread-label]');
+                    if (unreadLabel) unreadLabel.textContent = unreadCount ? `${unreadCount} unread` : 'You are all caught up';
+                    const markAll = popover.querySelector('[data-notification-mark-all]');
+                    if (markAll) markAll.hidden = unreadCount < 1;
+                    const badge = document.querySelector('[data-buyer-notification-count]');
+                    if (badge) {
+                        badge.textContent = String(unreadCount);
+                        badge.style.display = unreadCount ? '' : 'none';
+                    }
+                    filterNotifications();
+                } catch {
+                    const message = document.createElement('div');
+                    message.className = 'lk-notification-popover__empty';
+                    message.setAttribute('role', 'status');
+                    const heading = document.createElement('strong');
+                    heading.textContent = 'Notifications could not be loaded.';
+                    const retry = document.createElement('button');
+                    retry.type = 'button';
+                    retry.className = 'lk-text-link';
+                    retry.dataset.notificationPreviewRetry = '';
+                    retry.textContent = 'Try again';
+                    message.append(heading, retry);
+                    list.replaceChildren(message);
+                } finally {
+                    previewLoading = false;
+                    list.removeAttribute('aria-busy');
+                }
+            };
+
             const close = function () { popover.hidden = true; triggers.forEach((trigger) => trigger.setAttribute('aria-expanded', 'false')); };
-            triggers.forEach(function (trigger) { trigger.addEventListener('click', function () { const opening = popover.hidden; close(); if (opening) { popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); popover.querySelector('[data-notification-search]')?.focus(); } }); });
+            triggers.forEach(function (trigger) { trigger.addEventListener('click', function () { const opening = popover.hidden; close(); if (opening) { popover.hidden = false; trigger.setAttribute('aria-expanded', 'true'); search?.focus(); loadPreview(); } }); });
+            popover.addEventListener('click', function (event) { if (event.target.closest('[data-notification-preview-retry]')) loadPreview(); });
             document.addEventListener('click', function (event) { if (!popover.hidden && !popover.contains(event.target) && !event.target.closest('[data-notification-toggle]')) close(); });
             document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !popover.hidden) close(); });
-            popover.querySelector('[data-notification-search]')?.addEventListener('input', function (event) { const query = event.target.value.trim().toLowerCase(); popover.querySelectorAll('[data-notification-item]').forEach((item) => { item.hidden = query !== '' && !item.textContent.toLowerCase().includes(query); }); });
+            search?.addEventListener('input', filterNotifications);
         });
     </script>
 @endonce

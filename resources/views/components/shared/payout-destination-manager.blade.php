@@ -1,4 +1,15 @@
-<div class="payout-destination-list" aria-label="Saved payout destinations">
+@php
+    $destinationNoun = $destinationNoun ?? 'payout destination';
+    $destinationNounPlural = $destinationNounPlural ?? 'payout destinations';
+    $destinationSettingsLabel = $destinationSettingsLabel ?? 'Payout settings';
+    $destinationSaveLabel = $destinationSaveLabel ?? 'Save payout details';
+    $destinationUpdateLabel = $destinationUpdateLabel ?? 'Update payout details';
+    $destinationEmptyMessage = $destinationEmptyMessage ?? 'No '.$destinationNounPlural.' saved yet. Add one below; it will become the default automatically.';
+    $destinationAddTitle = $destinationAddTitle ?? (count($payoutDestinations) ? 'Add another destination' : 'Add a destination');
+    $destinationEditTitle = $destinationEditTitle ?? 'Update destination';
+    $destinationIncompleteNote = $destinationIncompleteNote ?? 'Incomplete details; add a complete destination to use it for future payouts.';
+@endphp
+<div class="payout-destination-list" aria-label="Saved {{ $destinationNounPlural }}">
     @forelse($payoutDestinations as $destination)
         @php($destinationType = $destination['payout_account_type'] ?? \App\Support\PayoutAccountDetails::ACCOUNT_NUMBER)
         @php($destinationComplete = filled($destination['payout_method']) && filled($destination['payout_account_name']) && filled($destination['payout_account_number']) && ($destination['payout_method'] !== 'Bank Transfer' || filled($destination['payout_bank_name'])))
@@ -30,9 +41,9 @@
                         <button type="submit" class="payout-inline-button">Set as default</button>
                     </form>
                 @elseif(!$destinationComplete)
-                    <span class="payout-destination-card__note">Incomplete details; add a complete destination to use it for future payouts.</span>
+                    <span class="payout-destination-card__note">{{ $destinationIncompleteNote }}</span>
                 @endif
-                <form method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-confirm-title="Remove payout destination?" data-confirm-message="Remove this saved payout destination? If it is the default, another saved destination will become the default." data-confirm-label="Remove destination" data-confirm-tone="danger">
+                <form method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-confirm-title="Remove {{ $destinationNoun }}?" data-confirm-message="Remove this saved {{ $destinationNoun }}? If it is the default, another saved destination will become the default." data-confirm-label="Remove {{ $destinationNoun }}" data-confirm-tone="danger">
                     @csrf @method('PUT')
                     <input type="hidden" name="destination_action" value="remove">
                     <input type="hidden" name="destination_id" value="{{ $destination['id'] }}">
@@ -41,7 +52,7 @@
             </div>
         </article>
     @empty
-        <p class="payout-empty-state">No payout destinations saved yet. Add one below; it will become the default automatically.</p>
+        <p class="payout-empty-state">{{ $destinationEmptyMessage }}</p>
     @endforelse
 </div>
 
@@ -49,14 +60,14 @@
 @php($editingDestinationId = old('destination_action') === 'update' ? (string) old('destination_id') : '')
 @php($editingDestination = collect($payoutDestinations)->firstWhere('id', $editingDestinationId))
 @php($editingDestinationIsDefault = (bool) data_get($editingDestination, 'is_default', false))
-@php($payoutEditorTitle = $editingDestinationId !== '' ? 'Update destination' : (count($payoutDestinations) ? 'Add another destination' : 'Add a destination'))
+@php($payoutEditorTitle = $editingDestinationId !== '' ? $destinationEditTitle : $destinationAddTitle)
 
 <div class="payout-editor">
     <div class="payout-editor__head">
-        <div><span class="payout-editor__eyebrow">Payout settings</span><h3 data-payout-editor-title>{{ $payoutEditorTitle }}</h3></div>
+        <div><span class="payout-editor__eyebrow">{{ $destinationSettingsLabel }}</span><h3 data-payout-editor-title>{{ $payoutEditorTitle }}</h3></div>
         <p>{{ $payoutChangeDescription }}</p>
     </div>
-    <form class="payout-form payout-fields-grid" method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-payout-destination-form data-payout-has-default="{{ $hasPayoutDefault ? '1' : '0' }}" data-payout-add-title="{{ count($payoutDestinations) ? 'Add another destination' : 'Add a destination' }}" data-payout-editing="{{ $editingDestinationId !== '' ? '1' : '0' }}" data-payout-edit-default="{{ $editingDestinationIsDefault ? '1' : '0' }}">
+    <form class="payout-form payout-fields-grid" method="POST" action="{{ route($payoutDestinationRoute, $payoutDestinationRouteParameters ?? []) }}" data-payout-destination-form data-payout-save-label="{{ $destinationSaveLabel }}" data-payout-update-label="{{ $destinationUpdateLabel }}" data-payout-edit-title="{{ $destinationEditTitle }}" data-payout-has-default="{{ $hasPayoutDefault ? '1' : '0' }}" data-payout-add-title="{{ $destinationAddTitle }}" data-payout-editing="{{ $editingDestinationId !== '' ? '1' : '0' }}" data-payout-edit-default="{{ $editingDestinationIsDefault ? '1' : '0' }}">
         @csrf @method('PUT')
         <input type="hidden" name="destination_action" value="{{ $editingDestinationId !== '' ? 'update' : 'add' }}">
         <input type="hidden" name="destination_id" value="{{ $editingDestinationId }}">
@@ -69,6 +80,6 @@
         <label class="payout-number-field"><span data-payout-number-label>{{ \App\Support\PayoutAccountDetails::typeLabel($payoutAccountType) }}</span><input type="text" inputmode="numeric" data-payout-account-number name="payout_account_number" maxlength="150" value="{{ old('payout_account_number') }}" required autocomplete="off" aria-describedby="{{ $payoutHelpId }}"><small id="{{ $payoutHelpId }}" data-payout-number-help>{{ \App\Support\PayoutAccountDetails::formatHint($payoutAccountType) }}</small></label>
         <label class="payout-default-choice"><input type="checkbox" name="make_default" value="1" data-payout-make-default @checked(old('make_default') || ($editingDestinationId !== '' && $editingDestinationIsDefault) || !$hasPayoutDefault)> <span>Set as default for future {{ $payoutPurpose }}</span></label>
         <div class="payout-security-note is-wide"><span class="payout-security-note__icon"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M6.5 9V6a3.5 3.5 0 0 1 7 0v3"/></svg></span><div><strong>Private and protected</strong><p>{{ $payoutSecurityCopy }} Account holder names and numbers are encrypted. Card numbers and security codes are never collected.</p></div></div>
-        <div class="payout-form-actions is-wide"><small>Check the number carefully before saving.</small><button type="button" class="payout-inline-button" data-payout-cancel-edit @if($editingDestinationId === '') hidden @endif>Cancel edit</button><button type="submit" class="{{ $payoutButtonClass }}" data-payout-submit>{{ $editingDestinationId !== '' ? 'Update payout details' : 'Save payout details' }}</button></div>
+        <div class="payout-form-actions is-wide"><small>Check the number carefully before saving.</small><button type="button" class="payout-inline-button" data-payout-cancel-edit @if($editingDestinationId === '') hidden @endif>Cancel edit</button><button type="submit" class="{{ $payoutButtonClass }}" data-payout-submit>{{ $editingDestinationId !== '' ? $destinationUpdateLabel : $destinationSaveLabel }}</button></div>
     </form>
 </div>

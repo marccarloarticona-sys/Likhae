@@ -269,7 +269,7 @@ class BuyerOrderPage8WorkflowTest extends TestCase
             'is_active' => true,
         ]);
         BuyerVoucherClaim::query()->create(['buyer_user_id' => $buyer->id, 'voucher_id' => $voucher->id]);
-        [$order, $sellerOrder, $shipment] = $this->makeOrder($buyer, $variant, 'PROCESSING', 'PREPARING', 'PREPARING', 'COD', 2, $voucher);
+        [$order, $sellerOrder, $shipment] = $this->makeOrder($buyer, $variant, 'PLACED', 'PLACED', 'PLACED', 'COD', 2, $voucher);
         $this->assertSame(1, VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id));
 
         $this->actingAs($buyer)
@@ -277,7 +277,7 @@ class BuyerOrderPage8WorkflowTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors('reason');
         $this->assertSame(5, (int) $variant->fresh()->stock);
-        $this->assertSame('PROCESSING', $order->fresh()->status);
+        $this->assertSame('PLACED', $order->fresh()->status);
 
         $request = ['reason' => 'ORDERED_BY_MISTAKE'];
         $this->postJson(route('buyer.orders.cancel', $order), $request)
@@ -300,10 +300,42 @@ class BuyerOrderPage8WorkflowTest extends TestCase
         $this->assertSame(1, $shipment->events()->where('notes', 'like', 'BUYER_ORDER_CANCELLED:%')->count());
     }
 
-    public function test_cancellation_is_blocked_at_ready_for_pickup_picked_up_and_delivered(): void
+    public function test_seller_acceptance_hides_buyer_cancellation_and_blocks_direct_requests(): void
+    {
+        [$buyer, $variant] = $this->buyerAndVariant();
+        [$order, $sellerOrder, $shipment] = $this->makeOrder($buyer, $variant, 'PLACED', 'PLACED', 'PLACED', 'COD');
+        $stockBefore = (int) $variant->fresh()->stock;
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertSee('Cancel Order');
+
+        $seller = $variant->product->sellerProfile->user;
+        $this->actingAs($seller)
+            ->patch(route('seller.orders.status', $sellerOrder), ['action' => 'confirm'])
+            ->assertRedirect();
+
+        $this->assertSame('CONFIRMED', $sellerOrder->fresh()->status);
+        $this->assertSame('CONFIRMED', $shipment->fresh()->current_status);
+        $this->assertSame('PROCESSING', $order->fresh()->status);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.orders.show', $order))
+            ->assertOk()
+            ->assertDontSee('Cancel Order');
+        $this->postJson(route('buyer.orders.cancel', $order), ['reason' => 'CHANGED_MIND'])
+            ->assertStatus(409);
+        $this->assertSame($stockBefore, (int) $variant->fresh()->stock);
+        $this->assertSame('CONFIRMED', $sellerOrder->fresh()->status);
+    }
+
+    public function test_cancellation_is_blocked_after_placed_status(): void
     {
         [$buyer, $variant] = $this->buyerAndVariant();
         foreach ([
+            ['CONFIRMED', 'CONFIRMED'],
+            ['PREPARING', 'PREPARING'],
             ['READY_FOR_PICKUP', 'READY_FOR_PICKUP'],
             ['PICKED_UP', 'PICKED_UP'],
             ['PICKED_UP', 'DELIVERED'],

@@ -129,11 +129,17 @@ class ParcelSettlementFlowTest extends TestCase
         $this->assertSame('PAID', $originPayout->fresh()->status);
         $this->assertSame('PAID', $destinationPayout->fresh()->status);
         $this->assertSame('30.00', data_get($destinationPayout->fresh()->metadata, 'rider_pass_through'));
+        $paidMetadata = $destinationPayout->fresh()->metadata;
+        $destinationPayout->update([
+            'amount' => '25.00',
+            'metadata' => array_replace($paidMetadata, ['amount_expected' => '25.00', 'rider_pass_through' => '20.00']),
+        ]);
+        $this->assertCount(0, $payouts->eligibleRiderParticipants($fixture['rider']));
+        $destinationPayout->update(['amount' => '35.00', 'metadata' => $paidMetadata]);
         $eligible = $payouts->eligibleRiderParticipants($fixture['rider']);
         $this->assertCount(1, $eligible);
-        $pickupEligible = $payouts->eligibleRiderParticipants($pickupRider);
-        $this->assertCount(1, $pickupEligible);
-        $this->assertSame(3000, FinancialRules::cents($eligible->first()->share_amount) + FinancialRules::cents($pickupEligible->first()->share_amount));
+        $this->assertCount(0, $payouts->eligibleRiderParticipants($pickupRider));
+        $this->assertSame(3000, FinancialRules::cents($eligible->first()->share_amount));
         $riderPayout = $payouts->requestRiderPayout($fixture['riderUser'], [$eligible->first()->id])->firstOrFail();
         $deliveryShare = $riderPayout->amount;
         $this->assertSame($riderPayout->id, $payouts->requestRiderPayout($fixture['riderUser'], [$eligible->first()->id])->firstOrFail()->id);
@@ -141,10 +147,6 @@ class ParcelSettlementFlowTest extends TestCase
         $riderPayout = $payouts->recordRiderPayout($fixture['centerUser'], $riderPayout, $deliveryShare, 'Manual', 'INTER-RIDER', null, 'payout-proofs/inter.pdf');
         $payouts->acknowledgeRiderPayout($fixture['riderUser'], $riderPayout, $deliveryShare);
         $this->assertSame('PAID', $riderPayout->fresh()->status);
-        $pickupPayout = $payouts->requestRiderPayout($pickupUser, [$pickupEligible->first()->id])->firstOrFail();
-        $pickupPayout = $payouts->recordRiderPayout($fixture['centerUser'], $pickupPayout, $pickupPayout->amount, 'Manual', 'INTER-PICKUP', null, 'payout-proofs/inter.pdf');
-        $payouts->acknowledgeRiderPayout($pickupUser, $pickupPayout, $pickupPayout->amount);
-        $this->assertSame('PAID', $pickupPayout->fresh()->status);
         $settlement = SellerSettlement::query()->where('shipment_financial_allocation_id', $allocation->id)->firstOrFail();
         $this->assertSame('ON_HOLD', $settlement->payout_status);
         $this->confirmBuyerReceipt($fixture);

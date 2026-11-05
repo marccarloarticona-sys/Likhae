@@ -22,6 +22,8 @@ class BuyerOrderActionService
 
     public const AUTOMATIC_RECEIPT_NOTE = 'Order automatically confirmed received after 3 days without Buyer confirmation.';
 
+    public const RETURN_WINDOW_DAYS = 7;
+
     /** @return array<string, mixed> */
     public function state(Order $order, bool $returnRefundStorageReady = true): array
     {
@@ -57,7 +59,7 @@ class BuyerOrderActionService
             ->flatMap(fn ($shipment) => $shipment->events)
             ->where('status', 'DELIVERED')
             ->max('occurred_at');
-        $returnDeadline = $deliveredAt?->copy()->addDays(5);
+        $returnDeadline = $deliveredAt?->copy()->addDays(self::RETURN_WINDOW_DAYS);
         $autoConfirmAt = $allDeliveredWithTimestamps && $deliveredAt
             ? $deliveredAt->copy()->addDays(3)
             : null;
@@ -82,10 +84,10 @@ class BuyerOrderActionService
         $activeCase = $activeDispute ?: $activeRequest;
         $confirmableShipmentIds = $this->confirmableShipmentIdsFor($order, $shipments);
         $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
-        $canCancel = in_array($order->status, ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'], true)
+        $canCancel = $order->status === 'PLACED'
             && $activeSellerOrders->isNotEmpty()
-            && $activeSellerOrders->every(fn ($sellerOrder): bool => in_array($sellerOrder->status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)
-                && $sellerOrder->shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)))
+            && $activeSellerOrders->every(fn ($sellerOrder): bool => $sellerOrder->status === 'PLACED'
+                && $sellerOrder->shipments->every(fn ($shipment): bool => $shipment->current_status === 'PLACED'))
             && ! $order->payments->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID')
             && ! $activeCase;
 

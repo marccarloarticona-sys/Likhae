@@ -72,6 +72,8 @@ Route::prefix('admin')
         Route::post('/marketing/campaigns', [AdminMarketingController::class, 'storeCampaign'])->name('marketing.campaigns.store');
         Route::patch('/marketing/campaigns/{voucher}', [AdminMarketingController::class, 'updateCampaign'])->name('marketing.campaigns.update');
         Route::patch('/marketing/campaigns/{voucher}/toggle', [AdminMarketingController::class, 'toggleCampaign'])->name('marketing.campaigns.toggle');
+        Route::patch('/marketing/campaigns/{voucher}/status', [AdminMarketingController::class, 'updateCampaignStatus'])->name('marketing.campaigns.status');
+        Route::get('/marketing/campaign-targets', [AdminMarketingController::class, 'campaignTargets'])->name('marketing.campaigns.targets');
         Route::post('/marketing/announcements', [AdminMarketingController::class, 'storeAnnouncement'])->name('marketing.announcements.store');
         Route::patch('/marketing/announcements/{announcement}', [AdminMarketingController::class, 'updateAnnouncement'])->name('marketing.announcements.update');
         Route::patch('/marketing/announcements/{announcement}/toggle', [AdminMarketingController::class, 'toggleAnnouncement'])->name('marketing.announcements.toggle');

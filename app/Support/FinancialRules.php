@@ -121,10 +121,7 @@ final class FinancialRules
         $additionalCare = max(0, self::cents($additionalCareFee));
         $deliveryEarnings = self::deliveryEarningsCents($shippingFee, $additionalCareFee);
         // Split each fee component independently. Inter-hub route percentages
-        // are applied to base shipping later; Additional Care keeps its
-        // existing Rider/Logistics allocation policy.
-        // Keep the parent Rider/Logistics pools balanced first; the Rider
-        // amount is then divided 1:2 across Pickup and Delivery roles.
+        // are applied to base shipping later. The Rider share goes to Delivery.
         $shippingAllocation = self::shippingAllocationCents($shipping, $riderPoolPercentage);
         $additionalCareAllocation = self::shippingAllocationCents($additionalCare, $riderPoolPercentage);
         $allocation = [
@@ -297,86 +294,25 @@ final class FinancialRules
     }
 
     /**
-     * Splits the 60% Rider share of base shipping into Pickup and Delivery in
-     * a 1:2 ratio (20% and 40% of the fee). Additional Care's Rider share
-     * continues to follow saved role weights among completed Rider legs.
+     * Assigns the Rider shares of shipping and Additional Care to Delivery.
      *
      * @param array{PICKUP?:list<int>,HUB_TO_HUB?:list<int>,DELIVERY?:list<int>} $completedRidersByRole
-     * @param array{PICKUP:int,HUB_TO_HUB:int,DELIVERY:int} $additionalCareWeights
      * @return array{participants:list<array{rider_profile_id:int,participant_role:string,share_cents:int}>,allocated_cents:int,unresolved_cents:int,leg_cents:array<string,int>}
      */
     public static function riderPoolRoleDistribution(
         int $shippingRiderPoolCents,
         int $additionalCareRiderPoolCents,
         array $completedRidersByRole,
-        array $additionalCareWeights,
     ): array {
         if ($shippingRiderPoolCents < 0 || $additionalCareRiderPoolCents < 0) {
             throw new \InvalidArgumentException('Rider Pool components must be non-negative.');
         }
 
-        [$pickupShippingCents, $deliveryShippingCents] = self::allocateCents($shippingRiderPoolCents, [1, 2]);
-        $careDistribution = self::riderLegDistribution(
-            $additionalCareRiderPoolCents,
-            $completedRidersByRole,
-            $additionalCareWeights,
+        return self::riderLegDistribution(
+            $shippingRiderPoolCents + $additionalCareRiderPoolCents,
+            ['DELIVERY' => $completedRidersByRole['DELIVERY'] ?? []],
+            ['PICKUP' => 0, 'HUB_TO_HUB' => 0, 'DELIVERY' => 1],
         );
-        $eligibleRiders = [];
-        foreach (['PICKUP', 'DELIVERY'] as $role) {
-            $eligibleRiders[$role] = collect($completedRidersByRole[$role] ?? [])
-                ->map(fn ($id): int => (int) $id)
-                ->filter(fn (int $id): bool => $id > 0)
-                ->unique()
-                ->sort()
-                ->values();
-        }
-
-        $shippingByRole = ['PICKUP' => $pickupShippingCents, 'DELIVERY' => $deliveryShippingCents];
-        $sharesByParticipant = [];
-        $legCents = ['PICKUP' => 0, 'HUB_TO_HUB' => 0, 'DELIVERY' => 0];
-        $allocatedCents = 0;
-
-        foreach ($shippingByRole as $role => $roleCents) {
-            $riders = $eligibleRiders[$role];
-            if ($roleCents <= 0 || $riders->isEmpty()) {
-                continue;
-            }
-
-            $baseShare = intdiv($roleCents, $riders->count());
-            $extraCentavos = $roleCents % $riders->count();
-            foreach ($riders as $index => $riderId) {
-                $share = $baseShare + ($index < $extraCentavos ? 1 : 0);
-                if ($share <= 0) {
-                    continue;
-                }
-                $key = $role.':'.$riderId;
-                $sharesByParticipant[$key] = [
-                    'rider_profile_id' => $riderId,
-                    'participant_role' => $role,
-                    'share_cents' => $share,
-                ];
-                $legCents[$role] += $share;
-                $allocatedCents += $share;
-            }
-        }
-
-        foreach ($careDistribution['participants'] as $participant) {
-            $key = $participant['participant_role'].':'.$participant['rider_profile_id'];
-            if (! isset($sharesByParticipant[$key])) {
-                $sharesByParticipant[$key] = $participant;
-            } else {
-                $sharesByParticipant[$key]['share_cents'] += $participant['share_cents'];
-            }
-            $legCents[$participant['participant_role']] += $participant['share_cents'];
-            $allocatedCents += $participant['share_cents'];
-        }
-
-        return [
-            'participants' => array_values($sharesByParticipant),
-            'allocated_cents' => $allocatedCents,
-            'unresolved_cents' => $shippingRiderPoolCents + $additionalCareRiderPoolCents - $allocatedCents,
-            'leg_cents' => $legCents,
-        ];
     }
 
     private static function percentageUnits(string|int|float $percentage): int

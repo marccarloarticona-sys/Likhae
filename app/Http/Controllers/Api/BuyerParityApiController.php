@@ -324,34 +324,9 @@ class BuyerParityApiController extends Controller
     public function claimVoucher(Request $request, Voucher $voucher): JsonResponse
     {
         $this->authorizeBuyer($request);
-        $buyer = $request->user();
-        abort_unless($buyer->isActive(), 403);
-        $claim = DB::transaction(function () use ($buyer, $voucher): BuyerVoucherClaim {
-            $campaign = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
-            abort_unless(Schema::hasColumn('vouchers', 'platform_code_key')
-                && $campaign->seller_profile_id === null
-                && filled($campaign->platform_code_key), 404);
-
-            $existing = BuyerVoucherClaim::query()
-                ->where('buyer_user_id', $buyer->id)
-                ->where('voucher_id', $campaign->id)
-                ->first();
-            if ($existing) return $existing;
-
-            abort_unless($campaign->is_active
-                && (! $campaign->starts_at || $campaign->starts_at->lte(now()))
-                && (! $campaign->ends_at || $campaign->ends_at->gte(now())), 422, 'This platform voucher is not available to collect now.');
-            abort_unless(app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($campaign), 422, 'This platform campaign needs an available LIKHAE budget before it can be collected.');
-            $globalUses = VoucherRedemptionCounter::countsFor(collect([$campaign]))->get($campaign->id, 0);
-            $buyerUses = VoucherRedemptionCounter::countsFor(collect([$campaign]), (int) $buyer->id)->get($campaign->id, 0);
-            abort_unless($campaign->usage_limit === null || $globalUses < $campaign->usage_limit, 422, 'This platform voucher has reached its usage limit.');
-            abort_unless($campaign->per_user_limit === null || $buyerUses < $campaign->per_user_limit, 422, 'You have reached the usage limit for this voucher.');
-
-            return BuyerVoucherClaim::query()->create([
-                'buyer_user_id' => $buyer->id,
-                'voucher_id' => $campaign->id,
-            ]);
-        }, 3);
+        abort_unless($voucher->seller_profile_id === null && filled($voucher->platform_code_key), 404);
+        $claim = app(\App\Services\Marketplace\BuyerVoucherClaimService::class)
+            ->claim($request->user(), (int) $voucher->id);
 
         return response()->json(['success' => true, 'message' => 'Voucher collected.', 'data' => [
             'voucher_id' => (int) $voucher->id,

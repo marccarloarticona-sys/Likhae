@@ -1063,21 +1063,34 @@
                         </div>
                         @else
                             @php($interaction = $timelineItem['interaction'])
-                            <article class="lk-smart-help-exchange" aria-label="Automated help exchange">
-                                <div class="lk-smart-help-question-bubble">{{ $interaction['question'] }}</div>
-                                <div class="lk-smart-help-answer-bubble">
-                                    <small>{{ $interaction['source'] ?: 'Automated answer' }}</small>
-                                    <p>{{ $interaction['answer'] }}</p>
-                                    @if(($interaction['feedback'] ?? null) === 'RESOLVED')<small class="lk-smart-help-feedback-result">Marked helpful</small>@elseif(($interaction['feedback'] ?? null) === 'UNRESOLVED')<small class="lk-smart-help-feedback-result">Still needs help</small>@endif
+                            @php($interactionSentAt = filled($interaction['created_at'] ?? null) ? \Illuminate\Support\Carbon::parse($interaction['created_at']) : null)
+                            <div class="lk-message-row is-buyer lk-smart-help-exchange-row lk-smart-help-question-row" aria-label="Your question to automated help">
+                                <div>
+                                    <div class="lk-message-bubble">{{ $interaction['question'] }}</div>
+                                    <div class="lk-message-meta"><span class="lk-message-time">{{ $interactionSentAt?->diffForHumans() }}</span></div>
                                 </div>
-                            </article>
+                            </div>
+                            <div class="lk-message-row lk-smart-help-exchange-row lk-smart-help-answer-row" data-automated-answer aria-label="Automated answer from {{ $activeSeller['name'] }}">
+                                <img class="lk-message-small-avatar" src="{{ $activeSeller['avatar'] }}" alt="" loading="lazy" decoding="async">
+                                <div>
+                                    <div class="lk-smart-help-sender"><strong>{{ $activeSeller['name'] }}</strong><span class="lk-smart-help-automated-badge">Automated</span></div>
+                                    <div class="lk-message-bubble lk-smart-help-answer-bubble">
+                                        <small class="lk-smart-help-source">{{ $interaction['source'] ?: 'Automated answer' }}</small>
+                                        <p class="lk-smart-help-answer-text">{{ $interaction['answer'] }}</p>
+                                    </div>
+                                    <div class="lk-message-meta">
+                                        <span class="lk-message-time">{{ $interactionSentAt?->diffForHumans() }}</span>
+                                        @if(($interaction['feedback'] ?? null) === 'RESOLVED')<span class="lk-message-time">Marked helpful</span>@elseif(($interaction['feedback'] ?? null) === 'UNRESOLVED')<span class="lk-message-time">Still needs help</span>@endif
+                                    </div>
+                                </div>
+                            </div>
                         @endif
                     @empty
                         <div class="lk-messages-empty">No messages yet. Send the first message to {{ $activeSeller['name'] }}.</div>
                     @endforelse
 
                     @if(!empty($smartHelpBootstrap))
-                        @include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap])
+                        @include('components.shared.smart-help', ['smartHelp' => $smartHelpBootstrap, 'avatar' => $activeSeller['avatar'], 'historyDisplayed' => true])
                     @endif
                 </div>
 

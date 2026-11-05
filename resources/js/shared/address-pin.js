@@ -419,7 +419,7 @@ function initialize(shell, maplibregl) {
 function bootAddressPins() {
     const shells = [...document.querySelectorAll('[data-address-pin]')];
     if (!shells.length) return;
-    const loadRenderer = mapRenderer.loadMapLibre || mapRenderer.loadMapbox;
+    const loadRenderer = mapRenderer.loadMapLibre;
     if (typeof loadRenderer !== 'function') {
         shells.forEach((shell) => updateStatus(shell, 'Map service is unavailable. Complete the address fields manually.', true));
         return;

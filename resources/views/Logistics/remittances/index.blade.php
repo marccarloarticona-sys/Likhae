@@ -240,7 +240,7 @@
     @if($parcelSettlementReady)
         <section id="rider-payout-requests" class="rounded-xl border border-line bg-surface p-6">
             <h2 class="font-display text-xl font-semibold text-ink">Rider payout records</h2>
-            <p class="mt-1 text-[11px] text-muted">For pickup and final-mile Rider shares, record the exact allocated amount after Admin sends and Logistics confirms the full delivery charges. Interhub driver shares are listed in their own tab. Only an actual manual transfer with a transaction reference and saved proof can be confirmed as Paid.</p>
+                            <p class="mt-1 text-[11px] text-muted">For allocated Rider shares, record the exact amount after Admin sends and Logistics confirms the full delivery charges. Interhub driver shares are listed in their own tab. Only an actual manual transfer with a transaction reference and saved proof can be confirmed as Paid.</p>
             <div class="mt-4 grid gap-4">
                 @forelse($riderPayoutRequests as $entry)
                     @include('logistics.remittances.partials.payout-request', ['entry' => $entry, 'payoutParticipants' => $riderPayoutParticipants, 'requestLabel' => 'Rider'])

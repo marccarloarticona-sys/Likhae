@@ -397,6 +397,17 @@ class FinancialAllocationService
         DB::transaction(function () use ($pool, $completedRidersByRole, $representativeAssignments, $weights): void {
             $lockedPool = RiderEarningPool::query()->whereKey($pool->id)->lockForUpdate()->firstOrFail();
             $lockedPool->loadMissing('allocation');
+            if ($lockedPool->participants()->where('status', '!=', 'PENDING')->exists()) {
+                return;
+            }
+            $committedDelivery = $lockedPool->participants()
+                ->where('participant_role', 'DELIVERY')
+                ->where('share_amount', '>', 0)
+                ->get();
+            if ($committedDelivery->count() === 1
+                && in_array((int) $committedDelivery->first()->rider_profile_id, $completedRidersByRole['DELIVERY'], true)) {
+                $completedRidersByRole['DELIVERY'] = [(int) $committedDelivery->first()->rider_profile_id];
+            }
             $shippingCents = FinancialRules::cents($lockedPool->allocation?->shipping_fee ?? 0);
             $careCents = max(0, FinancialRules::cents($lockedPool->allocation?->protection_amount ?? 0));
 
@@ -405,7 +416,6 @@ class FinancialAllocationService
                     FinancialRules::shippingAllocationCents($shippingCents, FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE)['rider_cents'],
                     FinancialRules::shippingAllocationCents($careCents, FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE)['rider_cents'],
                     $completedRidersByRole,
-                    $weights,
                 );
             } else {
                 // Keep old pool rows operable when they predate the allocation
@@ -460,7 +470,7 @@ class FinancialAllocationService
                             'rider_assignment_id' => $assignmentId,
                             'status' => $participant->status,
                         ],
-                        'notes' => 'Unpaid Rider share recalculated using the fixed 20% pickup / 40% delivery shipping-fee split. Additional Care follows the existing saved allocation weights.',
+                        'notes' => 'Unpaid Rider share recalculated with the full Rider share of shipping and Additional Care assigned to Delivery.',
                     ]);
                 }
             }

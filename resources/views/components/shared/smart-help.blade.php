@@ -2,30 +2,59 @@
     $smartSession = $smartHelp['session'] ?? [];
     $smartStatus = $smartSession['status'] ?? 'AUTOMATED_HELP';
     $humanHandoff = in_array($smartStatus, ['HUMAN_ASSISTANCE_REQUESTED', 'HUMAN_CONVERSATION'], true);
+    $humanConversation = $smartStatus === 'HUMAN_CONVERSATION';
     $lastFeedback = $smartSession['last_feedback'] ?? null;
+    $recipientName = $smartHelp['recipient_name'] ?? 'Seller';
+    $recipientAvatar = $avatar ?? $smartHelp['recipient_avatar'] ?? asset('images/defaults/profile-avatar.svg');
     $handoffLabel = ($smartHelp['recipient_type'] ?? null) === \App\Models\Communication\MessagingFaq::OWNER_ADMIN ? 'Talk to Live Admin' : 'Request live help';
+    $hasAutomatedHistory = ($historyDisplayed ?? false)
+        && (! empty($smartHelp['history']) || filled($smartSession['answer'] ?? null));
 @endphp
 <style>
-    .lk-smart-help{margin:18px 0 10px;padding:14px;border:1px solid #ead5c3;border-radius:18px;background:rgba(255,250,245,.94);color:#3c2019;font-size:12px}
-    .lk-smart-help-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-    .lk-smart-help-head strong{font-size:13px}
-    .lk-smart-help-context,.lk-smart-help-status{margin:4px 0;color:#8a6655}
-    .lk-smart-help-exchange{display:grid;gap:7px}
-    .lk-smart-help-question-bubble{justify-self:end;max-width:88%;padding:10px 13px;border-radius:16px 16px 5px 16px;background:#561c17;color:#fff;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
-    .lk-smart-help-answer-bubble{justify-self:start;max-width:94%;padding:12px 14px;border:1px solid #efdfd1;border-radius:16px 16px 16px 5px;background:#fff;color:#3c2019;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
-    .lk-smart-help-answer-bubble small{display:block;margin-bottom:5px;color:#8a6655;font-size:10px;font-weight:700}
-    .lk-smart-help-answer-bubble p{margin:0}
-    .lk-smart-help-answer-bubble .lk-smart-help-feedback-result{margin-top:7px;color:#76594b;font-size:10px}
-    .lk-smart-help-questions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
-    .lk-smart-help button{border:1px solid #dfc4ad;border-radius:999px;background:#fff;color:#5b2018;padding:7px 10px;font:inherit;font-weight:700;cursor:pointer}
+    .lk-smart-help{margin:12px 0 4px;color:#3c2019;font-size:12px}
+    .lk-smart-help-welcome,.lk-smart-help-sender{display:flex;align-items:center;gap:8px}
+    .lk-smart-help-welcome{max-width:82%;margin:14px 0 0}
+    .lk-smart-help-avatar{width:30px;height:30px;flex:0 0 30px;border-radius:50%;object-fit:cover}
+    .lk-smart-help-welcome-copy{min-width:0}
+    .lk-smart-help-sender{margin:0 0 5px;color:#76594b;font-size:11px}
+    .lk-smart-help-automated-badge{display:inline-flex;align-items:center;border:1px solid #ead5c3;border-radius:999px;padding:2px 7px;background:#fffaf5;color:#8a6655;font-size:9px;font-weight:800;letter-spacing:.02em}
+    .lk-smart-help-bubble{max-width:100%;padding:11px 13px}
+    .lk-smart-help-bubble small,.lk-smart-help-source{display:block;margin-bottom:4px;color:#8a6655;font-size:10px;font-weight:700}
+    .lk-smart-help-bubble p{margin:0}
+    .lk-smart-help-live-status{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:12px;color:#76594b;font-size:11px}
+    .lk-smart-help-live-status[hidden]{display:none}
+    .lk-smart-help-live-dot{width:7px;height:7px;border-radius:50%;background:#3d8c64}
+    .lk-smart-help-live-status strong{color:#3c2019}
+    .lk-smart-help-live-status small{color:#8a6655}
+    .lk-smart-help-status{margin:7px 0 0;color:#8a6655;font-size:11px;line-height:1.45}
+    .lk-smart-help-status:empty{display:none}
+    .lk-smart-help-status.lk-smart-help-error{color:#922e23}
+    .lk-smart-help-tools{margin-top:10px;border-top:1px solid #ead5c3;padding-top:8px}
+    .lk-smart-help-tools[hidden]{display:none}
+    .lk-smart-help-tools summary{display:flex;align-items:center;gap:7px;width:max-content;max-width:100%;color:#76594b;font-size:11px;cursor:pointer;list-style:none}
+    .lk-smart-help-tools summary::-webkit-details-marker{display:none}
+    .lk-smart-help-tools summary::after{content:'+';display:inline-grid;width:18px;height:18px;place-items:center;border:1px solid #dfc4ad;border-radius:50%;color:#5b2018;font-size:14px;line-height:1}
+    .lk-smart-help-tools[open] summary::after{content:'−'}
+    .lk-smart-help-tools summary strong{color:#3c2019}
+    .lk-smart-help-context{margin:8px 0;color:#8a6655;font-size:11px}
+    .lk-smart-help-questions{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+    .lk-smart-help button{border:1px solid #dfc4ad;border-radius:999px;background:#fffaf5;color:#5b2018;padding:7px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
     .lk-smart-help button:hover:not(:disabled){background:#f6e9dd}
     .lk-smart-help button:disabled{opacity:.55;cursor:not-allowed}
     .lk-smart-help-feedback{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px}
-    .lk-smart-help-feedback span{color:#76594b}
-    .lk-smart-help-error{color:#922e23}
+    .lk-smart-help-feedback span{color:#76594b;font-size:11px}
+    .lk-smart-help-feedback[hidden],.lk-smart-help-feedback-result[hidden]{display:none}
     .lk-smart-help-feedback-result{margin:7px 0 0;color:#76594b;font-size:11px}
-    .lk-smart-help-ask{display:flex;gap:7px;margin-top:10px}.lk-smart-help-ask input{min-width:0;flex:1;padding:9px 11px;border:1px solid #dfc4ad;border-radius:10px;background:#fff;color:#3c2019;font:inherit}.lk-smart-help-ask button{white-space:nowrap}
-    @media(max-width:700px){.lk-smart-help{margin:14px 0 8px;padding:11px}.lk-smart-help-question-bubble,.lk-smart-help-answer-bubble{max-width:96%}.lk-smart-help-questions button{max-width:100%;text-align:left}}
+    .lk-smart-help-ask{display:flex;gap:7px;margin-top:9px}
+    .lk-smart-help-ask input{min-width:0;flex:1;padding:8px 10px;border:1px solid #dfc4ad;border-radius:10px;background:#fff;color:#3c2019;font:inherit}
+    .lk-smart-help-ask button{white-space:nowrap}
+    .lk-smart-help-exchange-row{max-width:82%}
+    .lk-smart-help-exchange-row .lk-message-bubble{white-space:pre-wrap}
+    .lk-smart-help-answer-bubble .lk-smart-help-source{margin:0 0 4px}
+    .lk-smart-help-answer-bubble .lk-smart-help-answer-text{margin:0}
+    .lk-smart-help-answer-meta{margin-top:6px;color:#8a6655;font-size:10px}
+    .lk-smart-help-question-row .lk-message-bubble{white-space:pre-wrap}
+    @media(max-width:700px){.lk-smart-help-welcome,.lk-smart-help-exchange-row{max-width:96%}.lk-smart-help-tools summary{width:100%}.lk-smart-help-questions button{max-width:100%;text-align:left}}
 </style>
 <section
     class="lk-smart-help"
@@ -35,46 +64,62 @@
     data-handoff-url="{{ $smartHelp['handoff_url'] }}"
     data-product-id="{{ $smartHelp['product_id'] ?? '' }}"
     data-variant-id="{{ $smartHelp['variant_id'] ?? '' }}"
+    data-smart-help-avatar="{{ $recipientAvatar }}"
+    data-smart-help-recipient-name="{{ $recipientName }}"
     data-human-handoff="{{ $humanHandoff ? 'true' : 'false' }}"
     data-has-answer="{{ filled($smartSession['answer'] ?? null) ? 'true' : 'false' }}"
 >
     <input type="hidden" data-smart-help-token value="{{ csrf_token() }}">
-    <div class="lk-smart-help-head">
-        <strong>Suggested questions for {{ $smartHelp['recipient_name'] }}</strong>
-        <span>Automated help</span>
+
+    @if(! $humanHandoff && ! $hasAutomatedHistory)
+        <div class="lk-smart-help-welcome" aria-label="Automated welcome from {{ $recipientName }}">
+            <img class="lk-message-small-avatar lk-smart-help-avatar" src="{{ $recipientAvatar }}" alt="" loading="lazy" decoding="async">
+            <div class="lk-smart-help-welcome-copy">
+                <div class="lk-smart-help-sender"><strong>{{ $recipientName }}</strong><span class="lk-smart-help-automated-badge">Automated</span></div>
+                <div class="lk-message-bubble lk-smart-help-bubble"><small>Automated help</small><p>{{ $smartHelp['welcome_message'] }}</p></div>
+            </div>
+        </div>
+    @endif
+
+    <div class="lk-smart-help-live-status" data-smart-help-live-status role="status" aria-live="polite" @unless($humanHandoff) hidden @endunless>
+        <span class="lk-smart-help-live-dot" aria-hidden="true"></span>
+        <strong data-smart-help-live-title>{{ $humanConversation ? 'Live chat with' : 'Live chat requested with' }} {{ $recipientName }}</strong>
+        <small data-smart-help-live-description>{{ $humanConversation ? 'Replies appear in this conversation.' : 'Your message stays in this conversation while they join.' }}</small>
     </div>
-    @if(filled($smartHelp['context_label'] ?? null))<p class="lk-smart-help-context">Context: {{ $smartHelp['context_label'] }}</p>@endif
-    <p class="lk-smart-help-status" data-smart-help-status role="status" aria-live="polite">
-        @if($humanHandoff)
-            Live help was requested. This conversation stays with {{ $smartHelp['recipient_name'] }}.
-        @elseif(($smartSession['last_feedback'] ?? null) === 'RESOLVED')
-            Glad that helped. Choose another question or continue chatting below.
+
+    <p class="lk-smart-help-status" data-smart-help-status role="status" aria-live="polite" @if($humanHandoff) hidden @endif>
+        @if(($smartSession['last_feedback'] ?? null) === 'RESOLVED')
+            Glad that helped. Continue chatting or open automated help for another question.
         @else
-            Choose a suggested question. Its verified answer will appear in this conversation.
+            Automated answers are labeled in this conversation.
         @endif
     </p>
-    @if(! $humanHandoff)<div class="lk-smart-help-answer-bubble" style="max-width:100%"><small>LIKHAE Support</small><p>{{ $smartHelp['welcome_message'] }}</p></div>@endif
-    <div class="lk-smart-help-feedback" data-smart-help-feedback @if(empty($smartSession['answer']) || $humanHandoff || filled($lastFeedback)) hidden @endif>
-        <span>Did this answer help?</span>
-        <button type="button" data-smart-feedback="RESOLVED">Yes, thanks</button>
-        <button type="button" data-smart-feedback="UNRESOLVED">I still need help</button>
-    </div>
-    <p class="lk-smart-help-feedback-result" data-smart-help-feedback-note @if(!filled($lastFeedback) || $humanHandoff) hidden @endif>
-        @if($lastFeedback === 'RESOLVED')Marked helpful.@elseif($lastFeedback === 'UNRESOLVED')Thanks for letting us know. You can request live help in this conversation.@endif
-    </p>
-    <div class="lk-smart-help-questions" data-smart-help-questions>
-        @foreach($smartHelp['suggestions'] ?? [] as $suggestion)
-            <button type="button" data-smart-question data-question-key="{{ $suggestion['key'] }}" {{ $humanHandoff ? 'disabled' : '' }}>{{ $suggestion['question'] }}</button>
-        @endforeach
-    </div>
-    @if(! $humanHandoff)
+
+    @unless($humanHandoff)
+    <details class="lk-smart-help-tools" data-smart-help-tools>
+        <summary><strong>Automated help</strong><span>Suggested questions and answers</span></summary>
+        @if(filled($smartHelp['context_label'] ?? null))<p class="lk-smart-help-context">For this conversation: {{ $smartHelp['context_label'] }}</p>@endif
+        <div class="lk-smart-help-feedback" data-smart-help-feedback @if(empty($smartSession['answer']) || $humanHandoff || filled($lastFeedback)) hidden @endif>
+            <span>Did the latest automated answer help?</span>
+            <button type="button" data-smart-feedback="RESOLVED">Yes, thanks</button>
+            <button type="button" data-smart-feedback="UNRESOLVED">I still need help</button>
+        </div>
+        <p class="lk-smart-help-feedback-result" data-smart-help-feedback-note @if(!filled($lastFeedback) || $humanHandoff) hidden @endif>
+            @if($lastFeedback === 'RESOLVED')Marked helpful.@elseif($lastFeedback === 'UNRESOLVED')Thanks for letting us know. You can request live help in this conversation.@endif
+        </p>
+        <div class="lk-smart-help-questions" data-smart-help-questions>
+            @foreach($smartHelp['suggestions'] ?? [] as $suggestion)
+                <button type="button" data-smart-question data-question-key="{{ $suggestion['key'] }}">{{ $suggestion['question'] }}</button>
+            @endforeach
+        </div>
         <form class="lk-smart-help-ask" data-smart-ask-form>
-            <input type="text" maxlength="300" data-smart-ask-input placeholder="Ask a question in your own words" aria-label="Ask a support question">
+            <input type="text" maxlength="300" data-smart-ask-input placeholder="Ask an automated question" aria-label="Ask an automated question">
             <button type="submit" data-smart-ask-submit>Ask</button>
         </form>
-    @endif
-    <div class="lk-smart-help-feedback" data-smart-help-handoff-row @if($humanHandoff) hidden @endif>
-        <span>Use the message box below to add details. This keeps the same conversation history.</span>
-        <button type="button" data-smart-handoff>{{ $handoffLabel }}</button>
-    </div>
+        <div class="lk-smart-help-feedback" data-smart-help-handoff-row>
+            <span>Need a person?</span>
+            <button type="button" data-smart-handoff>{{ $handoffLabel }}</button>
+        </div>
+    </details>
+    @endunless
 </section>

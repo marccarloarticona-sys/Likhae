@@ -36,10 +36,8 @@ final class DeliveryEarningsBreakdown
                 $additionalCareAllocation['logistics_cents'],
                 [30, 10],
             );
-            [$pickupShippingRiderCents, $deliveryShippingRiderCents] = FinancialRules::allocateCents($riderShippingCents, [1, 2]);
-            [$pickupCareRiderCents, $deliveryCareRiderCents] = FinancialRules::allocateCents($additionalCareAllocation['rider_cents'], [1, 2]);
-            $pickupRiderCents = $pickupShippingRiderCents + $pickupCareRiderCents;
-            $deliveryRiderCents = $deliveryShippingRiderCents + $deliveryCareRiderCents;
+            $pickupRiderCents = 0;
+            $deliveryRiderCents = $riderShippingCents + $additionalCareAllocation['rider_cents'];
             $riderCents = $pickupRiderCents + $deliveryRiderCents;
             $originLogisticsCents = $originShippingCents + $originAdditionalCareCents;
             $destinationLogisticsCents = $destinationShippingCents + $destinationAdditionalCareCents;
@@ -56,7 +54,8 @@ final class DeliveryEarningsBreakdown
         }
 
         $riderCents = FinancialRules::cents($allocation->rider_allocation);
-        [$pickupRiderCents, $deliveryRiderCents] = FinancialRules::allocateCents($riderCents, [1, 2]);
+        $pickupRiderCents = 0;
+        $deliveryRiderCents = $riderCents;
 
         return [
             'is_inter_hub' => false,

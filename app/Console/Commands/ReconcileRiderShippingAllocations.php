@@ -9,7 +9,6 @@ use App\Models\Finance\RiderEarningPool;
 use App\Models\Finance\RiderEarningPoolParticipant;
 use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Services\Finance\DeliveryEarningsBreakdown;
-use App\Services\Finance\ShippingRatePolicyService;
 use App\Support\FinancialRules;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +20,7 @@ class ReconcileRiderShippingAllocations extends Command
                             {--apply : Back up and correct unpaid Rider shares}
                             {--target= : Required database name when applying changes}';
 
-    protected $description = 'Preview or reconcile unpaid Rider shipping shares to the 20/40 role split';
+    protected $description = 'Preview or reconcile unpaid Rider shipping shares to the Delivery Rider';
 
     public function handle(): int
     {
@@ -93,20 +92,30 @@ class ReconcileRiderShippingAllocations extends Command
                     ] : null,
                 ];
 
-                $participant->forceFill(['share_amount' => FinancialRules::amount($change['after_share_cents'])])->save();
+                $participantStatus = $change['after_share_cents'] === 0 && $participant->status === 'PAYOUT_REQUESTED'
+                    ? 'PENDING'
+                    : $participant->status;
+                $participant->forceFill([
+                    'share_amount' => FinancialRules::amount($change['after_share_cents']),
+                    'status' => $participantStatus,
+                ])->save();
                 if ($entry && $entry->status === 'PAYOUT_REQUESTED') {
                     $metadata = (array) $entry->metadata;
                     $history = (array) data_get($metadata, 'allocation_reconciliation_history', []);
                     $history[] = [
                         'previous_amount' => FinancialRules::amount($change['before_ledger_cents']),
                         'corrected_amount' => FinancialRules::amount($change['after_share_cents']),
-                        'policy' => '20% pickup Rider / 40% delivery Rider of shipping fee',
+                        'policy' => 'Delivery Rider receives the Rider share of shipping and Additional Care; Logistics shares are unchanged',
                         'reconciled_at' => $now->toIso8601String(),
                     ];
                     $metadata['amount_expected'] = FinancialRules::amount($change['after_share_cents']);
+                    if ($change['after_share_cents'] === 0) {
+                        $metadata['confirmation_status'] = 'VOID';
+                    }
                     $metadata['allocation_reconciliation_history'] = $history;
                     $entry->update([
                         'amount' => FinancialRules::amount($change['after_share_cents']),
+                        'status' => $change['after_share_cents'] === 0 ? 'VOID' : 'PAYOUT_REQUESTED',
                         'metadata' => $metadata,
                     ]);
                 }
@@ -120,7 +129,7 @@ class ReconcileRiderShippingAllocations extends Command
                     'after_state' => [
                         'participant' => [
                             'share_amount' => FinancialRules::amount($change['after_share_cents']),
-                            'status' => $participant->status,
+                            'status' => $participantStatus,
                         ],
                         'ledger_entry' => $entry ? [
                             'id' => $entry->id,
@@ -128,9 +137,23 @@ class ReconcileRiderShippingAllocations extends Command
                             'status' => $entry->status,
                         ] : null,
                     ],
-                    'notes' => 'Corrected unpaid Rider allocation to 20% Pickup / 40% Delivery of the parcel shipping fee. Additional Care allocation rules remain unchanged.',
+                    'notes' => 'Corrected unpaid Rider allocation to Delivery for shipping and Additional Care.',
                 ]);
                 $updated++;
+            }
+
+            foreach (array_unique(array_column($changes, 'pool_id')) as $poolId) {
+                $pool = RiderEarningPool::query()->whereKey($poolId)->lockForUpdate()->firstOrFail();
+                $allocatedCents = $pool->participants()->get()->sum(
+                    fn (RiderEarningPoolParticipant $participant): int => FinancialRules::cents($participant->share_amount),
+                );
+                $poolTotalCents = FinancialRules::cents($pool->total_amount);
+                if ($allocatedCents > $poolTotalCents) {
+                    throw new RuntimeException('Rider shares exceed the saved pool total. No reconciliation changes were committed.');
+                }
+                $pool->forceFill([
+                    'unresolved_share_amount' => FinancialRules::amount($poolTotalCents - $allocatedCents),
+                ])->save();
             }
 
             $updatedLogistics = 0;
@@ -179,12 +202,6 @@ class ReconcileRiderShippingAllocations extends Command
                         $completedRidersByRole[$assignment->assignment_type][] = (int) $assignment->rider_profile_id;
                     }
 
-                    $rateVersion = $shipment->sellerOrder?->shippingRateVersion;
-                    $weights = [
-                        'PICKUP' => (int) ($rateVersion?->pickup_rider_weight ?? ShippingRatePolicyService::DEFAULT_PICKUP_WEIGHT),
-                        'HUB_TO_HUB' => (int) ($rateVersion?->hub_to_hub_rider_weight ?? ShippingRatePolicyService::DEFAULT_HUB_WEIGHT),
-                        'DELIVERY' => (int) ($rateVersion?->last_mile_rider_weight ?? ShippingRatePolicyService::DEFAULT_LAST_MILE_WEIGHT),
-                    ];
                     $careCents = max(0, FinancialRules::cents($allocation->protection_amount ?? 0));
                     $distribution = FinancialRules::riderPoolRoleDistribution(
                         FinancialRules::shippingAllocationCents(
@@ -193,7 +210,6 @@ class ReconcileRiderShippingAllocations extends Command
                         )['rider_cents'],
                         FinancialRules::shippingAllocationCents($careCents, FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE)['rider_cents'],
                         $completedRidersByRole,
-                        $weights,
                     );
                     $targets = [];
                     foreach ($distribution['participants'] as $target) {
@@ -205,16 +221,19 @@ class ReconcileRiderShippingAllocations extends Command
                         ->whereIn('idempotency_key', $participants->map(fn ($participant): string => 'rider-payout-'.$participant->id))
                         ->get()
                         ->keyBy('idempotency_key');
+                    if ($participants->contains(fn (RiderEarningPoolParticipant $participant): bool =>
+                        ! in_array($participant->status, ['PENDING', 'PAYOUT_REQUESTED'], true))
+                        || $entries->contains(fn (FinancialLedgerEntry $entry): bool =>
+                            in_array($entry->status, ['PAYOUT_PENDING_ACK', 'PAID'], true))) {
+                        continue;
+                    }
 
                     foreach ($participants as $participant) {
                         if (! in_array($participant->status, ['PENDING', 'PAYOUT_REQUESTED'], true)) {
                             continue;
                         }
                         $key = $participant->participant_role.':'.$participant->rider_profile_id;
-                        if (! array_key_exists($key, $targets)) {
-                            continue;
-                        }
-                        $targetCents = $targets[$key];
+                        $targetCents = $targets[$key] ?? 0;
                         $entry = $entries->get('rider-payout-'.$participant->id);
                         if ($entry && in_array($entry->status, ['PAYOUT_PENDING_ACK', 'PAID'], true)) {
                             continue;
@@ -668,7 +687,8 @@ class ReconcileRiderShippingAllocations extends Command
         $snapshot = [
             'created_at' => now()->toIso8601String(),
             'database' => $database,
-            'reason' => 'Rider and Inter-Hub Logistics allocation correction: Pickup 20%, Delivery 40%, Origin 30%, Destination 10%',
+            'reason' => 'Rider and Inter-Hub Logistics allocation correction: Delivery 60%, Origin 30%, Destination 10%',
+            'rider_pools' => RiderEarningPool::query()->whereIn('id', array_unique(array_column($changes, 'pool_id')))->get()->toArray(),
             'participants' => RiderEarningPoolParticipant::query()->whereIn('id', $participantIds)->get()->toArray(),
             'ledger_entries' => FinancialLedgerEntry::query()->whereIn('id', $ledgerIds)->get()->toArray(),
             'inter_hub_logistics_changes' => array_map(fn (array $change): array => [

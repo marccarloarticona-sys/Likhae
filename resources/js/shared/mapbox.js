@@ -1466,6 +1466,8 @@ function initMap(shell, maplibregl) {
     map.on('error', (event) => {
         if (mapLoaded) return;
         const status = Number(event?.error?.status || event?.error?.statusCode);
+        shell.classList.add('is-map-error');
+        shell.setAttribute('aria-busy', 'false');
         updateStatus(shell, status === 401 || status === 403
             ? 'Open map tiles were rejected. Check the OpenFreeMap style URL or connection.'
             : 'Map tiles could not be loaded. Check the map provider connection and style URL.', true);
@@ -1481,6 +1483,9 @@ function initMap(shell, maplibregl) {
     addUserLocation(shell, map, maplibregl, markers);
     map.on('load', () => {
         mapLoaded = true;
+        shell.classList.remove('is-map-error');
+        shell.classList.add('is-map-ready');
+        shell.setAttribute('aria-busy', 'false');
         const pinFormId = shell.dataset.mapPinForm;
         const pinForm = pinFormId ? document.getElementById(pinFormId) : null;
         if (pinForm) {
@@ -1530,11 +1535,30 @@ function bootMaps() {
     const shells = [...document.querySelectorAll('[data-likhae-map]')];
     if (!shells.length) return;
 
-    shells.forEach((shell) => {
+    const start = () => shells.forEach((shell) => {
+        if (shell.dataset.mapStarted === 'true') return;
+        shell.dataset.mapStarted = 'true';
+        updateStatus(shell, 'Preparing the interactive map…');
         loadMapLibre()
             .then((maplibregl) => initMap(shell, maplibregl))
-            .catch(() => updateStatus(shell, 'The OpenStreetMap-based map could not be loaded. Check your connection and reload the page.', true));
+            .catch(() => {
+                shell.classList.add('is-map-error');
+                shell.setAttribute('aria-busy', 'false');
+                updateStatus(shell, 'The OpenStreetMap-based map could not be loaded. Check your connection and reload the page.', true);
+            });
     });
+
+    // Let the page finish its initial load before downloading and initializing
+    // MapLibre, which can otherwise compete with the order page's first paint.
+    const startWhenIdle = () => {
+        if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(start, { timeout: 1600 });
+        } else {
+            window.setTimeout(start, 500);
+        }
+    };
+    if (document.readyState === 'complete') startWhenIdle();
+    else window.addEventListener('load', startWhenIdle, { once: true });
 
     document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;

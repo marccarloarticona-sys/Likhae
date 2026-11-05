@@ -32,6 +32,7 @@
     $allowedTabs = [
         'profile',
         'addresses',
+        'wallet',
         'following',
         'reviews',
         'password',
@@ -52,6 +53,10 @@
         'addresses' => [
             'label' => 'Addresses',
             'description' => 'Delivery locations',
+        ],
+        'wallet' => [
+            'label' => 'Wallet',
+            'description' => 'Payment methods',
         ],
         'following' => [
             'label' => 'Following Stores',
@@ -84,6 +89,14 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/>
                     <circle cx="12" cy="10" r="2.5"/>
+                </svg>
+            ',
+
+            'wallet' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3" y="6" width="18" height="14" rx="2"/>
+                    <path d="M3 10h18M16 15h2"/>
+                    <path d="M6 6V4h12v2"/>
                 </svg>
             ',
 
@@ -390,6 +403,55 @@
                                 </div>
                             </div>
                         </form>
+                    </div>
+                </section>
+            @endif
+
+            @if ($activeTab === 'wallet')
+                <section class="payout-section" aria-labelledby="wallet-heading">
+                    <header class="payout-section-head">
+                        <div>
+                            <span class="payout-overline">Buyer Center</span>
+                            <h2 id="wallet-heading">Wallet</h2>
+                            <p>Save a GCash, Maya, or bank account for future online purchases and digital refunds.</p>
+                        </div>
+                        @if($walletDestinationReady && count($walletDestinations))
+                            <span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Payment details saved</span>
+                        @endif
+                    </header>
+
+                    <div class="payout-section-body">
+                        @if(session('status'))
+                            <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900" role="status">{{ session('status') }}</div>
+                        @endif
+
+                        <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
+                            Online checkout and digital refunds are not active yet. New purchases currently use Cash on Delivery, and new refunds are paid in cash after approval and inspection. Your saved details will be ready when those options are enabled.
+                        </div>
+
+                        @if($walletDestinationReady)
+                            @include('components.shared.payout-destination-manager', [
+                                'payoutDestinations' => $walletDestinations,
+                                'payoutDestinationRoute' => 'buyer.account.wallet.update',
+                                'payoutChangeDescription' => 'Choose which saved payment method should be the default for future purchases and refunds.',
+                                'payoutPurpose' => 'purchases and refunds',
+                                'payoutSecurityCopy' => 'Your saved account details are private and used only for payment workflows.',
+                                'payoutHelpId' => 'buyer-wallet-payment-number-help',
+                                'payoutButtonClass' => 'payout-inline-button',
+                                'destinationNoun' => 'payment method',
+                                'destinationNounPlural' => 'payment methods',
+                                'destinationSettingsLabel' => 'Wallet settings',
+                                'destinationSaveLabel' => 'Save payment method',
+                                'destinationUpdateLabel' => 'Update payment method',
+                                'destinationAddTitle' => count($walletDestinations) ? 'Add another payment method' : 'Add a payment method',
+                                'destinationEditTitle' => 'Update payment method',
+                                'destinationIncompleteNote' => 'Incomplete details; add a complete payment method before setting it as your default.',
+                            ])
+                        @else
+                            <div class="rounded-xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-600" role="status">
+                                Wallet setup is temporarily unavailable. Please try again later.
+                            </div>
+                        @endif
                     </div>
                 </section>
             @endif

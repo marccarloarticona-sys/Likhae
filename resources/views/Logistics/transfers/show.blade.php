@@ -90,7 +90,9 @@
                         @forelse($manifest->items as $item)
                             @php
                                 $shipment = $item->transferLeg?->shipment;
-                                $buyerReturn = $shipment?->buyerReturnWorkflows?->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER);
+                                $buyerReturn = $shipment?->relationLoaded('buyerReturnWorkflows')
+                                    ? $shipment->buyerReturnWorkflows->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+                                    : null;
                                 $trackingNumber = (string) ($buyerReturn?->return_tracking_number ?: $shipment?->tracking_number);
                                 $isReleased = $item->transferLeg?->status === \App\Models\Logistics\ShipmentTransferLeg::RELEASED;
                             @endphp
@@ -266,7 +268,9 @@
                         <tr class="border-b border-line">
                             <td class="px-2 py-3">#{{ $item->transfer_leg_id }} · {{ $item->transferLeg?->status }}</td>
                             <td class="px-2 py-3">
-                                @php($buyerReturn = $item->transferLeg?->shipment?->buyerReturnWorkflows?->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER))
+                                @php($buyerReturn = $shipment?->relationLoaded('buyerReturnWorkflows')
+                                    ? $shipment->buyerReturnWorkflows->firstWhere('status', \App\Models\Logistics\ShipmentReturnWorkflow::AWAITING_CROSS_CENTER_TRANSFER)
+                                    : null)
                                 <strong class="block">{{ $buyerReturn?->return_tracking_number ?? $item->transferLeg?->shipment?->tracking_number }}</strong>
                                 @if($isOriginCenter && $manifest->status === 'DRAFT')
                                     @if($savedWeight !== null)

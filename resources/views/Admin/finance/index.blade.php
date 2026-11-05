@@ -333,7 +333,7 @@
 
     @if($logisticsPayouts)
         <div class="ad-card" style="margin-top:16px">
-            <div class="ad-card-head"><div><span class="ad-overline">Delivery charge release</span><h2>Logistics transfers ready</h2><p>After full COD verification, release each route allocation. Single-Hub totals include both Rider reserves. Inter-Hub groups Pickup Rider with Origin Logistics, and Delivery Rider with Destination Logistics.</p></div></div>
+            <div class="ad-card-head"><div><span class="ad-overline">Delivery charge release</span><h2>Logistics transfers ready</h2><p>After full COD verification, release each route allocation. The Delivery Rider receives the Rider reserve. On Inter-Hub routes, Origin receives its Logistics share and Destination receives its Logistics share plus the Rider reserve.</p></div></div>
             <div class="grid gap-3" style="margin-top:16px">
                 @forelse($logisticsPayouts as $allocation)
                     @php($shipment = $allocation->shipment)
@@ -406,7 +406,7 @@
                                                 <h4 style="margin:0 0 8px">{{ $roleLabel }} · {{ $pool->logisticsCenter?->business_name ?? 'Logistics center' }}</h4>
                                                 <div class="ad-table-wrap"><table class="ad-table ad-finance-route-breakdown"><tbody>
                                                     @if($routeRole === 'ORIGIN')
-                                                        @if($usesCurrentInterHubSplit)
+                                                        @if($usesCurrentInterHubSplit && $pickupRiderCents > 0)
                                                             <tr><td>Pickup Rider</td><td>{{ number_format($pickupRiderPercent, 2) }}%</td><td>PHP {{ number_format($pickupRiderCents / 100, 2) }}</td></tr>
                                                         @elseif($riderPassThrough > 0)
                                                             <tr><td>Rider reserve</td><td>{{ number_format($riderReservePercent, 2) }}%</td><td>PHP {{ number_format($riderPassThrough, 2) }}</td></tr>
@@ -422,7 +422,9 @@
                                                         <tr><td>Destination Logistics</td><td>{{ number_format($destinationLogisticsPercent, 2) }}%</td><td>PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }}</td></tr>
                                                         <tr><th>Destination total</th><th>{{ number_format($grossTransferPercent, 2) }}%</th><th>PHP {{ number_format($grossDeliveryAmount, 2) }}</th></tr>
                                                     @else
-                                                        <tr><td>Pickup Rider reserve</td><td>{{ number_format($pickupRiderPercent, 2) }}%</td><td>PHP {{ number_format($pickupRiderCents / 100, 2) }}</td></tr>
+                                                        @if($pickupRiderCents > 0)
+                                                            <tr><td>Pickup Rider reserve</td><td>{{ number_format($pickupRiderPercent, 2) }}%</td><td>PHP {{ number_format($pickupRiderCents / 100, 2) }}</td></tr>
+                                                        @endif
                                                         <tr><td>Delivery Rider reserve</td><td>{{ number_format($deliveryRiderPercent, 2) }}%</td><td>PHP {{ number_format($deliveryRiderCents / 100, 2) }}</td></tr>
                                                         <tr><td>Same-Hub Logistics</td><td>{{ number_format($logisticsSharePercent, 2) }}%</td><td>PHP {{ number_format($payoutBreakdown['net_share_cents'] / 100, 2) }}</td></tr>
                                                         <tr><th>Same-Hub total</th><th>{{ number_format($grossTransferPercent, 2) }}%</th><th>PHP {{ number_format($grossDeliveryAmount, 2) }}</th></tr>

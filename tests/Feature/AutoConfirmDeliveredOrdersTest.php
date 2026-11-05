@@ -257,11 +257,11 @@ class AutoConfirmDeliveredOrdersTest extends TestCase
         ])->postJson(route('api.v1.buyer.orders.received', $order), ['confirm_receipt' => '1'])->assertForbidden();
     }
 
-    public function test_auto_receipt_does_not_shorten_the_existing_five_day_return_window(): void
+    public function test_auto_receipt_does_not_shorten_the_seven_day_return_window(): void
     {
         $this->at('2026-10-16 20:30:00');
         [$order] = $this->createOrder([
-            ['status' => 'DELIVERED', 'delivered_at' => now()->subDays(4)],
+            ['status' => 'DELIVERED', 'delivered_at' => now()->subDays(6)],
         ]);
 
         $this->artisan('likhae:auto-confirm-delivered-orders')->assertExitCode(0);

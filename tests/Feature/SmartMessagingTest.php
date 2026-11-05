@@ -44,7 +44,9 @@ class SmartMessagingTest extends TestCase
         ]);
 
         $this->actingAs($buyer)->get(route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]))
-            ->assertOk()->assertSee('Suggested questions for Approved Answer Shop')->assertSee('How long does delivery take?');
+            ->assertOk()->assertSee('Approved Answer Shop')->assertSee('How long does delivery take?')
+            ->assertSee('Automated', false)->assertSee('lk-smart-help-welcome', false)
+            ->assertSee('data-smart-help-tools', false);
 
         $answer = $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.answer', $conversation), [
             'question_key' => (string) $faq->id,
@@ -52,6 +54,12 @@ class SmartMessagingTest extends TestCase
         $this->assertStringContainsString('delivery estimate', $answer->json('answer'));
         $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.feedback', $conversation), ['feedback' => 'RESOLVED'])
             ->assertOk()->assertJsonPath('status', ConversationSupportSession::RESOLVED);
+
+        $history = $this->actingAs($buyer)->get(route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]))
+            ->assertOk()->assertSee($faq->question)->assertSee($faq->answer)
+            ->assertSee('data-automated-answer', false)->assertSee('Seller-approved answer')
+            ->assertSee('Automated', false);
+        $this->assertStringNotContainsString('class="lk-smart-help-exchange"', $history->getContent());
 
         $this->assertDatabaseCount('messages', 0);
         $this->assertDatabaseHas('messaging_faqs', ['id' => $faq->id, 'selection_count' => 1]);
@@ -127,6 +135,10 @@ class SmartMessagingTest extends TestCase
             ->assertOk()->assertJsonPath('status', ConversationSupportRequest::NEW);
         $this->actingAs($buyer)->postJson(route('buyer.messages.smart-help.handoff', $conversation))
             ->assertOk()->assertJsonPath('already_requested', true);
+        $this->actingAs($buyer)->get(route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]))
+            ->assertOk()->assertSee('Live chat requested with Live Handoff Shop')
+            ->assertSee('data-smart-help-live-status', false)
+            ->assertDontSee('data-smart-help-tools', false);
 
         $this->assertSame(1, Conversation::query()->count());
         $this->assertSame(1, Notification::query()->where('user_id', $seller->id)->where('type', 'CONVERSATION_HUMAN_ASSISTANCE')->count());
@@ -139,6 +151,10 @@ class SmartMessagingTest extends TestCase
             'conversation_id' => $conversation->id,
             'body' => 'I can help with your order question.',
         ])->assertOk();
+        $this->actingAs($buyer)->get(route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]))
+            ->assertOk()->assertSee('Live chat with Live Handoff Shop')
+            ->assertSee('I can help with your order question.')
+            ->assertSee('lk-message-small-avatar', false);
 
         $this->assertDatabaseHas('conversation_support_sessions', [
             'conversation_id' => $conversation->id,

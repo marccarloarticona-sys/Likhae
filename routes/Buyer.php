@@ -25,6 +25,15 @@ Route::prefix('buyer')
             ->name('ai.chat');
 
         Route::get('/home', [BuyerController::class, 'home'])->name('home');
+        Route::get('/home/marketing', [BuyerController::class, 'homeMarketing'])
+            ->middleware('throttle:30,1')
+            ->name('home.marketing');
+        Route::get('/notifications/preview', [BuyerController::class, 'notificationPreview'])
+            ->middleware('throttle:60,1')
+            ->name('notifications.preview');
+        Route::get('/home/recommendations', [BuyerController::class, 'homeRecommendations'])
+            ->middleware('throttle:60,1')
+            ->name('home.recommendations');
         Route::get('/platform-events', [BuyerPlatformEventController::class, 'index'])->name('platform-events.index');
         Route::get('/platform-events/{voucher}', [BuyerPlatformEventController::class, 'show'])->name('platform-events.show');
         Route::get('/discounts', [BuyerController::class, 'discounts'])->name('discounts');
@@ -115,6 +124,7 @@ Route::prefix('buyer')
         Route::get('/account/addresses', fn () => redirect()->route('buyer.account', ['tab' => 'addresses']))->name('account.addresses');
         Route::get('/account/security', fn () => redirect()->route('buyer.account', ['tab' => 'password']))->name('account.security');
         Route::get('/account/reviews', fn () => redirect()->route('buyer.account', ['tab' => 'reviews']))->name('account.reviews');
+        Route::put('/account/wallet/payment-method', [BuyerController::class, 'updateWalletPaymentDestination'])->middleware('throttle:10,1')->name('account.wallet.update');
         Route::put('/account/profile', [BuyerController::class, 'saveProfile'])->middleware('throttle:10,1')->name('account.profile.update');
         Route::post('/account/email/verify', [BuyerController::class, 'verifyEmailChange'])->middleware('throttle:10,1')->name('account.email.verify');
         Route::post('/account/email/resend', [BuyerController::class, 'resendEmailChangeCode'])->middleware('throttle:3,1')->name('account.email.resend');

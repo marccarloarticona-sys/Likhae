@@ -3,7 +3,7 @@
 @section('title', 'Home')
 
 @push('head')
-<link rel="preload" as="image" href="{{ asset('images/buyer/home-hero-editorial-v3.png') }}" type="image/png" fetchpriority="high">
+<link rel="preload" as="image" href="{{ asset('images/buyer/home-hero-editorial-v3.webp') }}" type="image/webp" fetchpriority="high">
 <style>
     :root {
         --lk-bg: #FBF7F2;
@@ -664,7 +664,8 @@
 
     .lk-platform-events-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
     .lk-platform-events-grid.is-single-event { grid-template-columns: minmax(0, 1fr); }
-    .lk-event-card { position: relative; overflow: hidden; display: grid; gap: 20px; padding: clamp(22px, 3vw, 34px); border: 0; border-radius: 24px; background: radial-gradient(circle at 86% 18%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-card { position: relative; overflow: hidden; display: grid; gap: 20px; padding: clamp(22px, 3vw, 34px); border: 0; border-top: 4px solid var(--lk-event-accent, #E9C7A5); border-radius: 24px; background: radial-gradient(circle at 86% 18%, rgba(193,151,113,.24), transparent 24%), linear-gradient(115deg, #561C17 0%, #642920 56%, #3E130F 100%); color: #FFF8F2; box-shadow: 0 18px 42px rgba(86,28,23,.18); }
+    .lk-event-card__image { width: 100%; max-height: 260px; aspect-ratio: 2.5 / 1; border-radius: 16px; object-fit: cover; background: rgba(255,248,242,.08); }
     .lk-event-card__top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .lk-event-card__eyebrow { color: #E9C7A5; font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
     .lk-event-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 11px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
@@ -828,6 +829,32 @@
         gap: 10px;
     }
 
+    .lk-home-page .lk-home-recommendation-more {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 48px;
+        color: var(--lk-home-muted, #6b625c);
+        font-size: 12px;
+        text-align: center;
+    }
+
+    .lk-home-page .lk-home-recommendation-more button {
+        padding: 7px 12px;
+        border: 1px solid var(--lk-home-line, #eadfd4);
+        border-radius: 999px;
+        background: var(--lk-home-paper, #fffdf9);
+        color: var(--lk-home-copy-maroon, #561c17);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+    }
+
+    .lk-home-page .lk-home-recommendation-more button:hover {
+        background: #f4e6df;
+    }
+
     @media (max-width: 1279px) and (min-width: 768px) {
         .lk-home-page .lk-home-product-grid,
         .lk-home-page .lk-home-recommendation-grid {
@@ -895,7 +922,7 @@
         border: 0;
         border-radius: 18px;
         background-color: #f5e8da;
-        background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 18%, rgba(255, 251, 246, .9) 30%, rgba(255, 251, 246, .8) 42%, rgba(255, 251, 246, .64) 54%, rgba(255, 251, 246, .45) 66%, rgba(255, 251, 246, .25) 80%, rgba(255, 251, 246, .08) 92%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 18%, rgba(255, 251, 246, .9) 30%, rgba(255, 251, 246, .8) 42%, rgba(255, 251, 246, .64) 54%, rgba(255, 251, 246, .45) 66%, rgba(255, 251, 246, .25) 80%, rgba(255, 251, 246, .08) 92%, rgba(255, 251, 246, 0) 100%), image-set(url('{{ asset('images/buyer/home-hero-editorial-v3.webp') }}') type('image/webp'), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}') type('image/png'));
         background-position: center right, right center;
         background-size: cover, cover;
         background-repeat: no-repeat;
@@ -965,6 +992,124 @@
         stroke-linecap: round;
         stroke-linejoin: round;
         stroke-width: 1.8;
+    }
+
+    .lk-home-page .lk-home-hero-carousel { position: relative; width: 100%; isolation: isolate; touch-action: pan-y; }
+    .lk-home-page .lk-home-hero-track { display: grid; }
+    .lk-home-page .lk-home-hero-slide {
+        grid-area: 1 / 1;
+        min-height: clamp(360px, 44vh, 520px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .55s ease;
+        visibility: hidden;
+        z-index: 0;
+    }
+    .lk-home-page .lk-home-hero-slide[aria-hidden="false"] {
+        opacity: 1;
+        pointer-events: auto;
+        visibility: visible;
+        z-index: 1;
+    }
+    .lk-home-page .lk-home-hero-slide--event { background-image: none; }
+    .lk-home-page .lk-home-hero-artwork { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; }
+    .lk-home-page .lk-home-hero-artwork picture,
+    .lk-home-page .lk-home-hero-artwork img { display: block; width: 100%; height: 100%; }
+    .lk-home-page .lk-home-hero-artwork img { object-fit: cover; object-position: center; }
+    .lk-home-page .lk-home-hero-artwork::after {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .95) 24%, rgba(255, 251, 246, .82) 43%, rgba(255, 251, 246, .45) 64%, rgba(255, 251, 246, .06) 100%);
+        content: "";
+    }
+    .lk-home-page .lk-home-hero-event-copy { position: relative; z-index: 1; width: min(55%, 600px); }
+    .lk-home-page .lk-home-hero-event-kicker {
+        display: inline-block;
+        margin-bottom: 11px;
+        color: var(--lk-home-copy-maroon);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .16em;
+        text-transform: uppercase;
+    }
+    .lk-home-page .lk-home-hero-event-title {
+        margin: 0;
+        color: var(--lk-home-ink);
+        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-size: clamp(44px, 5vw, 70px);
+        font-weight: 400;
+        letter-spacing: -.045em;
+        line-height: .94;
+        text-wrap: balance;
+    }
+    .lk-home-page .lk-home-hero-event-description {
+        max-width: 450px;
+        margin: 14px 0 0;
+        color: var(--lk-home-copy-maroon);
+        font-size: 14px;
+        line-height: 1.65;
+    }
+    .lk-home-page .lk-home-hero-controls {
+        position: absolute;
+        right: 22px;
+        bottom: 18px;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
+        border: 1px solid rgba(86, 28, 23, .12);
+        border-radius: 999px;
+        background: rgba(255, 253, 249, .92);
+        box-shadow: 0 5px 18px rgba(48, 29, 21, .12);
+        backdrop-filter: blur(10px);
+    }
+    .lk-home-page .lk-home-hero-arrow,
+    .lk-home-page .lk-home-hero-dot {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--lk-home-copy-maroon);
+        cursor: pointer;
+    }
+    .lk-home-page .lk-home-hero-arrow:hover,
+    .lk-home-page .lk-home-hero-dot[aria-current="true"] { background: #f1e4d7; }
+    .lk-home-page .lk-home-hero-arrow svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+    .lk-home-page .lk-home-hero-pagination { display: flex; align-items: center; gap: 2px; }
+    .lk-home-page .lk-home-hero-dot { width: 26px; height: 26px; }
+    .lk-home-page .lk-home-hero-dot::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
+    .lk-home-page .lk-home-hero-arrow:focus-visible,
+    .lk-home-page .lk-home-hero-dot:focus-visible { outline: 3px solid #bd3e2b; outline-offset: 2px; }
+    .lk-home-page .lk-home-hero-slide[aria-hidden="true"] a { visibility: hidden; }
+
+    @media (max-width: 640px) {
+        .lk-home-page .lk-home-hero-slide { min-height: 390px; }
+        .lk-home-page .lk-home-editorial-hero { align-items: flex-start; padding-bottom: 70px !important; }
+        .lk-home-page .lk-home-editorial-copy,
+        .lk-home-page .lk-home-hero-event-copy { width: min(82%, 420px); }
+        .lk-home-page .lk-home-editorial-title { font-size: clamp(48px, 13vw, 64px); }
+        .lk-home-page .lk-home-hero-event-title { font-size: clamp(42px, 11vw, 58px); }
+        .lk-home-page .lk-home-hero-artwork::after { background: linear-gradient(90deg, rgba(255, 251, 246, .96) 0%, rgba(255, 251, 246, .88) 42%, rgba(255, 251, 246, .45) 72%, rgba(255, 251, 246, .12) 100%); }
+        .lk-home-page .lk-home-hero-controls { right: 12px; bottom: 12px; }
+        .lk-home-page .lk-home-hero-arrow { width: 32px; height: 32px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .lk-home-page .lk-home-hero-slide { transition: none; }
+    }
+
+    html.dark .lk-home-page .lk-home-hero-artwork::after {
+        background: linear-gradient(90deg, rgba(23, 18, 16, .96) 0%, rgba(23, 18, 16, .9) 28%, rgba(23, 18, 16, .74) 48%, rgba(23, 18, 16, .35) 70%, rgba(23, 18, 16, .08) 100%);
+    }
+    html.dark .lk-home-page .lk-home-hero-controls {
+        border-color: rgba(255, 248, 242, .18);
+        background: rgba(36, 26, 23, .94);
     }
 
     .lk-home-page .lk-home-category-section {
@@ -1230,7 +1375,7 @@
 
     html.dark .lk-home-page .lk-home-editorial-hero {
         border-color: #49342b;
-        background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 18%, rgba(23, 18, 16, .84) 30%, rgba(23, 18, 16, .72) 42%, rgba(23, 18, 16, .56) 54%, rgba(23, 18, 16, .38) 66%, rgba(23, 18, 16, .22) 80%, rgba(23, 18, 16, .06) 92%, rgba(23, 18, 16, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+        background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 18%, rgba(23, 18, 16, .84) 30%, rgba(23, 18, 16, .72) 42%, rgba(23, 18, 16, .56) 54%, rgba(23, 18, 16, .38) 66%, rgba(23, 18, 16, .22) 80%, rgba(23, 18, 16, .06) 92%, rgba(23, 18, 16, 0) 100%), image-set(url('{{ asset('images/buyer/home-hero-editorial-v3.webp') }}') type('image/webp'), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}') type('image/png'));
     }
 
     html.dark .lk-home-page .lk-home-editorial-title,
@@ -1299,11 +1444,11 @@
             background-position: center right, 62% center;
             background-size: 100% 100%, cover;
             background-repeat: no-repeat;
-            background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 28%, rgba(255, 251, 246, .9) 40%, rgba(255, 251, 246, .78) 52%, rgba(255, 251, 246, .6) 64%, rgba(255, 251, 246, .4) 76%, rgba(255, 251, 246, .2) 88%, rgba(255, 251, 246, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+            background-image: linear-gradient(90deg, rgba(255, 251, 246, .98) 0%, rgba(255, 251, 246, .96) 28%, rgba(255, 251, 246, .9) 40%, rgba(255, 251, 246, .78) 52%, rgba(255, 251, 246, .6) 64%, rgba(255, 251, 246, .4) 76%, rgba(255, 251, 246, .2) 88%, rgba(255, 251, 246, 0) 100%), image-set(url('{{ asset('images/buyer/home-hero-editorial-v3.webp') }}') type('image/webp'), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}') type('image/png'));
         }
 
         html.dark .lk-home-page .lk-home-editorial-hero {
-            background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 28%, rgba(23, 18, 16, .84) 40%, rgba(23, 18, 16, .7) 52%, rgba(23, 18, 16, .52) 64%, rgba(23, 18, 16, .34) 76%, rgba(23, 18, 16, .16) 88%, rgba(23, 18, 16, 0) 100%), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}');
+            background-image: linear-gradient(90deg, rgba(23, 18, 16, .94) 0%, rgba(23, 18, 16, .92) 28%, rgba(23, 18, 16, .84) 40%, rgba(23, 18, 16, .7) 52%, rgba(23, 18, 16, .52) 64%, rgba(23, 18, 16, .34) 76%, rgba(23, 18, 16, .16) 88%, rgba(23, 18, 16, 0) 100%), image-set(url('{{ asset('images/buyer/home-hero-editorial-v3.webp') }}') type('image/webp'), url('{{ asset('images/buyer/home-hero-editorial-v3.png') }}') type('image/png'));
         }
 
         .lk-home-page .lk-home-editorial-copy {
@@ -1412,7 +1557,7 @@
     }
 
     .lk-home-page .lk-home-editorial-hero {
-        min-height: clamp(280px, 34vh, 420px) !important;
+        min-height: clamp(360px, 44vh, 520px) !important;
         height: auto !important;
         padding: clamp(16px, 2.5vw, 30px) !important;
         border-radius: 16px;
@@ -1994,6 +2139,115 @@
             min-height: 24px;
         }
     }
+
+    .lk-home-deferred-status {
+        margin: 10px 0;
+        color: #765f54;
+        font-size: 12px;
+    }
+
+    .lk-home-deferred-status.is-error {
+        color: #8a271d;
+    }
+
+    .lk-home-deferred-slot[aria-busy="true"] {
+        min-height: 220px;
+    }
+
+    .lk-home-skeleton-heading {
+        width: min(260px, 58%);
+        height: 17px;
+        border-radius: 999px;
+        background: #eee5dc;
+    }
+
+    .lk-home-skeleton-copy {
+        width: min(360px, 76%);
+        height: 10px;
+        margin-top: 8px;
+        border-radius: 999px;
+        background: #f1eae3;
+    }
+
+    .lk-home-skeleton-card {
+        overflow: hidden;
+        min-width: 0;
+        border: 1px solid #eadccc;
+        border-radius: 16px;
+        background: #fffdf9;
+    }
+
+    .lk-home-skeleton-media,
+    .lk-home-skeleton-line {
+        background: linear-gradient(90deg, #f3ede6 25%, #ebe2d9 42%, #f3ede6 63%);
+        background-size: 300% 100%;
+        animation: lk-home-skeleton-shimmer 1.4s ease-in-out infinite;
+    }
+
+    .lk-home-skeleton-media {
+        aspect-ratio: 600 / 552;
+    }
+
+    .lk-home-skeleton-body {
+        display: grid;
+        gap: 9px;
+        min-height: 132px;
+        padding: 13px;
+    }
+
+    .lk-home-skeleton-line {
+        width: 72%;
+        height: 9px;
+        border-radius: 999px;
+    }
+
+    .lk-home-skeleton-line.is-short { width: 42%; }
+    .lk-home-skeleton-line.is-long { width: 92%; }
+
+    .lk-home-skeleton-promo {
+        min-height: 112px;
+        border: 1px solid #eadccc;
+        border-radius: 16px;
+        background: #fffdf9;
+    }
+
+    @keyframes lk-home-skeleton-shimmer {
+        to { background-position-x: -300%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .lk-home-skeleton-media,
+        .lk-home-skeleton-line {
+            animation: none;
+            background: #f0e9e2;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .lk-home-page .lk-home-hero-slide { min-height: 390px; }
+        .lk-home-page .lk-home-editorial-hero {
+            align-items: flex-start;
+            padding: 30px 22px 70px !important;
+            background-position: center right, 62% center;
+        }
+        .lk-home-page .lk-home-editorial-copy,
+        .lk-home-page .lk-home-hero-event-copy { width: min(82%, 420px); }
+        .lk-home-page .lk-home-editorial-title { font-size: clamp(48px, 13vw, 64px); }
+        .lk-home-page .lk-home-hero-event-title { font-size: clamp(42px, 11vw, 58px); }
+        .lk-home-page .lk-home-hero-artwork::after {
+            background: linear-gradient(90deg, rgba(255, 251, 246, .96) 0%, rgba(255, 251, 246, .88) 42%, rgba(255, 251, 246, .45) 72%, rgba(255, 251, 246, .12) 100%);
+        }
+        .lk-home-page .lk-home-hero-controls { right: 12px; bottom: 12px; }
+        .lk-home-page .lk-home-hero-arrow { width: 32px; height: 32px; }
+    }
+    @media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+        .lk-home-page .lk-home-hero-slide { transition: none; }
+    }
+    @media (max-width: 640px) {
+        html.dark .lk-home-page .lk-home-hero-artwork::after {
+            background: linear-gradient(90deg, rgba(23, 18, 16, .96) 0%, rgba(23, 18, 16, .9) 42%, rgba(23, 18, 16, .55) 72%, rgba(23, 18, 16, .14) 100%);
+        }
+    }
 </style>
 @endpush
 
@@ -2012,7 +2266,6 @@
     }
 
     $featuredProducts = $products->take(6);
-    $recommendedProducts = $products->skip(6)->take(6);
 
     /*
     |--------------------------------------------------------------------------
@@ -2040,18 +2293,68 @@
 
 <div class="lk-page lk-home-page">
 
-    <section class="lk-home-editorial-hero" aria-labelledby="buyer-home-editorial-title">
-        <div class="lk-home-editorial-copy">
-            <h1 class="lk-home-editorial-title" id="buyer-home-editorial-title">
-                Everything<br>for your
-                <span>everyday.</span>
-            </h1>
-            <p class="lk-home-editorial-description">Browse the things you need, and a few things you&rsquo;ll love.</p>
-            <a class="lk-home-editorial-cta" href="{{ route('buyer.products') }}">
-                <span>Shop all products</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7"/></svg>
-            </a>
+    @php $homeHeroSlideCount = 1 + $homeCarouselEvents->count(); @endphp
+    <section class="lk-home-hero-carousel" data-home-hero-carousel aria-label="LIKHAE promotions" aria-roledescription="carousel">
+        <div class="lk-home-hero-track">
+            <article class="lk-home-editorial-hero lk-home-hero-slide" data-home-hero-slide aria-roledescription="slide" aria-label="1 of {{ $homeHeroSlideCount }}" aria-hidden="false">
+                <div class="lk-home-editorial-copy">
+                    <h1 class="lk-home-editorial-title" id="buyer-home-editorial-title">
+                        Everything<br>for your
+                        <span>everyday.</span>
+                    </h1>
+                    <p class="lk-home-editorial-description">Browse the things you need, and a few things you&rsquo;ll love.</p>
+                    <a class="lk-home-editorial-cta" href="{{ route('buyer.products') }}">
+                        <span>Shop all products</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7"/></svg>
+                    </a>
+                </div>
+            </article>
+            @foreach($homeCarouselEvents as $campaign)
+                @php
+                    $slideIndex = $loop->iteration;
+                    $desktopHeroUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($campaign->homepage_carousel_desktop_image_path);
+                    $mobileHeroPath = $campaign->homepage_carousel_mobile_image_path;
+                    $mobileHeroUrl = $mobileHeroPath && \Illuminate\Support\Facades\Storage::disk('public')->exists($mobileHeroPath)
+                        ? \Illuminate\Support\Facades\Storage::disk('public')->url($mobileHeroPath)
+                        : null;
+                    $heroCtaUrl = $campaign->homepage_carousel_cta_destination === 'OFFERS'
+                        ? route('buyer.platform-events.index')
+                        : route('buyer.platform-events.show', $campaign);
+                @endphp
+                <article class="lk-home-editorial-hero lk-home-hero-slide lk-home-hero-slide--event" data-home-hero-slide aria-roledescription="slide" aria-label="{{ $slideIndex + 1 }} of {{ $homeHeroSlideCount }}" aria-hidden="true" inert>
+                    <picture class="lk-home-hero-artwork">
+                        @if($mobileHeroUrl)<source media="(max-width: 640px)" srcset="{{ $mobileHeroUrl }}">@endif
+                        <img src="{{ $desktopHeroUrl }}" alt="{{ $campaign->homepage_carousel_headline ?: $campaign->name }}" loading="lazy" decoding="async" fetchpriority="low">
+                    </picture>
+                    <div class="lk-home-hero-event-copy">
+                        <span class="lk-home-hero-event-kicker">LIKHAE Marketplace Event</span>
+                        <h2 class="lk-home-hero-event-title">{{ $campaign->homepage_carousel_headline ?: $campaign->name }}</h2>
+                        @if(filled($campaign->homepage_carousel_description))
+                            <p class="lk-home-hero-event-description">{{ $campaign->homepage_carousel_description }}</p>
+                        @endif
+                        <a class="lk-home-editorial-cta" href="{{ $heroCtaUrl }}">
+                            <span>{{ $campaign->homepage_carousel_cta_label ?: 'View Offer' }}</span>
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7"/></svg>
+                        </a>
+                    </div>
+                </article>
+            @endforeach
         </div>
+        @if($homeCarouselEvents->isNotEmpty())
+            <div class="lk-home-hero-controls" role="group" aria-label="Hero carousel controls">
+                <button class="lk-home-hero-arrow" type="button" data-home-hero-previous aria-label="Previous promotion">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+                <div class="lk-home-hero-pagination" aria-label="Choose a promotion">
+                    @for($slideIndex = 0; $slideIndex < $homeHeroSlideCount; $slideIndex++)
+                        <button class="lk-home-hero-dot" type="button" data-home-hero-dot="{{ $slideIndex }}" aria-label="Show promotion {{ $slideIndex + 1 }}" aria-current="{{ $slideIndex === 0 ? 'true' : 'false' }}"></button>
+                    @endfor
+                </div>
+                <button class="lk-home-hero-arrow" type="button" data-home-hero-next aria-label="Next promotion">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+            </div>
+        @endif
     </section>
 
     <section class="lk-home-flow-section" aria-label="Shop and promotions">
@@ -2122,6 +2425,11 @@
                                     : null;
                                 $categoryImage = $defaultCategoryImage ?? $categoryImage;
                                 $categoryImageFallback = $categoryImage === $defaultCategoryImage ? $defaultCategoryFallback : null;
+                                $categoryImagePath = (string) (parse_url($categoryImage ?? '', PHP_URL_PATH) ?: '');
+                                $categoryCardPath = preg_match('#^/images/buyer/categories/([a-z0-9-]+-maroon-v2)\.webp$#', $categoryImagePath, $categoryImageMatch)
+                                    ? 'images/buyer/categories/'.$categoryImageMatch[1].'-card.webp'
+                                    : null;
+                                $categoryCardImage = $categoryCardPath && is_file(public_path($categoryCardPath)) ? asset($categoryCardPath) : null;
                                 $isIllustration = $categoryImage && str_ends_with(mb_strtolower(parse_url($categoryImage, PHP_URL_PATH) ?: ''), '.svg');
                             @endphp
                             <a class="lk-home-category-card" href="{{ route('buyer.products', ['category' => $categorySlug]) }}">
@@ -2129,11 +2437,11 @@
                                     @if($categoryImage)
                                         @if($categoryImageFallback)
                                             <picture>
-                                                <source srcset="{{ $categoryImage }}" type="image/webp">
-                                                <img src="{{ $categoryImageFallback }}" alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
+                                                <source srcset="{{ $categoryCardImage ? $categoryCardImage.' 680w, '.$categoryImage.' 1698w' : $categoryImage }}" sizes="(max-width: 720px) 42vw, (max-width: 1200px) 23vw, 280px" type="image/webp">
+                                                <img src="{{ $categoryImageFallback }}" @if($categoryCardImage) width="680" height="371" @endif alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
                                             </picture>
                                         @else
-                                            <img src="{{ $categoryImage }}" alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
+                                            <img src="{{ $categoryCardImage ?? $categoryImage }}" @if($categoryCardImage) srcset="{{ $categoryCardImage }} 680w, {{ $categoryImage }} 1698w" sizes="(max-width: 720px) 42vw, (max-width: 1200px) 23vw, 280px" width="680" height="371" @endif alt="" loading="lazy" decoding="async" @class(['is-illustration' => $isIllustration])>
                                         @endif
                                     @else
                                         <span aria-hidden="true"></span>
@@ -2188,67 +2496,33 @@
         </div>
     </section>
 
-    @if($dealProducts->isNotEmpty())
-        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-discounts-heading">
-            <div class="lk-section-head">
-                <div><span class="lk-kicker">Save on your next find</span><h2 id="home-discounts-heading">Discounts For You</h2><p>Active product discounts from LIKHAE sellers.</p></div>
-                <a href="{{ route('buyer.discounts') }}" class="lk-text-link">View All Discounts <span aria-hidden="true">→</span></a>
-            </div>
-            <div class="lk-product-grid lk-home-product-grid" role="region" aria-label="Discounted products">
-                @foreach($dealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
-            </div>
-        </section>
-    @endif
-
-    @if($flashDealProducts->isNotEmpty())
-        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-flash-deals-heading">
-            <div class="lk-section-head">
-                <div><span class="lk-kicker">Limited-time prices</span><h2 id="home-flash-deals-heading">Flash Deals</h2><p>Seller flash sales with promotional stock and end times.</p></div>
-                <a href="{{ route('buyer.flash-deals') }}" class="lk-text-link">View All Flash Deals <span aria-hidden="true">→</span></a>
-            </div>
-            <div class="lk-product-grid lk-home-product-grid" role="region" aria-label="Active flash deals">
-                @foreach($flashDealProducts as $product)<x-buyer.product-card :product="$product" deal home />@endforeach
-            </div>
-        </section>
-    @endif
-
-    <x-buyer.seller-promotions :promotions="$bundleOffers" heading="Bundle Deals" eyebrow="Save when you shop together" compact />
-    <x-buyer.seller-promotions :promotions="$freeGiftOffers" heading="Free Gift Offers" eyebrow="Buy X, get Y" compact />
-
-    @if($homeVoucherPreviews->isNotEmpty())
-        <section class="lk-section lk-home-marketing-section" aria-labelledby="home-vouchers-heading">
-            <div class="lk-section-head">
-                <div><span class="lk-kicker">Extra savings</span><h2 id="home-vouchers-heading">Vouchers</h2><p>Eligible seller and LIKHAE vouchers for your next order.</p></div>
-                <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}" class="lk-text-link">View All Vouchers <span aria-hidden="true">→</span></a>
-            </div>
-            <div class="lk-home-voucher-grid">
-                @foreach($homeVoucherPreviews as $voucher)
-                    <article class="lk-home-voucher-card">
-                        <div>
-                            <span class="lk-kicker">{{ $voucher['source'] }}</span>
-                            <h3>{{ $voucher['name'] }}</h3>
-                            <p><strong>{{ strtoupper($voucher['value']) }} voucher</strong></p>
-                            <p>Min ₱{{ number_format((float) $voucher['minimum'], 2) }}
-                                @if($voucher['maximum'])
-                                    · Up to ₱{{ number_format((float) $voucher['maximum'], 2) }} off
-                                @endif
-                            </p>
-                            <p>Expires {{ $voucher['expires'] }}</p>
-                            <span class="lk-home-voucher-feedback" aria-live="polite" data-voucher-feedback></span>
-                        </div>
-                        @if($voucher['kind'] === 'seller')
-                            <form method="POST" action="{{ route('buyer.vouchers.claim', $voucher['id']) }}" data-home-voucher-claim>
-                                @csrf
-                                <button class="lk-btn lk-btn-red" type="submit">Claim</button>
-                            </form>
-                        @else
-                            <a class="lk-btn lk-btn-red" href="{{ route('buyer.products') }}">Shop with voucher</a>
-                        @endif
-                    </article>
-                @endforeach
-            </div>
-        </section>
-    @endif
+    <div
+        class="lk-home-deferred-slot"
+        data-home-deferred-slot
+        data-deferred-url="{{ route('buyer.home.marketing') }}"
+        data-deferred-label="Marketplace offers"
+        aria-busy="true"
+    >
+        <div data-deferred-content class="lk-home-deferred-skeleton" aria-hidden="true">
+            @for($section = 0; $section < 2; $section++)
+                <section class="lk-section lk-home-marketing-section">
+                    <div class="lk-section-head">
+                        <div><div class="lk-home-skeleton-heading"></div><div class="lk-home-skeleton-copy"></div></div>
+                        <span class="lk-home-skeleton-line is-short"></span>
+                    </div>
+                    <div class="lk-product-grid lk-home-product-grid">
+                        @for($card = 0; $card < 4; $card++)
+                            <article class="lk-home-skeleton-card"><div class="lk-home-skeleton-media"></div><div class="lk-home-skeleton-body"><span class="lk-home-skeleton-line is-short"></span><span class="lk-home-skeleton-line is-long"></span><span class="lk-home-skeleton-line"></span></div></article>
+                        @endfor
+                    </div>
+                </section>
+            @endfor
+            <div class="lk-home-voucher-grid"><div class="lk-home-skeleton-promo"></div><div class="lk-home-skeleton-promo"></div></div>
+        </div>
+        <p class="lk-home-deferred-status" data-deferred-status role="status" aria-live="polite" hidden></p>
+        <button class="lk-btn lk-btn-light" type="button" data-deferred-retry hidden>Try again</button>
+        <noscript><p class="lk-home-deferred-status"><a href="{{ route('buyer.discounts') }}">View discounts</a> · <a href="{{ route('buyer.flash-deals') }}">View flash deals</a> · <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}">View vouchers</a></p></noscript>
+    </div>
 
     </section>
 
@@ -2317,33 +2591,6 @@
     </section>
     </section>
 
-    <section class="lk-home-flow-section" aria-label="Platform events">
-    <section class="lk-section" aria-labelledby="platform-events-heading">
-        <div class="lk-section-head">
-            <div>
-                <span class="lk-kicker">LIKHAE Marketplace</span>
-                <h2 id="platform-events-heading">Platform Events</h2>
-                <p>Marketplace-wide campaigns and events.</p>
-            </div>
-            <a class="lk-text-link" href="{{ route('buyer.platform-events.index') }}">View Offers <span aria-hidden="true">→</span></a>
-        </div>
-
-        @if ($platformCampaigns->isNotEmpty())
-            <div class="lk-platform-events-grid {{ $platformCampaigns->count() === 1 ? 'is-single-event' : '' }}">
-                @foreach ($platformCampaigns as $campaign)
-                    @include('buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
-                @endforeach
-            </div>
-        @else
-            <div class="lk-platform-events-empty" role="status">
-                <span class="lk-kicker">Platform Events</span>
-                <h3>No scheduled events right now</h3>
-                <p>When a marketplace-wide event is scheduled, its dates and details will appear here.</p>
-            </div>
-        @endif
-    </section>
-    </section>
-
     <section class="lk-home-flow-section" aria-label="Recommended products">
     {{-- Recommended products --}}
     <section
@@ -2374,30 +2621,22 @@
             </div>
         </div>
 
-        @if ($recommendedProducts->isNotEmpty())
-            <div class="lk-product-grid lk-home-recommendation-grid" role="region" aria-label="Recommended products">
-                @foreach ($recommendedProducts as $product)
-                    <x-buyer.product-card :product="$product" home />
-                @endforeach
-            </div>
-        @else
-            <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
-                <h3 class="text-sm font-semibold text-stone-900">
-                    More recommendations will appear here
-                </h3>
-
-                <p class="mt-1 text-xs text-stone-500">
-                    Explore products to help us prepare recommendations for you.
-                </p>
-
-                <a
-                    href="{{ route('buyer.products') }}"
-                    class="mt-4 inline-flex items-center justify-center rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950"
-                >
-                    Explore Products
-                </a>
-            </div>
-        @endif
+        <div class="lk-product-grid lk-home-recommendation-grid" role="region" aria-label="Recommended products" data-home-recommendation-grid data-recommendation-url="{{ route('buyer.home.recommendations') }}" data-next-page="1" data-exclude-product-ids="{{ implode(',', $recommendationExcludedProductIds ?? []) }}"></div>
+        <div class="lk-product-grid lk-home-recommendation-grid" data-recommendation-skeleton aria-hidden="true">
+            @for($card = 0; $card < 3; $card++)
+                <article class="lk-home-skeleton-card"><div class="lk-home-skeleton-media"></div><div class="lk-home-skeleton-body"><span class="lk-home-skeleton-line is-short"></span><span class="lk-home-skeleton-line is-long"></span><span class="lk-home-skeleton-line"></span></div></article>
+            @endfor
+        </div>
+        <div class="lk-home-recommendation-more" data-recommendation-sentinel>
+            <span data-recommendation-status role="status" aria-live="polite">Recommendations load when you reach this section.</span>
+            <button type="button" data-recommendation-retry hidden>Load recommendations</button>
+        </div>
+        <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center" data-recommendation-empty hidden>
+            <h3 class="text-sm font-semibold text-stone-900">More recommendations will appear here</h3>
+            <p class="mt-1 text-xs text-stone-500">Explore products to help us prepare recommendations for you.</p>
+            <a href="{{ route('buyer.products') }}" class="mt-4 inline-flex items-center justify-center rounded-xl bg-red-900 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-red-950">Explore Products</a>
+        </div>
+        <noscript><p class="mt-4 text-xs text-stone-500"><a href="{{ route('buyer.products', ['sort' => 'best-rated']) }}">Browse best-rated products</a></p></noscript>
     </section>
     </section>
 </div>
@@ -2406,6 +2645,96 @@
 @push('scripts')
 <script>
     (() => {
+        document.querySelectorAll('[data-home-hero-carousel]').forEach((carousel) => {
+            if (carousel.dataset.initialized === 'true') return;
+            carousel.dataset.initialized = 'true';
+
+            const slides = Array.from(carousel.querySelectorAll('[data-home-hero-slide]'));
+            const dots = Array.from(carousel.querySelectorAll('[data-home-hero-dot]'));
+            const previous = carousel.querySelector('[data-home-hero-previous]');
+            const next = carousel.querySelector('[data-home-hero-next]');
+            const track = carousel.querySelector('.lk-home-hero-track');
+            if (slides.length < 2 || !previous || !next || !track) return;
+
+            const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+            let activeIndex = Math.max(0, slides.findIndex((slide) => slide.getAttribute('aria-hidden') === 'false'));
+            let timer = null;
+            let pointerInside = false;
+            let focusInside = carousel.contains(document.activeElement);
+            let pageHidden = document.hidden;
+            let touchStartX = null;
+
+            const clearTimer = () => {
+                if (timer !== null) window.clearTimeout(timer);
+                timer = null;
+            };
+            const shouldPause = () => pointerInside || focusInside || pageHidden || motionPreference.matches;
+            const schedule = () => {
+                clearTimer();
+                if (shouldPause()) return;
+                timer = window.setTimeout(() => {
+                    showSlide(activeIndex + 1);
+                    schedule();
+                }, 7000);
+            };
+            const showSlide = (requestedIndex) => {
+                activeIndex = (requestedIndex + slides.length) % slides.length;
+                slides.forEach((slide, index) => {
+                    const active = index === activeIndex;
+                    slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+                    slide.inert = !active;
+                });
+                dots.forEach((dot, index) => {
+                    dot.setAttribute('aria-current', index === activeIndex ? 'true' : 'false');
+                });
+            };
+
+            previous.addEventListener('click', () => { showSlide(activeIndex - 1); schedule(); });
+            next.addEventListener('click', () => { showSlide(activeIndex + 1); schedule(); });
+            dots.forEach((dot) => dot.addEventListener('click', () => {
+                showSlide(Number(dot.dataset.homeHeroDot || 0));
+                schedule();
+            }));
+            carousel.addEventListener('pointerenter', () => { pointerInside = true; clearTimer(); });
+            carousel.addEventListener('pointerleave', () => { pointerInside = false; schedule(); });
+            carousel.addEventListener('focusin', () => { focusInside = true; clearTimer(); });
+            carousel.addEventListener('focusout', () => {
+                window.setTimeout(() => {
+                    focusInside = carousel.contains(document.activeElement);
+                    schedule();
+                }, 0);
+            });
+            carousel.addEventListener('keydown', (event) => {
+                if (event.key === 'ArrowLeft') {
+                    showSlide(activeIndex - 1);
+                    schedule();
+                } else if (event.key === 'ArrowRight') {
+                    showSlide(activeIndex + 1);
+                    schedule();
+                }
+            });
+            track.addEventListener('touchstart', (event) => {
+                touchStartX = event.changedTouches[0]?.clientX ?? null;
+            }, { passive: true });
+            track.addEventListener('touchend', (event) => {
+                const endX = event.changedTouches[0]?.clientX;
+                if (touchStartX === null || endX === undefined) return;
+                const distance = endX - touchStartX;
+                touchStartX = null;
+                if (Math.abs(distance) < 45) return;
+                showSlide(activeIndex + (distance < 0 ? 1 : -1));
+                schedule();
+            }, { passive: true });
+            document.addEventListener('visibilitychange', () => {
+                pageHidden = document.hidden;
+                schedule();
+            });
+            motionPreference.addEventListener?.('change', schedule);
+
+            showSlide(activeIndex);
+            schedule();
+        });
+
         document.querySelectorAll('[data-category-carousel]').forEach((carousel) => {
             const pages = Array.from(carousel.querySelectorAll('[data-category-page]'));
             const dots = Array.from(carousel.querySelectorAll('[data-category-dot]'));
@@ -2444,6 +2773,172 @@
                 dot.addEventListener('click', () => showPage(Number(dot.dataset.categoryDot || 0)));
             });
             showPage(0);
+        });
+
+        document.querySelectorAll('[data-home-deferred-slot]').forEach((slot) => {
+            const content = slot.querySelector('[data-deferred-content]');
+            const status = slot.querySelector('[data-deferred-status]');
+            const retryButton = slot.querySelector('[data-deferred-retry]');
+            const url = slot.dataset.deferredUrl;
+            const label = slot.dataset.deferredLabel || 'This section';
+            if (!content || !status || !retryButton || !url) return;
+
+            const skeleton = content.innerHTML;
+            let loading = false;
+            let loaded = false;
+            let observer = null;
+
+            const load = async () => {
+                if (loading || loaded) return;
+                loading = true;
+                content.hidden = false;
+                if (!content.innerHTML.trim()) content.innerHTML = skeleton;
+                status.hidden = false;
+                status.classList.remove('is-error');
+                status.textContent = `Loading ${label.toLowerCase()}…`;
+                retryButton.hidden = true;
+                slot.setAttribute('aria-busy', 'true');
+
+                try {
+                    const response = await fetch(url, {
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!response.ok) throw new Error('Deferred section could not be loaded.');
+                    const payload = await response.json();
+                    if (typeof payload.html !== 'string') throw new Error('Deferred section could not be loaded.');
+
+                    const template = document.createElement('template');
+                    template.innerHTML = payload.html;
+                    template.content.querySelectorAll('style').forEach((style) => style.remove());
+                    content.replaceChildren(template.content);
+                    content.hidden = false;
+                    loaded = true;
+                    status.hidden = true;
+                    observer?.disconnect();
+                    document.dispatchEvent(new CustomEvent('catalog:results-updated', {
+                        detail: { root: content },
+                    }));
+                } catch {
+                    content.hidden = true;
+                    status.hidden = false;
+                    status.classList.add('is-error');
+                    status.textContent = `${label} could not be loaded.`;
+                    retryButton.hidden = false;
+                    observer?.unobserve(slot);
+                } finally {
+                    loading = false;
+                    slot.setAttribute('aria-busy', 'false');
+                }
+            };
+
+            retryButton.addEventListener('click', load);
+            if ('IntersectionObserver' in window) {
+                observer = new IntersectionObserver((entries) => {
+                    if (entries.some((entry) => entry.isIntersecting)) load();
+                }, { rootMargin: '560px 0px' });
+                observer.observe(slot);
+            } else {
+                status.hidden = false;
+                status.textContent = `Load ${label.toLowerCase()} when ready.`;
+                retryButton.hidden = false;
+                slot.setAttribute('aria-busy', 'false');
+            }
+        });
+
+        document.querySelectorAll('[data-home-recommendation-grid]').forEach((grid) => {
+            const sentinel = grid.parentElement?.querySelector('[data-recommendation-sentinel]');
+            const status = sentinel?.querySelector('[data-recommendation-status]');
+            const retryButton = sentinel?.querySelector('[data-recommendation-retry]');
+            if (!sentinel || !status || !retryButton) return;
+
+            const skeleton = grid.parentElement?.querySelector('[data-recommendation-skeleton]');
+            const emptyState = grid.parentElement?.querySelector('[data-recommendation-empty]');
+            let page = Number(grid.dataset.nextPage || 1);
+            let isLoading = false;
+            let hasMore = true;
+            let observer = null;
+            const observerSupported = 'IntersectionObserver' in window;
+
+            const loadMore = async () => {
+                if (isLoading || !hasMore) return;
+
+                isLoading = true;
+                status.textContent = 'Loading more recommendations…';
+                retryButton.hidden = true;
+                grid.setAttribute('aria-busy', 'true');
+                if (page === 1 && skeleton) skeleton.hidden = false;
+
+                try {
+                    const url = new URL(grid.dataset.recommendationUrl, window.location.href);
+                    url.searchParams.set('recommendation_page', String(page));
+
+                    const excludedProductIds = grid.dataset.excludeProductIds || '';
+                    if (excludedProductIds) url.searchParams.set('exclude', excludedProductIds);
+
+                    const response = await fetch(url, {
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
+                    if (!response.ok) throw new Error('Recommendations could not be loaded.');
+
+                    const payload = await response.json();
+                    if (typeof payload.html !== 'string' || typeof payload.has_more !== 'boolean') {
+                        throw new Error('Recommendations could not be loaded.');
+                    }
+
+                    if (payload.html.trim()) {
+                        const template = document.createElement('template');
+                        template.innerHTML = payload.html;
+                        template.content.querySelectorAll('style').forEach((style) => style.remove());
+                        grid.append(template.content);
+                        document.dispatchEvent(new CustomEvent('catalog:results-updated', {
+                            detail: { root: grid },
+                        }));
+                    }
+
+                    page += 1;
+                    grid.dataset.nextPage = String(page);
+                    hasMore = payload.has_more;
+                    if (skeleton) skeleton.hidden = true;
+                    if (!grid.children.length && emptyState) emptyState.hidden = false;
+
+                    if (hasMore) {
+                        status.textContent = 'Scroll to load more recommendations.';
+                        retryButton.textContent = 'Load more recommendations';
+                        retryButton.hidden = observerSupported;
+                    } else {
+                        status.textContent = 'You’ve seen all available recommendations.';
+                        observer?.disconnect();
+                    }
+                } catch {
+                    if (skeleton) skeleton.hidden = true;
+                    observer?.unobserve(sentinel);
+                    status.textContent = 'Recommendations could not be loaded.';
+                    retryButton.textContent = 'Try again';
+                    retryButton.hidden = false;
+                } finally {
+                    isLoading = false;
+                    grid.setAttribute('aria-busy', 'false');
+                }
+            };
+
+            retryButton.addEventListener('click', async () => {
+                await loadMore();
+                if (observer && hasMore && retryButton.hidden) observer.observe(sentinel);
+            });
+
+            if (observerSupported) {
+                observer = new IntersectionObserver((entries) => {
+                    if (entries.some((entry) => entry.isIntersecting)) loadMore();
+                }, { rootMargin: '480px 0px' });
+                observer.observe(sentinel);
+            } else {
+                retryButton.hidden = false;
+            }
         });
 
     })();
