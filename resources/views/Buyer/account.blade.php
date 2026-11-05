@@ -56,7 +56,7 @@
         ],
         'wallet' => [
             'label' => 'Wallet',
-            'description' => 'Payment methods',
+            'description' => 'Refund destination',
         ],
         'following' => [
             'label' => 'Following Stores',
@@ -413,10 +413,10 @@
                         <div>
                             <span class="payout-overline">Buyer Center</span>
                             <h2 id="wallet-heading">Wallet</h2>
-                            <p>Save a GCash, Maya, or bank account for future online purchases and digital refunds.</p>
+                            <p>Save a GCash, Maya, or bank account as your destination for future digital refunds.</p>
                         </div>
                         @if($walletDestinationReady && count($walletDestinations))
-                            <span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Payment details saved</span>
+                            <span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Refund details saved</span>
                         @endif
                     </header>
 
@@ -426,26 +426,28 @@
                         @endif
 
                         <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
-                            Online checkout and digital refunds are not active yet. New purchases currently use Cash on Delivery, and new refunds are paid in cash after approval and inspection. Your saved details will be ready when those options are enabled.
+                            Online checkout remains disabled; new purchases use Cash on Delivery. New return/refund requests currently use the cash refund process after approval, return receipt, and inspection. Saved account details are reserved for future digital refunds and do not enable online checkout.
                         </div>
 
                         @if($walletDestinationReady)
                             @include('components.shared.payout-destination-manager', [
                                 'payoutDestinations' => $walletDestinations,
                                 'payoutDestinationRoute' => 'buyer.account.wallet.update',
-                                'payoutChangeDescription' => 'Choose which saved payment method should be the default for future purchases and refunds.',
-                                'payoutPurpose' => 'purchases and refunds',
-                                'payoutSecurityCopy' => 'Your saved account details are private and used only for payment workflows.',
+                                'payoutChangeDescription' => 'Choose which saved account should be the default destination for future digital refunds.',
+                                'payoutPurpose' => 'digital refunds',
+                                'payoutSecurityCopy' => 'Your saved account details are private and reserved for future digital refunds.',
                                 'payoutHelpId' => 'buyer-wallet-payment-number-help',
                                 'payoutButtonClass' => 'payout-inline-button',
-                                'destinationNoun' => 'payment method',
-                                'destinationNounPlural' => 'payment methods',
-                                'destinationSettingsLabel' => 'Wallet settings',
-                                'destinationSaveLabel' => 'Save payment method',
-                                'destinationUpdateLabel' => 'Update payment method',
-                                'destinationAddTitle' => count($walletDestinations) ? 'Add another payment method' : 'Add a payment method',
-                                'destinationEditTitle' => 'Update payment method',
-                                'destinationIncompleteNote' => 'Incomplete details; add a complete payment method before setting it as your default.',
+                                'destinationNoun' => 'refund destination',
+                                'destinationNounPlural' => 'refund destinations',
+                                'destinationSettingsLabel' => 'Refund destination settings',
+                                'destinationSaveLabel' => 'Save refund destination',
+                                'destinationUpdateLabel' => 'Update refund destination',
+                                'destinationAddTitle' => count($walletDestinations) ? 'Add another refund destination' : 'Add a refund destination',
+                                'destinationEditTitle' => 'Update refund destination',
+                                'destinationIncompleteNote' => 'Incomplete details; add a complete refund destination before setting it as your default.',
+                                'destinationChannelLabel' => 'Refund destination method',
+                                'destinationChannelHelp' => 'Choose where future digital refunds could be sent.',
                             ])
                         @else
                             <div class="rounded-xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-600" role="status">

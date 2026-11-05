@@ -48,6 +48,64 @@ class SellerFlashSaleValidationTest extends TestCase
         $this->assertSame(0, (int) $variant->flash_sale_sold);
     }
 
+    public function test_out_of_stock_sale_explains_the_blocker_then_appears_on_buyer_page_after_restock(): void
+    {
+        $seller = $this->seller();
+        $buyer = User::query()->where('email', 'buyer@likhae.com')->sole();
+        $category = Category::query()->findOrFail($seller->sellerProfile->primary_category_id);
+        $product = Product::query()->create([
+            'seller_profile_id' => $seller->sellerProfile->id,
+            'category_id' => $category->id,
+            'name' => 'Ipon Flash Sale',
+            'slug' => 'ipon-flash-sale',
+            'status' => 'ACTIVE',
+            'published_at' => now(),
+        ]);
+        $variant = ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'sku' => 'IPON-DEFAULT',
+            'price' => 49000,
+            'stock' => 0,
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $marketingUrl = route('seller.marketing', ['section' => 'flash-sales', 'product_id' => $product->id]);
+        $saveUrl = route('seller.marketing.flash-sales.update', ['product' => $product, 'section' => 'flash-sales', 'product_id' => $product->id]);
+
+        $this->actingAs($seller)->get($marketingUrl)
+            ->assertOk()
+            ->assertSee('All variants are out of stock.')
+            ->assertSee('Add stock to this product');
+
+        $this->from($marketingUrl)->patch($saveUrl, [
+            'flash_sale_product_id' => $product->id,
+            'variants' => [['id' => $variant->id, 'flash_sale_price' => null, 'flash_sale_allocation' => null]],
+        ])->assertRedirect($marketingUrl)->assertSessionHasErrors('variants');
+
+        $end = now()->addDays(2)->format('Y-m-d H:i:s');
+        $this->from($marketingUrl)->patch($saveUrl, [
+            'flash_sale_product_id' => $product->id,
+            'flash_sale_ends_at' => $end,
+            'variants' => [['id' => $variant->id, 'flash_sale_price' => 45000, 'flash_sale_allocation' => 1]],
+        ])->assertRedirect($marketingUrl)->assertSessionHasErrors('variants');
+        $this->assertNull($variant->fresh()->flash_sale_price);
+
+        $variant->update(['stock' => 2]);
+        $this->from($marketingUrl)->patch($saveUrl, [
+            'flash_sale_product_id' => $product->id,
+            'flash_sale_ends_at' => $end,
+            'variants' => [['id' => $variant->id, 'flash_sale_price' => 45000, 'flash_sale_allocation' => 1]],
+        ])->assertRedirect($marketingUrl)->assertSessionHasNoErrors();
+
+        $this->assertSame('45000.00', $variant->fresh()->flash_sale_price);
+        $this->actingAs($buyer)->get(route('buyer.flash-deals'))
+            ->assertOk()
+            ->assertSee('Ipon Flash Sale')
+            ->assertSee('data-flash-sale-countdown', false)
+            ->assertSee('datetime="'.$product->fresh()->flash_sale_ends_at->toIso8601String().'"', false)
+            ->assertSee('Sale ends');
+    }
+
     public function test_seller_flash_sale_validation_rejects_allocation_over_stock_and_price_not_below_regular(): void
     {
         $seller = $this->seller();

@@ -264,15 +264,22 @@
                         @php
                             $otherOffers = collect($promotionConflicts['products'][$product->id] ?? [])
                                 ->reject(fn ($conflict) => in_array($conflict['kind'], ['flash_sale', 'voucher'], true));
+                            $flashSaleFormFailed = (int) old('flash_sale_product_id') === (int) $product->id;
                         @endphp
                         @if($otherOffers->isNotEmpty())
                             <div class="sl-compliance-feedback is-warning sl-promotion-conflict" role="status"><strong>Existing offers affect this product</strong><ul>@foreach($otherOffers as $conflict)<li>{{ $conflict['label'] }} · {{ $conflict['status'] }}</li>@endforeach</ul><p>Seller vouchers may still apply at checkout. Flash sales take priority over product discounts. Clear incompatible bundle deals before saving; each flash price must be at least PHP 0.01.</p></div>
                         @endif
-                        <form method="POST" action="{{ route('seller.marketing.flash-sales.update', ['product' => $product, 'section' => 'flash-sales']) }}" class="sl-form-section">@csrf @method('PATCH')
+                        <form method="POST" action="{{ route('seller.marketing.flash-sales.update', ['product' => $product, 'section' => 'flash-sales', 'product_id' => $product->id]) }}" class="sl-form-section">@csrf @method('PATCH')
+                            <input type="hidden" name="flash_sale_product_id" value="{{ $product->id }}">
+                            @if($flashSaleFormFailed && $errors->any())<div class="sl-compliance-feedback is-warning" role="alert">{{ $errors->first() }}</div>@endif
+                            <p class="sl-compliance-feedback" role="note">Enter a flash price and allocation for at least one in-stock variant. Set a sale end time to show buyers a live countdown.</p>
+                            @if($product->variants->isNotEmpty() && $product->variants->every(fn ($variant) => (int) $variant->stock <= 0))
+                                <div class="sl-compliance-feedback is-warning" role="note">All variants are out of stock. <a href="{{ route('seller.products', ['mode' => 'edit', 'product' => $product->id]) }}">Add stock to this product</a> before creating a flash sale.</div>
+                            @endif
                             <div class="sl-form-grid">
-                                <label class="sl-field"><span>Sale starts at</span><input name="flash_sale_starts_at" type="datetime-local" value="{{ $product->flash_sale_starts_at?->format('Y-m-d\TH:i') }}"><small>Leave blank to start immediately.</small></label>
-                                <label class="sl-field"><span>Sale ends at</span><input name="flash_sale_ends_at" type="datetime-local" value="{{ $product->flash_sale_ends_at?->format('Y-m-d\TH:i') }}"><small>Leave blank for no end date.</small></label>
-                                <label class="sl-field"><span>Maximum flash-sale units per Buyer</span><input name="flash_sale_limit_per_buyer" type="number" min="1" step="1" value="{{ $product->flash_sale_limit_per_buyer }}" placeholder="No limit"><small>Optional. Counts this campaign's units across all variants.</small></label>
+                                <label class="sl-field"><span>Sale starts at</span><input name="flash_sale_starts_at" type="datetime-local" value="{{ $flashSaleFormFailed ? old('flash_sale_starts_at') : $product->flash_sale_starts_at?->format('Y-m-d\TH:i') }}"><small>Leave blank to start immediately.</small></label>
+                                <label class="sl-field"><span>Sale ends at</span><input name="flash_sale_ends_at" type="datetime-local" value="{{ $flashSaleFormFailed ? old('flash_sale_ends_at') : $product->flash_sale_ends_at?->format('Y-m-d\TH:i') }}"><small>Leave blank for no end date or buyer countdown.</small></label>
+                                <label class="sl-field"><span>Maximum flash-sale units per Buyer</span><input name="flash_sale_limit_per_buyer" type="number" min="1" step="1" value="{{ $flashSaleFormFailed ? old('flash_sale_limit_per_buyer') : $product->flash_sale_limit_per_buyer }}" placeholder="No limit"><small>Optional. Counts this campaign's units across all variants.</small></label>
                             </div>
                             <div class="sl-table-wrap"><table class="sl-table"><thead><tr><th>Variant</th><th>Product discount price</th><th>Stock</th><th>Flash price</th><th>Allocation (units)</th><th>Sold</th><th>Remaining</th><th>Status</th></tr></thead><tbody>
                                 @if($product->variants->isEmpty())
@@ -293,8 +300,8 @@
                                         <td><strong>{{ $variant->description ?: $variant->sku }}</strong><small>{{ $variant->sku }}</small><input type="hidden" name="variants[{{ $loop->index }}][id]" value="{{ $variant->id }}"></td>
                                         <td>PHP {{ number_format(app(\App\Services\Marketplace\ProductPriceResolver::class)->productDiscountPrice($variant), 2) }}</td>
                                         <td>{{ number_format((int) $variant->stock) }}</td>
-                                        <td><input aria-label="Flash price for {{ $variant->sku }}" name="variants[{{ $loop->index }}][flash_sale_price]" type="number" min="0.01" step="0.01" value="{{ $variant->flash_sale_price }}" placeholder="No sale"></td>
-                                        <td><input aria-label="Flash allocation for {{ $variant->sku }}" name="variants[{{ $loop->index }}][flash_sale_allocation]" type="number" min="1" step="1" value="{{ $variant->flash_sale_allocation }}" placeholder="Units"></td>
+                                        <td><input aria-label="Flash price for {{ $variant->sku }}" name="variants[{{ $loop->index }}][flash_sale_price]" type="number" min="0.01" step="0.01" value="{{ $flashSaleFormFailed ? old('variants.'.$loop->index.'.flash_sale_price') : $variant->flash_sale_price }}" placeholder="No sale"></td>
+                                        <td><input aria-label="Flash allocation for {{ $variant->sku }}" name="variants[{{ $loop->index }}][flash_sale_allocation]" type="number" min="1" step="1" value="{{ $flashSaleFormFailed ? old('variants.'.$loop->index.'.flash_sale_allocation') : $variant->flash_sale_allocation }}" placeholder="Units"></td>
                                         <td>{{ number_format((int) $variant->flash_sale_sold) }}</td>
                                         <td>{{ number_format((int) $variant->flash_sale_remaining) }}</td>
                                         <td><span class="sl-status {{ $flashStatus === 'Active' ? 'is-success' : ($flashStatus === 'Scheduled' ? 'is-info' : (in_array($flashStatus, ['Sold out', 'Expired'], true) ? 'is-warning' : 'is-neutral')) }}">{{ $flashStatus }}</span></td>

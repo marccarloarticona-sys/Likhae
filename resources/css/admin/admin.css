@@ -2903,6 +2903,11 @@ html.dark .ad-category-modal { background: rgba(0, 0, 0, .7); }
 .ad-marketing-campaign-name > img { width: 54px; height: 40px; flex: 0 0 54px; border: 1px solid var(--ad-border); border-radius: 7px; object-fit: cover; }
 .ad-marketing-campaign-name > span { min-width: 0; }
 .ad-marketing-media-fields { display: grid; gap: 11px; padding-top: 14px; border-top: 1px solid var(--ad-border); }
+.ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 220px; overflow: auto; padding: 8px; border: 1px solid var(--ad-border); border-radius: 9px; }
+.ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-results button { min-width: 0; padding: 8px; border: 1px solid var(--ad-border); border-radius: 7px; color: var(--ad-text); background: var(--ad-card); font-size: 10px; text-align: left; overflow-wrap: anywhere; }
+.ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-results button:disabled { opacity: .55; }
+.ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-selection { display: flex; flex-wrap: wrap; gap: 6px; }
+.ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-selection button { margin-left: 5px; border: 0; color: var(--ad-maroon); background: transparent; font-size: 9px; text-decoration: underline; }
 .ad-marketing-media-intro { display: grid; gap: 3px; }
 .ad-marketing-media-intro strong { color: var(--ad-text); font-size: 12px; }
 .ad-marketing-media-intro > span, .ad-marketing-cta-help { color: var(--ad-muted); font-size: 10px; line-height: 1.5; }
@@ -2954,6 +2959,7 @@ html.dark .ad-marketing-modal { background: rgba(0, 0, 0, .72); }
 @media (max-width: 520px) {
     .ad-marketing-modal-content { padding: 18px; }
     .ad-marketing-modal-content .ad-form-grid { grid-template-columns: 1fr; }
+    .ad-marketing-media-fields[aria-labelledby="campaign-distribution-heading"] #campaign-target-results { grid-template-columns: 1fr; }
     .ad-marketing-modal-content .ad-btn-bar { flex-direction: column-reverse; }
     .ad-marketing-modal-content .ad-btn-bar .ad-btn { width: 100%; }
 }

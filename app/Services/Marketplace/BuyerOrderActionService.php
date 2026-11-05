@@ -30,7 +30,7 @@ class BuyerOrderActionService
         $order->loadMissing('sellerOrders.shipments.events', 'disputes', 'payments');
 
         if ($returnRefundStorageReady) {
-            $order->loadMissing('returnRefundRequests.items', 'returnRefundRequests.sellerRequests.items');
+            $order->loadMissing('returnRefundRequests');
         }
 
         $shipments = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments);
@@ -78,9 +78,6 @@ class BuyerOrderActionService
                 ->sortByDesc('submitted_at')
                 ->first()
             : null;
-        $activeRequests = $returnRefundStorageReady
-            ? $order->returnRefundRequests->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED'])
-            : collect();
         $activeCase = $activeDispute ?: $activeRequest;
         $confirmableShipmentIds = $this->confirmableShipmentIdsFor($order, $shipments);
         $activeSellerOrders = $order->sellerOrders->where('status', '!=', 'CANCELLED');
@@ -127,10 +124,7 @@ class BuyerOrderActionService
     /** @return list<int> */
     public function confirmableShipmentIds(Order $order, bool $returnRefundStorageReady = true): array
     {
-        $order->loadMissing('sellerOrders.shipments', 'disputes');
-        if ($returnRefundStorageReady) {
-            $order->loadMissing('returnRefundRequests.items', 'returnRefundRequests.sellerRequests.items');
-        }
+        $order->loadMissing('sellerOrders.shipments');
 
         return $this->confirmableShipmentIdsFor($order, $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments));
     }
@@ -182,7 +176,7 @@ class BuyerOrderActionService
 
             $lockedOrder->load('sellerOrders.shipments.events', 'disputes', 'payments');
             if ($returnRefundStorageReady) {
-                $lockedOrder->load('returnRefundRequests.items', 'returnRefundRequests.sellerRequests.items');
+                $lockedOrder->load('returnRefundRequests');
             }
             $sellerOrder = $lockedOrder->sellerOrders->firstWhere('id', (int) $lockedShipment->seller_order_id);
             $lockedShipment = $sellerOrder?->shipments->firstWhere('id', (int) $lockedShipment->id);

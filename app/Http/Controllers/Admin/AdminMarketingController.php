@@ -10,6 +10,7 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerProfile;
 use App\Models\Finance\FinanceAuditEvent;
+use App\Models\User;
 use App\Services\Notifications\AnnouncementDestination;
 use App\Services\Notifications\AnnouncementNotificationPublisher;
 use App\Services\Marketplace\VoucherRedemptionCounter;
@@ -156,12 +157,28 @@ class AdminMarketingController extends Controller
         try {
             DB::transaction(function () use ($voucher, $data, $code, $request, $campaignBudgetReady): void {
                 $locked = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
+                $beforeCampaignStatus = (string) ($locked->campaign_status ?? 'ACTIVE');
                 if ($campaignBudgetReady) {
                     $budget = $data['campaign_budget_total'];
                     $reason = $data['campaign_budget_reason'];
                     unset($data['campaign_budget_total'], $data['campaign_budget_reason']);
                 }
+                $nextCampaignStatus = (string) ($data['campaign_status'] ?? $beforeCampaignStatus);
+                if ($nextCampaignStatus !== $beforeCampaignStatus) {
+                    abort_unless(Schema::hasTable('finance_audit_events'), 409, 'Campaign status changes require finance audit records to be available.');
+                }
                 $locked->update(array_merge($data, ['platform_code_key' => $code, 'code' => $code]));
+                if (($locked->campaign_status ?? 'ACTIVE') !== $beforeCampaignStatus) {
+                    FinanceAuditEvent::query()->create([
+                        'event_type' => 'PLATFORM_CAMPAIGN_STATUS_CHANGED',
+                        'auditable_type' => Voucher::class,
+                        'auditable_id' => $locked->id,
+                        'actor_user_id' => $request->user()->id,
+                        'before_state' => ['status' => $beforeCampaignStatus],
+                        'after_state' => ['status' => $locked->campaign_status],
+                        'notes' => 'Campaign status changed while editing campaign settings',
+                    ]);
+                }
                 if ($campaignBudgetReady) {
                     app(PlatformCampaignBudgetService::class)->setAllocation($locked, $budget, $reason, $request->user());
                 }
@@ -293,8 +310,11 @@ class AdminMarketingController extends Controller
         if ($ids !== []) {
             $query = match ($mode) {
                 'CATEGORIES' => Category::query()->where('is_active', true)->whereNull('archived_at'),
-                'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->whereNull('deleted_at'),
-                'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE'),
+                'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->whereHas('sellerProfile', fn ($seller) => $seller
+                    ->where('status', 'ACTIVE')
+                    ->whereHas('user', fn ($user) => $user->where('account_type', User::TYPE_SELLER)->where('status', User::STATUS_ACTIVE))),
+                'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE')->whereHas('user', fn ($user) => $user
+                    ->where('account_type', User::TYPE_SELLER)->where('status', User::STATUS_ACTIVE)),
                 default => null,
             };
             if (! $query || $query->whereIn('id', $ids)->count() !== count($ids)) {
@@ -327,8 +347,11 @@ class AdminMarketingController extends Controller
         $term = trim((string) ($data['q'] ?? ''));
         $query = match ($data['mode']) {
             'CATEGORIES' => Category::query()->where('is_active', true)->whereNull('archived_at')->select(['id', 'name']),
-            'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->select(['id', 'name']),
-            'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE')->select(['id', 'business_name']),
+            'PRODUCTS' => Product::query()->where('status', 'ACTIVE')->whereHas('sellerProfile', fn ($seller) => $seller
+                ->where('status', 'ACTIVE')
+                ->whereHas('user', fn ($user) => $user->where('account_type', User::TYPE_SELLER)->where('status', User::STATUS_ACTIVE)))->select(['id', 'name']),
+            'SELLERS' => SellerProfile::query()->where('status', 'ACTIVE')->whereHas('user', fn ($user) => $user
+                ->where('account_type', User::TYPE_SELLER)->where('status', User::STATUS_ACTIVE))->select(['id', 'business_name']),
         };
         $column = $data['mode'] === 'SELLERS' ? 'business_name' : 'name';
         $results = $query->when($term !== '', fn ($builder) => $builder->where($column, 'like', '%'.$term.'%'))
@@ -361,6 +384,8 @@ class AdminMarketingController extends Controller
 
     private function setCampaignStatus(Request $request, Voucher $voucher, string $status): RedirectResponse
     {
+        abort_unless(Schema::hasTable('finance_audit_events'), 409, 'Campaign status changes require finance audit records to be available.');
+
         DB::transaction(function () use ($request, $voucher, $status): void {
             $locked = Voucher::query()->whereKey($voucher->id)->lockForUpdate()->firstOrFail();
             if ($status === 'ACTIVE') {
@@ -375,17 +400,15 @@ class AdminMarketingController extends Controller
                 $attributes['campaign_status'] = $status;
             }
             $locked->update($attributes);
-            if (Schema::hasTable('finance_audit_events')) {
-                FinanceAuditEvent::query()->create([
-                    'event_type' => 'PLATFORM_CAMPAIGN_STATUS_CHANGED',
-                    'auditable_type' => Voucher::class,
-                    'auditable_id' => $locked->id,
-                    'actor_user_id' => $request->user()->id,
-                    'before_state' => $before,
-                    'after_state' => ['status' => $status, 'is_active' => (bool) $locked->is_active],
-                    'notes' => 'Admin campaign status action',
-                ]);
-            }
+            FinanceAuditEvent::query()->create([
+                'event_type' => 'PLATFORM_CAMPAIGN_STATUS_CHANGED',
+                'auditable_type' => Voucher::class,
+                'auditable_id' => $locked->id,
+                'actor_user_id' => $request->user()->id,
+                'before_state' => $before,
+                'after_state' => ['status' => $status, 'is_active' => (bool) $locked->is_active],
+                'notes' => 'Admin campaign status action',
+            ]);
         });
 
         return redirect()->route('admin.marketing', ['section' => 'campaigns'])->with('status', 'Platform campaign status updated. Existing redemptions and orders are unchanged.');
@@ -731,7 +754,14 @@ class AdminMarketingController extends Controller
     {
         return Schema::hasColumn('vouchers', 'campaign_budget_total')
             && Schema::hasColumn('seller_orders', 'seller_voucher_discount')
+            && Schema::hasColumn('seller_orders', 'platform_voucher_discount')
+            && Schema::hasColumn('seller_orders', 'platform_shipping_voucher_discount')
+            && Schema::hasColumn('seller_orders', 'funding_snapshot_version')
             && Schema::hasColumn('order_items', 'seller_voucher_discount')
+            && Schema::hasColumn('order_items', 'platform_voucher_discount')
+            && Schema::hasColumn('order_items', 'platform_shipping_voucher_discount')
+            && Schema::hasColumn('order_items', 'reward_points_discount')
+            && Schema::hasColumn('order_items', 'funding_snapshot_version')
             && Schema::hasColumn('financial_ledger_entries', 'voucher_id')
             && Schema::hasColumn('financial_ledger_entries', 'order_item_id');
     }

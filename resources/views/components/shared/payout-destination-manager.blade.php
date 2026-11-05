@@ -8,6 +8,8 @@
     $destinationAddTitle = $destinationAddTitle ?? (count($payoutDestinations) ? 'Add another destination' : 'Add a destination');
     $destinationEditTitle = $destinationEditTitle ?? 'Update destination';
     $destinationIncompleteNote = $destinationIncompleteNote ?? 'Incomplete details; add a complete destination to use it for future payouts.';
+    $destinationChannelLabel = $destinationChannelLabel ?? 'Payment channel';
+    $destinationChannelHelp = $destinationChannelHelp ?? 'Choose the service receiving this payment.';
 @endphp
 <div class="payout-destination-list" aria-label="Saved {{ $destinationNounPlural }}">
     @forelse($payoutDestinations as $destination)
@@ -71,7 +73,7 @@
         @csrf @method('PUT')
         <input type="hidden" name="destination_action" value="{{ $editingDestinationId !== '' ? 'update' : 'add' }}">
         <input type="hidden" name="destination_id" value="{{ $editingDestinationId }}">
-        <label><span>Payment channel</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected(old('payout_method') === $method)>{{ $method }}</option>@endforeach</select><small>Choose the service receiving this payment.</small></label>
+        <label><span>{{ $destinationChannelLabel }}</span><select name="payout_method" required><option value="">Select a channel</option>@foreach(['GCash', 'Maya', 'Bank Transfer', 'Other'] as $method)<option value="{{ $method }}" @selected(old('payout_method') === $method)>{{ $method }}</option>@endforeach</select><small>{{ $destinationChannelHelp }}</small></label>
         @php($payoutMethod = old('payout_method'))
         <label class="payout-bank-field" data-payout-bank-field @if($payoutMethod !== 'Bank Transfer') hidden @endif><span>Bank name</span><input name="payout_bank_name" maxlength="120" value="{{ old('payout_bank_name') }}" autocomplete="organization" placeholder="e.g. BPI"></label>
         <label><span>Account holder name</span><input name="payout_account_name" maxlength="150" value="{{ old('payout_account_name') }}" required autocomplete="name" placeholder="Name on the account"></label>

@@ -1,4 +1,4 @@
-@props(['item' => null, 'size' => '64'])
+@props(['item' => null, 'size' => '64', 'fetchpriority' => 'low'])
 
 @php
     $images = $item?->product?->images ?? collect();
@@ -9,4 +9,4 @@
         : asset('images/product-placeholder.svg');
 @endphp
 
-<img src="{{ $url }}" alt="{{ $image?->alt_text ?: ($item?->product_name ?? 'Product image') }}" loading="lazy" {{ $attributes->merge(['style' => "width:{$size}px;height:{$size}px;object-fit:cover;border:1px solid #e7e5e4;border-radius:10px;background:#fafaf9;flex:none;"]) }}>
+<img src="{{ $url }}" alt="{{ $image?->alt_text ?: ($item?->product_name ?? 'Product image') }}" width="{{ (int) $size }}" height="{{ (int) $size }}" loading="lazy" decoding="async" fetchpriority="{{ $fetchpriority }}" {{ $attributes->merge(['style' => "width:{$size}px;height:{$size}px;object-fit:cover;border:1px solid #e7e5e4;border-radius:10px;background:#fafaf9;flex:none;"]) }}>

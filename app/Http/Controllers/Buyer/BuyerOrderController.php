@@ -112,14 +112,7 @@ class BuyerOrderController extends Controller
         }
 
         if ($returnRefundReady) {
-            $orderQuery->with([
-                'returnRefundRequests.sellerRequests.sellerProfile',
-                'returnRefundRequests.sellerRequests.sellerOrder.sellerProfile',
-                'returnRefundRequests.sellerRequests.sellerOrder.items.product.images',
-                'returnRefundRequests.sellerRequests.items.orderItem.product.images',
-                'returnRefundRequests.items.orderItem',
-                'returnRefundRequests.sellerRequests.payouts',
-            ]);
+            $orderQuery->with('returnRefundRequests');
         }
 
         $orderQuery = $tabs->apply($orderQuery, $filter, $returnRefundReady, $shipmentReturnsReady, $returnEnhancementsReady);
@@ -128,6 +121,21 @@ class BuyerOrderController extends Controller
             ->latest()
             ->paginate(10)
             ->withQueryString();
+
+        if ($returnRefundReady) {
+            $ordersWithReturnRequests = $orders->getCollection()
+                ->filter(fn (Order $order): bool => $order->returnRefundRequests->isNotEmpty());
+            if ($ordersWithReturnRequests->isNotEmpty()) {
+                $ordersWithReturnRequests->load([
+                    'returnRefundRequests.sellerRequests.sellerProfile',
+                    'returnRefundRequests.sellerRequests.sellerOrder.sellerProfile',
+                    'returnRefundRequests.sellerRequests.sellerOrder.items.product.images',
+                    'returnRefundRequests.sellerRequests.items.orderItem.product.images',
+                    'returnRefundRequests.items.orderItem',
+                    'returnRefundRequests.sellerRequests.payouts',
+                ]);
+            }
+        }
 
         $orders->getCollection()->each(fn (Order $order) => $workflow->syncParentOrderProgress($order));
         $orderActionStates = $orders->getCollection()->mapWithKeys(
@@ -203,17 +211,24 @@ class BuyerOrderController extends Controller
             $orderQuery->with('sellerOrders.shipments.returnWorkflow');
         }
         if ($returnRefundReady) {
-            $orderQuery->with([
-                'sellerOrders.shipments.orderItem.returnRefundRequestItems',
-                'returnRefundRequests.items',
-                'returnRefundRequests.sellerRequests.items',
-            ]);
+            $orderQuery->with('returnRefundRequests');
         }
 
         $orders = $orderQuery
             ->get()
             ->sortBy('id')
             ->values();
+        if ($returnRefundReady && $detailOrderId === 0) {
+            $ordersWithReturnRequests = $orders
+                ->filter(fn (Order $order): bool => $order->returnRefundRequests->isNotEmpty());
+            if ($ordersWithReturnRequests->isNotEmpty()) {
+                $ordersWithReturnRequests->load([
+                    'sellerOrders.shipments.orderItem.returnRefundRequestItems',
+                    'returnRefundRequests.items',
+                    'returnRefundRequests.sellerRequests.items',
+                ]);
+            }
+        }
         $snapshot = $this->realtimeOrderSnapshot(
             $orders,
             $tabs,

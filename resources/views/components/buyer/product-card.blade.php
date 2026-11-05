@@ -320,6 +320,41 @@
         text-transform: uppercase !important;
     }
 
+    .lk-product-card--palette .lk-product-palette-tag--flash-sale {
+        right: 12px !important;
+        display: grid !important;
+        width: fit-content !important;
+        max-width: calc(100% - 24px) !important;
+        min-height: 0 !important;
+        gap: 3px !important;
+        align-items: start !important;
+        padding: 8px 11px !important;
+        border-color: rgba(255, 255, 255, 0.3) !important;
+        border-radius: 13px !important;
+        background: rgba(86, 28, 23, 0.94) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 8px 20px rgba(59, 33, 27, 0.22) !important;
+        font-size: 10px !important;
+        letter-spacing: normal !important;
+        line-height: 1.25 !important;
+        text-transform: none !important;
+    }
+
+    .lk-product-card--palette .lk-product-palette-tag--flash-sale strong {
+        color: #FFE1B8 !important;
+        font-size: 9px !important;
+        font-weight: 950 !important;
+        letter-spacing: 0.1em !important;
+        line-height: 1.2 !important;
+        text-transform: uppercase !important;
+    }
+
+    .lk-product-card--palette .lk-product-palette-tag--flash-sale time {
+        color: rgba(255, 255, 255, 0.88) !important;
+        font-size: 9px !important;
+        font-weight: 700 !important;
+    }
+
     .lk-product-card--palette .lk-product-heart {
         position: absolute !important;
         top: 12px !important;
@@ -774,9 +809,19 @@
             </span>
         @endif
 
-        <span class="lk-product-palette-tag">
-            LIKHAE Pick
-        </span>
+        @if($flashSaleActive && $flashSaleRemaining > 0)
+            <div class="lk-product-palette-tag lk-product-palette-tag--flash-sale" role="status">
+                <strong>Flash Sale</strong>
+                <span>{{ number_format($flashSaleRemaining) }} units left
+                    @if($flashSaleLimit) · Max {{ number_format((int) $flashSaleLimit) }} per buyer @endif
+                </span>
+                @if($flashSaleEndsAt)<time data-flash-sale-countdown datetime="{{ $flashSaleEndsAt }}">Ends {{ \Illuminate\Support\Carbon::parse($flashSaleEndsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
+            </div>
+        @else
+            <span class="lk-product-palette-tag">
+                LIKHAE Pick
+            </span>
+        @endif
 
         @if($unavailable || $availabilityRestricted)
             <span class="lk-product-unavailable-badge">Unavailable</span>
@@ -879,13 +924,6 @@
             @endif
         </div>
 
-        @if($flashSaleActive && $flashSaleRemaining > 0)
-            <div class="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[10px] font-semibold text-rose-900" role="status">
-                <span>Flash Sale · {{ number_format($flashSaleRemaining) }} promotional units left</span>
-                @if($flashSaleLimit)<span class="block mt-0.5">Limit {{ number_format((int) $flashSaleLimit) }} per Buyer</span>@endif
-                @if($flashSaleEndsAt)<time class="block mt-0.5" data-flash-sale-countdown datetime="{{ $flashSaleEndsAt }}">Sale ends {{ \Illuminate\Support\Carbon::parse($flashSaleEndsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
-            </div>
-        @endif
         @if($flashSaleSoldOut)
             <div class="mt-2 rounded-lg border border-[#EADCCC] bg-[#F6EFE7] px-3 py-2 text-xs font-bold text-[#6C4936]" role="status">Flash Sale allocation sold out</div>
         @endif

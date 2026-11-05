@@ -200,6 +200,17 @@ class BuyerController extends Controller
         ]);
     }
 
+    public function bundleDeals(Request $request): View
+    {
+        return view('buyer.bundle-deals', [
+            'promotions' => $this->sellerPromotions->forMarketplace(
+                $request->user(),
+                80,
+                SellerPromotion::TYPE_BUNDLE,
+            ),
+        ]);
+    }
+
     public function flashDeals(Request $request, FlashSaleReminderService $reminders): View
     {
         $query = $this->catalog->applyFilters($this->activeFlashSaleProductsQuery(), $request);
@@ -556,6 +567,12 @@ class BuyerController extends Controller
         $searchSuggestions = ! $invalidPriceRange && $paginator->total() === 0 && $filters['q'] !== ''
             ? $this->catalogSearchSuggestions($filters)
             : [];
+        $showRecommendations = $filters['q'] !== ''
+            && $catalogErrors->getBag('default')->isEmpty()
+            && $paginator->currentPage() === $paginator->lastPage();
+        $recommendations = $showRecommendations
+            ? $this->searchRecommendations($filters, 1)
+            : null;
 
         return view('buyer.products', [
             'products' => $paginator,
@@ -568,7 +585,97 @@ class BuyerController extends Controller
             'catalogQueryParameters' => $this->catalogQueryParameters($filters),
             'catalogErrors' => $catalogErrors,
             'catalogPriceRange' => $catalogPriceRange,
+            'recommendations' => $recommendations,
+            'recommendationProducts' => $recommendations?->getCollection()
+                ->map(fn (Product $product) => $this->buyerCatalogPayload($product)) ?? collect(),
         ]);
+    }
+
+    public function productRecommendations(Request $request): JsonResponse
+    {
+        $request->validate([
+            'recommendation_page' => ['sometimes', 'integer', 'min:1', 'max:1000000'],
+        ]);
+        [$filters, , $errors] = $this->validatedCatalogFilters($request);
+        abort_if($filters['q'] === '' || ! $errors->getBag('default')->isEmpty(), 422);
+
+        $page = (int) $request->query('recommendation_page', 1);
+        $recommendations = $this->searchRecommendations($filters, $page);
+        $products = $recommendations->getCollection()
+            ->map(fn (Product $product) => $this->buyerCatalogPayload($product));
+
+        return response()->json([
+            'html' => view('buyer.products.recommendation-cards', ['products' => $products])->render(),
+            'has_more' => $recommendations->hasMorePages(),
+            'next_page' => $recommendations->hasMorePages() ? $page + 1 : null,
+        ]);
+    }
+
+    /** @param array<string, mixed> $filters */
+    private function searchRecommendations(array $filters, int $page): \Illuminate\Pagination\Paginator
+    {
+        $matching = $this->filterBuyerCatalog(Product::query()->visible(), $filters);
+        $query = $this->filterBuyerCatalog(
+            $this->catalog->visibleQuery()->with('sellerProfile.businessAddress'),
+            $filters,
+            false,
+        )
+            ->whereHas('variants', fn (Builder $variants) => $variants->where('is_active', true)->where('stock', '>', 0))
+            ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+            ->whereNotIn('products.id', (clone $matching)->select('products.id'));
+
+        $scoreParts = [];
+        $bindings = [];
+        $tokens = collect(preg_split('/[^\pL\pN]+/u', mb_strtolower($filters['q']), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 2)
+            ->unique()
+            ->take(5);
+        foreach ($tokens as $token) {
+            $pattern = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $token).'%';
+            $scoreParts[] = "CASE WHEN LOWER(products.name) LIKE ? ESCAPE '!' THEN 10 WHEN LOWER(products.description) LIKE ? ESCAPE '!' THEN 4 ELSE 0 END";
+            array_push($bindings, $pattern, $pattern);
+        }
+
+        $matchedCategoryIds = (clone $matching)
+            ->distinct()
+            ->pluck('products.category_id')
+            ->filter()
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values();
+        if ($matchedCategoryIds->isNotEmpty()) {
+            $parentIds = Category::query()
+                ->whereIn('id', $matchedCategoryIds)
+                ->whereNotNull('parent_id')
+                ->pluck('parent_id')
+                ->map(fn ($id): int => (int) $id);
+            $relatedCategoryIds = Category::query()
+                ->whereIn('parent_id', $matchedCategoryIds->merge($parentIds)->unique())
+                ->pluck('id')
+                ->merge($parentIds)
+                ->diff($matchedCategoryIds)
+                ->unique()
+                ->values();
+            $exactPlaceholders = implode(', ', array_fill(0, $matchedCategoryIds->count(), '?'));
+            $categoryScore = "CASE WHEN products.category_id IN ({$exactPlaceholders}) THEN 3";
+            array_push($bindings, ...$matchedCategoryIds->all());
+            if ($relatedCategoryIds->isNotEmpty()) {
+                $relatedPlaceholders = implode(', ', array_fill(0, $relatedCategoryIds->count(), '?'));
+                $categoryScore .= " WHEN products.category_id IN ({$relatedPlaceholders}) THEN 2";
+                array_push($bindings, ...$relatedCategoryIds->all());
+            }
+            $scoreParts[] = $categoryScore.' ELSE 0 END';
+        }
+        if ($scoreParts === []) {
+            $scoreParts[] = '0';
+        }
+
+        return $query
+            ->orderByRaw('('.implode(' + ', $scoreParts).') DESC', $bindings)
+            ->orderByDesc('reviews_avg_rating')
+            ->orderByDesc('order_items_sum_quantity')
+            ->orderByDesc('products.id')
+            ->simplePaginate(12, ['products.*'], 'recommendation_page', $page);
     }
 
     /** @return array{array<string, mixed>, array<string, string>, ViewErrorBag} */
@@ -2397,19 +2504,19 @@ class BuyerController extends Controller
             if ($action === 'set_default') {
                 $manager->setDefault($buyer, $data['destination_id']);
 
-                return back()->with('status', 'Default wallet payment method updated.');
+                return back()->with('status', 'Default refund destination updated.');
             }
 
             if ($action === 'remove') {
                 $manager->remove($buyer, $data['destination_id']);
 
-                return back()->with('status', 'Wallet payment method removed.');
+                return back()->with('status', 'Refund destination removed.');
             }
 
             $destination = $input->validate($request, true);
             $manager->update($buyer, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
 
-            return back()->with('status', 'Wallet payment method updated.');
+            return back()->with('status', 'Refund destination updated.');
         }
 
         abort_unless($action === 'add', 422, 'Unsupported wallet payment method action.');
@@ -2417,7 +2524,7 @@ class BuyerController extends Controller
         $destination = $input->validate($request, true);
         $manager->add($buyer, $destination, (bool) ($destination['make_default'] ?? false));
 
-        return back()->with('status', 'Wallet payment method saved securely.');
+        return back()->with('status', 'Refund destination saved securely.');
     }
 
     public function settings(Request $request): View

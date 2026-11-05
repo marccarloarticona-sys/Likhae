@@ -224,8 +224,9 @@
 
     .lk-quick-grid {
         display: grid !important;
-        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-        gap: 16px !important;
+        grid-template-columns: repeat(6, minmax(112px, 1fr)) !important;
+        gap: 8px !important;
+        overflow-x: auto;
     }
 
     .lk-quick-card {
@@ -780,7 +781,28 @@
         }
 
         .lk-quick-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            grid-template-columns: repeat(6, minmax(112px, 1fr)) !important;
+            overflow-x: auto;
+        }
+
+        .lk-quick-card {
+            min-height: 56px !important;
+            gap: 6px !important;
+            padding: 7px !important;
+        }
+
+        .lk-quick-icon {
+            width: 32px !important;
+            height: 32px !important;
+            flex-basis: 32px !important;
+        }
+
+        .lk-quick-card strong {
+            font-size: 10px !important;
+        }
+
+        .lk-quick-card small {
+            font-size: 9px !important;
         }
 
         .lk-category-grid {
@@ -807,6 +829,11 @@
         .lk-category-grid,
         .lk-product-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .lk-quick-grid {
+            grid-template-columns: repeat(6, minmax(112px, 1fr)) !important;
+            overflow-x: auto;
         }
 
         .lk-countdown {
@@ -2492,6 +2519,14 @@
             <a href="{{ route('buyer.free-gifts') }}" class="lk-quick-card">
                 <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/><path d="M2 7h20v5H2z"/><path d="M12 7v14"/><path d="M12 7H7.5A2.5 2.5 0 1 1 10 4.5z"/><path d="M12 7h4.5A2.5 2.5 0 1 0 14 4.5z"/></svg></div>
                 <div><strong>Free Gifts</strong><small>Buy and get rewards</small></div>
+            </a>
+            <a href="{{ route('buyer.bundle-deals') }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/><path d="M12 8v5"/></svg></div>
+                <div><strong>Bundle Deals</strong><small>Save when you shop together</small></div>
+            </a>
+            <a href="{{ route('buyer.wishlist') }}" class="lk-quick-card">
+                <div class="lk-quick-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div>
+                <div><strong>Wishlist</strong><small>Your saved products</small></div>
             </a>
         </div>
     </section>

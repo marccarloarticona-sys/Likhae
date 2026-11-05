@@ -73,6 +73,7 @@ class BuyerParityApiController extends Controller
             'voucher_codes.seller.*' => ['nullable', 'string', 'max:80'],
             'voucher_codes.platform' => ['nullable', 'string', 'max:80'],
             'voucher_codes.shipping' => ['nullable', 'string', 'max:80'],
+            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['integer'],
             'reward_points' => ['nullable', 'integer', 'min:0'],
@@ -131,6 +132,7 @@ class BuyerParityApiController extends Controller
             'voucher_codes.seller.*' => ['nullable', 'string', 'max:80'],
             'voucher_codes.platform' => ['nullable', 'string', 'max:80'],
             'voucher_codes.shipping' => ['nullable', 'string', 'max:80'],
+            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'seller_notes' => ['nullable', 'array'],
             'seller_notes.*' => ['nullable', 'string', 'max:200'],
             'protection_item_ids' => ['nullable', 'array'],
@@ -673,7 +675,10 @@ class BuyerParityApiController extends Controller
 
     private function normalizeVoucherCodes(array $codes): array
     {
-        if (array_intersect(['seller', 'platform', 'shipping'], array_keys($codes)) !== []) {
+        $autoApply = array_key_exists('auto_apply', $codes)
+            ? filter_var($codes['auto_apply'], FILTER_VALIDATE_BOOLEAN)
+            : true;
+        if (array_intersect(['seller', 'platform', 'shipping', 'auto_apply'], array_keys($codes)) !== []) {
             return [
                 'seller' => collect((array) ($codes['seller'] ?? []))
                     ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
@@ -681,13 +686,19 @@ class BuyerParityApiController extends Controller
                     ->all(),
                 'platform' => mb_strtoupper(trim((string) ($codes['platform'] ?? ''))),
                 'shipping' => mb_strtoupper(trim((string) ($codes['shipping'] ?? ''))),
+                'auto_apply' => $autoApply,
             ];
         }
 
-        return collect($codes)
-            ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
-            ->filter()
-            ->all();
+        return [
+            'seller' => collect($codes)
+                ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+                ->filter()
+                ->all(),
+            'platform' => '',
+            'shipping' => '',
+            'auto_apply' => $autoApply,
+        ];
     }
     private function authorizeBuyer(Request $request): void
     {

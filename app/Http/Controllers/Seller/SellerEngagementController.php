@@ -464,7 +464,8 @@ class SellerEngagementController extends Controller
             && Schema::hasColumn('product_variants', 'flash_sale_price')
             && Schema::hasColumn('product_variants', 'flash_sale_allocation')
             && Schema::hasColumn('product_variants', 'flash_sale_sold')
-            && Schema::hasColumn('order_items', 'flash_sale_quantity');
+            && Schema::hasColumn('order_items', 'flash_sale_quantity')
+            && Schema::hasColumn('order_items', 'flash_sale_campaign_key');
         $flashVariants = $eligibleProducts->flatMap(fn (Product $product) => $product->variants);
         $activeFlashSales = $flashSaleSchemaReady
             ? $flashVariants->filter(fn (ProductVariant $variant): bool => $variant->active_flash_sale_price !== null)->count()
@@ -1108,6 +1109,9 @@ class SellerEngagementController extends Controller
             && Carbon::parse($data['flash_sale_ends_at'])->lessThanOrEqualTo(Carbon::parse($data['flash_sale_starts_at']))) {
             throw ValidationException::withMessages(['flash_sale_ends_at' => 'The flash sale end time must be later than its start time.']);
         }
+        if (! empty($data['flash_sale_ends_at']) && Carbon::parse($data['flash_sale_ends_at'])->lessThanOrEqualTo(now())) {
+            throw ValidationException::withMessages(['flash_sale_ends_at' => 'Choose a future end time so buyers can see the remaining time.']);
+        }
 
         DB::transaction(function () use ($data, $product, $seller, $promotionConflictService): void {
             $lockedProduct = Product::query()
@@ -1133,15 +1137,18 @@ class SellerEngagementController extends Controller
                 ->pluck('id')
                 ->map(fn ($id): int => (int) $id)
                 ->all();
-            if ($flashVariantIds !== []) {
-                $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $flashVariantIds, [
-                    'exclude_kinds' => ['flash_sale', 'discount', 'voucher'],
+            if ($flashVariantIds === []) {
+                throw ValidationException::withMessages([
+                    'variants' => 'Enter a flash price and allocation for at least one variant. Use End all product flash sales to clear an existing campaign.',
                 ]);
-                if ($conflicts->isNotEmpty()) {
-                    throw ValidationException::withMessages([
-                        'variants' => 'A flash sale cannot overlap with an existing bundle deal. Clear these offers first: '.$conflicts->pluck('label')->unique()->implode(', ').'. Flash Sale has priority over Product Discount; discounts are not compounded.',
-                    ]);
-                }
+            }
+            $conflicts = $promotionConflictService->conflictsForVariantIds($seller, $flashVariantIds, [
+                'exclude_kinds' => ['flash_sale', 'discount', 'voucher'],
+            ]);
+            if ($conflicts->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'variants' => 'A flash sale cannot overlap with an existing bundle deal. Clear these offers first: '.$conflicts->pluck('label')->unique()->implode(', ').'. Flash Sale has priority over Product Discount; discounts are not compounded.',
+                ]);
             }
 
             $hasOpenFlashOrder = OrderItem::query()
@@ -1166,6 +1173,11 @@ class SellerEngagementController extends Controller
                     ]);
                 }
                 if ($price !== null) {
+                    if ((int) $variant->stock <= 0) {
+                        throw ValidationException::withMessages([
+                            'variants' => 'Add stock to '.$variant->sku.' before setting its flash sale allocation.',
+                        ]);
+                    }
                     if ((float) $price >= round((float) $variant->price, 2)) {
                         throw ValidationException::withMessages([
                             'variants' => 'Each flash price must be below the variant’s regular catalog price.',

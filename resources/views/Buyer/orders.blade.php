@@ -44,7 +44,7 @@
     ])->values()->toJson());
 @endphp
 
-<div class="lk-page-narrow lk-order-page" data-buyer-order-live data-order-stream-url="{{ route('buyer.orders.stream') }}" data-order-ids="{{ $liveOrderIds->toJson() }}" data-shipment-ids="{{ $liveShipmentIds->toJson() }}" data-order-version="{{ $liveOrderVersion }}" data-order-detail-id="{{ $mode === 'show' ? (int) ($selectedOrder?->id ?? 0) : '' }}" data-order-tab-key="{{ $mode === 'index' ? strtolower(str_replace('_', '-', $filter)) : 'all' }}">
+<div class="lk-page-narrow lk-order-page" data-buyer-order-live data-order-page-mode="{{ $mode }}" data-order-stream-url="{{ route('buyer.orders.stream') }}" data-order-ids="{{ $liveOrderIds->toJson() }}" data-shipment-ids="{{ $liveShipmentIds->toJson() }}" data-order-version="{{ $liveOrderVersion }}" data-order-detail-id="{{ $mode === 'show' ? (int) ($selectedOrder?->id ?? 0) : '' }}" data-order-tab-key="{{ $mode === 'index' ? strtolower(str_replace('_', '-', $filter)) : 'all' }}">
     @if(session('buyer_notice'))<div class="mb-4 rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('buyer_notice') }}</div>@endif
 
     @if($mode === 'success')
@@ -540,7 +540,7 @@
                             @if(isset($reviewPhotosById[$item->review?->id]))
                                 <div class="flex flex-wrap gap-2">
                                     @foreach($reviewPhotosById[$item->review->id] as $photoUrl)
-                                        <img src="{{ $photoUrl }}" alt="Current review photo" class="h-24 w-24 rounded-lg object-cover" width="96" height="96" loading="lazy" decoding="async">
+                                        <img src="{{ $photoUrl }}" alt="Current review photo" class="h-24 w-24 rounded-lg object-cover" width="96" height="96" loading="lazy" decoding="async" fetchpriority="low">
                                     @endforeach
                                 </div>
                             @endif
@@ -647,17 +647,21 @@
                     $orderDisplayTotal = $orderItemsForTab->sum(fn ($item) => (float) $item->line_total);
                     $returnRequests = $returnRefundReady ? $order->returnRefundRequests->sortByDesc('submitted_at') : collect();
                     $returnRequest = $returnRequests->first();
-                    $returnSellerRequests = $returnRequests->flatMap(fn ($requestRecord) => $requestRecord->sellerRequests);
-                    $formalReturnItemIds = $returnRequests->flatMap(function ($requestRecord) {
-                        $itemIds = $requestRecord->items->pluck('order_item_id');
-                        $sellerRequestItems = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->items);
-                        $itemIds = $itemIds->merge($sellerRequestItems->pluck('order_item_id'));
-                        if ($itemIds->isEmpty()) {
-                            $itemIds = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->sellerOrder?->items->pluck('id') ?? collect());
-                        }
+                    $returnSellerRequests = $activeTabKey === 'returns'
+                        ? $returnRequests->flatMap(fn ($requestRecord) => $requestRecord->sellerRequests)
+                        : collect();
+                    $formalReturnItemIds = $activeTabKey === 'returns'
+                        ? $returnRequests->flatMap(function ($requestRecord) {
+                            $itemIds = $requestRecord->items->pluck('order_item_id');
+                            $sellerRequestItems = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->items);
+                            $itemIds = $itemIds->merge($sellerRequestItems->pluck('order_item_id'));
+                            if ($itemIds->isEmpty()) {
+                                $itemIds = $requestRecord->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->sellerOrder?->items->pluck('id') ?? collect());
+                            }
 
-                        return $itemIds->filter()->map(fn ($id): int => (int) $id)->all();
-                    })->unique()->values();
+                            return $itemIds->filter()->map(fn ($id): int => (int) $id)->all();
+                        })->unique()->values()
+                        : collect();
                     $actionState = $orderActionStates->get($order->id, []);
                     $confirmableShipmentIds = collect($actionState['confirmable_shipment_ids'] ?? [])->map(fn ($id): int => (int) $id)->all();
                 @endphp

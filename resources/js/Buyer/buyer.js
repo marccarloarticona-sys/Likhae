@@ -472,16 +472,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    let catalogGrid = one('.lk-products-main .lk-product-grid');
     const catalogViewLinks = all('.lk-products-toolbar .lk-view-toggle');
     const applyCatalogView = (view) => {
         const useListView = view === 'list';
-        catalogGrid?.classList.toggle('is-list-view', useListView);
-        if (catalogGrid) {
-            all('.lk-product-card--palette', catalogGrid).forEach((card) => {
+        all('.lk-products-main .lk-product-grid').forEach((grid) => {
+            grid.classList.toggle('is-list-view', useListView);
+            all('.lk-product-card--palette', grid).forEach((card) => {
                 card.classList.toggle('is-compact', useListView);
             });
-        }
+        });
         catalogViewLinks.forEach((link) => {
             const isActive = new URL(link.href, window.location.href).searchParams.get('view') === view;
             link.classList.toggle('active', isActive);
@@ -537,6 +536,103 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastCatalogResultKey = catalogResultKey(window.location.href);
     let catalogRequestController = null;
     let catalogRequestId = 0;
+    let recommendationState = null;
+
+    const initializeSearchRecommendations = () => {
+        recommendationState?.observer?.disconnect();
+        recommendationState?.controller?.abort();
+        const section = one('[data-catalog-recommendations]', catalogResults || document);
+        recommendationState = null;
+        if (!section || !section.dataset.nextPage) return;
+
+        const grid = one('[data-recommendation-grid]', section);
+        const status = one('[data-recommendation-status]', section);
+        const retry = one('[data-recommendation-retry]', section);
+        const sentinel = one('[data-recommendation-sentinel]', section);
+        if (!grid || !status || !retry || !sentinel) return;
+
+        const state = { section, controller: null, observer: null, loading: false };
+        recommendationState = state;
+        const loadNext = async () => {
+            if (state.loading || recommendationState !== state || !section.dataset.nextPage) return;
+            state.loading = true;
+            retry.hidden = true;
+            status.hidden = false;
+            status.textContent = 'Loading more recommendations…';
+            section.setAttribute('aria-busy', 'true');
+            const controller = new AbortController();
+            state.controller = controller;
+            const timeout = window.setTimeout(() => controller.abort(), 15000);
+
+            try {
+                const url = new URL(section.dataset.recommendationUrl, window.location.href);
+                url.searchParams.set('recommendation_page', section.dataset.nextPage);
+                const response = await fetch(url, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    signal: controller.signal,
+                });
+                if (!response.ok) throw new Error('Recommendations could not be loaded.');
+                const payload = await response.json();
+                if (typeof payload.html !== 'string' || typeof payload.has_more !== 'boolean') {
+                    throw new Error('Recommendations could not be loaded.');
+                }
+                if (recommendationState !== state) return;
+
+                const template = document.createElement('template');
+                template.innerHTML = payload.html;
+                const seenIds = new Set(all('[data-product-card]', catalogResults).map((card) => card.dataset.productId));
+                const cards = all('[data-product-card]', template.content).filter((card) => {
+                    if (!card.dataset.productId || seenIds.has(card.dataset.productId)) return false;
+                    seenIds.add(card.dataset.productId);
+                    return true;
+                });
+                grid.append(...cards);
+                cards.forEach((card) => {
+                    document.dispatchEvent(new CustomEvent('catalog:results-updated', { detail: { root: card } }));
+                });
+                applyCatalogView(new URL(window.location.href).searchParams.get('view') === 'list' ? 'list' : 'grid');
+
+                section.dataset.nextPage = payload.has_more && cards.length ? String(payload.next_page) : '';
+                status.textContent = cards.length
+                    ? (section.dataset.nextPage ? '' : 'You’ve seen all recommendations.')
+                    : 'No more recommendations are available.';
+                status.hidden = Boolean(section.dataset.nextPage);
+                if (section.dataset.nextPage) state.observer?.observe(sentinel);
+                else state.observer?.disconnect();
+            } catch (error) {
+                if (recommendationState !== state) return;
+                status.textContent = 'Recommendations could not be loaded. Please try again.';
+                retry.hidden = false;
+                state.observer?.disconnect();
+            } finally {
+                window.clearTimeout(timeout);
+                state.loading = false;
+                state.controller = null;
+                if (recommendationState === state) {
+                    section.setAttribute('aria-busy', 'false');
+                    if (section.dataset.nextPage && retry.hidden
+                        && sentinel.getBoundingClientRect().top <= window.innerHeight + 350) {
+                        window.requestAnimationFrame(loadNext);
+                    }
+                }
+            }
+        };
+
+        retry.addEventListener('click', () => {
+            loadNext();
+        });
+        if ('IntersectionObserver' in window) {
+            state.observer = new IntersectionObserver((entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) loadNext();
+            }, { rootMargin: '350px 0px' });
+            state.observer.observe(sentinel);
+        } else {
+            retry.textContent = 'Load more recommendations';
+            retry.hidden = false;
+        }
+    };
+    initializeSearchRecommendations();
 
     const syncCatalogFilterFields = (url) => {
         if (!catalogFilterForm) return;
@@ -700,10 +796,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             catalogResults.innerHTML = nextResults.innerHTML;
             catalogResults.setAttribute('aria-busy', 'false');
-            catalogGrid = one('.lk-products-main .lk-product-grid');
             syncCatalogToolbar(responseDocument, url);
             syncCatalogCategoryNav(responseDocument);
             applyCatalogView(url.searchParams.get('view') === 'list' ? 'list' : 'grid');
+            initializeSearchRecommendations();
 
             if (pushHistory && url.href !== window.location.href) {
                 window.history.pushState({ catalogResults: true }, '', url);
@@ -1877,7 +1973,16 @@ document.addEventListener('DOMContentLoaded', () => {
             window.Echo?.private(`shipments.${shipmentId}`)
                 .listen('.shipment.tracking.updated', checkOrders);
         });
-        startRealtimeFallback(checkOrders);
+        const startOrderPollingWhenIdle = () => {
+            const start = () => startRealtimeFallback(checkOrders);
+            if ('requestIdleCallback' in window) {
+                window.requestIdleCallback(start, { timeout: 1800 });
+            } else {
+                window.setTimeout(start, 500);
+            }
+        };
+        if (document.readyState === 'complete') startOrderPollingWhenIdle();
+        else window.addEventListener('load', startOrderPollingWhenIdle, { once: true });
     }
 
 });

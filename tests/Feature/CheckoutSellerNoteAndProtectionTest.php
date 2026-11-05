@@ -273,6 +273,14 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($sellerVoucher->id));
         $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
         $this->assertSame(1, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
+        $orderItems = $order->items()->get();
+        $this->assertEquals(10.00, $orderItems->sum(fn (OrderItem $item): float => (float) $item->seller_voucher_discount));
+        $this->assertEquals(20.00, $orderItems->sum(fn (OrderItem $item): float => (float) $item->platform_voucher_discount));
+        $this->assertEquals(30.00, $orderItems->sum(fn (OrderItem $item): float => (float) $item->platform_shipping_voucher_discount));
+        $this->assertSame(4, \App\Models\Finance\FinancialLedgerEntry::query()
+            ->whereIn('order_item_id', $orderItems->modelKeys())
+            ->where('entry_type', 'CAMPAIGN_SUBSIDY_RESERVED')
+            ->count());
 
         $campaignBudgets = app(\App\Services\Finance\PlatformCampaignBudgetService::class);
         $productBudget = $campaignBudgets->summary($platformVoucher->fresh());
@@ -284,12 +292,9 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(0, $shippingBudget['spent_cents'], 'Pending COD must not recognize shipping campaign expense.');
         $this->assertSame(9997000, $shippingBudget['available_cents']);
 
-        $order->update(['status' => 'CANCELLED']);
-        $order->sellerOrders()->update(['status' => 'CANCELLED']);
-        foreach ($order->sellerOrders as $sellerOrder) {
-            $campaignBudgets->releaseForSellerOrder($sellerOrder, $fixture['buyer']);
-            $campaignBudgets->releaseForSellerOrder($sellerOrder, $fixture['buyer']);
-        }
+        $this->actingAs($fixture['buyer'])
+            ->postJson(route('buyer.orders.cancel', $order), ['reason' => 'ORDERED_BY_MISTAKE'])
+            ->assertOk();
         $this->assertSame(0, $campaignBudgets->summary($platformVoucher->fresh())['reserved_cents']);
         $this->assertSame(0, $campaignBudgets->summary($platformVoucher->fresh())['spent_cents']);
         $this->assertSame(0, $campaignBudgets->summary($shippingVoucher->fresh())['reserved_cents']);
@@ -305,6 +310,246 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($sellerVoucher->id));
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($platformVoucher->id));
         $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count($shippingVoucher->id));
+    }
+
+    public function test_auto_campaigns_choose_the_largest_discount_with_a_stable_tie_and_can_be_removed(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $first = $this->platformCampaign([
+            'code' => 'AUTOFIRST'.str()->upper(str()->random(5)),
+            'distribution_mode' => 'AUTO',
+            'discount_type' => 'FIXED',
+            'discount_value' => 12,
+        ]);
+        $tied = $this->platformCampaign([
+            'code' => 'AUTOTIED'.str()->upper(str()->random(5)),
+            'distribution_mode' => 'AUTO',
+            'discount_type' => 'FIXED',
+            'discount_value' => 12,
+        ]);
+        $smaller = $this->platformCampaign([
+            'code' => 'AUTOSMALL'.str()->upper(str()->random(5)),
+            'distribution_mode' => 'AUTO',
+            'discount_type' => 'FIXED',
+            'discount_value' => 5,
+        ]);
+        $items = collect([$fixture['itemA']]);
+        $checkout = app(CheckoutService::class);
+        $autoSelection = [
+            'seller' => [],
+            'platform' => '',
+            'shipping' => '',
+            'auto_apply_platform' => true,
+            'auto_apply_shipping' => false,
+        ];
+
+        $preview = $checkout->preview($items, $autoSelection, $fixture['buyer']);
+        $this->assertSame($first->id, $preview['platform_voucher']->id);
+        $this->assertEquals(12.00, $preview['platform_voucher_discount']);
+        $this->assertNotSame($tied->id, $preview['platform_voucher']->id);
+        $this->assertNotSame($smaller->id, $preview['platform_voucher']->id);
+        $this->assertTrue($preview['platform_auto_applied']);
+
+        $removed = $checkout->preview($items, [...$autoSelection, 'auto_apply_platform' => false], $fixture['buyer']);
+        $this->assertNull($removed['platform_voucher']);
+        $this->assertEquals(0.00, $removed['platform_voucher_discount']);
+
+        try {
+            $checkout->preview($items, [...$autoSelection, 'platform' => $first->code], $fixture['buyer']);
+            $this->fail('A buyer cannot manually enter a voucher configured for auto-apply.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('applied automatically', (string) $exception->errors()['platform_voucher_code'][0]);
+        }
+    }
+
+    public function test_platform_stacking_compatibility_flags_are_enforced(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $sellerVoucher = Voucher::query()->create([
+            'seller_profile_id' => $fixture['sellerA']->id,
+            'code' => 'STACKSELLER'.str()->upper(str()->random(5)),
+            'name' => 'Seller voucher for stack compatibility',
+            'discount_type' => 'FIXED',
+            'discount_value' => 5,
+            'minimum_order_amount' => 0,
+            'is_active' => true,
+        ]);
+        BuyerVoucherClaim::query()->create(['buyer_user_id' => $fixture['buyer']->id, 'voucher_id' => $sellerVoucher->id]);
+        $noSellerStack = $this->platformCampaign([
+            'code' => 'NOSSELLER'.str()->upper(str()->random(5)),
+            'stack_with_seller' => false,
+        ]);
+        $checkout = app(CheckoutService::class);
+        try {
+            $checkout->preview(collect([$fixture['itemA']]), [
+                'seller' => [$fixture['sellerA']->id => $sellerVoucher->code],
+                'platform' => $noSellerStack->code,
+                'shipping' => '',
+                'auto_apply_platform' => false,
+                'auto_apply_shipping' => false,
+            ], $fixture['buyer']);
+            $this->fail('A platform voucher can disallow stacking with seller vouchers.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('cannot be combined', (string) $exception->errors()['platform_voucher_code'][0]);
+        }
+
+        $noShippingStack = $this->platformCampaign([
+            'code' => 'NOSSHIPPING'.str()->upper(str()->random(5)),
+            'stack_with_shipping' => false,
+        ]);
+        $shippingVoucher = $this->platformCampaign([
+            'code' => 'COMPATSHIP'.str()->upper(str()->random(5)),
+            'benefit_scope' => 'SHIPPING',
+        ]);
+        try {
+            $checkout->preview(collect([$fixture['itemA']]), [
+                'seller' => [],
+                'platform' => $noShippingStack->code,
+                'shipping' => $shippingVoucher->code,
+                'auto_apply_platform' => false,
+                'auto_apply_shipping' => false,
+            ], $fixture['buyer']);
+            $this->fail('A product platform voucher can disallow stacking with shipping campaigns.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('cannot be used together', (string) $exception->errors()['shipping_voucher_code'][0]);
+        }
+    }
+
+    public function test_claimable_first_time_campaign_rechecks_audience_and_category_or_product_targets(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $claimable = $this->platformCampaign([
+            'code' => 'CLAIMFIRST'.str()->upper(str()->random(5)),
+            'distribution_mode' => 'CLAIMABLE',
+            'buyer_audience' => 'FIRST_TIME',
+            'target_mode' => 'CATEGORIES',
+            'target_category_ids' => [$fixture['category']->id],
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+        ]);
+        $claims = app(BuyerVoucherClaimService::class);
+        $this->assertTrue($claims->claimablePlatformVouchers($fixture['buyer'])->contains('id', $claimable->id));
+        $this->actingAs($fixture['buyer'])
+            ->get(route('buyer.rewards'))
+            ->assertOk()
+            ->assertSee($claimable->code)
+            ->assertSee('Collect');
+        $this->post(route('buyer.vouchers.claim', $claimable))->assertRedirect(route('buyer.rewards'));
+        $this->get(route('buyer.rewards'))->assertOk()->assertSee('Use Collected');
+
+        $budgets = app(\App\Services\Finance\PlatformCampaignBudgetService::class);
+        $this->assertSame(0, $budgets->summary($claimable)['reserved_cents']);
+        $this->assertSame(0, \App\Services\Marketplace\VoucherRedemptionCounter::count((int) $claimable->id));
+
+        $items = collect([$fixture['itemA'], $fixture['itemB']]);
+        $checkout = app(CheckoutService::class);
+        $claimSelection = [
+            'seller' => [],
+            'platform' => $claimable->code,
+            'shipping' => '',
+            'auto_apply_platform' => false,
+            'auto_apply_shipping' => false,
+        ];
+        $claimPreview = $checkout->preview($items, $claimSelection, $fixture['buyer']);
+        $this->assertEquals(30.00, $claimPreview['platform_voucher_discount']);
+
+        $productCampaign = $this->platformCampaign([
+            'code' => 'PRODUCTTARGET'.str()->upper(str()->random(5)),
+            'target_mode' => 'PRODUCTS',
+            'target_product_ids' => [$fixture['productA']->id],
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+        ]);
+        $productPreview = $checkout->preview($items, [
+            'seller' => [],
+            'platform' => $productCampaign->code,
+            'shipping' => '',
+            'auto_apply_platform' => false,
+            'auto_apply_shipping' => false,
+        ], $fixture['buyer']);
+        $this->assertEquals(10.00, $productPreview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
+        $this->assertEquals(0.00, $productPreview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
+
+        $sellerCampaign = $this->platformCampaign([
+            'code' => 'SELLERTARGET'.str()->upper(str()->random(5)),
+            'target_mode' => 'SELLERS',
+            'target_seller_ids' => [$fixture['sellerA']->id],
+            'discount_type' => 'PERCENT',
+            'discount_value' => 10,
+        ]);
+        $sellerPreview = $checkout->preview($items, [
+            'seller' => [],
+            'platform' => $sellerCampaign->code,
+            'shipping' => '',
+            'auto_apply_platform' => false,
+            'auto_apply_shipping' => false,
+        ], $fixture['buyer']);
+        $this->assertGreaterThan(0, $sellerPreview['groups'][$fixture['sellerA']->id]['platform_voucher_discount']);
+        $this->assertEquals(0.00, $sellerPreview['groups'][$fixture['sellerB']->id]['platform_voucher_discount']);
+
+        Order::query()->create([
+            'order_number' => 'CAMPAIGN-COMPLETED-'.str()->upper(str()->random(8)),
+            'buyer_user_id' => $fixture['buyer']->id,
+            'status' => 'COMPLETED',
+            'payment_status' => 'PAID',
+            'placed_at' => now()->subDay(),
+            'completed_at' => now()->subHour(),
+        ]);
+        try {
+            $checkout->preview($items, $claimSelection, $fixture['buyer']);
+            $this->fail('A first-time campaign is no longer available after a completed order.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('order history', (string) $exception->errors()['platform_voucher_code'][0]);
+        }
+    }
+
+    public function test_paused_expired_and_exhausted_campaigns_fail_checkout_validation(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $checkout = app(CheckoutService::class);
+        $items = collect([$fixture['itemA']]);
+        $paused = $this->platformCampaign([
+            'code' => 'PAUSEDCAMPAIGN'.str()->upper(str()->random(4)),
+            'campaign_status' => 'PAUSED',
+            'is_active' => false,
+        ]);
+        $expired = $this->platformCampaign([
+            'code' => 'EXPIREDCAMPAIGN'.str()->upper(str()->random(4)),
+            'ends_at' => now()->subMinute(),
+        ]);
+        $limited = $this->platformCampaign([
+            'code' => 'LIMITEDCAMPAIGN'.str()->upper(str()->random(4)),
+            'usage_limit' => 1,
+            'per_user_limit' => 1,
+        ]);
+        $selection = fn (Voucher $voucher): array => [
+            'seller' => [], 'platform' => $voucher->code, 'shipping' => '',
+            'auto_apply_platform' => false, 'auto_apply_shipping' => false,
+        ];
+
+        foreach ([[$paused, 'not active'], [$expired, 'not active']] as [$voucher, $message]) {
+            try {
+                $checkout->preview($items, $selection($voucher), $fixture['buyer']);
+                $this->fail('A paused or expired campaign cannot be redeemed.');
+            } catch (\Illuminate\Validation\ValidationException $exception) {
+                $this->assertStringContainsString($message, strtolower((string) $exception->errors()['platform_voucher_code'][0]));
+            }
+        }
+        $checkout->preview($items, $selection($limited), $fixture['buyer']);
+        Order::query()->create([
+            'order_number' => 'CAMPAIGN-USED-'.str()->upper(str()->random(8)),
+            'buyer_user_id' => $fixture['buyer']->id,
+            'status' => 'PLACED',
+            'payment_status' => 'PENDING',
+            'platform_voucher_id' => $limited->id,
+            'placed_at' => now(),
+        ]);
+        try {
+            $checkout->preview($items, $selection($limited), $fixture['buyer']);
+            $this->fail('Global and per-buyer usage limits must be enforced at checkout.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertStringContainsString('redemption limit', strtolower((string) $exception->errors()['platform_voucher_code'][0]));
+        }
     }
 
     public function test_selected_product_seller_voucher_uses_only_eligible_subtotal_when_stacked(): void
@@ -778,9 +1023,9 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             'shipping' => 'SHIP999',
         ], $fixture['buyer']);
 
-        $this->assertEquals(299.98, $preview['platform_voucher_discount']);
+        $this->assertEquals(300.00, $preview['platform_voucher_discount']);
         $this->assertEquals(100.00, $preview['shipping_voucher_discount']);
-        $this->assertEquals(0.02, $preview['grand_total']);
+        $this->assertEquals(0.00, $preview['grand_total']);
         $this->assertGreaterThanOrEqual(0, $preview['grand_total']);
     }
 
@@ -1984,6 +2229,38 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(250, $afterCancel['spent_cents']);
         $this->assertSame(500, $afterCancel['available_cents']);
         $this->assertSame(1, \App\Models\Finance\FinancialLedgerEntry::query()->where('seller_order_id', $secondSellerOrder->id)->where('entry_type', 'SELLER_VOUCHER_DISCOUNT_RELEASED')->count());
+    }
+
+    /** @param array<string, mixed> $overrides */
+    private function platformCampaign(array $overrides = [], int|float|string $allocation = '100000.00'): Voucher
+    {
+        $code = (string) ($overrides['code'] ?? 'CAMPAIGN'.str()->upper(str()->random(10)));
+        $campaign = Voucher::query()->create(array_merge([
+            'seller_profile_id' => null,
+            'platform_code_key' => $code,
+            'benefit_scope' => 'PRODUCT',
+            'code' => $code,
+            'name' => 'Platform campaign '.$code,
+            'visibility' => 'PUBLIC',
+            'distribution_mode' => 'CODE',
+            'target_mode' => 'ALL',
+            'buyer_audience' => 'ALL',
+            'stack_with_seller' => true,
+            'stack_with_shipping' => true,
+            'campaign_status' => 'ACTIVE',
+            'discount_type' => 'FIXED',
+            'discount_value' => 10,
+            'minimum_order_amount' => 0,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDays(2),
+            'is_active' => true,
+        ], $overrides, ['code' => $code, 'platform_code_key' => $code]));
+        $admin = User::query()->where('account_type', User::TYPE_ADMIN)->first()
+            ?? User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+        app(\App\Services\Finance\PlatformCampaignBudgetService::class)
+            ->setAllocation($campaign, $allocation, 'Campaign checkout feature test allocation', $admin);
+
+        return $campaign->refresh();
     }
 
     private function checkoutFixture(): array

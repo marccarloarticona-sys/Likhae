@@ -24,6 +24,7 @@ use App\Models\User;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\Finance\PlatformCampaignBudgetService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Process;
@@ -274,6 +275,57 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertCount(1, collect($results)->pluck('claim_id')->unique());
         $this->assertSame(1, BuyerVoucherClaim::query()->where('buyer_user_id', $buyer->id)->where('voucher_id', $voucher->id)->count());
         $this->assertSame(0, VoucherRedemptionCounter::count((int) $voucher->id));
+    }
+
+    public function test_mysql_concurrent_last_platform_budget_redemption_cannot_overdraw_campaign(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller, $category] = $this->sellerRoutingFixture('platform-budget-race');
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+        $campaignCode = 'PLATBUDGET'.str()->upper(str()->random(10));
+        $voucher = Voucher::query()->create([
+            'seller_profile_id' => null,
+            'platform_code_key' => $campaignCode,
+            'benefit_scope' => 'PRODUCT',
+            'code' => $campaignCode,
+            'name' => 'Concurrent platform campaign budget',
+            'visibility' => 'PUBLIC',
+            'distribution_mode' => 'CODE',
+            'target_mode' => 'ALL',
+            'buyer_audience' => 'ALL',
+            'campaign_status' => 'ACTIVE',
+            'discount_type' => 'FIXED',
+            'discount_value' => '30.00',
+            'minimum_order_amount' => '0.00',
+            'starts_at' => now()->subMinute(),
+            'ends_at' => now()->addHour(),
+            'is_active' => true,
+        ]);
+        app(PlatformCampaignBudgetService::class)->setAllocation(
+            $voucher,
+            '30.00',
+            'Authorized last-budget concurrency test allocation',
+            $admin,
+        );
+
+        $variantA = $this->variant($seller, $category, 'platform-budget-a', 2, '100.00');
+        $variantB = $this->variant($seller, $category, 'platform-budget-b', 2, '100.00');
+        [$buyerA, $addressA, $itemA] = $this->buyerCart($variantA, 'platform-budget-a');
+        [$buyerB, $addressB, $itemB] = $this->buyerCart($variantB, 'platform-budget-b');
+        $results = $this->runWorkers([
+            ['buyer' => $buyerA, 'address' => $addressA, 'item' => $itemA, 'key' => (string) str()->uuid(), 'voucher' => $voucher->code],
+            ['buyer' => $buyerB, 'address' => $addressB, 'item' => $itemB, 'key' => (string) str()->uuid(), 'voucher' => $voucher->code],
+        ]);
+
+        $this->assertSame(1, collect($results)->where('status', 'success')->count(), json_encode($results));
+        $this->assertSame(1, collect($results)->where('status', 'business_failure')->count(), json_encode($results));
+        $this->assertSame(1, Order::query()->where('platform_voucher_id', $voucher->id)->count());
+        $this->assertSame(3000, app(PlatformCampaignBudgetService::class)->summary($voucher->fresh())['reserved_cents']);
+        $this->assertSame(3000, (int) DB::table('financial_ledger_entries')
+            ->where('voucher_id', $voucher->id)
+            ->where('entry_type', 'CAMPAIGN_SUBSIDY_RESERVED')
+            ->sum('amount') * 100);
     }
 
     private function assertDisposableMySql(): void

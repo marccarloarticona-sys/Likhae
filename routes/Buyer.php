@@ -37,8 +37,12 @@ Route::prefix('buyer')
         Route::get('/platform-events', [BuyerPlatformEventController::class, 'index'])->name('platform-events.index');
         Route::get('/platform-events/{voucher}', [BuyerPlatformEventController::class, 'show'])->name('platform-events.show');
         Route::get('/discounts', [BuyerController::class, 'discounts'])->name('discounts');
+        Route::get('/bundle-deals', [BuyerController::class, 'bundleDeals'])->name('bundle-deals');
         Route::get('/free-gifts', [BuyerController::class, 'freeGifts'])->name('free-gifts');
         Route::get('/products', [BuyerController::class, 'products'])->name('products');
+        Route::get('/products/recommendations', [BuyerController::class, 'productRecommendations'])
+            ->middleware('throttle:60,1')
+            ->name('products.recommendations');
         Route::get('/products/{slug}', [BuyerController::class, 'product'])->name('product-details');
         Route::get('/wishlist', [BuyerController::class, 'wishlist'])->name('wishlist');
         Route::post('/wishlist/{product}', [BuyerController::class, 'toggleWishlist'])->name('wishlist.toggle');

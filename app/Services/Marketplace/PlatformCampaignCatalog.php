@@ -54,6 +54,7 @@ class PlatformCampaignCatalog
 
         return $campaigns
             ->filter(fn (Voucher $campaign): bool => ! $campaign->requiresReview()
+                && app(PlatformCampaignEligibility::class)->status($campaign) === 'ACTIVE'
                 && ($campaign->usage_limit === null
                     || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit)
                 && $selectableCampaignIds->contains($campaign->id))
@@ -87,6 +88,8 @@ class PlatformCampaignCatalog
 
         return $campaigns
             ->filter(fn (Voucher $campaign): bool => ! $campaign->requiresReview()
+                && in_array(app(PlatformCampaignEligibility::class)->status($campaign), ['ACTIVE', 'SCHEDULED'], true)
+                && (! Schema::hasColumn('vouchers', 'visibility') || $campaign->visibility === 'PUBLIC')
                 && ($campaign->usage_limit === null
                     || $redemptionCounts->get($campaign->id, 0) < $campaign->usage_limit))
             ->filter(fn (Voucher $campaign): bool => app(PlatformCampaignBudgetService::class)->selectable($campaign))

@@ -25,6 +25,16 @@ class PlatformVoucherIntegrationTest extends TestCase
             ->assertOk()
             ->assertSee('name="maximum_discount_amount"', escape: false)
             ->assertSee('name="per_user_limit"', escape: false);
+        $category = \App\Models\Seller\Category::query()->firstOrFail();
+        $this->actingAs($admin)
+            ->getJson(route('admin.marketing.campaigns.targets', [
+                'mode' => 'CATEGORIES',
+                'q' => $category->name,
+                'page' => 1,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $category->id)
+            ->assertJsonPath('current_page', 1);
 
         $this->post(route('admin.marketing.campaigns.store'), [
             'code' => 'PLATFORMCAP10',
@@ -49,6 +59,17 @@ class PlatformVoucherIntegrationTest extends TestCase
         $this->assertSame('40.00', $voucher->maximum_discount_amount);
         $this->assertSame(1, $voucher->per_user_limit);
         $this->assertSame(100, $voucher->usage_limit);
+
+        $this->actingAs($admin)
+            ->patch(route('admin.marketing.campaigns.status', $voucher), ['status' => 'PAUSED'])
+            ->assertRedirect(route('admin.marketing', ['section' => 'campaigns']));
+        $this->assertFalse($voucher->fresh()->is_active);
+        $this->assertDatabaseHas('finance_audit_events', [
+            'event_type' => 'PLATFORM_CAMPAIGN_STATUS_CHANGED',
+            'auditable_type' => Voucher::class,
+            'auditable_id' => $voucher->id,
+            'actor_user_id' => $admin->id,
+        ]);
 
         $this->actingAs($seller)
             ->post(route('admin.marketing.campaigns.store'), [

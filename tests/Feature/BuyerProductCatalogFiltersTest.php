@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
+use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
@@ -336,6 +337,137 @@ class BuyerProductCatalogFiltersTest extends TestCase
             ->assertSee('No products found');
         $this->assertSame(0, $deletedResponse->viewData('products')->total());
         $this->assertSame([], $deletedResponse->viewData('searchSuggestions'));
+    }
+
+    public function test_search_recommendations_follow_the_last_results_page_without_repeating_matches(): void
+    {
+        [$buyer, $source] = $this->catalogFixture();
+        $category = Category::query()->create([
+            'name' => 'Search Recommendation Devices',
+            'slug' => 'search-recommendation-devices',
+            'is_active' => true,
+        ]);
+        $source->category_id = $category->id;
+        $matchingIds = [];
+        for ($index = 1; $index <= 25; $index++) {
+            $matchingIds[] = $this->createCatalogProduct($source, 'Samsung Device '.str_pad((string) $index, 2, '0', STR_PAD_LEFT), 150)->id;
+        }
+        for ($index = 1; $index <= 15; $index++) {
+            $this->createCatalogProduct($source, 'Related Device '.str_pad((string) $index, 2, '0', STR_PAD_LEFT), 150);
+        }
+
+        $search = ['q' => 'Samsung', 'category' => $category->slug];
+        $first = $this->actingAs($buyer)->get(route('buyer.products', $search))->assertOk();
+        $this->assertSame(25, $first->viewData('products')->total());
+        $this->assertNull($first->viewData('recommendations'));
+        $first->assertDontSee('data-catalog-recommendations');
+
+        $last = $this->get(route('buyer.products', [...$search, 'page' => 2]))->assertOk();
+        $last->assertSee('Recommended based on your search:')
+            ->assertSee('Explore more products you might like.');
+        $this->assertSame(25, $last->viewData('products')->total());
+        $firstRecommendationIds = $last->viewData('recommendationProducts')->pluck('id')->all();
+        $this->assertCount(12, $firstRecommendationIds);
+        $this->assertSame([], array_intersect($matchingIds, $firstRecommendationIds));
+
+        $next = $this->get(route('buyer.products.recommendations', [...$search, 'recommendation_page' => 2]))
+            ->assertOk()
+            ->assertJsonPath('has_more', false);
+        preg_match_all('/<article\b[^>]*data-product-id="(\d+)"/s', $next->json('html'), $matches);
+        $nextIds = array_map('intval', $matches[1]);
+        $this->assertCount(3, $nextIds);
+        $this->assertCount(count($firstRecommendationIds) + count($nextIds), array_unique([...$firstRecommendationIds, ...$nextIds]));
+        $this->assertSame([], array_intersect($matchingIds, $nextIds));
+
+        $this->get(route('buyer.products', [...$search, 'page' => 99]))
+            ->assertOk()
+            ->assertDontSee('data-catalog-recommendations');
+    }
+
+    public function test_recommendations_respect_filters_and_exclude_unavailable_products(): void
+    {
+        [$buyer, $source] = $this->catalogFixture();
+        $category = Category::query()->create([
+            'name' => 'Search Recommendation Filters',
+            'slug' => 'search-recommendation-filters',
+            'is_active' => true,
+        ]);
+        $source->category_id = $category->id;
+        $this->createCatalogProduct($source, 'Samsung Filter Match', 150);
+        $eligible = $this->createCatalogProduct($source, 'Related Filter Choice', 150);
+        $this->createCatalogProduct($source, 'Expensive Filter Choice', 300);
+        $this->createCatalogProduct($source, 'Draft Filter Choice', 150, 'DRAFT');
+        $soldOut = $this->createCatalogProduct($source, 'Sold Out Filter Choice', 150);
+        $soldOut->variants()->update(['stock' => 0]);
+
+        $filters = [
+            'q' => 'Samsung',
+            'category' => $category->slug,
+            'min_price' => '150',
+            'max_price' => '150',
+            'sort' => 'price-low',
+            'view' => 'list',
+        ];
+        $response = $this->actingAs($buyer)->get(route('buyer.products', $filters))->assertOk();
+        $recommendationIds = $response->viewData('recommendationProducts')->pluck('id')->all();
+        $this->assertContains($eligible->id, $recommendationIds);
+        $this->assertNotContains($soldOut->id, $recommendationIds);
+        $response->assertSee('data-recommendation-grid')
+            ->assertSee('is-list-view');
+    }
+
+    public function test_zero_result_search_has_recommendations_and_invalid_requests_do_not(): void
+    {
+        [$buyer] = $this->catalogFixture();
+        $emptySearch = $this->actingAs($buyer)->get(route('buyer.products', ['q' => 'NoMatchingKeywordXYZ']))->assertOk();
+        $this->assertSame(0, $emptySearch->viewData('products')->total());
+        $emptySearch->assertSee('data-catalog-recommendations');
+
+        $this->get(route('buyer.products.recommendations', ['q' => '']))->assertStatus(422);
+        $this->getJson(route('buyer.products.recommendations', ['q' => 'Samsung', 'recommendation_page' => -1]))
+            ->assertStatus(422);
+    }
+
+    public function test_changing_search_keyword_recomputes_recommendations(): void
+    {
+        [$buyer, $source] = $this->catalogFixture();
+        $category = Category::query()->create([
+            'name' => 'Search Recommendation Keywords',
+            'slug' => 'search-recommendation-keywords',
+            'is_active' => true,
+        ]);
+        $source->category_id = $category->id;
+        $samsung = $this->createCatalogProduct($source, 'Samsung Keyword Product', 150);
+        $nokia = $this->createCatalogProduct($source, 'Nokia Keyword Product', 150);
+
+        $this->actingAs($buyer);
+        $samsungSearch = $this->get(route('buyer.products', ['q' => 'Samsung', 'category' => $category->slug]))->assertOk();
+        $nokiaSearch = $this->get(route('buyer.products', ['q' => 'Nokia', 'category' => $category->slug]))->assertOk();
+
+        $this->assertSame([$nokia->id], $samsungSearch->viewData('recommendationProducts')->pluck('id')->all());
+        $this->assertSame([$samsung->id], $nokiaSearch->viewData('recommendationProducts')->pluck('id')->all());
+    }
+
+    public function test_empty_recommendation_result_stops_pagination(): void
+    {
+        [$buyer, $source] = $this->catalogFixture();
+        $category = Category::query()->create([
+            'name' => 'Search Recommendation Empty',
+            'slug' => 'search-recommendation-empty',
+            'is_active' => true,
+        ]);
+        $source->category_id = $category->id;
+        $this->createCatalogProduct($source, 'Samsung Only Match', 150);
+
+        $filters = ['q' => 'Samsung', 'category' => $category->slug];
+        $page = $this->actingAs($buyer)->get(route('buyer.products', $filters))->assertOk();
+        $this->assertCount(0, $page->viewData('recommendationProducts'));
+        $page->assertSee('No other products are available for these filters right now.');
+
+        $response = $this->get(route('buyer.products.recommendations', [...$filters, 'recommendation_page' => 2]))
+            ->assertOk()
+            ->assertJsonPath('has_more', false);
+        $this->assertSame('', trim($response->json('html')));
     }
 
     /** @return array{User, Product, ProductVariant} */

@@ -338,7 +338,7 @@
                         </button>
                         @if(filled($shippingVoucherCode))
                             <div class="mt-3 flex items-center justify-between gap-3 border-t border-amber-200 pt-3 text-xs">
-                                <span class="font-semibold text-emerald-800">Applied: {{ $shippingVoucherCode }}</span>
+                                <span class="font-semibold text-emerald-800">{{ ($shippingAutoApplied ?? false) ? 'Auto applied' : 'Applied' }}: {{ $shippingVoucherCode }}</span>
                                 <button type="submit" name="remove_shipping_voucher" value="1" formmethod="POST" formaction="{{ route('buyer.checkout.voucher') }}" formnovalidate class="font-semibold text-red-800 underline">Remove</button>
                             </div>
                         @endif

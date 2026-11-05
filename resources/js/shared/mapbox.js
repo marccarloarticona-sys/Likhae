@@ -15,6 +15,7 @@ function loadMapLibre() {
         const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.href = MAPLIBRE_CSS;
+        link.fetchPriority = 'low';
         link.dataset.likhaeMaplibreCss = 'true';
         document.head.appendChild(link);
     }
@@ -23,6 +24,7 @@ function loadMapLibre() {
         const script = document.createElement('script');
         script.src = MAPLIBRE_SCRIPT;
         script.async = true;
+        script.fetchPriority = 'low';
         script.onload = () => window.maplibregl
             ? resolve(window.maplibregl)
             : reject(new Error('The map renderer loaded without its browser API.'));

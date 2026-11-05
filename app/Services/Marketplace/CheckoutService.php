@@ -8,6 +8,7 @@ use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -74,12 +75,13 @@ class CheckoutService
                     ->map(fn (CartItem $item): int => (int) $item->productVariant->product_id)
                     ->unique()
                     ->all();
+                $cartVariantIds = $sellerItems->pluck('product_variant_id')->map(fn ($id): int => (int) $id)->unique()->all();
 
                 return Voucher::query()
                     ->where('seller_profile_id', $sellerId)
                     ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
                     ->when(Schema::hasColumn('vouchers', 'benefit_scope'), fn ($query) => $query->where('benefit_scope', 'PRODUCT'))
-                    ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->where('visibility', 'PUBLIC'))
+                    ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->whereIn('visibility', $buyer ? ['PUBLIC', 'FOLLOWERS'] : ['PUBLIC']))
                     ->where('is_active', true)
                     ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
                     ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
@@ -98,10 +100,17 @@ class CheckoutService
                         ),
                     ])
                     ->with('eligibleProducts:id')
+                    ->when(Schema::hasTable('voucher_variants'), fn ($query) => $query->with('eligibleVariants:id,product_id'))
                     ->get()
                     ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null || $voucher->seller_orders_count < $voucher->usage_limit)
                         && ($voucher->per_user_limit === null || $voucher->buyer_uses_count < $voucher->per_user_limit)
+                        && (! $buyer || ! Schema::hasColumn('vouchers', 'visibility') || $voucher->visibility !== 'FOLLOWERS'
+                            || (Schema::hasTable('seller_followers') && SellerFollower::query()
+                                ->where('buyer_user_id', $buyer->id)
+                                ->where('seller_profile_id', $sellerId)
+                                ->exists()))
                         && ($voucher->applies_to !== 'PRODUCTS' || $voucher->eligibleProducts->contains(fn (Product $product): bool => in_array((int) $product->id, $cartProductIds, true)))
+                        && ($voucher->applies_to !== 'VARIANTS' || $voucher->eligibleVariants->contains(fn (ProductVariant $variant): bool => in_array((int) $variant->id, $cartVariantIds, true)))
                     )
                     ->values();
             })
@@ -126,6 +135,7 @@ class CheckoutService
                 && (! $buyer || $voucher->per_user_limit === null || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
                 && $eligibility->status($voucher) === 'ACTIVE'
                 && $eligibility->audienceEligible($voucher, $buyer)
+                && $eligibility->distribution($voucher) !== 'AUTO'
                 && ($eligibility->distribution($voucher) !== 'CLAIMABLE'
                     || ($buyer && $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists()))
                 && (strtoupper((string) $voucher->benefit_scope) === 'SHIPPING' || $eligibility->hasEligibleItem($voucher, $items))
@@ -291,6 +301,8 @@ class CheckoutService
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
         $structuredVoucherSelection = is_array($voucherCodes)
             && array_intersect(['seller', 'platform', 'shipping'], array_keys($voucherCodes)) !== [];
+        $autoApplyPlatform = (bool) (is_array($voucherCodes) ? ($voucherCodes['auto_apply_platform'] ?? $voucherCodes['auto_apply'] ?? true) : true);
+        $autoApplyShipping = (bool) (is_array($voucherCodes) ? ($voucherCodes['auto_apply_shipping'] ?? $voucherCodes['auto_apply'] ?? true) : true);
         $legacyVoucherCodes = is_array($voucherCodes) && ! $structuredVoucherSelection ? $voucherCodes : [];
         $groups = [];
         $subtotal = 0.0;
@@ -483,6 +495,9 @@ class CheckoutService
                     ]);
                 }
                 $discount = $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items']));
+                app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
+                    $voucher, $discount, $lockVoucherUsage, 'seller_voucher_codes.'.$sellerId,
+                );
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
                 $group['voucher'] = $voucher;
@@ -492,8 +507,12 @@ class CheckoutService
 
             $this->allocateSellerDiscountToItems($groups);
             $platformCode = mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? '')));
-            if ($platformCode === '' && ($voucherCodes['auto_apply'] ?? true)) {
-                $platformCode = $this->bestAutoPlatformVoucherCode($groups, $buyer, $lockVoucherUsage);
+            if ($platformCode === '' && $autoApplyPlatform) {
+                $selectedShippingCode = mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? '')));
+                $selectedShippingVoucher = $selectedShippingCode !== ''
+                    ? Voucher::query()->whereNull('seller_profile_id')->where('platform_code_key', $selectedShippingCode)->first()
+                    : null;
+                $platformCode = $this->bestAutoPlatformVoucherCode($groups, $buyer, $lockVoucherUsage, 'PRODUCT', $selectedShippingVoucher);
                 $platformAutoApplied = $platformCode !== '';
             }
             if ($platformCode !== '') {
@@ -501,27 +520,43 @@ class CheckoutService
                 $eligibleProductTotal = $platformCandidate
                     ? array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($platformCandidate, $group), $groups))
                     : 0.0;
-                $platformVoucher = $this->usablePlatformVoucher($platformCode, 'PRODUCT', $eligibleProductTotal, $buyer, $lockVoucherUsage);
+                $platformVoucher = $this->usablePlatformVoucher($platformCode, 'PRODUCT', $eligibleProductTotal, $buyer, $lockVoucherUsage, $platformAutoApplied);
                 $platformDiscount = $this->discountAmount($platformVoucher, $eligibleProductTotal);
+                app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($platformVoucher, $platformDiscount, $lockVoucherUsage);
                 $this->allocatePlatformDiscount($groups, $platformVoucher, $platformDiscount, $eligibleProductTotal);
             }
 
             $shippingCode = mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? '')));
+            $shippingAutoApplied = false;
+            if ($shippingCode === '' && $autoApplyShipping) {
+                $shippingCode = $this->bestAutoPlatformVoucherCode($groups, $buyer, $lockVoucherUsage, 'SHIPPING', $platformVoucher);
+                $shippingAutoApplied = $shippingCode !== '';
+            }
             if ($shippingCode !== '') {
                 $eligibleShippingTotal = array_sum(array_map(fn (array $group): float => (float) $group['shipping_fee'], $groups));
                 $shippingSpendBase = array_sum(array_map(
                     fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['voucher_discount']),
                     $groups,
                 ));
-                $shippingVoucher = $this->usablePlatformVoucher($shippingCode, 'SHIPPING', $shippingSpendBase, $buyer, $lockVoucherUsage);
+                $shippingVoucher = $this->usablePlatformVoucher(
+                    $shippingCode,
+                    'SHIPPING',
+                    $eligibleShippingTotal,
+                    $buyer,
+                    $lockVoucherUsage,
+                    $shippingAutoApplied,
+                    $shippingSpendBase,
+                );
                 if ($platformVoucher && (! app(PlatformCampaignEligibility::class)->stacksWithShipping($platformVoucher)
                     || ! app(PlatformCampaignEligibility::class)->stacksWithShipping($shippingVoucher))) {
                     throw ValidationException::withMessages(['shipping_voucher_code' => 'These LIKHAE vouchers cannot be used together.']);
                 }
                 $shippingDiscount = $this->discountAmount($shippingVoucher, $eligibleShippingTotal);
+                app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($shippingVoucher, $shippingDiscount, $lockVoucherUsage);
                 $this->allocateShippingDiscount($groups, $shippingDiscount, $eligibleShippingTotal);
             }
         } else {
+            $shippingAutoApplied = false;
             foreach ($groups as $sellerId => &$group) {
                 $code = trim((string) ($legacyVoucherCodes[$sellerId] ?? ''));
                 $voucher = $code !== ''
@@ -540,6 +575,11 @@ class CheckoutService
                     ]);
                 }
                 $discount = $voucher ? $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items'])) : 0.0;
+                if ($voucher) {
+                    app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
+                        $voucher, $discount, $lockVoucherUsage, 'voucher_codes.'.$sellerId,
+                    );
+                }
 
                 $group['voucher'] = $voucher;
                 $group['seller_voucher'] = $voucher;
@@ -604,6 +644,7 @@ class CheckoutService
             'promotion_discount_total' => round($promotionDiscountTotal, 2),
             'platform_voucher' => $platformVoucher,
             'platform_auto_applied' => $platformAutoApplied,
+            'shipping_auto_applied' => $shippingAutoApplied ?? false,
             'platform_voucher_discount' => $platformVoucherDiscountTotal,
             'shipping_voucher' => $shippingVoucher,
             'shipping_voucher_discount' => round($shippingVoucherDiscountTotal, 2),
@@ -954,8 +995,13 @@ class CheckoutService
             ]);
 
             $sourceAware = Schema::hasColumn('seller_orders', 'funding_snapshot_version')
+                && Schema::hasColumn('seller_orders', 'seller_voucher_discount')
+                && Schema::hasColumn('seller_orders', 'platform_voucher_discount')
+                && Schema::hasColumn('seller_orders', 'platform_shipping_voucher_discount')
                 && Schema::hasColumn('order_items', 'funding_snapshot_version')
+                && Schema::hasColumn('order_items', 'seller_voucher_discount')
                 && Schema::hasColumn('order_items', 'platform_voucher_discount')
+                && Schema::hasColumn('order_items', 'reward_points_discount')
                 && Schema::hasColumn('order_items', 'platform_shipping_voucher_discount');
 
             foreach ($preview['groups'] as $sellerId => $group) {
@@ -1756,6 +1802,7 @@ class CheckoutService
                     ->where('account_type', User::TYPE_SELLER)
                     ->where('status', User::STATUS_ACTIVE)))
             ->with('eligibleProducts:id')
+            ->when(Schema::hasTable('voucher_variants'), fn ($query) => $query->with('eligibleVariants:id,product_id'))
             ->withCount([
                 'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
                 'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
@@ -1777,6 +1824,25 @@ class CheckoutService
             return null;
         }
 
+        if ($voucher->requiresReview()) {
+            throw ValidationException::withMessages([
+                $errorKey => 'This voucher is under review and cannot be used. Please choose another voucher.',
+            ]);
+        }
+
+        if ($buyer && Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS') {
+            $isFollowing = Schema::hasTable('seller_followers')
+                && SellerFollower::query()
+                    ->where('buyer_user_id', $buyer->id)
+                    ->where('seller_profile_id', $sellerId)
+                    ->exists();
+            if (! $isFollowing) {
+                throw ValidationException::withMessages([
+                    $errorKey => 'Follow this store to use its follower reward.',
+                ]);
+            }
+        }
+
         $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $items);
         if ($eligibleSubtotal <= 0) {
             throw ValidationException::withMessages([
@@ -1794,24 +1860,13 @@ class CheckoutService
 
     private function voucherEligibleSubtotal(Voucher $voucher, Collection $items): float
     {
-        if ($voucher->applies_to !== 'PRODUCTS') {
+        if (! in_array($voucher->applies_to, ['PRODUCTS', 'VARIANTS'], true)) {
             return round((float) $items->sum(fn (CartItem $item): float => $this->checkoutItemSubtotalAfterPromotions($item)), 2);
         }
 
-        $productIds = $voucher->relationLoaded('eligibleProducts')
-            ? $voucher->eligibleProducts->modelKeys()
-            : $voucher->eligibleProducts()->pluck('products.id')->all();
-        $eligibleIds = array_fill_keys(array_map('intval', $productIds), true);
-
-        return round((float) $items->sum(function (CartItem $item) use ($eligibleIds): float {
-            $item->loadMissing('productVariant');
-            $variant = $item->productVariant;
-            if (! $variant || ! isset($eligibleIds[(int) $variant->product_id])) {
-                return 0.0;
-            }
-
-            return $this->checkoutItemSubtotalAfterPromotions($item);
-        }), 2);
+        return round((float) $items->sum(fn (CartItem $item): float => $this->sellerVoucherItemEligible($voucher, $item)
+            ? $this->checkoutItemSubtotalAfterPromotions($item)
+            : 0.0), 2);
     }
 
     private function checkoutItemSubtotalAfterPromotions(CartItem $item): float
@@ -1852,7 +1907,15 @@ class CheckoutService
         });
     }
 
-    private function usablePlatformVoucher(string $code, string $scope, float $eligibleSubtotal, ?User $buyer, bool $lockVoucherUsage): Voucher
+    private function usablePlatformVoucher(
+        string $code,
+        string $scope,
+        float $eligibleSubtotal,
+        ?User $buyer,
+        bool $lockVoucherUsage,
+        bool $autoSelected = false,
+        ?float $minimumSpendSubtotal = null,
+    ): Voucher
     {
         $field = $scope === 'SHIPPING' ? 'shipping_voucher_code' : 'platform_voucher_code';
         if (! Schema::hasColumn('vouchers', 'platform_code_key')) {
@@ -1871,6 +1934,9 @@ class CheckoutService
             throw ValidationException::withMessages([$field => 'Choose an available LIKHAE voucher for this category.']);
         }
         $eligibility = app(PlatformCampaignEligibility::class);
+        if ($eligibility->distribution($voucher) === 'AUTO' && ! $autoSelected) {
+            throw ValidationException::withMessages([$field => 'This voucher is applied automatically at checkout.']);
+        }
         if ($eligibility->distribution($voucher) === 'CLAIMABLE'
             && (! $buyer || ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists())) {
             throw ValidationException::withMessages([$field => 'Collect this LIKHAE voucher in Rewards before using it.']);
@@ -1896,7 +1962,7 @@ class CheckoutService
         if ($buyer && $voucher->per_user_limit !== null && $buyerRedemptions >= $voucher->per_user_limit) {
             throw ValidationException::withMessages([$field => 'You have already used this voucher the maximum number of times.']);
         }
-        if ($eligibleSubtotal < (float) $voucher->minimum_order_amount) {
+        if (($minimumSpendSubtotal ?? $eligibleSubtotal) < (float) $voucher->minimum_order_amount) {
             throw ValidationException::withMessages([$field => 'The eligible amount does not meet this voucher’s minimum spend.']);
         }
         if ($eligibleSubtotal <= 0) {
@@ -1907,7 +1973,7 @@ class CheckoutService
     }
 
     /** @param array<int, array<string, mixed>> $groups */
-    private function bestAutoPlatformVoucherCode(array $groups, ?User $buyer, bool $lockVoucherUsage): string
+    private function bestAutoPlatformVoucherCode(array $groups, ?User $buyer, bool $lockVoucherUsage, string $scope = 'PRODUCT', ?Voucher $otherPlatformVoucher = null): string
     {
         if (! Schema::hasColumn('vouchers', 'distribution_mode')) {
             return '';
@@ -1917,17 +1983,26 @@ class CheckoutService
         $best = null;
         $bestCents = 0;
         $candidates = Voucher::query()->whereNull('seller_profile_id')->whereNotNull('platform_code_key')
-            ->where('distribution_mode', 'AUTO')->where('benefit_scope', 'PRODUCT')
+            ->where('distribution_mode', 'AUTO')->where('benefit_scope', $scope)
             ->orderBy('id')->get();
         foreach ($candidates as $candidate) {
             if ($eligibility->status($candidate) !== 'ACTIVE'
-                || (! $eligibility->stacksWithSeller($candidate)
+                || ($scope === 'PRODUCT' && ! $eligibility->stacksWithSeller($candidate)
                     && collect($groups)->contains(fn (array $group): bool => (float) $group['seller_voucher_discount'] > 0))) {
                 continue;
             }
-            $subtotal = array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($candidate, $group), $groups));
+            if ($otherPlatformVoucher && (! $eligibility->stacksWithShipping($candidate)
+                || ! $eligibility->stacksWithShipping($otherPlatformVoucher))) {
+                continue;
+            }
+            $subtotal = $scope === 'PRODUCT'
+                ? array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($candidate, $group), $groups))
+                : array_sum(array_map(fn (array $group): float => (float) $group['shipping_fee'], $groups));
             try {
-                $this->usablePlatformVoucher($candidate->code, 'PRODUCT', $subtotal, $buyer, $lockVoucherUsage);
+                $spendBase = $scope === 'SHIPPING'
+                    ? array_sum(array_map(fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['voucher_discount']), $groups))
+                    : $subtotal;
+                $this->usablePlatformVoucher($candidate->code, $scope, $subtotal, $buyer, $lockVoucherUsage, true, $spendBase);
                 $discountCents = FinancialRules::cents($this->discountAmount($candidate, $subtotal));
                 $summary = $budgets->summary($candidate);
                 if ($discountCents <= 0 || $summary['available_cents'] === null || $summary['available_cents'] < $discountCents) {
@@ -2006,35 +2081,9 @@ class CheckoutService
                 ]);
             }
             $subtotal = array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($voucher, $group), $groups));
-            $this->usablePlatformVoucher($voucher->code, 'PRODUCT', $subtotal, $buyer, $lockVoucherUsage);
-            $usage = $lockVoucherUsage
-                ? VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id)
-                : null;
-            $redemptions = $usage['redemptions'] ?? VoucherRedemptionCounter::count((int) $voucher->id);
-            $buyerRedemptions = $usage['buyer_redemptions'] ?? ($buyer
-                ? VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id)
-                : 0);
-
-            if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
-                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher is not active yet.']);
-            }
-            if ($voucher->ends_at && $voucher->ends_at->isPast()) {
-                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has expired.']);
-            }
-            if ($voucher->usage_limit !== null && $redemptions >= $voucher->usage_limit) {
-                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has reached its redemption limit.']);
-            }
-            if ($buyer && $voucher->per_user_limit !== null && $buyerRedemptions >= $voucher->per_user_limit) {
-                throw ValidationException::withMessages(['voucher_code' => 'You have already used this platform voucher the maximum number of times.']);
-            }
-            if ($subtotal < (float) $voucher->minimum_order_amount) {
-                $remaining = (float) $voucher->minimum_order_amount - $subtotal;
-                throw ValidationException::withMessages([
-                    'voucher_code' => 'Add PHP '.number_format($remaining, 2).' more to use this platform voucher.',
-                ]);
-            }
-
+            $voucher = $this->usablePlatformVoucher($voucher->code, 'PRODUCT', $subtotal, $buyer, $lockVoucherUsage);
             $discount = $this->discountAmount($voucher, $subtotal);
+            app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($voucher, $discount, $lockVoucherUsage);
             $this->allocatePlatformDiscount($groups, $voucher, $discount, $subtotal);
 
             return $voucher;
@@ -2052,6 +2101,21 @@ class CheckoutService
             || ($requiresClaim && ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists())) {
             throw ValidationException::withMessages([
                 'voucher_code' => 'Collect this Seller voucher in Rewards before using it.',
+            ]);
+        }
+
+        if ($voucher->requiresReview()) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'This voucher is under review and cannot be used. Please choose another voucher.',
+            ]);
+        }
+        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS'
+            && (! Schema::hasTable('seller_followers') || ! SellerFollower::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->where('seller_profile_id', $voucher->seller_profile_id)
+                ->exists())) {
+            throw ValidationException::withMessages([
+                'voucher_code' => 'Follow this store to use its follower reward.',
             ]);
         }
 
@@ -2113,6 +2177,7 @@ class CheckoutService
         }
 
         $discount = $this->discountAmount($voucher, $eligibleSubtotal);
+        app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable($voucher, $discount, $lockVoucherUsage, 'voucher_code');
         $group['seller_voucher'] = $voucher;
         $group['seller_voucher_discount'] = $discount;
         $group['voucher'] = $voucher;
@@ -2150,8 +2215,10 @@ class CheckoutService
             $weights = $items->map(fn (CartItem $item): int => $voucher && $this->sellerVoucherItemEligible($voucher, $item)
                 ? FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item)) : 0)->all();
             $shares = FinancialRules::allocateCents(FinancialRules::cents($group['seller_voucher_discount']), $weights);
+            $group['seller_voucher_item_discounts'] = [];
             foreach ($items as $index => $item) {
                 $item->setAttribute('checkout_seller_voucher_discount', ($shares[$index] ?? 0) / 100);
+                $group['seller_voucher_item_discounts'][(int) $item->id] = $shares[$index] ?? 0;
             }
         }
         unset($group);
@@ -2159,8 +2226,21 @@ class CheckoutService
 
     private function sellerVoucherItemEligible(Voucher $voucher, CartItem $item): bool
     {
+        if ($voucher->applies_to === 'VARIANTS') {
+            if (! Schema::hasTable('voucher_variants')) {
+                return false;
+            }
+            $variantIds = $voucher->relationLoaded('eligibleVariants')
+                ? $voucher->eligibleVariants->modelKeys()
+                : $voucher->eligibleVariants()->pluck('product_variant_id')->all();
+
+            return in_array((int) $item->product_variant_id, array_map('intval', $variantIds), true);
+        }
         if ($voucher->applies_to !== 'PRODUCTS') {
             return true;
+        }
+        if (! Schema::hasTable('voucher_products')) {
+            return false;
         }
         $ids = $voucher->relationLoaded('eligibleProducts')
             ? $voucher->eligibleProducts->modelKeys()

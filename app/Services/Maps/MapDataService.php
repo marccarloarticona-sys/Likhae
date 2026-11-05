@@ -253,7 +253,40 @@ class MapDataService
 
     public function forShipments(iterable $shipments, bool $includeSeller = false, ?User $viewer = null): array
     {
-        return collect($shipments)
+        $shipmentModels = new \Illuminate\Database\Eloquent\Collection(
+            collect($shipments)
+                ->filter(fn ($shipment): bool => $shipment instanceof Shipment)
+                ->values()
+                ->all(),
+        );
+        if ($shipmentModels->isEmpty()) {
+            return [];
+        }
+
+        $relations = [
+            'sellerOrder.order.address',
+            'sellerOrder.sellerProfile.businessAddress',
+            'riderAssignments.riderProfile',
+            'riderAssignments.liveLocation',
+            'logisticsCenter.address',
+            'serviceArea.logisticsCenter.address',
+        ];
+        if (Schema::hasTable('shipment_transfer_legs')) {
+            $relations[] = 'transferLegs.originLogisticsCenter.address';
+            $relations[] = 'transferLegs.destinationLogisticsCenter.address';
+        } else {
+            $shipmentModels->each(function (Shipment $shipment): void {
+                if (! $shipment->relationLoaded('transferLegs')) {
+                    $shipment->setRelation('transferLegs', collect());
+                }
+            });
+        }
+
+        // Hydrate map relationships for the whole order at once. Loading them
+        // inside forShipment() individually turns a multi-parcel map into N+1 queries.
+        $shipmentModels->loadMissing($relations);
+
+        return $shipmentModels
             ->flatMap(fn ($shipment) => $this->forShipment($shipment, true, $includeSeller, $viewer))
             ->unique('id')
             ->values()

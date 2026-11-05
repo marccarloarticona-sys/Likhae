@@ -69,7 +69,7 @@ class PlatformCampaignBudgetService
         $field = strtoupper((string) $voucher->benefit_scope) === 'SHIPPING'
             ? 'shipping_voucher_code'
             : 'platform_voucher_code';
-        if (! Schema::hasColumn('vouchers', 'campaign_budget_total') || ! $this->ledgerReady()) {
+        if (! $this->reservationReady()) {
             throw ValidationException::withMessages([
                 $field => 'LIKHAE campaign funding is not ready yet. Please continue checkout without this voucher.',
             ]);
@@ -388,7 +388,7 @@ class PlatformCampaignBudgetService
 
     public function selectable(Voucher $voucher): bool
     {
-        if (! Schema::hasColumn('vouchers', 'campaign_budget_total') || ! $this->ledgerReady()) {
+        if (! $this->reservationReady()) {
             return false;
         }
         $summary = $this->summary($voucher);
@@ -399,12 +399,25 @@ class PlatformCampaignBudgetService
             && ! $summary['reconciliation_mismatch'];
     }
 
+    private function reservationReady(): bool
+    {
+        return Schema::hasColumn('vouchers', 'campaign_budget_total')
+            && $this->ledgerReady()
+            && Schema::hasColumn('seller_orders', 'funding_snapshot_version')
+            && Schema::hasColumn('seller_orders', 'seller_voucher_discount')
+            && Schema::hasColumn('seller_orders', 'platform_voucher_discount')
+            && Schema::hasColumn('seller_orders', 'platform_shipping_voucher_discount')
+            && Schema::hasColumn('order_items', 'funding_snapshot_version')
+            && Schema::hasColumn('order_items', 'seller_voucher_discount')
+            && Schema::hasColumn('order_items', 'platform_voucher_discount')
+            && Schema::hasColumn('order_items', 'reward_points_discount')
+            && Schema::hasColumn('order_items', 'platform_shipping_voucher_discount');
+    }
+
     /** @return Collection<int, int> IDs of vouchers with an available campaign budget. */
     public function selectableIds(Collection $vouchers): Collection
     {
-        if ($vouchers->isEmpty()
-            || ! Schema::hasColumn('vouchers', 'campaign_budget_total')
-            || ! $this->ledgerReady()) {
+        if ($vouchers->isEmpty() || ! $this->reservationReady()) {
             return collect();
         }
 

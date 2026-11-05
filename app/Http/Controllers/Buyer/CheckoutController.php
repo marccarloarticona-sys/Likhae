@@ -122,7 +122,7 @@ class CheckoutController extends Controller
                 try {
                     $preview = $this->checkoutService->preview(
                         $items,
-                        ['seller' => [], 'platform' => '', 'shipping' => '', 'auto_apply' => false],
+                        ['seller' => [], 'platform' => '', 'shipping' => '', 'auto_apply_platform' => false, 'auto_apply_shipping' => false],
                         $request->user(),
                         null,
                         $previewAddress,
@@ -179,7 +179,8 @@ class CheckoutController extends Controller
             'sellerVoucherCodes' => $voucherSelection['seller'],
             'platformVoucherCode' => $preview['platform_voucher']?->code ?? $voucherSelection['platform'],
             'platformAutoApplied' => (bool) ($preview['platform_auto_applied'] ?? false),
-            'shippingVoucherCode' => $voucherSelection['shipping'],
+            'shippingVoucherCode' => $preview['shipping_voucher']?->code ?? $voucherSelection['shipping'],
+            'shippingAutoApplied' => (bool) ($preview['shipping_auto_applied'] ?? false),
             'hasUnavailableStock' => $hasUnavailableStock,
             'automaticRouting' => $automaticRouting,
             'selectedProtectionIds' => $selectedProtectionIds,
@@ -235,17 +236,18 @@ class CheckoutController extends Controller
 
         $selection = $this->currentVoucherSelection($request, $items);
         if ($request->boolean('clear_voucher')) {
-            $selection = ['seller' => [], 'platform' => '', 'shipping' => '', 'auto_apply' => false];
+            $selection = ['seller' => [], 'platform' => '', 'shipping' => '', 'auto_apply_platform' => false, 'auto_apply_shipping' => false];
         } else {
             if ($request->filled('remove_seller_voucher')) {
                 unset($selection['seller'][(int) $data['remove_seller_voucher']]);
             }
             if ($request->boolean('remove_platform_voucher')) {
                 $selection['platform'] = '';
-                $selection['auto_apply'] = false;
+                $selection['auto_apply_platform'] = false;
             }
             if ($request->boolean('remove_shipping_voucher')) {
                 $selection['shipping'] = '';
+                $selection['auto_apply_shipping'] = false;
             }
             foreach ((array) ($data['seller_voucher_codes'] ?? []) as $sellerId => $code) {
                 $sellerId = (int) $sellerId;
@@ -258,10 +260,11 @@ class CheckoutController extends Controller
             }
             if (filled($data['platform_voucher_code'] ?? null)) {
                 $selection['platform'] = mb_strtoupper(trim((string) $data['platform_voucher_code']));
-                $selection['auto_apply'] = true;
+                $selection['auto_apply_platform'] = true;
             }
             if (filled($data['shipping_voucher_code'] ?? null)) {
                 $selection['shipping'] = mb_strtoupper(trim((string) $data['shipping_voucher_code']));
+                $selection['auto_apply_shipping'] = true;
             }
             if (filled($data['voucher_code'] ?? null)) {
                 $code = mb_strtoupper(trim((string) $data['voucher_code']));
@@ -368,7 +371,8 @@ class CheckoutController extends Controller
             'seller' => $sellerVoucherCodes,
             'platform' => $platformVoucherCode,
             'shipping' => '',
-            'auto_apply' => true,
+            'auto_apply_platform' => true,
+            'auto_apply_shipping' => true,
         ];
         $this->checkoutService->preview($selectedItems, $voucherSelection, $request->user());
         $this->storeVoucherSelection($request, $voucherSelection);
@@ -493,7 +497,7 @@ class CheckoutController extends Controller
         return $items->contains(fn ($item): bool => (bool) $item->productVariant?->product?->sellerProfile?->vacation_mode);
     }
 
-    /** @return array{seller:array<int,string>,platform:string,shipping:string,auto_apply:bool} */
+    /** @return array{seller:array<int,string>,platform:string,shipping:string,auto_apply_platform:bool,auto_apply_shipping:bool} */
     private function currentVoucherSelection(Request $request, \Illuminate\Support\Collection $items): array
     {
         $session = $request->session();
@@ -504,7 +508,8 @@ class CheckoutController extends Controller
             'seller' => (array) $session->get('checkout_seller_voucher_codes', []),
             'platform' => (string) $session->get('checkout_platform_voucher_code', ''),
             'shipping' => (string) $session->get('checkout_shipping_voucher_code', ''),
-            'auto_apply' => ! (bool) $session->get('checkout_auto_apply_suppressed', false),
+            'auto_apply_platform' => ! (bool) $session->get('checkout_auto_platform_suppressed', false),
+            'auto_apply_shipping' => ! (bool) $session->get('checkout_auto_shipping_suppressed', false),
         ];
 
         if (! $hasNewSelection) {
@@ -566,7 +571,8 @@ class CheckoutController extends Controller
         $request->session()->put('checkout_seller_voucher_codes', $sellerCodes);
         $request->session()->put('checkout_platform_voucher_code', mb_strtoupper(trim((string) ($selection['platform'] ?? ''))));
         $request->session()->put('checkout_shipping_voucher_code', mb_strtoupper(trim((string) ($selection['shipping'] ?? ''))));
-        $request->session()->put('checkout_auto_apply_suppressed', ! ($selection['auto_apply'] ?? true));
+        $request->session()->put('checkout_auto_platform_suppressed', ! ($selection['auto_apply_platform'] ?? true));
+        $request->session()->put('checkout_auto_shipping_suppressed', ! ($selection['auto_apply_shipping'] ?? true));
         $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_voucher_source']);
     }
 }

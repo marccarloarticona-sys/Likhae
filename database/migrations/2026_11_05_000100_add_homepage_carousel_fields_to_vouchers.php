@@ -6,17 +6,6 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    private const COLUMNS = [
-        'homepage_carousel_enabled',
-        'homepage_carousel_desktop_image_path',
-        'homepage_carousel_mobile_image_path',
-        'homepage_carousel_headline',
-        'homepage_carousel_description',
-        'homepage_carousel_cta_label',
-        'homepage_carousel_cta_destination',
-        'homepage_carousel_priority',
-    ];
-
     public function up(): void
     {
         if (! Schema::hasTable('vouchers')) {
@@ -58,13 +47,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        if (! Schema::hasTable('vouchers')) {
-            return;
-        }
-
-        $existing = array_values(array_filter(self::COLUMNS, fn (string $column): bool => Schema::hasColumn('vouchers', $column)));
-        if ($existing !== []) {
-            Schema::table('vouchers', fn (Blueprint $table) => $table->dropColumn($existing));
-        }
+        // Keep campaign artwork settings if application code is rolled back.
     }
 };

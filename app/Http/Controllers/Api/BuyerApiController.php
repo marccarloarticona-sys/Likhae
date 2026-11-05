@@ -278,6 +278,7 @@ class BuyerApiController extends Controller
             'cart_item_ids.*' => ['required', 'integer', 'distinct'],
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
             'voucher_codes' => ['nullable', 'array'],
+            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'logistics_center_id' => ['nullable', 'integer'],
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['required', 'integer', 'distinct'],
@@ -372,6 +373,7 @@ class BuyerApiController extends Controller
             'contact_number' => ['nullable', 'string', 'max:30', 'regex:/^(?:09|\\+?639)\\d{9}$/'],
             'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
             'voucher_codes' => ['nullable', 'array'],
+            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'logistics_center_id' => ['nullable', 'integer'],
             'seller_notes' => ['nullable', 'array'],
             'seller_notes.*' => ['nullable', 'string', 'max:200'],
@@ -1051,16 +1053,24 @@ class BuyerApiController extends Controller
 
     private function normalizeCheckoutVoucherCodes(Request $request, array $voucherCodes): array
     {
-        $structured = array_intersect(['seller', 'platform', 'shipping'], array_keys($voucherCodes)) !== [];
+        $autoApply = array_key_exists('auto_apply', $voucherCodes)
+            ? filter_var($voucherCodes['auto_apply'], FILTER_VALIDATE_BOOLEAN)
+            : true;
+        $structured = array_intersect(['seller', 'platform', 'shipping', 'auto_apply'], array_keys($voucherCodes)) !== [];
         if (! $structured) {
             $request->validate([
                 'voucher_codes.*' => ['nullable', 'string', 'max:80'],
             ]);
 
-            return collect($voucherCodes)
-                ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
-                ->filter()
-                ->all();
+            return [
+                'seller' => collect($voucherCodes)
+                    ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+                    ->filter()
+                    ->all(),
+                'platform' => '',
+                'shipping' => '',
+                'auto_apply' => $autoApply,
+            ];
         }
 
         $request->validate([
@@ -1068,6 +1078,7 @@ class BuyerApiController extends Controller
             'voucher_codes.seller.*' => ['nullable', 'string', 'max:80'],
             'voucher_codes.platform' => ['nullable', 'string', 'max:80'],
             'voucher_codes.shipping' => ['nullable', 'string', 'max:80'],
+            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
         ]);
 
         return [
@@ -1077,6 +1088,7 @@ class BuyerApiController extends Controller
                 ->all(),
             'platform' => mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? ''))),
             'shipping' => mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? ''))),
+            'auto_apply' => $autoApply,
         ];
     }
     private function authorizeBuyer(Request $request): void

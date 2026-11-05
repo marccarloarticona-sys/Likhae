@@ -763,6 +763,7 @@ class ParcelSettlementFlowTest extends TestCase
         $this->assertSame('RESERVED', $reservation->status);
         $this->assertTrue(\Illuminate\Support\Facades\Schema::hasColumn('financial_ledger_entries', 'order_item_id'));
         app(PlatformCampaignBudgetService::class)->consumeForOrderItem($fixture['item']->fresh(), $fixture['buyer']);
+        app(PlatformCampaignBudgetService::class)->consumeForOrderItem($fixture['item']->fresh(), $fixture['buyer']);
         $this->recordCollection($fixture, '1310.00');
         $fixture['shipment']->update(['current_status' => 'DELIVERED']);
 

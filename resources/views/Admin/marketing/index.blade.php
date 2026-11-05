@@ -51,15 +51,12 @@
                                 @php
                                     $budgetSummary = $campaignBudgetSummaries[$campaign->id] ?? ['allocated_cents' => null, 'reserved_cents' => 0, 'spent_cents' => 0, 'available_cents' => null, 'usage_percent' => 0, 'status' => 'Pending Budget Setup', 'reconciliation_mismatch' => false];
                                     $budgetHistory = $campaignBudgetHistory[$campaign->id] ?? collect();
-                                    $campaignStatus = $campaign->requiresReview() ? 'Review required' : (! $campaign->is_active
-                                        ? 'Paused'
-                                        : ($campaign->starts_at?->isFuture()
-                                            ? 'Scheduled'
-                                            : ($campaign->ends_at?->isPast() ? 'Expired' : 'Active')));
+                                    $campaignStatusKey = app(\App\Services\Marketplace\PlatformCampaignEligibility::class)->status($campaign);
+                                    $campaignStatus = $campaign->requiresReview() ? 'Review required' : str($campaignStatusKey)->lower()->headline()->toString();
                                     $campaignStatusClass = match ($campaignStatus) {
                                         'Active' => 'is-active',
                                         'Scheduled' => 'is-pending',
-                                        'Expired' => 'is-inactive',
+                                        'Ended' => 'is-inactive',
                                         default => 'is-review',
                                     };
                                     $campaignImageUrl = $marketingMediaReady
@@ -112,6 +109,15 @@
                                                 data-minimum="{{ $campaign->minimum_order_amount }}" data-maximum="{{ $campaign->maximum_discount_amount }}"
                                                 data-usage-limit="{{ $campaign->usage_limit }}" data-per-user-limit="{{ $campaign->per_user_limit }}"
                                                 data-starts-at="{{ $campaign->starts_at?->format('Y-m-d\TH:i') }}" data-ends-at="{{ $campaign->ends_at?->format('Y-m-d\TH:i') }}"
+                                                @if($campaignControlsReady)
+                                                    data-distribution-mode="{{ $campaign->distribution_mode ?: 'CODE' }}"
+                                                    data-target-mode="{{ $campaign->target_mode ?: 'ALL' }}"
+                                                    data-target-ids="@json($campaign->target_mode === 'CATEGORIES' ? ($campaign->target_category_ids ?? []) : ($campaign->target_mode === 'PRODUCTS' ? ($campaign->target_product_ids ?? []) : ($campaign->target_seller_ids ?? [])))"
+                                                    data-buyer-audience="{{ $campaign->buyer_audience ?: 'ALL' }}"
+                                                    data-stack-with-seller="{{ $campaign->stack_with_seller ? '1' : '0' }}"
+                                                    data-stack-with-shipping="{{ $campaign->stack_with_shipping ? '1' : '0' }}"
+                                                    data-campaign-status="{{ $campaign->campaign_status ?: 'ACTIVE' }}"
+                                                @endif
                                                 @if($campaignBudgetReady) data-budget="{{ $campaign->campaign_budget_total }}" @endif
                                                 data-image-url="{{ $campaignImageUrl }}" data-image-alt="{{ $campaign->image_alt }}" data-theme-color="{{ $campaign->theme_color }}"
                                                 @if($homepageCarouselReady)
@@ -124,10 +130,17 @@
                                                     data-homepage-carousel-cta-destination="{{ $campaign->homepage_carousel_cta_destination ?: 'EVENT' }}"
                                                     data-homepage-carousel-priority="{{ $campaign->homepage_carousel_priority }}"
                                                 @endif>Edit</button>
-                                            <form method="POST" action="{{ route('admin.marketing.campaigns.toggle', $campaign) }}">
+                                            <form method="POST" action="{{ $campaignControlsReady ? route('admin.marketing.campaigns.status', $campaign) : route('admin.marketing.campaigns.toggle', $campaign) }}" onsubmit="return confirm('Change this campaign status? Existing orders and reservations remain valid.');">
                                                 @csrf @method('PATCH')
+                                                <input type="hidden" name="status" value="{{ $campaign->is_active ? 'PAUSED' : 'ACTIVE' }}">
                                                 <button class="ad-btn {{ $campaign->is_active ? 'ad-btn-warning-soft' : 'ad-btn-primary' }} ad-btn-xs" type="submit" @disabled(!$campaign->is_active && $campaign->requiresReview())>{{ $campaign->is_active ? 'Pause' : ($campaign->requiresReview() ? 'Review required' : 'Resume') }}</button>
                                             </form>
+                                            @if($campaignControlsReady && $campaignStatusKey !== 'ENDED')
+                                                <form method="POST" action="{{ route('admin.marketing.campaigns.status', $campaign) }}" onsubmit="return confirm('End this campaign now? Existing orders and reservations remain valid.');">
+                                                    @csrf @method('PATCH')<input type="hidden" name="status" value="ENDED">
+                                                    <button class="ad-btn ad-btn-secondary ad-btn-xs" type="submit">End</button>
+                                                </form>
+                                            @endif
                                         </div>
                                     </td>
                                 </tr>
@@ -152,14 +165,42 @@
                         @csrf
                         <input type="hidden" name="_method" id="marketing-campaign-method" value="POST">
                         <input type="hidden" name="editing_campaign" id="marketing-campaign-id" value="{{ old('editing_campaign') }}">
-                        <div class="ad-form-grid">
+                        <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>1. Basic Campaign Information</strong></div><div class="ad-form-grid">
                             <label class="ad-field"><span>Campaign name</span><input id="campaign-name" name="name" value="{{ old('name') }}" maxlength="150" required></label>
                             <label class="ad-field"><span>Voucher code</span><input id="campaign-code" name="code" value="{{ old('code') }}" maxlength="80" required></label>
+                        </div></section>
+                        <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>2. Discount Rules</strong></div><div class="ad-form-grid">
                             <label class="ad-field"><span>Applies to</span><select id="campaign-benefit-scope" name="benefit_scope" required><option value="PRODUCT" @selected(old('benefit_scope', 'PRODUCT') === 'PRODUCT')>Eligible product amounts</option><option value="SHIPPING" @selected(old('benefit_scope') === 'SHIPPING')>Shipping fees</option></select></label>
                             <label class="ad-field"><span>Discount type</span><select id="campaign-discount-type" name="discount_type" required><option value="PERCENT" @selected(old('discount_type', 'PERCENT') === 'PERCENT')>Percent</option><option value="FIXED" @selected(old('discount_type') === 'FIXED')>Fixed amount</option></select></label>
                             <label class="ad-field"><span>Discount value</span><input id="campaign-discount-value" name="discount_value" type="number" min="0.01" step="0.01" value="{{ old('discount_value', '10') }}" required><small>Percentage vouchers are limited to 99.99%.</small></label>
                             <label class="ad-field"><span>Minimum spend</span><input id="campaign-minimum" name="minimum_order_amount" type="number" min="0" step="0.01" value="{{ old('minimum_order_amount', '0') }}"></label>
                             <label class="ad-field"><span>Maximum discount</span><input id="campaign-maximum" name="maximum_discount_amount" type="number" min="0.01" step="0.01" value="{{ old('maximum_discount_amount') }}"></label>
+                        </div></section>
+                        @if($campaignControlsReady)<label class="ad-field"><span>Campaign status</span><select id="campaign-status" name="campaign_status"><option value="DRAFT" @selected(old('campaign_status') === 'DRAFT')>Draft</option><option value="ACTIVE" @selected(old('campaign_status', 'ACTIVE') === 'ACTIVE')>Active / scheduled</option><option value="PAUSED" @selected(old('campaign_status') === 'PAUSED')>Paused</option><option value="ENDED" @selected(old('campaign_status') === 'ENDED')>Ended</option></select></label>@endif
+                        </div></section>
+                        @if($campaignControlsReady)
+                            <section class="ad-marketing-media-fields" aria-labelledby="campaign-distribution-heading">
+                                <div class="ad-marketing-media-intro"><strong id="campaign-distribution-heading">3. Distribution and Eligibility</strong><span>Claiming does not reserve funding or count as redemption. Checkout rechecks each rule.</span></div>
+                                <div class="ad-form-grid">
+                                    <label class="ad-field"><span>Distribution method</span><select id="campaign-distribution-mode" name="distribution_mode"><option value="CODE" @selected(old('distribution_mode', 'CODE') === 'CODE')>Voucher code</option><option value="CLAIMABLE" @selected(old('distribution_mode') === 'CLAIMABLE')>Claimable in Rewards</option><option value="AUTO" @selected(old('distribution_mode') === 'AUTO')>Auto apply</option></select></label>
+                                    <label class="ad-field"><span>Buyer audience</span><select id="campaign-buyer-audience" name="buyer_audience"><option value="ALL" @selected(old('buyer_audience', 'ALL') === 'ALL')>All buyers</option><option value="FIRST_TIME" @selected(old('buyer_audience') === 'FIRST_TIME')>First completed order</option><option value="EXISTING" @selected(old('buyer_audience') === 'EXISTING')>Has a completed order</option></select></label>
+                                    <label class="ad-field"><span>Product targeting</span><select id="campaign-target-mode" name="target_mode"><option value="ALL" @selected(old('target_mode', 'ALL') === 'ALL')>All eligible products</option><option value="CATEGORIES" @selected(old('target_mode') === 'CATEGORIES')>Selected categories / subcategories</option><option value="PRODUCTS" @selected(old('target_mode') === 'PRODUCTS')>Selected products</option><option value="SELLERS" @selected(old('target_mode') === 'SELLERS')>Selected sellers</option></select></label>
+                                </div>
+                                <div id="campaign-target-picker" class="ad-field" data-endpoint="{{ route('admin.marketing.campaigns.targets') }}" @if(old('target_mode', 'ALL') === 'ALL') hidden @endif>
+                                    <label for="campaign-target-search">Search campaign targets</label>
+                                    <input id="campaign-target-search" type="search" maxlength="80" placeholder="Search categories, products, or sellers" autocomplete="off">
+                                    <div id="campaign-target-results" role="listbox" aria-label="Campaign targets"></div>
+                                    <div id="campaign-target-selection" aria-live="polite"></div>
+                                    <small>Results are paginated; selected records are checked against active database rows when saved.</small>
+                                </div>
+                                <div class="ad-marketing-media-intro"><strong>4. Stacking Compatibility</strong><span>At most one LIKHAE product voucher can be selected.</span></div>
+                                <div class="ad-form-grid">
+                                    <label class="ad-marketing-popup-toggle"><input type="hidden" name="stack_with_seller" value="0"><input id="campaign-stack-seller" type="checkbox" name="stack_with_seller" value="1" checked><span><strong>Can stack with a Seller voucher</strong></span></label>
+                                    <label class="ad-marketing-popup-toggle"><input type="hidden" name="stack_with_shipping" value="0"><input id="campaign-stack-shipping" type="checkbox" name="stack_with_shipping" value="1" checked><span><strong>Can stack with a shipping voucher</strong></span></label>
+                                </div>
+                            </section>
+                        @endif
+                        <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>5. Budget and Redemption Limits</strong></div><div class="ad-form-grid">
                             <label class="ad-field"><span>Total redemptions</span><input id="campaign-usage-limit" name="usage_limit" type="number" min="1" value="{{ old('usage_limit') }}"></label>
                             <label class="ad-field"><span>Uses per buyer</span><input id="campaign-per-user-limit" name="per_user_limit" type="number" min="1" value="{{ old('per_user_limit') }}"></label>
                             @if($campaignBudgetReady)
@@ -172,12 +213,13 @@
                                 <label class="ad-field"><span>Total allocated fund (₱)</span><input id="campaign-budget-total" type="number" placeholder="Unavailable until finance setup" disabled aria-disabled="true"></label>
                                 <label class="ad-field"><span>Budget change reason</span><input id="campaign-budget-reason" type="text" placeholder="Unavailable until finance setup" disabled aria-disabled="true"></label>
                             @endif
+                        </div></section>
+                        <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>6. Scheduling and Status</strong><span>All times use Asia/Manila. Existing orders keep their campaign reservations after pause or end.</span></div><div class="ad-form-grid">
                             <label class="ad-field"><span>Starts at</span><input id="campaign-starts-at" name="starts_at" type="datetime-local" value="{{ old('starts_at') }}"></label>
                             <label class="ad-field"><span>Ends at</span><input id="campaign-ends-at" name="ends_at" type="datetime-local" value="{{ old('ends_at') }}"></label>
-                        </div>
-                        @if($marketingMediaReady)
+                            @if($marketingMediaReady)
                             <div class="ad-marketing-media-fields">
-                                <div class="ad-marketing-media-intro"><strong>Campaign artwork</strong><span>Optional presentation only. It does not change discounts, redemption limits, or checkout totals.</span></div>
+                                <div class="ad-marketing-media-intro"><strong>7. Campaign artwork and carousel</strong><span>Optional presentation only. It does not change discounts, redemption limits, or checkout totals.</span></div>
                                 <label class="ad-field"><span>Promotional image</span><input id="campaign-image" name="campaign_image" type="file" accept="image/jpeg,image/png,image/webp"></label>
                                 <div class="ad-form-grid ad-marketing-media-meta">
                                     <label class="ad-field"><span>Image alt text</span><input id="campaign-image-alt" name="image_alt" value="{{ old('image_alt') }}" maxlength="255" placeholder="Describe the campaign artwork"></label>
@@ -190,7 +232,7 @@
                         @if($homepageCarouselReady)
                             <section class="ad-marketing-media-fields" aria-labelledby="campaign-homepage-carousel-heading">
                                 <div class="ad-marketing-media-intro">
-                                    <strong id="campaign-homepage-carousel-heading">Buyer Hero Carousel placement</strong>
+                                    <strong id="campaign-homepage-carousel-heading">Buyer Hero Carousel options</strong>
                                     <span>Carousel slides use this campaign’s schedule and show only while it is active, public, and funded. The CTA opens this campaign or the offers list.</span>
                                 </div>
                                 <input type="hidden" name="homepage_carousel_enabled" value="0">
@@ -220,6 +262,7 @@
                                 <small class="ad-marketing-cta-help">Artwork must be JPG, PNG, or WebP and up to 5 MB. Future and expired campaigns follow their existing start and end times.</small>
                             </section>
                         @endif
+                        <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>8. Review and Publish</strong><span>Confirm budget, audience, selected targets, date range, and preview artwork before saving.</span></div></section>
                         <div class="ad-btn-bar">
                             <button type="button" class="ad-btn ad-btn-secondary" data-marketing-modal-close>Cancel</button>
                             <button class="ad-btn ad-btn-primary" id="marketing-campaign-submit" type="submit">Create Campaign</button>
@@ -447,6 +490,23 @@
             const campaignId = document.getElementById('marketing-campaign-id');
             const title = document.getElementById('marketing-campaign-modal-title');
             const submit = document.getElementById('marketing-campaign-submit');
+            const campaignControlsReady = @json($campaignControlsReady);
+            const targetMode = document.getElementById('campaign-target-mode');
+            const targetSearch = document.getElementById('campaign-target-search');
+            const targetPicker = document.getElementById('campaign-target-picker');
+            const targetResults = document.getElementById('campaign-target-results');
+            const targetSelection = document.getElementById('campaign-target-selection');
+            const targetIds = new Set(@json(array_map('intval', (array) old('target_ids', []))));
+            const initialTargetIds = Array.from(targetIds);
+            const distributionMode = document.getElementById('campaign-distribution-mode');
+            const buyerAudience = document.getElementById('campaign-buyer-audience');
+            const campaignStatus = document.getElementById('campaign-status');
+            const stackWithSeller = document.getElementById('campaign-stack-seller');
+            const stackWithShipping = document.getElementById('campaign-stack-shipping');
+            const initialDistributionMode = distributionMode?.value || 'CODE';
+            const initialTargetMode = targetMode?.value || 'ALL';
+            const initialBuyerAudience = buyerAudience?.value || 'ALL';
+            const initialCampaignStatus = campaignStatus?.value || 'ACTIVE';
             const imageField = document.getElementById('campaign-image');
             const imageAltField = document.getElementById('campaign-image-alt');
             const themeColorField = document.getElementById('campaign-theme-color');
@@ -456,6 +516,72 @@
             const imagePreviewLabel = document.getElementById('campaign-image-preview-label');
             let previewObjectUrl = null;
             let opener = null;
+
+            const targetLabels = new Map();
+            const renderTargetSelection = () => {
+                if (!targetSelection) return;
+                targetSelection.replaceChildren();
+                form.querySelectorAll('input[name="target_ids[]"]').forEach((input) => input.remove());
+                targetIds.forEach((id) => {
+                    const label = document.createElement('span');
+                    label.className = 'ad-status is-pending';
+                    label.textContent = `${targetLabels.get(id) || `#${id}`} `;
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.textContent = 'Remove';
+                    remove.setAttribute('aria-label', `Remove ${label.textContent}`);
+                    remove.addEventListener('click', () => { targetIds.delete(id); renderTargetSelection(); });
+                    label.append(remove);
+                    targetSelection.append(label);
+                    const hidden = document.createElement('input');
+                    hidden.type = 'hidden'; hidden.name = 'target_ids[]'; hidden.value = String(id);
+                    form.append(hidden);
+                });
+            };
+            let targetPage = 1;
+            const searchTargets = async (page = 1) => {
+                if (!campaignControlsReady || !targetPicker || !targetMode || targetMode.value === 'ALL') {
+                    if (targetResults) targetResults.replaceChildren();
+                    return;
+                }
+                targetPage = page;
+                const url = new URL(targetPicker.dataset.endpoint, window.location.origin);
+                url.searchParams.set('mode', targetMode.value);
+                url.searchParams.set('q', targetSearch?.value || '');
+                url.searchParams.set('page', String(page));
+                const response = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+                if (!response.ok) return;
+                const payload = await response.json();
+                targetResults.replaceChildren();
+                payload.data.forEach((record) => {
+                    const button = document.createElement('button');
+                    button.type = 'button'; button.setAttribute('role', 'option');
+                    button.textContent = `${record.label} · #${record.id}`;
+                    button.disabled = targetIds.has(record.id);
+                    button.addEventListener('click', () => {
+                        targetIds.add(record.id); targetLabels.set(record.id, record.label);
+                        renderTargetSelection(); searchTargets(targetPage);
+                    });
+                    targetResults.append(button);
+                });
+                if (payload.last_page > 1) {
+                    const pager = document.createElement('div');
+                    const previous = document.createElement('button'); previous.type = 'button'; previous.textContent = 'Previous'; previous.disabled = page <= 1;
+                    previous.addEventListener('click', () => searchTargets(page - 1));
+                    const next = document.createElement('button'); next.type = 'button'; next.textContent = 'Next'; next.disabled = page >= payload.last_page;
+                    next.addEventListener('click', () => searchTargets(page + 1));
+                    pager.append(previous, document.createTextNode(` Page ${page} of ${payload.last_page} `), next);
+                    targetResults.append(pager);
+                }
+            };
+            let targetSearchTimer = null;
+            targetSearch?.addEventListener('input', () => { clearTimeout(targetSearchTimer); targetSearchTimer = setTimeout(() => searchTargets(1), 250); });
+            targetMode?.addEventListener('change', () => {
+                targetIds.clear(); renderTargetSelection();
+                targetPicker.hidden = targetMode.value === 'ALL';
+                searchTargets(1);
+            });
+            renderTargetSelection();
 
             const setImagePreview = (url, label = '') => {
                 if (!imagePreview) return;
@@ -546,6 +672,19 @@
                     if (fields.budgetReason) fields.budgetReason.value = '';
                     fields.startsAt.value = button.dataset.startsAt || '';
                     fields.endsAt.value = button.dataset.endsAt || '';
+                    if (campaignControlsReady) {
+                        distributionMode.value = button.dataset.distributionMode || 'CODE';
+                        buyerAudience.value = button.dataset.buyerAudience || 'ALL';
+                        campaignStatus.value = button.dataset.campaignStatus || 'ACTIVE';
+                        targetMode.value = button.dataset.targetMode || 'ALL';
+                        stackWithSeller.checked = button.dataset.stackWithSeller === '1';
+                        stackWithShipping.checked = button.dataset.stackWithShipping === '1';
+                        targetIds.clear();
+                        try { JSON.parse(button.dataset.targetIds || '[]').forEach((id) => targetIds.add(Number(id))); } catch (_) {}
+                        targetPicker.hidden = targetMode.value === 'ALL';
+                        renderTargetSelection();
+                        searchTargets(1);
+                    }
                     if (fields.homepageHeadline) fields.homepageHeadline.value = button.dataset.homepageCarouselHeadline || '';
                     if (fields.homepageDescription) fields.homepageDescription.value = button.dataset.homepageCarouselDescription || '';
                     if (fields.homepageCtaLabel) fields.homepageCtaLabel.value = button.dataset.homepageCarouselCtaLabel || 'View Offer';
@@ -569,6 +708,18 @@
                     });
                 } else {
                     Object.entries(fields).forEach(([key, field]) => { if (field) field.value = initial[key]; });
+                    if (campaignControlsReady) {
+                        distributionMode.value = initialDistributionMode;
+                        buyerAudience.value = initialBuyerAudience;
+                        campaignStatus.value = initialCampaignStatus;
+                        targetMode.value = initialTargetMode;
+                        stackWithSeller.checked = true;
+                        stackWithShipping.checked = true;
+                        targetIds.clear(); initialTargetIds.forEach((id) => targetIds.add(id));
+                        targetPicker.hidden = targetMode.value === 'ALL';
+                        renderTargetSelection();
+                        searchTargets(1);
+                    }
                     if (homepageEnabledField) homepageEnabledField.checked = initialHomepageEnabled;
                     if (imageField) imageField.value = '';
                     if (imageAltField) imageAltField.value = initialMedia.imageAlt;
@@ -594,7 +745,7 @@
             modal.querySelectorAll('[data-marketing-modal-close]').forEach((button) => button.addEventListener('click', close));
             modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
             document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal.classList.contains('is-open')) close(); });
-            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('campaign_budget_total') || $errors->has('campaign_budget_reason') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color') || $errors->has('homepage_carousel_enabled') || $errors->has('homepage_carousel_headline') || $errors->has('homepage_carousel_description') || $errors->has('homepage_carousel_cta_label') || $errors->has('homepage_carousel_cta_destination') || $errors->has('homepage_carousel_priority') || $errors->has('homepage_carousel_desktop_image') || $errors->has('homepage_carousel_mobile_image') || $errors->has('remove_homepage_carousel_desktop_image') || $errors->has('remove_homepage_carousel_mobile_image'))
+            @if($errors->has('name') || $errors->has('code') || $errors->has('benefit_scope') || $errors->has('discount_type') || $errors->has('discount_value') || $errors->has('minimum_order_amount') || $errors->has('maximum_discount_amount') || $errors->has('usage_limit') || $errors->has('per_user_limit') || $errors->has('campaign_budget_total') || $errors->has('campaign_budget_reason') || $errors->has('starts_at') || $errors->has('ends_at') || $errors->has('campaign_image') || $errors->has('image_alt') || $errors->has('theme_color') || $errors->has('distribution_mode') || $errors->has('target_mode') || $errors->has('target_ids') || $errors->has('buyer_audience') || $errors->has('stack_with_seller') || $errors->has('stack_with_shipping') || $errors->has('campaign_status') || $errors->has('homepage_carousel_enabled') || $errors->has('homepage_carousel_headline') || $errors->has('homepage_carousel_description') || $errors->has('homepage_carousel_cta_label') || $errors->has('homepage_carousel_cta_destination') || $errors->has('homepage_carousel_priority') || $errors->has('homepage_carousel_desktop_image') || $errors->has('homepage_carousel_mobile_image') || $errors->has('remove_homepage_carousel_desktop_image') || $errors->has('remove_homepage_carousel_mobile_image'))
                 const failedCampaignId = @json(old('editing_campaign'));
                 const editButton = Array.from(document.querySelectorAll('[data-marketing-campaign-open="edit"]'))
                     .find((button) => button.dataset.campaignId === String(failedCampaignId));
