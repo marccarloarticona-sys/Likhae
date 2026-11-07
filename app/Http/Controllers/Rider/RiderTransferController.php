@@ -7,7 +7,10 @@ use App\Models\Logistics\TransferManifest;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
+use App\Services\Maps\TransferManifestLocationService;
+use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -104,7 +107,45 @@ class RiderTransferController extends Controller
             }
         }
 
-        return view('rider.transfer-show', compact('rider', 'manifest', 'mapMarkers', 'mapRouteReady'));
+        $locationUpdateEndpoint = $manifest->status === TransferManifest::IN_TRANSIT
+            ? route('rider.transfers.location', $manifest->id)
+            : null;
+
+        return view('rider.transfer-show', compact('rider', 'manifest', 'mapMarkers', 'mapRouteReady', 'locationUpdateEndpoint'));
+    }
+
+    public function updateLocation(Request $request, int $manifest, TransferManifestLocationService $locations): JsonResponse
+    {
+        $data = $request->validate([
+            'latitude' => ['required', 'numeric', 'between:-90,90'],
+            'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'accuracy' => ['required', 'numeric', 'min:0', 'max:1500'],
+            'recorded_at' => ['required', 'date'],
+        ]);
+
+        $rider = $request->user()->riderProfile;
+        abort_unless($rider, 403);
+        $model = TransferManifest::query()
+            ->where('assigned_driver_rider_profile_id', $rider->id)
+            ->findOrFail($manifest);
+        $location = $locations->update(
+            $model,
+            $request->user(),
+            (float) $data['latitude'],
+            (float) $data['longitude'],
+            (float) $data['accuracy'],
+            Carbon::parse($data['recorded_at']),
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'latitude' => (float) $location->availability_latitude,
+                'longitude' => (float) $location->availability_longitude,
+                'accuracy' => (float) $data['accuracy'],
+                'recorded_at' => $location->availability_location_updated_at?->toIso8601String(),
+            ],
+        ]);
     }
 
     public function accept(Request $request, int $manifest): RedirectResponse

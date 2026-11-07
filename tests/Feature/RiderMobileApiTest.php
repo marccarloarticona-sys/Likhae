@@ -86,12 +86,15 @@ class RiderMobileApiTest extends TestCase
             ->postJson(route('api.v1.rider.assignments.location', $assignment), [
                 'latitude' => 14.5995,
                 'longitude' => 120.9842,
-                'accuracy' => 12.5,
+                // Browser network location can be less precise than GPS but
+                // still gives the map a useful device position.
+                'accuracy' => 500,
                 'recorded_at' => now()->toIso8601String(),
             ])
             ->assertOk()
             ->assertJsonPath('data.latitude', 14.5995)
-            ->assertJsonPath('data.longitude', 120.9842);
+            ->assertJsonPath('data.longitude', 120.9842)
+            ->assertJsonPath('data.accuracy', 500);
 
         $this->withToken($this->issueToken($rider))
             ->postJson(route('api.v1.rider.assignments.location', $assignment), [
@@ -153,7 +156,7 @@ class RiderMobileApiTest extends TestCase
             ->postJson(route('api.v1.rider.assignments.location', $assignment), [
                 'latitude' => 14.5995,
                 'longitude' => 120.9842,
-                'accuracy' => 251,
+                'accuracy' => 1501,
                 'recorded_at' => now()->toIso8601String(),
             ])
             ->assertStatus(422)

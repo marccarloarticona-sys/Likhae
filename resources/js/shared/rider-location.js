@@ -1,6 +1,8 @@
+import { getDevicePosition, rememberDevicePosition } from './device-location';
+
 const LOCATION_UPDATE_INTERVAL_MS = 10000;
 const LOCATION_MOVEMENT_THRESHOLD_METERS = 25;
-const MAX_ACCURACY_METERS = 250;
+const MAX_ACCURACY_METERS = 1500;
 const MAX_TIMESTAMP_SKEW_MS = 120000;
 
 function distanceMeters(first, second) {
@@ -29,9 +31,11 @@ function initializeRiderLocationTracker() {
 
     let assignments = parseAssignments(shell);
     let watchId;
+    let refreshInProgress = false;
     let lastSentAt = 0;
     let lastCoordinates = null;
     let stoppedByRider = false;
+    let retryTimer;
 
     const statusElement = shell.querySelector('[data-rider-location-status]');
     const controls = () => [
@@ -63,6 +67,8 @@ function initializeRiderLocationTracker() {
         if (watchId !== undefined && navigator.geolocation) {
             navigator.geolocation.clearWatch(watchId);
         }
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        retryTimer = undefined;
         watchId = undefined;
         lastSentAt = 0;
         lastCoordinates = null;
@@ -135,6 +141,7 @@ function initializeRiderLocationTracker() {
         const longitude = Number(position.coords?.longitude);
         const accuracy = Number(position.coords?.accuracy);
         const timestamp = Number(position.timestamp);
+        rememberDevicePosition(position);
         const coordinates = [longitude, latitude];
         const recordedAt = new Date(timestamp);
 
@@ -146,7 +153,7 @@ function initializeRiderLocationTracker() {
         }
 
         if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > MAX_ACCURACY_METERS) {
-            setStatus(`GPS accuracy is too poor (${Number.isFinite(accuracy) ? `${Math.round(accuracy)}m` : 'unknown'}). Move to an open area and wait for a better fix.`, 'poor-accuracy');
+            setStatus(`Device location accuracy is too low (${Number.isFinite(accuracy) ? `±${Math.round(accuracy)}m` : 'unknown'}). Keep Location Services on; the map will update when the device gets a clearer fix.`, 'poor-accuracy');
             return;
         }
 
@@ -162,7 +169,9 @@ function initializeRiderLocationTracker() {
 
         lastSentAt = now;
         lastCoordinates = coordinates;
-        setStatus('Live GPS is active. Keep this Rider page in the foreground while traveling.', 'active');
+        setStatus(accuracy > 250
+            ? `Device location is live (±${Math.round(accuracy)}m). Keep this Rider page open while traveling.`
+            : 'Live GPS is active. Keep this Rider page in the foreground while traveling.', 'active');
         const payload = {
             latitude,
             longitude,
@@ -192,12 +201,59 @@ function initializeRiderLocationTracker() {
                             },
                         }));
                     });
-                    setStatus('Live GPS is active. Keep this Rider page in the foreground while traveling.', 'active');
+                    const accepted = results.find((result) => result.ok);
+                    setStatus(Number(accepted?.location?.accuracy) > 250
+                        ? `Device location is live (±${Math.round(Number(accepted.location.accuracy))}m). Keep this Rider page open while traveling.`
+                        : 'Live GPS is active. Keep this Rider page in the foreground while traveling.', 'active');
                 } else if (assignments.length) {
                     const failure = results.find((result) => result.message);
                     setStatus(failure?.message || 'GPS was read, but the server could not receive the update. Retrying.', failure?.state || 'offline');
                 }
             });
+    };
+
+    const startWatch = (highAccuracy) => {
+        if (watchId !== undefined && navigator.geolocation) {
+            navigator.geolocation.clearWatch(watchId);
+        }
+        watchId = navigator.geolocation.watchPosition((position) => {
+            const accuracy = Number(position.coords?.accuracy);
+            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > MAX_ACCURACY_METERS)) {
+                setStatus(`Approximate location received (${Number.isFinite(accuracy) ? `${Math.round(accuracy)}m` : 'unknown'} accuracy). Requesting a more precise Rider GPS fix…`, 'poor-accuracy');
+                startWatch(true);
+                return;
+            }
+            send(position);
+        }, (error) => {
+            if (error.code === 1) {
+                stop('Chrome denied location access. Allow location for this site and resume Rider GPS.');
+                shell.dataset.riderLocationState = 'permission-denied';
+                return;
+            }
+            if (!highAccuracy) {
+                setStatus('The first GPS request did not get a fix. Trying high-accuracy Rider GPS…', 'ready');
+                startWatch(true);
+                return;
+            }
+            if (watchId !== undefined && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+            watchId = undefined;
+            syncControls();
+            setStatus(error.code === 2
+                ? 'Device location is temporarily unavailable. Check Location Services; Rider GPS will retry automatically.'
+                : 'Device location timed out. Rider GPS will retry automatically.', 'error');
+            if (!stoppedByRider) {
+                if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+                retryTimer = window.setTimeout(() => {
+                    retryTimer = undefined;
+                    startWatch(false);
+                }, 10000);
+            }
+        }, {
+            enableHighAccuracy: highAccuracy,
+            maximumAge: highAccuracy ? 0 : 30000,
+            timeout: highAccuracy ? 25000 : 15000,
+        });
+        syncControls();
     };
 
     const start = () => {
@@ -210,22 +266,10 @@ function initializeRiderLocationTracker() {
         if (!navigator.onLine) {
             setStatus('Device offline. GPS will start sending when the connection returns.', 'offline');
         } else {
-            setStatus('Requesting device GPS permission for the active Rider assignment…', 'ready');
+            setStatus('Requesting live Rider GPS. Chrome may use network location first, then precise device GPS…', 'ready');
         }
         stoppedByRider = false;
-        watchId = navigator.geolocation.watchPosition(send, (error) => {
-            if (error.code === 1) {
-                stop('GPS permission was denied. Enable location access in browser settings to continue tracking.');
-                shell.dataset.riderLocationState = 'permission-denied';
-                return;
-            }
-            if (error.code === 2) {
-                setStatus('Device GPS is temporarily unavailable. Waiting for another fix.', 'error');
-                return;
-            }
-            setStatus('Device GPS timed out. Waiting for another fix.', 'error');
-        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
-        syncControls();
+        startWatch(false);
     };
 
     const refresh = () => {
@@ -235,16 +279,21 @@ function initializeRiderLocationTracker() {
             return;
         }
 
-        setStatus('Requesting a fresh Rider device GPS fix…', 'ready');
-        navigator.geolocation.getCurrentPosition(send, (error) => {
+        if (refreshInProgress) return;
+        refreshInProgress = true;
+        setStatus('Requesting a fresh Rider GPS fix. Trying the browser location provider first…', 'ready');
+
+        getDevicePosition({ maxAgeMs: 30000, forceFresh: true }).then(send).catch((error) => {
             if (error.code === 1) {
-                setStatus('GPS permission was denied. Enable precise location access in browser settings.', 'error');
+                setStatus('Chrome denied location access. Allow location for this site and resume Rider GPS.', 'error');
             } else if (error.code === 2) {
-                setStatus('Device GPS is unavailable. Move outdoors and try refreshing Rider GPS again.', 'error');
+                setStatus('Chrome has location permission, but the device could not determine a position. Turn on Location Services and try again.', 'error');
             } else {
-                setStatus('The fresh GPS request timed out. Check your signal and try again.', 'error');
+                setStatus(error?.message || 'The device location request timed out. Keep this page open and try again.', 'error');
             }
-        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+        }).finally(() => {
+            refreshInProgress = false;
+        });
     };
 
     const toggle = () => {

@@ -6,6 +6,7 @@ use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
+use App\Models\Logistics\TransferManifest;
 use App\Models\Rider\RiderAssignment;
 use App\Models\User;
 use Illuminate\Support\Facades\Schema;
@@ -38,10 +39,16 @@ class MapDataService
         if (Schema::hasTable('shipment_transfer_legs')) {
             $relations[] = 'transferLegs.originLogisticsCenter.address';
             $relations[] = 'transferLegs.destinationLogisticsCenter.address';
+            if (Schema::hasTable('transfer_manifest_items')) {
+                $relations[] = 'transferLegs.manifestItems.manifest.assignedDriver';
+                $relations[] = 'transferLegs.manifestItems.manifest.originLogisticsCenter';
+                $relations[] = 'transferLegs.manifestItems.manifest.destinationLogisticsCenter';
+            }
         } elseif (! $shipment->relationLoaded('transferLegs')) {
             $shipment->setRelation('transferLegs', collect());
         }
         $shipment->loadMissing($relations);
+        $activeTransferManifest = $this->activeTransferManifest($shipment);
         $tracking = $this->trackingState($shipment, $viewer);
         $markers = [];
 
@@ -66,6 +73,9 @@ class MapDataService
         }
 
         foreach ($shipment->riderAssignments ?? [] as $assignment) {
+            if ($activeTransferManifest) {
+                continue;
+            }
             $canSeeLive = $this->canSeeLive($shipment, $assignment, $viewer);
             $canPublishLocation = $this->canPublishLocation($shipment, $assignment, $viewer);
             $canSeePendingDeliveryLocation = $this->canSeePendingDeliveryLocation($shipment, $assignment, $tracking, $viewer);
@@ -85,6 +95,12 @@ class MapDataService
                 }
                 $markers[] = $marker;
             }
+        }
+
+        if ($activeTransferManifest && $this->canSeeInterhubLocation($shipment, $activeTransferManifest, $viewer)) {
+            $marker = $this->interhubRiderMarker($activeTransferManifest, $shipment);
+            $marker['active_rider'] = true;
+            $markers[] = $marker;
         }
 
         $transferLegs = ($shipment->transferLegs ?? collect())
@@ -274,6 +290,11 @@ class MapDataService
         if (Schema::hasTable('shipment_transfer_legs')) {
             $relations[] = 'transferLegs.originLogisticsCenter.address';
             $relations[] = 'transferLegs.destinationLogisticsCenter.address';
+            if (Schema::hasTable('transfer_manifest_items')) {
+                $relations[] = 'transferLegs.manifestItems.manifest.assignedDriver';
+                $relations[] = 'transferLegs.manifestItems.manifest.originLogisticsCenter';
+                $relations[] = 'transferLegs.manifestItems.manifest.destinationLogisticsCenter';
+            }
         } else {
             $shipmentModels->each(function (Shipment $shipment): void {
                 if (! $shipment->relationLoaded('transferLegs')) {
@@ -379,6 +400,7 @@ class MapDataService
             'location_fresh' => $fresh,
             'location_state' => $fresh ? 'live' : 'stale',
             'location_recorded_at' => $location->recorded_at?->toIso8601String(),
+            'recorded_at' => $location->recorded_at?->toIso8601String(),
             'popup' => $location->recorded_at?->diffForHumans()
                 ? ($fresh ? 'Updated '.$location->recorded_at->diffForHumans() : 'Last updated '.$location->recorded_at->diffForHumans())
                 : 'Assignment location unavailable',
@@ -400,6 +422,109 @@ class MapDataService
         ];
     }
 
+    private function activeTransferManifest(Shipment $shipment): ?TransferManifest
+    {
+        if (! Schema::hasTable('shipment_transfer_legs') || ! Schema::hasTable('transfer_manifest_items')) {
+            return null;
+        }
+
+        $shipment->loadMissing([
+            'transferLegs.manifestItems.manifest.assignedDriver',
+            'transferLegs.manifestItems.manifest.originLogisticsCenter',
+            'transferLegs.manifestItems.manifest.destinationLogisticsCenter',
+        ]);
+
+        foreach (($shipment->transferLegs ?? collect())->sortByDesc('sequence_no') as $leg) {
+            if ($leg->status !== ShipmentTransferLeg::IN_TRANSIT) {
+                continue;
+            }
+
+            foreach ($leg->manifestItems ?? [] as $item) {
+                $manifest = $item->manifest;
+                if ($manifest instanceof TransferManifest
+                    && $manifest->status === TransferManifest::IN_TRANSIT
+                    && $manifest->assigned_driver_rider_profile_id) {
+                    return $manifest;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function canSeeInterhubLocation(Shipment $shipment, TransferManifest $manifest, ?User $viewer): bool
+    {
+        if (! $viewer || ! $manifest->assignedDriver) {
+            return false;
+        }
+
+        if ($viewer->isAccountType(User::TYPE_ADMIN)) {
+            return true;
+        }
+
+        if ($viewer->isAccountType(User::TYPE_RIDER)) {
+            return (int) $manifest->assignedDriver->user_id === (int) $viewer->id;
+        }
+
+        if ($viewer->isAccountType(User::TYPE_BUYER)) {
+            return (int) $shipment->sellerOrder?->order?->buyer_user_id === (int) $viewer->id;
+        }
+
+        if ($viewer->isAccountType(User::TYPE_SELLER)) {
+            return (int) $shipment->sellerOrder?->sellerProfile?->user_id === (int) $viewer->id;
+        }
+
+        if ($viewer->isAccountType(User::TYPE_LOGISTICS)) {
+            return in_array((int) $viewer->id, [
+                (int) ($manifest->originLogisticsCenter?->owner_user_id ?? 0),
+                (int) ($manifest->destinationLogisticsCenter?->owner_user_id ?? 0),
+            ], true);
+        }
+
+        return false;
+    }
+
+    private function interhubRiderMarker(TransferManifest $manifest, Shipment $shipment): array
+    {
+        $driver = $manifest->assignedDriver;
+        $recordedAt = $driver?->availability_location_updated_at;
+        $recordedDuringTransfer = $recordedAt !== null
+            && (! $manifest->departed_at || $recordedAt->greaterThanOrEqualTo($manifest->departed_at));
+        $recordedAt = $recordedDuringTransfer ? $recordedAt : null;
+        $coordinates = $driver && $recordedDuringTransfer ? $this->coordinatePair((object) [
+            'latitude' => $driver->availability_latitude,
+            'longitude' => $driver->availability_longitude,
+        ]) : null;
+        $fresh = $coordinates !== null && ($recordedAt?->greaterThanOrEqualTo(now()->subMinutes(self::LOCATION_FRESHNESS_MINUTES)) ?? false);
+
+        $marker = [
+            'id' => 'interhub-rider-manifest-'.$manifest->id,
+            'kind' => 'rider',
+            'assignment_type' => 'INTER_LOGISTICS',
+            'transfer_manifest_id' => $manifest->id,
+            'shipment_id' => $shipment->id,
+            'label' => 'Inter-hub rider',
+            'title' => $coordinates
+                ? ($fresh ? 'Current inter-hub rider location' : 'Last known inter-hub rider location')
+                : 'Waiting for current rider location',
+            'location_fresh' => $fresh,
+            'location_state' => $coordinates ? ($fresh ? 'live' : 'stale') : 'unavailable',
+            'location_pending' => $coordinates === null,
+            'location_recorded_at' => $recordedAt?->toIso8601String(),
+            'recorded_at' => $recordedAt?->toIso8601String(),
+            'popup' => $coordinates
+                ? ($recordedAt?->diffForHumans() ? 'Updated '.$recordedAt->diffForHumans() : 'Inter-hub rider location')
+                : 'The assigned inter-hub rider device is sharing its location when available.',
+        ];
+
+        if ($coordinates) {
+            $marker['latitude'] = round($coordinates['latitude'], 7);
+            $marker['longitude'] = round($coordinates['longitude'], 7);
+        }
+
+        return $marker;
+    }
+
     public function trackingState(Shipment $shipment, ?User $viewer = null): array
     {
         $viewer ??= auth()->user();
@@ -412,17 +537,30 @@ class MapDataService
             'serviceArea.logisticsCenter.address',
         ]);
 
-        $assignment = $this->activeAssignment($shipment)
-            ?: $this->acceptedDeliveryAssignment($shipment);
-        $destinationKind = $this->destinationKind($shipment, $assignment);
+        if (Schema::hasTable('shipment_transfer_legs') && Schema::hasTable('transfer_manifest_items')) {
+            $shipment->loadMissing([
+                'transferLegs.manifestItems.manifest.assignedDriver',
+                'transferLegs.manifestItems.manifest.originLogisticsCenter',
+                'transferLegs.manifestItems.manifest.destinationLogisticsCenter',
+            ]);
+        }
+
+        $activeTransferManifest = $this->activeTransferManifest($shipment);
+        $assignment = $activeTransferManifest ? null : ($this->activeAssignment($shipment)
+            ?: $this->acceptedDeliveryAssignment($shipment));
+        $destinationKind = $activeTransferManifest ? 'logistics' : $this->destinationKind($shipment, $assignment);
         $destination = match ($destinationKind) {
             'seller' => $shipment->sellerOrder?->sellerProfile?->businessAddress,
-            'logistics' => ($shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter)?->address,
+            'logistics' => $activeTransferManifest?->destinationLogisticsCenter?->address
+                ?: ($shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter)?->address,
             'buyer' => $shipment->sellerOrder?->order?->address,
             default => null,
         };
         $visible = $assignment && $this->canSeeLive($shipment, $assignment, $viewer);
         $location = $visible ? $this->assignmentMarker($assignment) : null;
+        if ($activeTransferManifest && $this->canSeeInterhubLocation($shipment, $activeTransferManifest, $viewer)) {
+            $location = $this->interhubRiderMarker($activeTransferManifest, $shipment);
+        }
         $locationState = $location['location_state'] ?? 'unavailable';
         $destinationCoordinates = $this->coordinatePair($destination);
 
@@ -432,13 +570,16 @@ class MapDataService
             'status' => $shipment->current_status,
             'active_destination_kind' => $destinationKind,
             'active_assignment_id' => $assignment?->id,
-            'active_assignment_type' => $assignment?->assignment_type,
+            'active_assignment_type' => $activeTransferManifest ? 'INTER_LOGISTICS' : $assignment?->assignment_type,
+            'active_transfer_manifest_id' => $activeTransferManifest && $this->canSeeInterhubLocation($shipment, $activeTransferManifest, $viewer)
+                ? $activeTransferManifest->id
+                : null,
             'live' => $locationState === 'live',
             'location_state' => $locationState,
-            'last_location' => $location ? [
+            'last_location' => isset($location['latitude'], $location['longitude']) ? [
                 'latitude' => $location['latitude'],
                 'longitude' => $location['longitude'],
-                'recorded_at' => $assignment->liveLocation?->recorded_at?->toIso8601String(),
+                'recorded_at' => $location['location_recorded_at'] ?? null,
             ] : null,
             'destination' => $destinationCoordinates ? [
                 'kind' => $destinationKind,

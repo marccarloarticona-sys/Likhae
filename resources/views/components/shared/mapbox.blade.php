@@ -10,6 +10,7 @@
     'userLocationTarget' => null,
     'navigation' => false,
     'liveTracking' => true,
+    'riderLocationEndpoint' => null,
     'orderRoute' => false,
     'projection' => null,
     'pinFormId' => null,
@@ -28,6 +29,7 @@
     data-map-user-target="{{ $userLocationTarget }}"
     data-map-rider-gps="{{ $riderGps ? 'true' : 'false' }}"
     data-map-live-device-gps="{{ $liveDeviceGps ? 'true' : 'false' }}"
+    data-map-rider-location-endpoint="{{ $riderLocationEndpoint }}"
     data-map-live="{{ auth()->check() && $liveTracking ? 'true' : 'false' }}"
     data-map-order-route="{{ $orderRoute ? 'true' : 'false' }}"
     data-map-projection="{{ $projection }}"

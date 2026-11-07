@@ -123,7 +123,7 @@
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             Proof of delivery photo
                             <input type="file" name="proof_file" accept="image/jpeg,image/png,image/webp" capture="environment" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-proof-input>
-                            <small class="font-normal text-muted">Take a clear photo of the delivered parcel. The photo will be stamped with capture time, rider GPS coordinates, GPS accuracy, and the mapped location. Allow location access when prompted.</small>
+                            <small class="font-normal text-muted">Take a clear photo of the delivered parcel. LIKHAE uses this device's location, including a recent live GPS fix when available, and stamps the photo with the coordinates and reported accuracy.</small>
                             <span class="hidden rounded-lg border border-line bg-page-secondary px-3 py-2 text-xs font-medium text-muted" aria-live="polite" data-delivery-proof-status></span>
                             <button type="button" class="hidden w-fit rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink" data-delivery-location-retry>Retry GPS and stamp photo</button>
                         </label>
@@ -265,20 +265,41 @@
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
         }).format(date) + ' PHT';
 
-        const getCurrentPosition = () => new Promise((resolve, reject) => {
-            if (!navigator.geolocation) {
-                reject(new Error('This device/browser does not provide GPS location.'));
-                return;
+        const getCurrentPosition = async () => {
+            if (window.LikhaeDeviceLocation?.getPosition) {
+                try {
+                    return await window.LikhaeDeviceLocation.getPosition({ maxAgeMs: 120000 });
+                } catch (error) {
+                    if (error?.code === 1) {
+                        throw new Error('Location permission is blocked. Allow location for this site in the device/browser settings, then retry.');
+                    }
+                }
             }
-            navigator.geolocation.getCurrentPosition(resolve, (error) => {
-                const message = error.code === error.PERMISSION_DENIED
-                    ? 'Location permission is blocked. Allow location access in your browser settings, then retry.'
-                    : error.code === error.POSITION_UNAVAILABLE
-                        ? 'The device could not determine its GPS location. Move outdoors or near a window, then retry.'
-                        : 'GPS is taking too long. Check that location is enabled, then retry.';
-                reject(new Error(message));
-            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-        });
+            if (!navigator.geolocation) {
+                throw new Error('This device/browser does not provide location services.');
+            }
+            const readPosition = (options) => new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, options);
+            });
+            let approximate = null;
+            try {
+                approximate = await readPosition({ enableHighAccuracy: false, maximumAge: 120000, timeout: 15000 });
+            } catch (error) {
+                if (error.code === 1) throw new Error('Location permission is blocked. Allow location for this site in device/browser settings, then retry.');
+            }
+            try {
+                const precise = await readPosition({ enableHighAccuracy: true, maximumAge: 30000, timeout: 25000 });
+                if (!approximate || precise.coords.accuracy < approximate.coords.accuracy) return precise;
+            } catch (error) {
+                if (error.code === 1) throw new Error('Location permission is blocked. Allow location for this site in device/browser settings, then retry.');
+                if (!approximate) {
+                    throw new Error(error.code === 2
+                        ? 'The device could not determine a position. Turn on Location Services and move near a window or outdoors, then retry.'
+                        : 'Device location timed out. Check that Location Services are on, then retry.');
+                }
+            }
+            return approximate;
+        };
 
         const lookupPlace = async (latitude, longitude) => {
             const apiKey = document.querySelector('[data-likhae-map]')?.dataset.geoapifyKey;
@@ -360,7 +381,7 @@
                     `Photo time: ${formatManilaTime(capturedAt)}`,
                     `GPS fix: ${formatManilaTime(gpsFixAt)}`,
                     `Latitude: ${latitude.toFixed(6)}   Longitude: ${longitude.toFixed(6)}`,
-                    `GPS accuracy: +/- ${accuracy} m`,
+                    `Device location accuracy: +/- ${accuracy} m`,
                     ...locationLines,
                 ];
                 const panelHeight = padding * 2 + lineHeight * lines.length;

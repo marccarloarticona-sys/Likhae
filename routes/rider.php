@@ -90,6 +90,7 @@ Route::prefix('rider')
             Route::post('/transfers/{manifest}/accept', [RiderTransferController::class, 'accept'])->name('transfers.accept');
             Route::post('/transfers/{manifest}/decline', [RiderTransferController::class, 'decline'])->name('transfers.decline');
             Route::post('/transfers/{manifest}/start', [RiderTransferController::class, 'start'])->name('transfers.start');
+            Route::post('/transfers/{manifest}/location', [RiderTransferController::class, 'updateLocation'])->whereNumber('manifest')->name('transfers.location');
         });
 
         Route::get('/earnings', [RiderController::class, 'earnings'])->name('earnings');

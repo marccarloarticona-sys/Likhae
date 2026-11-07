@@ -380,6 +380,62 @@ class PagsanjanPilaTransferManifestTest extends TestCase
         $this->assertSame('COMPLETED', $shipments[0]->fresh()->current_status);
     }
 
+    public function test_interhub_device_location_reaches_buyer_and_seller_tracking_maps(): void
+    {
+        $fixture = $this->fixture();
+        $shipment = $this->preparedShipment($fixture);
+        app(ShipmentWorkflowService::class)->recordPackedMeasurements($shipment, $fixture['sellerUser'], '0.5', '2');
+        $manifest = $this->manifestWithLegs($fixture, [$shipment]);
+        $service = app(TransferManifestService::class);
+        $manifest = $service->assignDriver($fixture['originUser'], $manifest, $fixture['driver']);
+        $manifest = $service->seal($fixture['originUser'], $manifest);
+        $item = $manifest->items()->with('transferLeg.shipment')->sole();
+        $service->driverAccept($fixture['driverUser'], $manifest);
+        $manifest = $service->release($fixture['originUser'], $manifest->fresh(), [
+            $item->id => $shipment->tracking_number,
+        ]);
+        $service->driverStart($fixture['driverUser'], $manifest);
+
+        $this->actingAs($fixture['buyer'])
+            ->getJson(route('tracking.live', $shipment->tracking_number))
+            ->assertOk()
+            ->assertJsonPath('tracking.location_state', 'unavailable')
+            ->assertJsonPath('tracking.last_location', null);
+
+        $this->actingAs($fixture['driverUser'])
+            ->postJson(route('rider.transfers.location', $manifest), [
+                'latitude' => 14.12345,
+                'longitude' => 121.54321,
+                // A phone using Wi-Fi/network location can report a wider
+                // accuracy radius than a dedicated GPS fix.
+                'accuracy' => 700,
+                'recorded_at' => now()->toIso8601String(),
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.latitude', 14.12345)
+            ->assertJsonPath('data.longitude', 121.54321)
+            ->assertJsonPath('data.accuracy', 700);
+
+        $buyerTracking = $this->actingAs($fixture['buyer'])
+            ->getJson(route('tracking.live', $shipment->tracking_number))
+            ->assertOk()
+            ->assertJsonPath('tracking.location_state', 'live')
+            ->assertJsonPath('tracking.last_location.latitude', 14.12345)
+            ->assertJsonPath('tracking.active_assignment_type', 'INTER_LOGISTICS');
+        $buyerRiderMarker = collect($buyerTracking->json('markers'))
+            ->firstWhere('assignment_type', 'INTER_LOGISTICS');
+        $this->assertSame(14.12345, $buyerRiderMarker['latitude'] ?? null);
+        $this->assertSame(121.54321, $buyerRiderMarker['longitude'] ?? null);
+
+        $sellerTracking = $this->actingAs($fixture['sellerUser'])
+            ->getJson(route('tracking.live', $shipment->tracking_number))
+            ->assertOk()
+            ->assertJsonPath('tracking.location_state', 'live')
+            ->assertJsonPath('tracking.last_location.longitude', 121.54321);
+        $this->assertNotNull(collect($sellerTracking->json('markers'))
+            ->firstWhere('assignment_type', 'INTER_LOGISTICS'));
+    }
+
     private function fixture(): array
     {
         $sellerUser = User::factory()->create(['account_type' => User::TYPE_SELLER]);
@@ -411,6 +467,7 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'plate_number' => 'TRANSFER-'.uniqid(),
             'drivers_license_number' => 'LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
             'approved_by_user_id' => $originUser->id,
             'approved_at' => now(),
         ]);
@@ -424,6 +481,7 @@ class PagsanjanPilaTransferManifestTest extends TestCase
             'plate_number' => 'WRONG-TRANSFER-'.uniqid(),
             'drivers_license_number' => 'WRONG-LICENSE-'.uniqid(),
             'status' => 'ACTIVE',
+            'is_online' => true,
             'approved_by_user_id' => $originUser->id,
             'approved_at' => now(),
         ]);

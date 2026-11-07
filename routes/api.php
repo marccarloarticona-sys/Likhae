@@ -143,6 +143,7 @@ Route::prefix('v1')->group(function (): void {
                 Route::post('/{manifest}/accept', [RiderTransferApiController::class, 'accept'])->whereNumber('manifest')->name('accept');
                 Route::post('/{manifest}/decline', [RiderTransferApiController::class, 'decline'])->whereNumber('manifest')->name('decline');
                 Route::post('/{manifest}/start', [RiderTransferApiController::class, 'start'])->whereNumber('manifest')->name('start');
+                Route::post('/{manifest}/location', [RiderTransferApiController::class, 'updateLocation'])->whereNumber('manifest')->name('location');
             });
         Route::middleware('rider.operational:LOCAL_BARANGAY')
             ->prefix('rider')

@@ -1,3 +1,5 @@
+import { getDevicePosition, rememberDevicePosition } from './device-location';
+
 const MAPLIBRE_SCRIPT = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.js';
 const MAPLIBRE_CSS = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.css';
 const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -897,6 +899,10 @@ async function drawUserRoute(shell, map, maplibregl, markers, from) {
     }
 }
 
+async function readDevicePosition() {
+    return getDevicePosition({ maxAgeMs: 120000, forceFresh: true });
+}
+
 function addUserLocation(shell, map, maplibregl, markers) {
     if (shell.dataset.mapLiveDeviceGps === 'true') return;
     const button = shell.querySelector('[data-map-location]');
@@ -927,7 +933,7 @@ function addUserLocation(shell, map, maplibregl, markers) {
 
         button.disabled = true;
         updateStatus(shell, 'Waiting for your location permission…');
-        navigator.geolocation.getCurrentPosition(async (position) => {
+        readDevicePosition().then(async (position) => {
             const lng = position.coords.longitude;
             const lat = position.coords.latitude;
             shell._likhaeUserMarker?.remove();
@@ -941,18 +947,26 @@ function addUserLocation(shell, map, maplibregl, markers) {
             map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), essential: true });
             const hasRoute = await drawUserRoute(shell, map, maplibregl, markers, [lng, lat]);
             if (hasRoute === true) {
-                updateStatus(shell, 'Road route preview is ready. This GPS fix was not sent to LIKHAE tracking.');
+                const accuracy = Number(position.coords.accuracy);
+                const approximate = Number.isFinite(accuracy) && accuracy > 1000;
+                updateStatus(shell, approximate
+                    ? `Approximate location shown (about ${Math.round(accuracy / 1000)} km accuracy). This GPS fix was not sent to LIKHAE tracking.`
+                    : 'Road route preview is ready. This GPS fix was not sent to LIKHAE tracking.');
             } else if (hasRoute === null) {
                 updateStatus(shell, 'Your location is shown on this device only.');
             }
-            button.disabled = false;
-        }, (error) => {
+        }).catch((error) => {
             const message = error.code === 1
-                ? 'Location permission was not granted. You can enable it in browser settings.'
-                : 'We could not read your location right now. Try again.';
+                ? 'Chrome has not granted LIKHAE location access. Allow Location in this site’s permissions and retry.'
+                : error.code === 2
+                    ? 'Chrome has location access, but the device location service could not find a position. Turn on device Location Services and retry.'
+                    : error.code === 3
+                        ? 'The location request timed out. LIKHAE tried both approximate and high-accuracy location; try again when your device location is ready.'
+                        : 'The device location is temporarily unavailable. Check Location Services and try again.';
             updateStatus(shell, message, true);
+        }).finally(() => {
             button.disabled = false;
-        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+        });
     });
 }
 
@@ -963,13 +977,18 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
     const target = markers.find((marker) => marker.target_kind === shell.dataset.mapUserTarget);
     const destination = markerCoordinates(target);
     const apiKey = shell.dataset.geoapifyKey?.trim() || '';
+    const locationEndpoint = shell.dataset.mapRiderLocationEndpoint || '';
     const rider = { assignment_type: 'INTER_LOGISTICS', active_destination_kind: 'destination', location_fresh: true };
     let watchId;
+    let retryTimer;
     let lastRouteFrom = null;
     let lastRouteAt = 0;
+    let lastLocationSentAt = 0;
+    let locationSending = false;
     let routeRequest = 0;
     let activeRoute = null;
     let followDriver = true;
+    let trackingRequested = false;
 
     const setButton = (active) => {
         if (!button) return;
@@ -977,7 +996,42 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
         button.setAttribute('aria-pressed', String(active));
     };
 
+    const saveTransferLocation = async (position) => {
+        if (!locationEndpoint || locationSending || Date.now() - lastLocationSentAt < 10000) return;
+        locationSending = true;
+        lastLocationSentAt = Date.now();
+        try {
+            const response = await fetch(locationEndpoint, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude,
+                    accuracy: position.coords.accuracy,
+                    recorded_at: new Date(position.timestamp || Date.now()).toISOString(),
+                }),
+            });
+            if (!response.ok) {
+                const detail = await response.json().catch(() => null);
+                updateStatus(shell, detail?.message || `Live location could not be saved (HTTP ${response.status}). Check your connection and retry.`, true);
+                return;
+            }
+            updateStatus(shell, 'Device location is live on the route map and updating shipment tracking. Keep this page open while traveling.');
+        } catch {
+            updateStatus(shell, 'The map is using this device location. It will retry saving live tracking when the connection returns.', true);
+        } finally {
+            locationSending = false;
+        }
+    };
+
     const updateFromPosition = (position) => {
+        rememberDevicePosition(position);
         const latitude = Number(position.coords?.latitude);
         const longitude = Number(position.coords?.longitude);
         const accuracy = Number(position.coords?.accuracy);
@@ -986,10 +1040,12 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
             updateStatus(shell, 'Device GPS returned an invalid location. Waiting for a fresh reading.', true);
             return;
         }
-        if (Number.isFinite(accuracy) && accuracy > 250) {
-            updateStatus(shell, `GPS accuracy is low (${Math.round(accuracy)} m). Waiting for a clearer location fix.`, true);
+        if (!Number.isFinite(accuracy) || accuracy > 1500) {
+            updateStatus(shell, `Device location accuracy is too low (${Number.isFinite(accuracy) ? `±${Math.round(accuracy)} m` : 'unknown'}). Waiting for a clearer fix.`, true);
             return;
         }
+
+        void saveTransferLocation(position);
 
         const from = [longitude, latitude];
         if (!shell._likhaeUserMarker) {
@@ -1012,7 +1068,7 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
             map.fitBounds(bounds, { padding: 64, maxZoom: 13, duration: 350 });
         }
         const locationState = shell.querySelector('[data-map-location-state]');
-        if (locationState) locationState.textContent = 'LIVE DRIVER GPS';
+        if (locationState) locationState.textContent = accuracy > 250 ? `APPROX. LIVE GPS ±${Math.round(accuracy)} M` : 'LIVE DRIVER GPS';
         if (!destination) {
             updateNavigationPanel(shell, { rider, target, status: 'Destination hub map coordinates are missing.' });
             updateStatus(shell, 'Your live location is shown. The destination hub needs a saved map pin.', true);
@@ -1053,7 +1109,10 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
     };
 
     const stop = (message = 'Live GPS paused. The destination hub remains visible.') => {
+        trackingRequested = false;
         if (watchId !== undefined && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        retryTimer = undefined;
         watchId = undefined;
         setButton(false);
         const locationState = shell.querySelector('[data-map-location-state]');
@@ -1064,8 +1123,54 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
         }
     };
 
+    const startWatch = (highAccuracy) => {
+        if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
+        watchId = navigator.geolocation.watchPosition((position) => {
+            const accuracy = Number(position.coords?.accuracy);
+            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > 1500)) {
+                const message = `Approximate location received (${Number.isFinite(accuracy) ? `${Math.round(accuracy)} m` : 'unknown'} accuracy). Requesting precise live GPS…`;
+                updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
+                updateStatus(shell, message, true);
+                startWatch(true);
+                return;
+            }
+            updateFromPosition(position);
+        }, (error) => {
+            if (error.code !== 1 && !highAccuracy) {
+                const message = 'The first location request did not get a fix. Trying high-accuracy live GPS…';
+                updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
+                updateStatus(shell, message);
+                startWatch(true);
+                return;
+            }
+            const message = error.code === 1
+                ? 'Location permission is blocked. Allow location for this site in device/browser settings, then resume GPS.'
+                : error.code === 2
+                    ? 'Device location is temporarily unavailable. Check Location Services; live GPS will retry automatically.'
+                    : 'Device location timed out. Live GPS will retry automatically.';
+            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
+            updateStatus(shell, message, true);
+            if (error.code === 1) stop(null);
+            else {
+                if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
+                watchId = undefined;
+                if (trackingRequested) {
+                    if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+                    retryTimer = window.setTimeout(() => {
+                        retryTimer = undefined;
+                        startWatch(false);
+                    }, 10000);
+                }
+            }
+        }, {
+            enableHighAccuracy: highAccuracy,
+            maximumAge: highAccuracy ? 0 : 30000,
+            timeout: highAccuracy ? 25000 : 15000,
+        });
+    };
+
     const start = () => {
-        if (watchId !== undefined) return;
+        if (trackingRequested) return;
         if (!navigator.geolocation) {
             updateNavigationPanel(shell, { rider, target, status: 'This browser does not support live device GPS.' });
             updateStatus(shell, 'This browser does not support live device GPS.', true);
@@ -1075,20 +1180,14 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
             updateNavigationPanel(shell, { rider, target, status: 'Destination hub map coordinates are missing.' });
         }
         followDriver = true;
-        updateStatus(shell, 'Requesting device location permission for live inter-hub navigation.');
+        trackingRequested = true;
+        updateStatus(shell, 'Requesting live GPS. Chrome may use network location first, then precise device GPS.');
         setButton(true);
-        watchId = navigator.geolocation.watchPosition(updateFromPosition, (error) => {
-            const message = error.code === 1
-                ? 'Location access was denied. Enable browser location permission to show your live position.'
-                : 'Device location is temporarily unavailable. Waiting for another GPS reading.';
-            updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
-            updateStatus(shell, message, true);
-            if (error.code === 1) stop(null);
-        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+        startWatch(false);
     };
 
     map.on('dragstart', () => { followDriver = false; });
-    button?.addEventListener('click', () => watchId === undefined ? start() : stop());
+    button?.addEventListener('click', () => trackingRequested ? stop() : start());
     window.addEventListener('pagehide', () => stop(null), { once: true });
     start();
 }
@@ -1388,15 +1487,11 @@ function setRealtimeConnectionState(shell, state) {
 function syncPollingFallback(shell, map, maplibregl) {
     const connected = shell._likhaeRealtimeConnectionState === 'connected';
     const orderRoute = shell.dataset.mapOrderRoute === 'true';
-    if (connected && !orderRoute) {
-        if (shell._likhaeTrackingTimer) window.clearInterval(shell._likhaeTrackingTimer);
-        shell._likhaeTrackingTimer = null;
-        shell._likhaeTrackingTimerIntervalMs = null;
-        shell._likhaeTrackingTimerMode = null;
-        return;
-    }
-
-    const intervalMs = orderRoute ? ORDER_ROUTE_POLL_INTERVAL_MS : 5000;
+    // Keep a light server check even while Echo says "connected". Some device
+    // networks connect the WebSocket but fail private-channel authorization,
+    // and inter-hub transfers do not use RiderAssignment location events.
+    // Polling lets every authorized device pick up the latest saved device GPS.
+    const intervalMs = connected || orderRoute ? ORDER_ROUTE_POLL_INTERVAL_MS : 5000;
     const mode = connected ? 'connected' : 'fallback';
     if (shell._likhaeTrackingTimer
         && shell._likhaeTrackingTimerIntervalMs === intervalMs

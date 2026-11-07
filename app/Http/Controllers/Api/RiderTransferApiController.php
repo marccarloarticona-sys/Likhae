@@ -8,7 +8,9 @@ use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\TransferManifestService;
+use App\Services\Maps\TransferManifestLocationService;
 use App\Support\RiderVehicleType;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -134,6 +136,44 @@ class RiderTransferApiController extends Controller
         }
 
         return $this->workflowSuccess($result);
+    }
+
+    public function updateLocation(
+        Request $request,
+        int $manifest,
+        LogisticsSchemaReadiness $schema,
+        TransferManifestLocationService $locations,
+    ): JsonResponse {
+        $rider = $this->interLogisticsRider($request);
+        if (! $schema->transferReady()) {
+            return $this->schemaUnavailable();
+        }
+
+        $data = $request->validate([
+            'latitude' => ['required', 'numeric', 'between:-90,90'],
+            'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'accuracy' => ['required', 'numeric', 'min:0', 'max:1500'],
+            'recorded_at' => ['required', 'date'],
+        ]);
+
+        $profile = $locations->update(
+            $this->assignedManifest($rider, $manifest),
+            $request->user(),
+            (float) $data['latitude'],
+            (float) $data['longitude'],
+            (float) $data['accuracy'],
+            Carbon::parse($data['recorded_at']),
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'latitude' => (float) $profile->availability_latitude,
+                'longitude' => (float) $profile->availability_longitude,
+                'accuracy' => (float) $data['accuracy'],
+                'recorded_at' => $profile->availability_location_updated_at?->toIso8601String(),
+            ],
+        ]);
     }
 
     private function interLogisticsRider(Request $request): RiderProfile

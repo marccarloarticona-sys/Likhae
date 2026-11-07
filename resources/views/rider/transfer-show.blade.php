@@ -48,9 +48,9 @@
         <section class="rounded-xl border border-line bg-surface p-5">
             <h2 class="text-base font-semibold text-ink">Your location to destination route</h2>
             @if($manifest->status === 'RELEASED')
-                <p class="mt-1 text-sm text-muted">Allow device location access to see your exact current GPS position and the route to {{ $manifest->destinationLogisticsCenter?->business_name }} before starting the transfer.</p>
+                <p class="mt-1 text-sm text-muted">Allow device location access to see your current position and route to {{ $manifest->destinationLogisticsCenter?->business_name }} before starting the transfer.</p>
             @else
-                <p class="mt-1 text-sm text-muted">Your exact live GPS position is the route starting point. Keep this page open and allow device location access while traveling to {{ $manifest->destinationLogisticsCenter?->business_name }}.</p>
+                <p class="mt-1 text-sm text-muted">Your device location is the route starting point. Keep this page open and allow device location access while traveling to {{ $manifest->destinationLogisticsCenter?->business_name }}.</p>
             @endif
             <x-shared.mapbox
                 :markers="$mapMarkers"
@@ -60,6 +60,7 @@
                 :allow-user-location="false"
                 :rider-gps="true"
                 :live-device-gps="true"
+                :rider-location-endpoint="$locationUpdateEndpoint"
                 :live-tracking="$manifest->status === 'IN_TRANSIT'"
                 :navigation="true"
                 :order-route="false"
