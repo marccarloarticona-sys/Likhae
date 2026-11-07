@@ -21,12 +21,15 @@
 @endpush
 
 @section('content')
+    @php
+        $remoteCoverageEnabled = (bool) config('likhae.automatic_seller_pickup_matching', false);
+    @endphp
     <div class="delivery-areas-page mx-auto w-full max-w-[1500px] space-y-6">
         <header class="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-line bg-surface px-5 py-5 shadow-sm sm:px-7 sm:py-6">
             <div>
                 <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Rider management</p>
                 <h1 class="mt-2 text-2xl font-bold tracking-tight text-ink sm:text-3xl">Delivery Areas</h1>
-                <p class="mt-2 text-sm text-muted">Assign local riders to specific barangays within your center’s municipality.</p>
+                <p class="mt-2 text-sm text-muted">Assign local riders to a single barangay. {{ $remoteCoverageEnabled ? 'During automatic pickup matching, you can explicitly configure exact remote PSGC areas your center serves.' : 'Areas outside your center’s municipality require explicit administrator-approved coverage.' }}</p>
             </div>
             @if ($center->address)
                 <div class="rounded-xl border border-line bg-page px-4 py-3 text-xs text-muted">
@@ -48,7 +51,7 @@
                 @csrf
                 <div class="border-b border-line px-5 py-4 sm:px-6">
                     <h2 class="text-base font-bold text-ink">Add barangay coverage</h2>
-                    <p class="mt-1 text-xs leading-5 text-muted">Choose a barangay in your center’s municipality. Coverage is verified against official PSGC codes when saved.</p>
+                    <p class="mt-1 text-xs leading-5 text-muted">{{ $remoteCoverageEnabled ? 'Choose the exact barangay your center serves. Pickup matching will never use distance alone as authorization.' : 'Choose a barangay in your center’s municipality. Coverage is verified against official PSGC codes when saved.' }}</p>
                 </div>
                 <div class="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
                     <label class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink">Area name
@@ -60,9 +63,9 @@
                     <x-shared.philippine-address-fields
                         :address="$center->address"
                         :include-details="false"
-                        :allowed-province-code="$centerCanonicalMunicipality['province_code']"
-                        :allowed-municipality-code="$centerCanonicalMunicipality['municipality_code']"
-                        :region-code="$centerCanonicalMunicipality['region_code']"
+                        :allowed-province-code="$remoteCoverageEnabled ? null : $centerCanonicalMunicipality['province_code']"
+                        :allowed-municipality-code="$remoteCoverageEnabled ? null : $centerCanonicalMunicipality['municipality_code']"
+                        :region-code="$remoteCoverageEnabled ? null : $centerCanonicalMunicipality['region_code']"
                         field-class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
                         label-class="grid min-w-0 gap-1.5 text-xs font-semibold text-ink"
                         wrapper-class="delivery-area-address grid min-w-0 gap-4 sm:col-span-2 sm:grid-cols-2"

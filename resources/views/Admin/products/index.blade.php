@@ -123,6 +123,14 @@
                                             @endif
                                             @if($moderationAvailable && $product->latestModerationScan)
                                                 <span class="ad-product-flag">AI {{ str($product->latestModerationScan->overall_risk ?: $product->latestModerationScan->scan_status)->replace('_', ' ')->headline() }}</span>
+                                                @if(in_array($product->latestModerationScan->scan_status, ['SCAN_FAILED', 'AI_SCAN_DEFERRED'], true) && $product->latestModerationScan->failure_code)
+                                                    <small>{{ match ($product->latestModerationScan->failure_code) {
+                                                        'AI_PROVIDER_TIMEOUT' => 'Provider unavailable or timed out',
+                                                        'AI_QUOTA_LIMIT' => 'Provider quota limit',
+                                                        'AI_NOT_CONFIGURED' => 'Provider credentials missing',
+                                                        default => str($product->latestModerationScan->failure_code)->replace('AI_', '')->replace('_', ' ')->headline(),
+                                                    } }}</small>
+                                                @endif
                                                 @if($product->latestModerationScan->detected_categories)
                                                     <small>{{ collect($product->latestModerationScan->detected_categories)->map(fn ($category) => str($category)->replace('_', ' ')->headline()->toString())->take(2)->implode(', ') }}</small>
                                                 @endif
@@ -145,6 +153,9 @@
                                     <span class="ad-status is-{{ \Illuminate\Support\Str::slug($product->status) }}">
                                         {{ str($product->status)->replace('_', ' ')->headline() }}
                                     </span>
+                                    @if($product->status === 'ACTIVE' && ! $product->sellerProfile?->store_visibility)
+                                        <small>Store hidden from buyers</small>
+                                    @endif
                                 </td>
                                 <td>
                                     <a class="ad-btn ad-btn-secondary" href="{{ route('admin.products.show', array_merge(['product' => $product->id], $productListQuery)) }}">View</a>

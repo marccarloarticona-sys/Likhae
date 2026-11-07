@@ -1403,6 +1403,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const row = document.createElement('div');
             row.className = 'sl-variation-row';
             row.innerHTML = `<label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label><input name="variants[${index}][id]" type="hidden" value="${escapeHtml(previousValue('id'))}"><input name="variants[${index}][values]" value="${escapeHtml(values.join(', '))}" aria-label="Option values"><input name="variants[${index}][product_image_ref]" type="hidden" value="${escapeHtml(previousValue('product_image_ref'))}" data-variant-image-ref><button type="button" class="sl-variant-image-button" data-variant-image-trigger aria-label="Choose image for ${escapeHtml(values.join(' / '))}"><span class="sl-variant-image-thumb" data-variant-image-thumb></span><span data-variant-image-label>Choose image</span></button><input name="variants[${index}][sku]" value="${escapeHtml(previousValue('sku'))}" placeholder="Auto-generated SKU" aria-label="Variant SKU"><input name="variants[${index}][price]" type="number" min="0" step="0.01" value="${escapeHtml(previousValue('price'))}" placeholder="Price" aria-label="Variant price"><input name="variants[${index}][stock]" type="number" min="0" value="${escapeHtml(previousValue('stock'))}" placeholder="Stock" aria-label="Variant stock"><input name="variants[${index}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="${escapeHtml(previousValue('weight_kg'))}" placeholder="kg" aria-label="Weight per item in kilograms"><select name="variants[${index}][payment_method]" aria-label="Payment method"><option value="cod_online" ${previousValue('payment_method', 'cod_online') === 'cod_online' ? 'selected' : ''}>COD + Online</option><option value="cod" ${previousValue('payment_method') === 'cod' ? 'selected' : ''}>COD</option><option value="online" ${previousValue('payment_method') === 'online' ? 'selected' : ''}>Online</option></select><select name="variants[${index}][is_active]" aria-label="Availability"><option value="1" ${isActive === '1' ? 'selected' : ''}>Available</option><option value="0" ${isActive === '0' ? 'selected' : ''}>Unavailable</option></select><button type="button" class="sl-icon-btn" data-remove-variant>&times;</button>`;
+            if (productForm?.dataset.productDimensionsReady === 'true') {
+                const dimensions = document.createElement('div');
+                dimensions.className = 'sl-variant-dimensions';
+                dimensions.setAttribute('role', 'group');
+                dimensions.setAttribute('aria-label', 'Product dimensions in centimeters');
+                const baseDimension = (field) => select(`[name="${field}"]`, productForm)?.value || '';
+                [['length_cm', 'L', 'Length'], ['width_cm', 'W', 'Width'], ['height_cm', 'H', 'Height']].forEach(([field, placeholder, label]) => {
+                    const input = document.createElement('input');
+                    input.name = `variants[${index}][${field}]`;
+                    input.type = 'number';
+                    input.min = '0.01';
+                    input.max = '99999999.99';
+                    input.step = '0.01';
+                    input.value = previousValue(field, baseDimension(field));
+                    input.placeholder = placeholder;
+                    input.setAttribute('aria-label', `${label} in centimeters`);
+                    dimensions.appendChild(input);
+                });
+                rowField(row, 'weight_kg')?.after(dimensions);
+            }
             const generatedPriceField = select('[name$="[price]"]', row);
             if (generatedPriceField) generatedPriceField.dataset.savedPrice = String(savedVariantPrices[previousVariantId] ?? '');
             const previousPriceField = rowField(previousRow, 'price');
@@ -1605,6 +1625,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     select('[data-product-search]')?.addEventListener('input', filterProductRows);
     select('[data-product-status-filter]')?.addEventListener('change', filterProductRows);
+
+    document.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const openButton = target?.closest('[data-handover-dialog-open]');
+        if (openButton) {
+            const dialog = document.getElementById(openButton.dataset.handoverDialogOpen || '');
+            if (dialog && !dialog.open) {
+                if (typeof dialog.showModal === 'function') dialog.showModal();
+                else dialog.setAttribute('open', '');
+            }
+            return;
+        }
+
+        const closeButton = target?.closest('[data-handover-dialog-close]');
+        const dialog = closeButton?.closest('dialog');
+        if (dialog?.open) {
+            if (typeof dialog.close === 'function') dialog.close();
+            else dialog.removeAttribute('open');
+        }
+    });
+
+    selectAll('[data-handover-dialog]').forEach((dialog) => {
+        dialog.addEventListener('click', (event) => {
+            if (event.target === dialog && dialog.open && typeof dialog.close === 'function') dialog.close();
+        });
+    });
 
     const orderSearch = select('[data-order-search]');
     orderSearch?.addEventListener('input', () => {

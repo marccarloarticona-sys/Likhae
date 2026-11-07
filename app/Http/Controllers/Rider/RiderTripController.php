@@ -10,6 +10,7 @@ use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Support\LocalTripCapacityRules;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -91,12 +92,12 @@ class RiderTripController extends Controller
         return view('rider.trip-show', compact('rider', 'trip'));
     }
 
-    public function load(Request $request, int $trip): RedirectResponse
+    public function load(Request $request, int $trip): RedirectResponse|JsonResponse
     {
         return $this->run($request, $trip, fn (RiderLocalTrip $model) => $this->trips->loadTrip($request->user(), $model), 'Trip load verified.');
     }
 
-    public function accept(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse
+    public function accept(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse|JsonResponse
     {
         return $this->run($request, $trip, function (RiderLocalTrip $model) use ($request, $workflow): void {
             DB::transaction(function () use ($model, $request, $workflow): void {
@@ -127,7 +128,7 @@ class RiderTripController extends Controller
         }, 'All active parcels in this batch have been accepted.');
     }
 
-    public function reject(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse
+    public function reject(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse|JsonResponse
     {
         $data = $request->validate(['reason' => ['required', 'string', 'max:1000']]);
 
@@ -158,7 +159,7 @@ class RiderTripController extends Controller
         }, 'Delivery batch declined and returned to Logistics for reassignment.');
     }
 
-    public function start(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse
+    public function start(Request $request, int $trip, ShipmentWorkflowService $workflow): RedirectResponse|JsonResponse
     {
         return $this->run($request, $trip, function (RiderLocalTrip $model) use ($request, $workflow): void {
             DB::transaction(function () use ($model, $request, $workflow): void {
@@ -184,7 +185,7 @@ class RiderTripController extends Controller
         }, 'Trip started. All parcels are now out for delivery; open each parcel to record its delivery.');
     }
 
-    private function run(Request $request, int $id, callable $action, string $message): RedirectResponse
+    private function run(Request $request, int $id, callable $action, string $message): RedirectResponse|JsonResponse
     {
         abort_unless($this->schema->localTripsReady(), 503, 'Local trip schema is not installed.');
         $rider = $request->user()->riderProfile;
@@ -192,8 +193,13 @@ class RiderTripController extends Controller
         try {
             $action(RiderLocalTrip::query()->where('rider_profile_id', $rider->id)->findOrFail($id));
         } catch (RuntimeException $exception) {
-            return back()->withErrors(['trip' => $exception->getMessage()]);
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => $exception->getMessage()], 422)
+                : back()->withErrors(['trip' => $exception->getMessage()]);
         }
-        return back()->with('status', $message);
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message, 'trip_id' => $id])
+            : back()->with('status', $message);
     }
 }

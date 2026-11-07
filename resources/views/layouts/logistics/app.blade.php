@@ -1,7 +1,14 @@
+@php
+    $logisticsThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    if (! in_array($logisticsThemePreference, ['light', 'dark', 'system'], true)) {
+        $logisticsThemePreference = 'system';
+    }
+@endphp
 <!DOCTYPE html>
 <html
-    lang="en"
+    lang="{{ str_replace('_', '-', app()->getLocale()) }}"
     class="bg-[#f7f3ec]"
+    data-theme-preference="{{ $logisticsThemePreference }}"
 >
 
 <head>
@@ -38,24 +45,15 @@
     <script>
         (() => {
 
-            const savedTheme =
-                localStorage.getItem(
-                    'likhae-theme'
-                );
-
-            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-
-                document.documentElement
-                    .classList
-                    .add('dark');
-
-            } else {
-
-                document.documentElement
-                    .classList
-                    .remove('dark');
-
-            }
+            const theme = @json($logisticsThemePreference);
+            try {
+                if (theme === 'system') localStorage.removeItem('likhae-theme');
+                else localStorage.setItem('likhae-theme', theme);
+            } catch (_) {}
+            document.documentElement.classList.toggle(
+                'dark',
+                theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+            );
 
         })();
     </script>

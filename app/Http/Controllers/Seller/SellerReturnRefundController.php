@@ -47,10 +47,12 @@ class SellerReturnRefundController extends Controller
 
         $physicalReturnRequired = trim((string) $sellerRequest->request?->solution) === 'Return & Refund';
         $physicalReturnReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady()
-            && app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+            && app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady()
+            && Schema::hasColumn('seller_return_refund_requests', 'shipment_id')
+            && Schema::hasColumn('return_refund_request_items', 'shipment_id');
         $inspectionsByItem = collect();
         if ($physicalReturnRequired && $physicalReturnReady) {
-            $sellerRequest->load('buyerReturnWorkflow.shipment', 'buyerReturnWorkflow.logisticsCenter.address');
+            $sellerRequest->load('shipment.orderItem', 'buyerReturnWorkflow.shipment', 'buyerReturnWorkflow.logisticsCenter.address');
             $inspectionsByItem = ReturnInspection::query()
                 ->where('seller_return_refund_request_id', $sellerRequest->id)
                 ->latest('id')
@@ -58,6 +60,7 @@ class SellerReturnRefundController extends Controller
                 ->keyBy('return_refund_request_item_id');
         } else {
             $sellerRequest->setRelation('buyerReturnWorkflow', null);
+            $sellerRequest->setRelation('shipment', null);
         }
 
         $responseDeadline = $sellerRequest->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW

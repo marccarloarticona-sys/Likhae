@@ -8,6 +8,7 @@ use App\Models\Buyer\CartItem;
 use App\Models\Buyer\BuyerVoucherClaim;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
+use App\Models\Admin\PlatformSetting;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
@@ -83,7 +84,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->assertSee('E-Wallet')
             ->assertSee('Coming Soon')
             ->assertSee('0 / 200')
-            ->assertSee('Delivery fee: &#8369;50.00 per seller parcel', false)
+            ->assertSee('Estimated shipping is calculated per seller parcel')
             ->assertSee('one seller shipment')
             ->assertSee('100 points =')
             ->assertSee('Line total');
@@ -191,6 +192,82 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(50.00, $sellerBGroup['shipping_fee']);
         $this->assertEquals(100.00, $preview['shipping_total']);
         $this->assertSame('50.00', $sellerAGroup['shipping_rate_snapshot']['shipping_fee']);
+    }
+
+    public function test_shipping_quote_endpoint_recalculates_each_seller_parcel_for_a_changed_address(): void
+    {
+        $fixture = $this->checkoutFixture();
+        Address::query()->whereKey($fixture['sellerA']->business_address_id)->update(['region_name' => 'CALABARZON']);
+        Address::query()->whereKey($fixture['sellerB']->business_address_id)->update(['region_name' => 'Region I']);
+        $secondBuyerAddress = $fixture['address']->replicate();
+        $secondBuyerAddress->label = 'Work';
+        $secondBuyerAddress->region_code = '0300000000';
+        $secondBuyerAddress->region_name = 'Region III';
+        $secondBuyerAddress->is_default = false;
+        $secondBuyerAddress->save();
+        $session = ['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]];
+        $selectedItems = app(CartService::class)->selectedItems($fixture['buyer'], $session['checkout_cart_item_ids']);
+        $payload = [
+            'checkout_attempt_key' => (string) \Illuminate\Support\Str::uuid(),
+            'cart_quote_token' => app(CheckoutService::class)->checkoutCartToken($fixture['buyer'], $selectedItems),
+        ];
+
+        $ncrQuote = $this->actingAs($fixture['buyer'])
+            ->withSession($session)
+            ->postJson(route('buyer.checkout.shipping-quote'), $payload + ['address_id' => $fixture['address']->id])
+            ->assertOk()
+            ->assertJsonPath('groups.'.$fixture['sellerA']->id.'.shipping_fee', '55.00')
+            ->assertJsonPath('groups.'.$fixture['sellerB']->id.'.shipping_fee', '65.00')
+            ->assertJsonPath('shipping_total', '120.00')
+            ->json();
+
+        $centralLuzonQuote = $this->actingAs($fixture['buyer'])
+            ->withSession($session)
+            ->postJson(route('buyer.checkout.shipping-quote'), $payload + ['address_id' => $secondBuyerAddress->id])
+            ->assertOk()
+            ->assertJsonPath('groups.'.$fixture['sellerA']->id.'.shipping_fee', '60.00')
+            ->json();
+
+        $this->assertSame(64, strlen($ncrQuote['quote_token']));
+        $this->assertNotSame($ncrQuote['quote_token'], $centralLuzonQuote['quote_token']);
+
+        $fixture['itemA']->update(['quantity' => 2]);
+        $this->actingAs($fixture['buyer'])
+            ->withSession($session)
+            ->postJson(route('buyer.checkout.shipping-quote'), $payload + ['address_id' => $secondBuyerAddress->id])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('cart');
+    }
+
+    public function test_order_rejects_a_shipping_quote_if_regional_rates_change_before_submission(): void
+    {
+        $fixture = $this->checkoutFixture();
+        Address::query()->whereKey($fixture['sellerA']->business_address_id)->update(['region_name' => 'CALABARZON']);
+        $items = collect([$fixture['itemA']]);
+        $checkout = app(CheckoutService::class);
+        $preview = $checkout->preview($items, [], $fixture['buyer'], null, $fixture['address']);
+        $token = $checkout->shippingQuoteToken($fixture['buyer'], $fixture['address'], $items, $preview);
+        PlatformSetting::put('shipping_region_tiers', 'CALABARZON | National Capital Region | 4', 'string');
+
+        try {
+            $checkout->placeOrder(
+                $fixture['buyer'],
+                $fixture['address'],
+                [$fixture['itemA']->id],
+                'COD',
+                [],
+                null,
+                [],
+                [],
+                (string) \Illuminate\Support\Str::uuid(),
+                expectedShippingQuoteToken: $token,
+            );
+            $this->fail('Checkout must refresh after its regional shipping rate changes.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('shipping_quote', $exception->errors());
+        }
+
+        $this->assertDatabaseCount('orders', 0);
     }
 
     public function test_seller_platform_and_shipping_vouchers_stack_with_separate_order_accounting(): void
@@ -1654,6 +1731,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
     public function test_checkout_keeps_notes_per_seller_and_charges_the_most_specific_selected_care_rule(): void
     {
         $fixture = $this->checkoutFixture();
+        Address::query()->whereKey($fixture['sellerA']->business_address_id)->update(['region_name' => 'CALABARZON']);
         $categoryRule = $this->rule(['category_id' => $fixture['category']->id, 'percentage_rate' => 1]);
         $subcategoryRule = $this->rule(['subcategory_id' => $fixture['subcategory']->id, 'percentage_rate' => 2]);
         $productRule = $this->rule(['product_id' => $fixture['productA']->id, 'percentage_rate' => 3]);
@@ -1669,6 +1747,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]])
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000010',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id, $fixture['itemB']->id]),
                 'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1690,9 +1769,11 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertEquals(4.00, (float) $sellerOrderB->protection_total);
         $this->assertEquals(7.00, (float) $order->protection_total);
         $this->assertEquals(300.00, (float) $order->subtotal);
-        $this->assertEquals(100.00, (float) $order->shipping_total);
-        $this->assertEquals(407.00, (float) $order->grand_total);
-        $this->assertEquals(407.00, (float) $order->payments->first()->amount);
+        $this->assertEquals(105.00, (float) $order->shipping_total);
+        $this->assertEquals(412.00, (float) $order->grand_total);
+        $this->assertEquals(412.00, (float) $order->payments->first()->amount);
+        $this->assertSame('55.00', $sellerOrderA->shipping_rate_snapshot['shipping_fee']);
+        $this->assertSame('5.00', $sellerOrderA->shipping_rate_snapshot['regional_addon_fee']);
 
         $itemA = $sellerOrderA->items->first();
         $itemB = $sellerOrderB->items->first();
@@ -1721,6 +1802,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $session = ['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]];
         $payload = [
             'checkout_attempt_key' => '00000000-0000-4000-8000-000000000011',
+            'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id, $fixture['itemB']->id]),
             'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
             'address_id' => $fixture['address']->id,
             'payment_method' => 'COD',
@@ -1752,6 +1834,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id]])
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000021',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id]),
                 'cart_item_ids' => [$fixture['itemA']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1785,6 +1868,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession($session)
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000022',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id]),
                 'cart_item_ids' => [$fixture['itemA']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1813,6 +1897,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $fixture['itemA']->productVariant()->update(['price' => 125]);
         $payload = [
             'checkout_attempt_key' => $attemptKey,
+            'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id]),
             'cart_item_ids' => [$fixture['itemA']->id],
             'address_id' => $fixture['address']->id,
             'payment_method' => 'COD',
@@ -1845,6 +1930,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id]])
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000012',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], [$fixture['itemA']->id, $fixture['itemB']->id]),
                 'cart_item_ids' => [$fixture['itemA']->id, $fixture['itemB']->id],
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1887,17 +1973,23 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         ]);
         $itemIds = [$fixture['itemA']->id];
 
-        $this->actingAs($fixture['buyer'])
+        $this->assertTrue(app(CheckoutService::class)->automaticRoutingReady());
+        $checkoutPage = $this->actingAs($fixture['buyer'])
             ->withSession(['checkout_cart_item_ids' => $itemIds])
             ->get(route('buyer.checkout'))
             ->assertOk()
             ->assertSee('Delivery details may need confirmation after your order is placed.')
             ->assertSee('Place Order');
+        $checkoutDocument = new \DOMDocument;
+        @$checkoutDocument->loadHTML($checkoutPage->getContent());
+        $checkoutXpath = new \DOMXPath($checkoutDocument);
+        $this->assertSame(0, $checkoutXpath->query('//input[@name="logistics_center_id"]')->length);
 
         $this->actingAs($fixture['buyer'])
             ->withSession(['checkout_cart_item_ids' => $itemIds])
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000016',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], $itemIds),
                 'cart_item_ids' => $itemIds,
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1921,6 +2013,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $attemptKey = '00000000-0000-4000-8000-000000000013';
         $payload = [
             'checkout_attempt_key' => $attemptKey,
+            'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], $itemIds),
             'cart_item_ids' => $itemIds,
             'address_id' => $fixture['address']->id,
             'payment_method' => 'COD',
@@ -1947,7 +2040,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(route('buyer.orders.success', ['order' => $order->order_number]), $firstResponse->headers->get('Location'));
     }
 
-    public function test_one_seller_order_keeps_each_distinct_product_line_in_its_own_parcel_and_waybill(): void
+    public function test_one_seller_order_prints_one_waybill_listing_each_parcel_scan_code(): void
     {
         $fixture = $this->checkoutFixture();
         $fixture['itemA']->update(['quantity' => 2]);
@@ -1978,6 +2071,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->withSession(['checkout_cart_item_ids' => $itemIds])
             ->post(route('buyer.order.store'), [
                 'checkout_attempt_key' => '00000000-0000-4000-8000-000000000015',
+                'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], $itemIds),
                 'cart_item_ids' => $itemIds,
                 'address_id' => $fixture['address']->id,
                 'payment_method' => 'COD',
@@ -1994,6 +2088,13 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertCount(2, $shipments);
         $this->assertSame(2, $shipments->pluck('tracking_number')->unique()->count());
         $this->assertSame(2, $shipments->pluck('order_item_id')->unique()->count());
+        foreach ($shipments as $shipment) {
+            $shipment->update([
+                'parcel_length_cm' => '20.00',
+                'parcel_width_cm' => '15.00',
+                'parcel_height_cm' => '10.00',
+            ]);
+        }
 
         $workflow = app(ShipmentWorkflowService::class);
         $workflow->sellerTransition($sellerOrder, 'confirm', $fixture['sellerUserA']);
@@ -2005,6 +2106,15 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(2, $shipments->sum(fn ($shipment) => $shipment->fresh()->waybills()->count()));
         $this->assertDatabaseCount('order_items', 2);
         $this->assertDatabaseCount('shipments', 2);
+
+        $this->actingAs($fixture['sellerUserA'])
+            ->get(route('seller.orders.waybill', $sellerOrder))
+            ->assertOk()
+            ->assertSee('Seller Order Waybill')
+            ->assertSee('Product A')
+            ->assertSee('Second seller parcel product')
+            ->assertSee($shipments[0]->tracking_number)
+            ->assertSee($shipments[1]->tracking_number);
     }
 
     public function test_another_buyer_cannot_reuse_a_checkout_attempt_key(): void
@@ -2013,6 +2123,7 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $itemIds = [$fixture['itemA']->id, $fixture['itemB']->id];
         $payload = [
             'checkout_attempt_key' => '00000000-0000-4000-8000-000000000014',
+            'shipping_quote_token' => $this->shippingQuoteTokenFor($fixture['buyer'], $fixture['address'], $itemIds),
             'cart_item_ids' => $itemIds,
             'address_id' => $fixture['address']->id,
             'payment_method' => 'COD',
@@ -2266,6 +2377,16 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
             ->setAllocation($campaign, $allocation, 'Campaign checkout feature test allocation', $admin);
 
         return $campaign->refresh();
+    }
+
+    /** @param list<int> $itemIds */
+    private function shippingQuoteTokenFor(User $buyer, Address $address, array $itemIds): string
+    {
+        $items = app(CartService::class)->selectedItems($buyer, $itemIds);
+        $checkout = app(CheckoutService::class);
+        $preview = $checkout->preview($items, [], $buyer, null, $address);
+
+        return $checkout->shippingQuoteToken($buyer, $address, $items, $preview);
     }
 
     private function checkoutFixture(): array

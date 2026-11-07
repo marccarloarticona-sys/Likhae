@@ -1,7 +1,7 @@
 @extends('layouts.admin.app')
-@section('title','System Settings')
+@section('title', __('settings.title'))
 @section('active','system-settings')
-@section('subtitle','Manage platform status and settings.')
+@section('subtitle', __('settings.admin_system_subtitle'))
 @push('head')@vite(['resources/css/shared/workspace-settings.css', 'resources/css/admin/system-settings.css'])@endpush
 
 @php
@@ -176,6 +176,12 @@
             @if($productModerationHealth['enabled'] && ! $productModerationHealth['configured'])
                 <p class="ad-ops-ai-config-note">Scanning will start after provider credentials are configured.</p>
             @endif
+            @if($productModerationHealth['enabled'] && $productModerationHealth['configured'] && ! $productModerationHealth['primary_configured'] && $productModerationHealth['fallback_configured'])
+                <p class="ad-ops-ai-config-note">Primary provider credentials are missing. Every scan is using the backup provider until the primary is configured.</p>
+            @endif
+            @if($productModerationHealth['enabled'] && $productModerationHealth['queue_connection'] === 'sync')
+                <p class="ad-ops-ai-config-note">Scans run during the web request. Temporary provider failures cannot receive delayed queue retries until a persistent queue and worker are configured.</p>
+            @endif
             <dl>
                 <div><dt>Provider</dt><dd>{{ $productModerationHealth['provider'] }}</dd></div>
                 <div><dt>Primary model</dt><dd>{{ $productModerationHealth['primary_model'] }}</dd></div>
@@ -229,8 +235,8 @@
 
     </section>
 
-    <section id="system-settings-preferences" class="ad-card ad-ops-section ws-personal-preferences ad-ops-tab-panel" aria-label="Admin preferences">
-        <header class="ad-card-head ad-ops-section-head"><div><span>Personal workspace experience</span><h2>Admin Preferences</h2></div></header>
+    <section id="system-settings-preferences" class="ad-card ad-ops-section ws-personal-preferences ad-ops-tab-panel" aria-label="{{ __('settings.admin_preferences_title') }}">
+        <header class="ad-card-head ad-ops-section-head"><div><span>{{ __('settings.admin_preferences_eyebrow') }}</span><h2>{{ __('settings.admin_preferences_title') }}</h2></div></header>
         <x-shared.workspace.settings :config="$settingsConfig" :preferences="$preferences" :show-heading="false" />
     </section>
 </div>

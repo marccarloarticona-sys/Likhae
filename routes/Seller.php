@@ -44,6 +44,7 @@ Route::prefix('seller')
         Route::post('/settlements/{settlement}/report-payout-issue', [SellerFinanceController::class, 'reportPayoutIssue'])->middleware('throttle:5,1')->name('settlements.report-payout-issue');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'seller')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'seller')->name('settings.update');
+        Route::patch('/settings/theme', [WorkspaceSettingsController::class, 'updateThemePreference'])->defaults('workspace', 'seller')->name('settings.theme.update');
 
         Route::get('/products', [SellerProductController::class, 'index'])->name('products');
         Route::get('/products/inventory/preview', [SellerProductController::class, 'inventoryPreview'])->name('products.inventory.preview');
@@ -89,7 +90,8 @@ Route::prefix('seller')
         Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');
         Route::get('/orders/refunds/evidence/{evidence}', [SellerReturnRefundController::class, 'evidence'])->name('orders.refunds.evidence');
         Route::patch('/orders/{sellerOrder}/status', [SellerOrderController::class, 'transition'])->name('orders.status');
-        Route::patch('/orders/{sellerOrder}/items/{orderItem}/measurements', [SellerOrderController::class, 'recordParcelMeasurements'])->name('orders.parcels.measurements');
+        Route::post('/orders/{sellerOrder}/items/{orderItem}/split', [SellerOrderController::class, 'splitParcels'])->name('orders.parcels.split');
+        Route::post('/orders/{sellerOrder}/parcels/{shipment}/dimensions', [SellerOrderController::class, 'saveParcelDimensions'])->name('orders.parcels.dimensions');
         Route::post('/orders/{sellerOrder}/parcels', [SellerOrderController::class, 'ensureParcels'])->name('orders.parcels.ensure');
         Route::get('/orders/{sellerOrder}/waybill', [SellerOperationsController::class, 'waybill'])->name('orders.waybill');
         Route::get('/orders/{sellerOrder}/items/{orderItem}/waybill', [SellerOperationsController::class, 'waybillItem'])->name('orders.waybill.item');

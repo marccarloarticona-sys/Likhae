@@ -45,11 +45,44 @@ final class FinalMileDispatchService
                 throw new RuntimeException('Only the active destination logistics center can dispatch this parcel.');
             }
 
-            $shipment = Shipment::query()->whereKey($shipment->id)->with('serviceArea')->lockForUpdate()->firstOrFail();
+            $shipment = Shipment::query()->whereKey($shipment->id)
+                ->with(['serviceArea', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address'])
+                ->lockForUpdate()
+                ->firstOrFail();
             $validDispatchStatus = $shipment->current_status === 'SORTED'
                 || ($allowUnavailableDeliveryTakeover && $shipment->current_status === 'ASSIGNED_TO_RIDER');
             if ((int) $shipment->logistics_center_id !== (int) $center->id || ! $validDispatchStatus) {
                 throw new RuntimeException('The parcel must be sorted into this center and in its custody before final-mile dispatch.');
+            }
+            if (filled($shipment->smart_coverage_route_id)) {
+                if (! $shipment->smart_coverage_service_date) {
+                    throw new RuntimeException('This fallback parcel has no reserved service date. Dispatch is paused for authorized routing review.');
+                }
+                $seller = $shipment->sellerOrder?->sellerProfile;
+                $buyerAddress = $shipment->sellerOrder?->order?->address;
+                if (! $seller || ! $buyerAddress
+                    || trim((string) $buyerAddress->province_code) !== trim((string) $shipment->destination_province_code)
+                    || trim((string) $buyerAddress->municipality_code) !== trim((string) $shipment->destination_municipality_code)
+                    || trim((string) $buyerAddress->barangay_code) !== trim((string) $shipment->destination_barangay_code)) {
+                    throw new RuntimeException('The saved buyer address differs from this parcel’s approved coverage snapshot. Dispatch is paused for authorized routing review.');
+                }
+                try {
+                    $storedRoute = app(PsgcLogisticsRoutingService::class)->revalidateStoredFallback(
+                        $seller,
+                        $buyerAddress,
+                        (int) $shipment->smart_coverage_route_id,
+                        lock: true,
+                        serviceDate: $shipment->smart_coverage_service_date?->toDateString(),
+                    );
+                } catch (\Illuminate\Validation\ValidationException) {
+                    throw new RuntimeException('The approved fallback route is no longer eligible. Dispatch is paused for authorized routing review.');
+                }
+                if ((int) $storedRoute['destination']->id !== (int) $center->id
+                    || (int) $storedRoute['destination_area']->service_area_id !== (int) $shipment->service_area_id
+                    || (int) $storedRoute['origin']->id !== (int) $shipment->origin_logistics_center_id
+                    || (int) $storedRoute['destination']->id !== (int) $shipment->destination_logistics_center_id) {
+                    throw new RuntimeException('The selected center no longer matches this parcel’s approved fallback route. Dispatch is paused for authorized routing review.');
+                }
             }
 
             $rider = RiderProfile::query()

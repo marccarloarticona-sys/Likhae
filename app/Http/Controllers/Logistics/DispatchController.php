@@ -24,6 +24,7 @@ use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\SellerPickupAutoDispatchService;
+use App\Services\Fulfillment\SellerPickupMatchingService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
@@ -83,12 +84,15 @@ class DispatchController extends Controller
         LogisticsSchemaReadiness $schema,
         RiderAssignmentOfferExpiryService $offers,
         SellerPickupAutoDispatchService $autoDispatch,
+        SellerPickupMatchingService $automaticMatching,
     ): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
+        $automaticMatching->pausePendingWhenDisabled();
         $offers->expireDuePickupOffers(logisticsCenterId: (int) $center->id);
         $autoDispatch->retryForCenter($request->user(), $center);
+        $automaticMatching->expireDueOffers((int) $center->id);
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -168,10 +172,22 @@ class DispatchController extends Controller
             ->filter(fn (array $group): bool => $group['seller'] !== null)
             ->values();
 
+        $sellerPickupRelations = [
+            'sellerProfile.user',
+            'pickupAddress',
+            'riderLocalTrip.rider.user',
+            'memberships.sellerOrder',
+            'memberships.shipment.serviceArea',
+            'memberships.shipment.orderItem',
+            'memberships.shipment.waybills',
+        ];
+        if ($schema->sellerPickupCenterSelectionReady()) {
+            $sellerPickupRelations[] = 'preferredLogisticsCenter';
+        }
         $sellerPickupRequests = $schema->sellerPickupRequestsReady()
             ? SellerPickupRequest::query()
                 ->whereHas('memberships.shipment')
-                ->where(function ($query) use ($center): void {
+                ->where(function ($query) use ($center, $schema): void {
                     $query->whereHas('riderLocalTrip', fn ($trip) => $trip->where('logistics_center_id', $center->id))
                         ->orWhere(function ($unassigned) use ($center): void {
                             $unassigned->whereNull('rider_local_trip_id')
@@ -179,23 +195,77 @@ class DispatchController extends Controller
                                     $shipment->where('logistics_center_id', $center->id)
                                         ->orWhereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id));
                                 });
+                        })
+                        ->orWhere(function ($requested) use ($center, $schema): void {
+                            if (! $schema->sellerPickupCenterSelectionReady()) {
+                                $requested->whereRaw('1 = 0');
+
+                                return;
+                            }
+
+                            $requested->whereNull('rider_local_trip_id')
+                                ->where('status', 'REQUESTED')
+                                ->where('preferred_logistics_center_id', $center->id);
+                        })
+                        ->orWhere(function ($automatic) use ($center, $schema): void {
+                            if (! $schema->sellerPickupCenterOffersReady()) {
+                                $automatic->whereRaw('1 = 0');
+
+                                return;
+                            }
+                            $automatic->whereIn('status', ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'])
+                                ->where(function ($visibility) use ($center, $schema): void {
+                                    $visibility->whereHas('centerOffers', fn ($offer) => $offer
+                                        ->where('logistics_center_id', $center->id)
+                                        ->where('status', 'OFFERED')
+                                        ->where('expires_at', '>', now()))
+                                        ->orWhere(function ($pending) use ($center, $schema): void {
+                                            $pending->whereIn('status', ['MATCHING', 'PENDING'])
+                                                ->whereHas('pickupAddress', function ($address) use ($center): void {
+                                                    $address->whereExists(function ($authorized) use ($center): void {
+                                                        $authorized->selectRaw('1')
+                                                            ->from('service_area_locations')
+                                                            ->join('service_areas', 'service_areas.id', '=', 'service_area_locations.service_area_id')
+                                                            ->whereColumn('service_area_locations.province_code', 'addresses.province_code')
+                                                            ->whereColumn('service_area_locations.municipality_code', 'addresses.municipality_code')
+                                                            ->whereColumn('service_area_locations.barangay_code', 'addresses.barangay_code')
+                                                            ->where('service_areas.logistics_center_id', $center->id)
+                                                            ->where('service_areas.is_active', true);
+                                                    });
+                                                });
+                                        });
+                                });
                         });
                 })
-                ->with([
-                    'sellerProfile.user',
-                    'pickupAddress',
-                    'riderLocalTrip.rider.user',
-                    'memberships.sellerOrder',
-                    'memberships.shipment.serviceArea',
-                    'memberships.shipment.orderItem',
-                    'memberships.shipment.waybills',
-                ])
+                ->with($sellerPickupRelations)
                 ->latest('id')
                 ->limit(100)
                 ->get()
             : collect();
-        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders): void {
+        if ($sellerPickupRequests->isNotEmpty()) {
+            $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
+            $sellerPickupRequests = $sellerPickupRequests
+                ->reject(function (SellerPickupRequest $pickupRequest) use ($center, $areaEligibility): bool {
+                    if (! in_array($pickupRequest->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
+                        return false;
+                    }
+
+                    return ! $pickupRequest->pickupAddress
+                        || ! $areaEligibility->centerAuthorizesAddress($center, $pickupRequest->pickupAddress);
+                })
+                ->values();
+        }
+        if ($schema->sellerPickupRequestsReady() && $schema->sellerPickupCenterOffersReady()) {
+            $sellerPickupRequests->load('centerOffers.logisticsCenter');
+        }
+        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema): void {
             $shipments = $pickupRequest->memberships->map(fn ($membership) => $membership->shipment)->filter();
+            $currentOffer = $schema->sellerPickupCenterOffersReady()
+                ? $pickupRequest->centerOffers->first(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && $offer->status === 'OFFERED'
+                    && $offer->expires_at?->isFuture())
+                : null;
+            $pickupRequest->setAttribute('current_center_offer', $currentOffer);
             $count = $shipments->count();
             $address = $pickupRequest->pickupAddress;
             $eligibleRiders = $count > 0 && $address && is_numeric($address->latitude) && is_numeric($address->longitude)
@@ -257,6 +327,7 @@ class DispatchController extends Controller
             'activePickupBatches' => $activePickupBatches,
             'riders' => $riders,
             'pickupSchemaReady' => $schema->sellerPickupBatchesReady(),
+            'automaticPickupMatchingReady' => $schema->automaticSellerPickupMatchingReady(),
         ]);
     }
 
@@ -967,7 +1038,54 @@ class DispatchController extends Controller
             return back()->withErrors(['pickup_request' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' rejected. Parcel history was retained.');
+        $pickupRequest->refresh();
+
+        return back()->with('status', $pickupRequest->status === 'RETURNED_TO_SELLER'
+            ? 'Seller pickup request #'.$pickupRequest->id.' declined. The parcels were returned to the Seller for another center choice.'
+            : 'Seller pickup request #'.$pickupRequest->id.' rejected. Parcel history was retained.');
+    }
+
+    public function acceptSellerPickupCenterOffer(
+        Request $request,
+        SellerPickupRequest $pickupRequest,
+        int $offer,
+        SellerPickupMatchingService $matching,
+        SellerPickupAutoDispatchService $autoDispatch,
+    ): RedirectResponse {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+
+        try {
+            $accepted = $matching->accept($request->user(), $center, (int) $pickupRequest->id, $offer, $autoDispatch);
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['pickup_request' => $exception->getMessage()]);
+        }
+
+        $pickupRequest->refresh();
+
+        return back()->with('status', $accepted
+            ? 'Seller pickup request #'.$pickupRequest->id.' accepted, routed, and assigned to the nearest eligible local Rider at the Seller-selected center.'
+            : ($pickupRequest->status === 'RETURNED_TO_SELLER'
+                ? 'This offer expired. The pickup request has been returned to the Seller for another Logistics center choice.'
+                : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.'));
+    }
+
+    public function declineSellerPickupCenterOffer(
+        Request $request,
+        SellerPickupRequest $pickupRequest,
+        int $offer,
+        SellerPickupMatchingService $matching,
+    ): RedirectResponse {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+
+        try {
+            $matching->decline($request->user(), $center, (int) $pickupRequest->id, $offer);
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['pickup_request' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Offer declined. The pickup request has been returned to the Seller for another Logistics center choice.');
     }
 
     public function autoAssignPickup(Request $request, Shipment $shipment, SellerPickupAutoDispatchService $autoDispatch): RedirectResponse

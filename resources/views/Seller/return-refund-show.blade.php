@@ -30,6 +30,9 @@
 @if($isPhysicalReturn)
     <section class="sl-card my-5">
         <h2 class="font-bold">Buyer return to Seller</h2>
+        @if($sellerRequest->shipment)
+            <p class="mt-2 text-sm text-stone-700">Outbound parcel <strong>{{ $sellerRequest->shipment->tracking_number }}</strong> · Returned quantity {{ $sellerRequest->items->sum('quantity') }}</p>
+        @endif
         @if(!$physicalReturnReady)
             <p class="mt-2 text-sm text-amber-800">The return waybill and Logistics route are waiting for the additive route migration.</p>
         @elseif($buyerReturnWorkflow)

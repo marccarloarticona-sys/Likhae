@@ -95,7 +95,7 @@ class ReturnTransportLossService
         }
 
         if ($item) {
-            $checkoutFeeCents = OrderItemParcelAmount::forItem($sellerOrder, $item)['shipping_fee_cents'];
+            $checkoutFeeCents = OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['shipping_fee_cents'];
         } elseif ($sellerOrder->shipments->count() === 1) {
             $checkoutFeeCents = FinancialRules::cents($sellerOrder->shipping_fee ?? 0);
         } else {

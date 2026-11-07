@@ -507,14 +507,14 @@
     class="lk-sidebar"
     id="buyer-sidebar"
     data-lk-sidebar
-    aria-label="Buyer navigation"
+    aria-label="{{ __('navigation.items.buyer_navigation') }}"
 >
     <div class="lk-sidebar-head">
         <button
             type="button"
             class="lk-side-toggle"
             data-lk-sidebar-toggle
-            aria-label="Collapse sidebar"
+            aria-label="{{ __('navigation.items.collapse_sidebar') }}"
             aria-expanded="true"
         >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -525,7 +525,7 @@
         <a
             href="{{ route('buyer.home') }}"
             class="lk-brand"
-            aria-label="LIKHAE Buyer Home"
+            aria-label="{{ __('navigation.items.buyer_home') }}"
         >
             <x-shared.likhae-logo
                 context="Buyer Center"
@@ -539,7 +539,7 @@
         {{-- Navigation --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Navigation
+                {{ __('navigation.sections.navigation') }}
             </span>
 
             <a
@@ -554,7 +554,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Home
+                    {{ __('navigation.items.home') }}
                 </span>
             </a>
         </div>
@@ -562,7 +562,7 @@
         {{-- Marketplace --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Marketplace
+                {{ __('navigation.sections.marketplace') }}
             </span>
 
             <a
@@ -577,7 +577,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Categories
+                    {{ __('navigation.items.categories') }}
                 </span>
             </a>
 
@@ -593,7 +593,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Cart
+                    {{ __('navigation.items.cart') }}
                 </span>
 
                 @if($cartCount > 0)
@@ -607,7 +607,7 @@
         {{-- Orders --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Orders
+                {{ __('navigation.sections.orders') }}
             </span>
 
             <a
@@ -622,7 +622,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Orders
+                    {{ __('navigation.items.orders') }}
                 </span>
                 @if($orderCount > 0)
                     <span class="lk-nav-count">{{ $orderCount > 99 ? '99+' : $orderCount }}</span>
@@ -633,7 +633,7 @@
         {{-- Communication --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Communication
+                {{ __('navigation.sections.communication') }}
             </span>
 
             <a
@@ -648,7 +648,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Messages
+                    {{ __('navigation.items.messages') }}
                 </span>
 
                 @if($messageCount > 0)
@@ -668,7 +668,7 @@
                         {!! $icons['notifications'] !!}
                     </svg>
                 </span>
-                <span class="lk-nav-text">Notifications</span>
+                <span class="lk-nav-text">{{ __('navigation.items.notifications') }}</span>
                 @if($notificationCount > 0)
                     <span class="lk-nav-count">{{ $notificationCount > 99 ? '99+' : $notificationCount }}</span>
                 @endif
@@ -678,7 +678,7 @@
         {{-- Account --}}
         <div class="lk-nav-section">
             <span class="lk-nav-section-title">
-                Account
+                {{ __('navigation.sections.account') }}
             </span>
 
             <a
@@ -693,7 +693,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Rewards
+                    {{ __('navigation.items.rewards') }}
                 </span>
             </a>
             <a
@@ -707,7 +707,7 @@
                     </svg>
                 </span>
                 <span class="lk-nav-text">
-                    My Account
+                    {{ __('navigation.items.my_account') }}
                 </span>
             </a>
 
@@ -722,7 +722,7 @@
                     </svg>
                 </span>
                 <span class="lk-nav-text">
-                    System Settings
+                    {{ __('navigation.items.system_settings') }}
                 </span>
             </a>
         </div>
@@ -735,7 +735,7 @@
             id="themeToggle"
             type="button"
             class="lk-nav-link"
-            data-title="Appearance"
+            data-title="{{ __('navigation.items.appearance') }}"
         >
             <span class="lk-theme-left">
                 <span class="lk-nav-icon">
@@ -745,13 +745,13 @@
                 </span>
 
                 <span class="lk-theme-copy">
-                    <strong>Appearance</strong>
-                    <span>Light / Dark Mode</span>
+                    <strong>{{ __('navigation.items.appearance') }}</strong>
+                    <span>{{ __('navigation.items.light_dark_mode') }}</span>
                 </span>
             </span>
 
-            <span id="themeToggleBadge">
-                OFF
+            <span id="themeToggleBadge" data-label-on="{{ __('common.labels.on') }}" data-label-off="{{ __('common.labels.off') }}">
+                {{ __('common.labels.off') }}
             </span>
         </button>
 
@@ -759,16 +759,16 @@
             <form
                 method="POST"
             action="{{ route('logout') }}"
-            data-confirm-title="Log out?"
-            data-confirm-message="You will be signed out of your LIKHAE account."
-            data-confirm-label="Log out"
+            data-confirm-title="{{ __('common.confirmation.logout_title') }}"
+            data-confirm-message="{{ __('common.confirmation.logout_message') }}"
+            data-confirm-label="{{ __('common.confirmation.logout_label') }}"
             >
                 @csrf
 
                 <button
                     type="submit"
                     class="lk-nav-link lk-logout"
-                    data-title="Logout"
+                    data-title="{{ __('navigation.items.logout') }}"
                 >
                     <span class="lk-nav-icon">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -777,7 +777,7 @@
                     </span>
 
                     <span class="lk-nav-text">
-                        Logout
+                        {{ __('navigation.items.logout') }}
                     </span>
                 </button>
             </form>
@@ -785,7 +785,7 @@
             <a
                 href="{{ Route::has('login') ? route('login') : url('/login') }}"
                 class="lk-nav-link lk-logout"
-                data-title="Logout"
+                data-title="{{ __('navigation.items.logout') }}"
             >
                 <span class="lk-nav-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -794,7 +794,7 @@
                 </span>
 
                 <span class="lk-nav-text">
-                    Logout
+                    {{ __('navigation.items.logout') }}
                 </span>
             </a>
         @endif

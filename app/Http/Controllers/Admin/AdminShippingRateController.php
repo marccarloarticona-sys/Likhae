@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin\PlatformSetting;
 use App\Models\Finance\ShippingRateChangeRequest;
 use App\Models\User;
-use App\Services\Finance\RegionShippingRateService;
 use App\Services\Finance\ShippingRateGovernanceService;
 use App\Services\Finance\ShippingRatePolicyService;
 use App\Support\FinancialRules;
@@ -28,7 +27,7 @@ class AdminShippingRateController extends Controller
             $status = 'PENDING';
         }
         $tab = (string) $request->query('tab', 'requests');
-        if (! in_array($tab, ['requests', 'transfer-commission', 'regional-tiers'], true)) {
+        if ($tab !== 'requests') {
             $tab = 'requests';
         }
         $requests = $ready && $tab === 'requests'
@@ -48,12 +47,6 @@ class AdminShippingRateController extends Controller
             'status' => $status,
             'currentVersion' => $ready ? $rates->currentVersion() : null,
             'tab' => $tab,
-            'shippingSettings' => [
-                'transfer_commission_type' => PlatformSetting::valueOf('transfer_commission_type', 'PERCENT'),
-                'transfer_commission_value' => PlatformSetting::valueOf('transfer_commission_value', 0),
-                'additional_region_tier_fee' => PlatformSetting::valueOf('additional_region_tier_fee', RegionShippingRateService::DEFAULT_ADDITIONAL_TIER_FEE),
-                'shipping_region_tiers' => PlatformSetting::valueOf('shipping_region_tiers', ''),
-            ],
         ]);
     }
 
@@ -75,21 +68,6 @@ class AdminShippingRateController extends Controller
 
         return redirect()->route('admin.shipping-rate-requests', ['tab' => 'transfer-commission'])
             ->with('status', 'Transfer commission settings updated.');
-    }
-
-    public function updateRegionalShippingTiers(Request $request, RegionShippingRateService $regionShipping): RedirectResponse
-    {
-        $data = $request->validate([
-            'additional_region_tier_fee' => ['required', 'decimal:0,2', 'min:0', 'max:1000000'],
-            'shipping_region_tiers' => ['nullable', 'string', 'max:10000'],
-        ]);
-
-        $normalizedRegionTiers = $regionShipping->normalizeTierMap((string) ($data['shipping_region_tiers'] ?? ''));
-        PlatformSetting::put('additional_region_tier_fee', $data['additional_region_tier_fee'], 'decimal', $request->user()->id);
-        PlatformSetting::put('shipping_region_tiers', $normalizedRegionTiers, 'string', $request->user()->id);
-
-        return redirect()->route('admin.shipping-rate-requests', ['tab' => 'regional-tiers'])
-            ->with('status', 'Regional shipping tier settings updated.');
     }
 
     public function show(Request $request, ShippingRateChangeRequest $shippingRateRequest, ShippingRatePolicyService $rates): View

@@ -7,6 +7,7 @@ use App\Http\Middleware\TrackAdminManagedUserSessions;
 use App\Http\Middleware\EnsureRiderOperationalType;
 use App\Http\Middleware\RequireMandatoryPolicyAcceptance;
 use App\Http\Middleware\AttachSystemLogRequestContext;
+use App\Http\Middleware\SetUserLocale;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -28,7 +29,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(at: '*');
         $middleware->web(
             prepend: [AttachSystemLogRequestContext::class],
-            append: [EnsureActiveAccount::class, TrackAdminManagedUserSessions::class, PreventPrivatePageCache::class, RequireMandatoryPolicyAcceptance::class],
+            append: [EnsureActiveAccount::class, TrackAdminManagedUserSessions::class, PreventPrivatePageCache::class, SetUserLocale::class, RequireMandatoryPolicyAcceptance::class],
         );
         $middleware->api(prepend: [AttachSystemLogRequestContext::class]);
         $middleware->redirectGuestsTo(fn (Request $request) => route(

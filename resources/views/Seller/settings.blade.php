@@ -1,6 +1,6 @@
 @extends('layouts.seller.app')
-@section('title','System Settings')
+@section('title', __('settings.title'))
 @section('active','settings')
-@section('subtitle','Personalize Seller Center alerts and workspace behavior.')
+@section('subtitle', __('settings.descriptions.seller'))
 @push('head')@vite('resources/css/shared/workspace-settings.css')@endpush
 @section('content')<x-shared.workspace.settings :config="$settingsConfig" :preferences="$preferences" />@endsection

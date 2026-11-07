@@ -7,6 +7,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Seller\SellerOrder;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Schema;
 
 class BuyerOrderTabService
 {
@@ -263,7 +264,7 @@ class BuyerOrderTabService
                         });
                     }
                     if ($returnRefundReady) {
-                        $shipment->whereDoesntHave('orderItem.returnRefundRequestItems');
+                        $this->withoutItemReturn($shipment);
                     }
                 })->orWhereHas('sellerOrders', fn (Builder $sellerOrder): Builder => $sellerOrder
                     ->whereIn('status', self::SHIPPED_SELLER_STATES)
@@ -283,7 +284,7 @@ class BuyerOrderTabService
             $query->whereHas('sellerOrders.shipments', function (Builder $shipment) use ($returnRefundReady): void {
                 $shipment->where('current_status', 'COMPLETED');
                 if ($returnRefundReady) {
-                    $shipment->whereDoesntHave('orderItem.returnRefundRequestItems');
+                    $this->withoutItemReturn($shipment);
                 }
             })->orWhere(function (Builder $query) use ($returnRefundReady): void {
                 $query->where('status', 'COMPLETED')->whereDoesntHave('sellerOrders.shipments');
@@ -348,16 +349,33 @@ class BuyerOrderTabService
             return false;
         }
 
-        $itemIds = $order->returnRefundRequests->flatMap(function ($request): array {
+        $items = $order->returnRefundRequests->flatMap(function ($request) {
             $requestItems = $request->relationLoaded('items') ? $request->items : collect();
             $sellerRequestItems = $request->relationLoaded('sellerRequests')
                 ? $request->sellerRequests->flatMap(fn ($sellerRequest) => $sellerRequest->items)
                 : collect();
 
-            return $requestItems->pluck('order_item_id')->merge($sellerRequestItems->pluck('order_item_id'))->filter()->map(fn ($id): int => (int) $id)->all();
-        })->unique()->values();
+            return $requestItems->merge($sellerRequestItems);
+        });
 
-        return $itemIds->isEmpty() || $itemIds->contains((int) $shipment->order_item_id);
+        return $items->contains(fn ($item): bool => (
+            (int) $item->order_item_id === (int) $shipment->order_item_id
+            || ($shipment->order_item_id === null && (int) ($item->shipment_id ?? 0) === (int) $shipment->id)
+        )
+            && (! Schema::hasColumn('return_refund_request_items', 'shipment_id')
+                || $item->shipment_id === null
+                || (int) $item->shipment_id === (int) $shipment->id));
+    }
+
+    private function withoutItemReturn(Builder $shipment): Builder
+    {
+        if (! Schema::hasColumn('return_refund_request_items', 'shipment_id')) {
+            return $shipment->whereDoesntHave('orderItem.returnRefundRequestItems');
+        }
+
+        return $shipment
+            ->whereDoesntHave('returnRefundRequestItems')
+            ->whereDoesntHave('orderItem.returnRefundRequestItems', fn (Builder $items): Builder => $items->whereNull('shipment_id'));
     }
 
     private function shipmentHasSellerReturnWorkflow(Shipment $shipment): bool

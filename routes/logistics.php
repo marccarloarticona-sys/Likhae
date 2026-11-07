@@ -69,8 +69,11 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/dashboard', [LogisticsPortalController::class, 'dashboard'])->name('dashboard');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'logistics')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'logistics')->name('settings.update');
+        Route::patch('/settings/theme', [WorkspaceSettingsController::class, 'updateThemePreference'])->defaults('workspace', 'logistics')->name('settings.theme.update');
         Route::post('/policies/rider', [RiderPolicyController::class, 'store'])->name('policies.rider.store');
         Route::get('/shipping-rate', [LogisticsShippingRateController::class, 'index'])->name('shipping-rate');
+        Route::post('/shipping-rate/regional-tiers', [LogisticsShippingRateController::class, 'updateRegionalShippingTiers'])
+            ->name('shipping-rate.regional-tiers.update');
         Route::post('/shipping-rate-requests', [LogisticsShippingRateController::class, 'store'])->name('shipping-rate-requests.store');
         Route::post('/shipping-rate-requests/{shippingRateRequest}/cancel', [LogisticsShippingRateController::class, 'cancel'])
             ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.cancel');
@@ -99,6 +102,10 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
             ->whereNumber('pickupRequest')->name('pickups.requests.assign');
         Route::post('/pickups/requests/{pickupRequest}/reject', [DispatchController::class, 'rejectSellerPickupRequest'])
             ->whereNumber('pickupRequest')->name('pickups.requests.reject');
+        Route::post('/pickups/requests/{pickupRequest}/offers/{offer}/accept', [DispatchController::class, 'acceptSellerPickupCenterOffer'])
+            ->whereNumber('pickupRequest')->whereNumber('offer')->name('pickups.requests.offers.accept');
+        Route::post('/pickups/requests/{pickupRequest}/offers/{offer}/decline', [DispatchController::class, 'declineSellerPickupCenterOffer'])
+            ->whereNumber('pickupRequest')->whereNumber('offer')->name('pickups.requests.offers.decline');
         Route::post('/pickups/assignments', [DispatchController::class, 'assignPickupBatch'])->name('pickups.assignments.store');
         Route::patch('/pickups/batches/{trip}/reassign', [DispatchController::class, 'reassignPickupBatch'])->name('pickups.batches.reassign');
         Route::post('/pickups/{pickupRequest}/approve', [DispatchController::class, 'approvePickup'])->name('pickups.approve');
@@ -170,6 +177,7 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::post('/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])->whereNumber('conversation')->middleware('throttle:60,1')->name('messages.smart-help.feedback');
         Route::post('/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])->whereNumber('conversation')->middleware('throttle:20,1')->name('messages.smart-help.handoff');
         Route::get('/reports', [LogisticsPortalController::class, 'reports'])->name('reports');
+        Route::get('/reports/shipments.csv', [LogisticsPortalController::class, 'exportShipmentsCsv'])->name('reports.shipments.csv');
         Route::get('/reports/transactions.csv', [LogisticsPortalController::class, 'exportFinancialTransactionsCsv'])->name('reports.transactions.csv');
         Route::get('/reports/transactions.pdf', [LogisticsPortalController::class, 'exportFinancialTransactionsPdf'])->name('reports.transactions.pdf');
         Route::get('/remittances', [LogisticsRemittanceController::class, 'index'])->name('remittances');

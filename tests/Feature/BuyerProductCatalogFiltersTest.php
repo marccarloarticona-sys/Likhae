@@ -246,6 +246,7 @@ class BuyerProductCatalogFiltersTest extends TestCase
         $this->withToken($apiToken)
             ->postJson(route('api.v1.buyer.checkout.store'), [
                 'checkout_attempt_key' => (string) Str::uuid(),
+                'shipping_quote_token' => str_repeat('a', 64),
                 'cart_item_ids' => [$cartItem->id],
                 'address_id' => $buyer->addresses()->value('id'),
                 'payment_method' => 'COD',
@@ -264,6 +265,35 @@ class BuyerProductCatalogFiltersTest extends TestCase
             ->assertOk()
             ->assertSee($product->name)
             ->assertSee('Out of Stock');
+    }
+
+    public function test_hidden_store_explains_why_its_active_product_is_missing_from_buyers(): void
+    {
+        [$buyer, $product] = $this->catalogFixture();
+        $sellerProfile = $product->sellerProfile;
+        $sellerProfile->update(['store_visibility' => false]);
+
+        $this->actingAs($buyer)
+            ->get(route('buyer.products', ['q' => $product->name]))
+            ->assertOk()
+            ->assertSee('No products found');
+
+        $this->actingAs($sellerProfile->user)
+            ->get(route('seller.products'))
+            ->assertOk()
+            ->assertSee('Your store is hidden from buyers.');
+
+        $admin = User::query()->where('email', 'admin@likhae.com')->sole();
+        $this->actingAs($admin)
+            ->get(route('admin.products', ['search' => $product->name]))
+            ->assertOk()
+            ->assertSee('Store hidden from buyers');
+
+        $sellerProfile->update(['store_visibility' => true]);
+        $this->actingAs($buyer)
+            ->get(route('buyer.products', ['q' => $product->name]))
+            ->assertOk()
+            ->assertSee($product->name);
     }
 
     public function test_price_sort_uses_current_selling_prices(): void

@@ -344,7 +344,7 @@
                     @php($destinationBreakdown = $routeBreakdowns->get('DESTINATION'))
                     @php($usesCurrentInterHubSplit = !$deliverySplit['is_inter_hub'] || ($originBreakdown && $destinationBreakdown && $originBreakdown['rider_reserve_cents'] === $deliverySplit['pickup_rider_cents'] && $destinationBreakdown['rider_reserve_cents'] === $deliverySplit['delivery_rider_cents']))
                     @php($commissionBaseCents = $deliverySplit['total_cents'])
-                    @php($parcelAmounts = $shipment?->orderItem && $shipment?->sellerOrder ? \App\Support\OrderItemParcelAmount::forItem($shipment->sellerOrder, $shipment->orderItem) : null)
+                    @php($parcelAmounts = $shipment?->orderItem && $shipment?->sellerOrder ? \App\Support\OrderItemParcelAmount::forShipment($shipment->sellerOrder, $shipment) : null)
                     @php($originName = $shipment?->originLogisticsCenter?->business_name)
                     @php($destinationName = $shipment?->destinationLogisticsCenter?->business_name ?? $shipment?->logisticsCenter?->business_name)
                     <article class="ad-card" style="padding:16px">

@@ -39,8 +39,8 @@ class ProductModerationAlignmentScanTest extends TestCase
             $mock->shouldReceive('providerLabel')->andReturn('Test provider');
             $mock->shouldReceive('primaryModel')->andReturn('Test model');
             $mock->shouldReceive('objectModel')->andReturn('Test detector');
-            $mock->shouldReceive('classifyText')->once()->andReturn(['available' => true, 'category_probabilities' => ['SAFE' => 1], 'business_mismatch_probability' => 0.01, 'category_mismatch_probability' => 0.02, 'subcategory_mismatch_probability' => 0.8]);
-            $mock->shouldReceive('classifyImages')->once()->andReturn(['available' => true, 'category_probabilities' => ['ORDINARY_PRODUCT' => 1], 'business_mismatch_probability' => 0.01, 'category_mismatch_probability' => 0.02, 'subcategory_mismatch_probability' => 0.9]);
+            $mock->shouldReceive('classifyText')->once()->andReturn(['available' => true, 'category_probabilities' => ['SAFE' => 1], 'business_mismatch_probability' => 0.01, 'subcategory_mismatch_probability' => 0.8]);
+            $mock->shouldReceive('classifyImages')->once()->andReturn(['available' => true, 'category_probabilities' => ['ORDINARY_PRODUCT' => 1], 'business_mismatch_probability' => 0.01, 'subcategory_mismatch_probability' => 0.9]);
             $mock->shouldReceive('detectObjects')->once()->andReturn([]);
         });
         $this->mock(ProductModerationImagePreprocessor::class, function ($mock): void {
@@ -57,7 +57,8 @@ class ProductModerationAlignmentScanTest extends TestCase
         $this->assertSame('ACTIVE', $product->fresh()->status);
         $this->assertNull($scan->held_at);
         $this->assertSame(0.8, $scan->text_findings['subcategory_mismatch_probability']);
-        $this->assertSame('NO_MISMATCH_SIGNAL', data_get($scan->model_results, 'alignment.checks.category_mismatch_probability.status'));
+        $this->assertSame('NO_MISMATCH_SIGNAL', data_get($scan->model_results, 'alignment.checks.business_mismatch_probability.status'));
+        $this->assertNull(data_get($scan->model_results, 'alignment.checks.category_mismatch_probability'));
         $this->assertSame('POSSIBLE_MISMATCH', data_get($scan->model_results, 'alignment.checks.subcategory_mismatch_probability.status'));
         $this->assertDatabaseHas('notifications', [
             'user_id' => $admin->id,
@@ -69,6 +70,7 @@ class ProductModerationAlignmentScanTest extends TestCase
         $this->actingAs($admin)->get(route('admin.products.show', $product))
             ->assertOk()->assertSee('Product-to-category fit (AI assessment)')
             ->assertSee('Activewear')->assertSee('Product content vs selected subcategory')
+            ->assertDontSee('Selected category path check')->assertDontSee('Product content vs selected category')
             ->assertSee('90.0% mismatch score')
             ->assertSee('Save human decision');
     }

@@ -92,9 +92,11 @@
             </section>
         @endif
 
-        <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
+        <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-shipping-quote-url="{{ route('buyer.checkout.shipping-quote') }}" data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
             @csrf
             <input type="hidden" name="checkout_attempt_key" value="{{ $checkoutAttemptKey }}">
+            <input type="hidden" name="cart_quote_token" value="{{ $checkoutCartToken ?? '' }}" data-checkout-cart-token>
+            <input type="hidden" name="shipping_quote_token" value="{{ $shippingQuoteToken ?? '' }}" data-shipping-quote-token>
             @foreach($cartItems as $cartItem)
                 <input type="hidden" name="cart_item_ids[]" value="{{ $cartItem->id }}">
             @endforeach
@@ -115,8 +117,8 @@
                     <div class="grid gap-3 p-5">
                         @if($automaticRouting)
                             <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                                <strong class="block">Delivery fee: &#8369;{{ number_format((float) config('likhae.standard_shipping_fee', 50), 2) }} per seller parcel</strong>
-                                <span class="mt-1 block text-xs leading-5">Each shop ships as a separate parcel. Delivery availability is checked against the selected address.</span>
+                                <strong class="block">Estimated shipping is calculated per seller parcel</strong>
+                                <span class="mt-1 block text-xs leading-5">Each shop ships as a separate parcel. The estimate uses its saved business region and your selected delivery region.</span>
                             </div>
                         @else
                         @forelse($logisticsProviders as $provider)
@@ -137,6 +139,7 @@
                         @endif
                         @error('logistics_center_id')<p class="text-xs font-semibold text-red-700">{{ $message }}</p>@enderror
                         @if(!$automaticRouting)<p class="text-[11px] leading-5 text-stone-500">The delivery fee is &#8369;{{ number_format((float) config('likhae.standard_shipping_fee', 50), 2) }} for each seller parcel.</p>@endif
+                        <p data-shipping-quote-status role="status" aria-live="polite" class="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">Shipping estimates use saved addresses and regional centers. They are not official courier rates.</p>
                     </div>
                 </section>
 
@@ -154,7 +157,7 @@
                         $sellerProtection = (float) data_get($group, 'protection_total', 0);
                         $sellerTotal = (float) data_get($group, 'grand_total', 0);
                     @endphp
-                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-promotion-discount="{{ number_format($sellerPromotionDiscount, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}" data-seller-shipping-discount="{{ number_format($sellerShippingVoucherDiscount, 2, '.', '') }}">
+                    <section class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm" data-seller-card data-seller-id="{{ $sellerId }}" data-seller-subtotal="{{ number_format($sellerSubtotal, 2, '.', '') }}" data-seller-promotion-discount="{{ number_format($sellerPromotionDiscount, 2, '.', '') }}" data-seller-discount="{{ number_format($sellerDiscount, 2, '.', '') }}" data-seller-reward-discount="{{ number_format($sellerRewardDiscount, 2, '.', '') }}" data-seller-reward-points="{{ $sellerRewardPoints }}" data-seller-shipping-fee="{{ number_format($sellerShipping, 2, '.', '') }}" data-seller-base-shipping-fee="{{ number_format((float) data_get($group, 'shipping_rate_snapshot.base_fee', $sellerShipping), 2, '.', '') }}" data-seller-regional-shipping-fee="{{ number_format((float) data_get($group, 'shipping_rate_snapshot.regional_addon_fee', 0), 2, '.', '') }}" data-seller-shipping-discount="{{ number_format($sellerShippingVoucherDiscount, 2, '.', '') }}">
                         <header class="border-b border-stone-100 bg-stone-50 px-5 py-4">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <h2 class="text-base font-bold uppercase tracking-wide text-stone-900">{{ data_get($group, 'seller.business_name', 'LIKHAE Seller') }}</h2>
@@ -227,7 +230,9 @@
                                 <div class="flex flex-wrap justify-between gap-2 text-emerald-700"><span>Shipping Voucher {{ $shippingVoucherCode }}</span><strong>-&#8369;{{ number_format($sellerShippingVoucherDiscount, 2) }}</strong></div>
                             @endif
                             <div data-seller-reward-row class="flex justify-between gap-3 text-red-800" @if($sellerRewardPoints === 0) hidden @endif><span>Reward points (<span data-seller-reward-points>{{ number_format($sellerRewardPoints) }}</span>)</span><strong data-seller-reward-discount>-&#8369;{{ number_format($sellerRewardDiscount, 2) }}</strong></div>
-                            <div class="flex justify-between gap-3 text-stone-500"><span>Shipping</span><strong data-seller-shipping-total>&#8369;{{ number_format($sellerShipping, 2) }}</strong></div>
+                            <div class="flex justify-between gap-3 text-stone-500"><span>Base shipping</span><strong data-seller-shipping-base>&#8369;{{ number_format((float) data_get($group, 'shipping_rate_snapshot.base_fee', $sellerShipping), 2) }}</strong></div>
+                            <div class="flex justify-between gap-3 text-stone-500"><span>Distance-based regional fee</span><strong data-seller-shipping-regional>&#8369;{{ number_format((float) data_get($group, 'shipping_rate_snapshot.regional_addon_fee', 0), 2) }}</strong></div>
+                            <div class="flex justify-between gap-3 text-stone-500"><span>Total shipping</span><strong data-seller-shipping-total>&#8369;{{ number_format($sellerShipping, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 text-amber-800"><span>Additional Care</span><strong data-seller-protection-total>&#8369;{{ number_format($sellerProtection, 2) }}</strong></div>
                             <div class="flex justify-between gap-3 border-t border-stone-100 pt-2 font-bold text-stone-900"><span>Seller total</span><strong data-seller-total>&#8369;{{ number_format($sellerTotal, 2) }}</strong></div>
                         </div>
@@ -347,7 +352,7 @@
                     <div class="flex justify-between"><dt class="text-stone-500">Shipping</dt><dd id="checkout-shipping-total">&#8369;{{ number_format((float) data_get($preview, 'shipping_total', 0), 2) }}</dd></div>
                     <div class="flex justify-between text-emerald-800"><dt>Seller Voucher discount</dt><dd>-&#8369;{{ number_format($groups->sum(fn ($group) => (float) data_get($group, 'seller_voucher_discount', 0)), 2) }}</dd></div>
                     <div class="flex justify-between text-emerald-800"><dt>Platform Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'platform_voucher_discount', 0), 2) }}</dd></div>
-                    <div class="flex justify-between text-emerald-800"><dt>Shipping Voucher discount</dt><dd>-&#8369;{{ number_format((float) data_get($preview, 'shipping_voucher_discount', 0), 2) }}</dd></div>
+                    <div class="flex justify-between text-emerald-800"><dt>Shipping Voucher discount</dt><dd id="checkout-shipping-voucher-discount">-&#8369;{{ number_format((float) data_get($preview, 'shipping_voucher_discount', 0), 2) }}</dd></div>
                     <div class="flex justify-between border-t border-stone-100 pt-2 font-semibold text-stone-800"><dt>Total discount</dt><dd id="checkout-total-discount">-&#8369;{{ number_format((float) data_get($preview, 'total_discount', 0), 2) }}</dd></div>
                     <div id="checkout-reward-points-summary" class="flex justify-between text-red-800" @if($selectedRewardPoints === 0) hidden @endif><dt>Reward points (<span data-reward-points-summary-count>{{ number_format($selectedRewardPoints) }}</span>)</dt><dd id="checkout-reward-points-discount">-&#8369;{{ number_format((float) data_get($preview, 'reward_points_discount', 0), 2) }}</dd></div>
                     <div class="flex items-center justify-between gap-3 text-amber-800">
@@ -571,8 +576,17 @@
             const subtotal = Number(@json((float) data_get($preview, 'subtotal', 0)));
             const discount = Number(@json((float) data_get($preview, 'discount_total', 0)));
             const promotionDiscount = Number(@json((float) data_get($preview, 'promotion_discount_total', 0)));
-            const shippingVoucherDiscount = Number(@json((float) data_get($preview, 'shipping_voucher_discount', 0)));
-            const fixedVoucherDiscount = discount + shippingVoucherDiscount;
+            const checkoutForm = document.querySelector('[data-checkout-form]');
+            const placeOrderButton = checkoutForm?.querySelector('[data-place-order-submit]');
+            const deliveryStatus = document.querySelector('[data-delivery-availability]');
+            const quoteStatus = document.querySelector('[data-shipping-quote-status]');
+            const shippingQuoteToken = checkoutForm?.querySelector('[data-shipping-quote-token]');
+            const deliveryAvailability = @json($deliveryAvailability);
+            const automaticRouting = @json($automaticRouting);
+            const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked);
+            const availabilityMessage = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
+            let shippingQuoteFresh = Boolean(shippingQuoteToken?.value && shippingQuoteToken.value.length === 64);
+            let quoteRequestSequence = 0;
             const maximumRewardPoints = Number(@json($maxRedeemablePoints));
             const money = (value) => `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -612,6 +626,7 @@
             const updateTotals = (input) => {
                 let shippingTotal = 0;
                 let protectionTotal = 0;
+                let shippingVoucherDiscount = 0;
                 const rewardPoints = selectedRewardPoints();
                 const rewardAllocations = allocateRewardPoints(rewardPoints);
                 const protectionCheckboxes = [...document.querySelectorAll('[data-protection-checkbox]')];
@@ -628,9 +643,7 @@
                     const sellerPromotionDiscount = Number(card.dataset.sellerPromotionDiscount || 0);
                     const sellerDiscount = Number(card.dataset.sellerDiscount || 0);
                     const sellerRewardDiscount = sellerRewardPoints / 100;
-                    const sellerShipping = input
-                        ? Number(input.dataset.shippingFee || 0)
-                        : Number(card.dataset.sellerShippingFee || 0);
+                    const sellerShipping = Number(card.dataset.sellerShippingFee || 0);
                     const sellerProtection = [...document.querySelectorAll('[data-protection-checkbox]:checked')]
                         .filter((checkbox) => checkbox.dataset.sellerId === sellerId)
                         .reduce((sum, checkbox) => sum + Number(checkbox.dataset.protectionFee || 0), 0);
@@ -638,7 +651,10 @@
                     const sellerTotal = Math.max(0, sellerSubtotal - sellerPromotionDiscount - sellerDiscount - sellerRewardDiscount + sellerShipping - sellerShippingDiscount + sellerProtection);
 
                     shippingTotal += sellerShipping;
+                    shippingVoucherDiscount += sellerShippingDiscount;
                     protectionTotal += sellerProtection;
+                    card.querySelector('[data-seller-shipping-base]')?.replaceChildren(money(Number(card.dataset.sellerBaseShippingFee || 0)));
+                    card.querySelector('[data-seller-shipping-regional]')?.replaceChildren(money(Number(card.dataset.sellerRegionalShippingFee || 0)));
                     card.querySelector('[data-seller-shipping-total]')?.replaceChildren(money(sellerShipping));
                     card.querySelector('[data-seller-protection-total]')?.replaceChildren(money(sellerProtection));
                     const rewardRow = card.querySelector('[data-seller-reward-row]');
@@ -655,8 +671,10 @@
                 if (rewardDiscount) rewardDiscount.textContent = `-${money(rewardPoints / 100)}`;
                 if (shipping) shipping.textContent = money(shippingTotal);
                 if (protection) protection.textContent = money(protectionTotal);
+                const shippingVoucherDiscountSummary = document.getElementById('checkout-shipping-voucher-discount');
+                if (shippingVoucherDiscountSummary) shippingVoucherDiscountSummary.textContent = `-${money(shippingVoucherDiscount)}`;
                 const totalDiscount = document.getElementById('checkout-total-discount');
-                if (totalDiscount) totalDiscount.textContent = `-${money(fixedVoucherDiscount + promotionDiscount + (rewardPoints / 100))}`;
+                if (totalDiscount) totalDiscount.textContent = `-${money(discount + shippingVoucherDiscount + promotionDiscount + (rewardPoints / 100))}`;
                 if (total) total.textContent = money(Math.max(0, subtotal - promotionDiscount - discount - (rewardPoints / 100) + shippingTotal - shippingVoucherDiscount + protectionTotal));
             };
 
@@ -687,7 +705,10 @@
                 });
                 if (input.checked) updateTotals(input);
             });
-            document.querySelectorAll('input[name="address_id"]').forEach((input) => input.addEventListener('change', updateDeliveryAvailability));
+            document.querySelectorAll('input[name="address_id"]').forEach((input) => input.addEventListener('change', () => {
+                updateDeliveryAvailability();
+                refreshShippingQuote();
+            }));
             document.querySelectorAll('[data-seller-note]').forEach((textarea) => {
                 const counter = textarea.parentElement?.querySelector('[data-seller-note-count]');
                 const updateCount = () => {
@@ -697,13 +718,6 @@
                 updateCount();
             });
 
-            const checkoutForm = document.querySelector('[data-checkout-form]');
-            const placeOrderButton = checkoutForm?.querySelector('[data-place-order-submit]');
-            const deliveryStatus = document.querySelector('[data-delivery-availability]');
-            const deliveryAvailability = @json($deliveryAvailability);
-            const automaticRouting = @json($automaticRouting);
-            const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked);
-            const availabilityMessage = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
             const updateDeliveryAvailability = () => {
                 const addressId = document.querySelector('input[name="address_id"]:checked')?.value || '';
                 const providerId = document.querySelector('input[name="logistics_center_id"]:checked')?.value || '';
@@ -722,14 +736,82 @@
                     deliveryStatus.classList.toggle('text-red-800', !availability.available);
                 }
                 if (placeOrderButton && !placeOrderButton.textContent.includes('Placing order')) {
-                    placeOrderButton.disabled = checkoutBlocked || !availability.available;
-                    placeOrderButton.textContent = checkoutBlocked ? 'Review checkout' : (availability.available ? 'Place Order' : 'Delivery unavailable');
+                    placeOrderButton.disabled = checkoutBlocked || !availability.available || !shippingQuoteFresh;
+                    placeOrderButton.textContent = checkoutBlocked
+                        ? 'Review checkout'
+                        : (!shippingQuoteFresh ? 'Updating shipping…' : (availability.available ? 'Place Order' : 'Delivery unavailable'));
+                }
+            };
+            const refreshShippingQuote = async () => {
+                const addressId = document.querySelector('input[name="address_id"]:checked')?.value || '';
+                if (!addressId || !checkoutForm) return;
+                const requestSequence = ++quoteRequestSequence;
+                shippingQuoteFresh = false;
+                if (shippingQuoteToken) shippingQuoteToken.value = '';
+                if (quoteStatus) {
+                    quoteStatus.textContent = 'Updating the shipping estimate for this address…';
+                    quoteStatus.className = 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900';
+                }
+                updateDeliveryAvailability();
+
+                try {
+                    const response = await fetch(checkoutForm.dataset.shippingQuoteUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': checkoutForm.querySelector('input[name="_token"]')?.value || '',
+                        },
+                        body: JSON.stringify({
+                            address_id: addressId,
+                            checkout_attempt_key: checkoutForm.querySelector('input[name="checkout_attempt_key"]')?.value || '',
+                            cart_quote_token: checkoutForm.querySelector('[data-checkout-cart-token]')?.value || '',
+                        }),
+                    });
+                    const payload = await response.json();
+                    if (requestSequence !== quoteRequestSequence) return;
+                    if (!response.ok) {
+                        const firstError = Object.values(payload.errors || {}).flat()[0];
+                        throw new Error(firstError || payload.message || 'Shipping could not be recalculated.');
+                    }
+
+                    for (const card of document.querySelectorAll('[data-seller-card]')) {
+                        const quote = payload.groups?.[card.dataset.sellerId];
+                        if (!quote || !quote.snapshot) throw new Error('The shipping quote is incomplete. Refresh checkout and try again.');
+                        card.dataset.sellerShippingFee = quote.shipping_fee;
+                        card.dataset.sellerBaseShippingFee = quote.snapshot.base_fee;
+                        card.dataset.sellerRegionalShippingFee = quote.snapshot.regional_addon_fee;
+                        card.dataset.sellerShippingDiscount = quote.shipping_voucher_discount;
+                    }
+                    if (!payload.quote_token || payload.quote_token.length !== 64) throw new Error('The shipping quote could not be verified. Refresh checkout and try again.');
+                    if (shippingQuoteToken) shippingQuoteToken.value = payload.quote_token;
+                    shippingQuoteFresh = true;
+                    if (quoteStatus) {
+                        quoteStatus.textContent = 'Shipping estimate updated for the selected address. Estimates are not official courier rates.';
+                        quoteStatus.className = 'rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600';
+                    }
+                    updateTotals(document.querySelector('input[name="logistics_center_id"]:checked'));
+                    updateDeliveryAvailability();
+                } catch (error) {
+                    if (requestSequence !== quoteRequestSequence) return;
+                    shippingQuoteFresh = false;
+                    if (quoteStatus) {
+                        quoteStatus.textContent = error instanceof Error ? error.message : 'Shipping could not be recalculated. Try selecting the address again.';
+                        quoteStatus.className = 'rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800';
+                    }
+                    updateDeliveryAvailability();
                 }
             };
             updateDeliveryAvailability();
             checkoutForm?.addEventListener('submit', (event) => {
                 if (!event.submitter?.matches('[data-place-order-submit]')) return;
                 if (!placeOrderButton) return;
+                if (!shippingQuoteFresh) {
+                    event.preventDefault();
+                    quoteStatus?.focus();
+                    return;
+                }
                 placeOrderButton.disabled = true;
                 placeOrderButton.textContent = 'Placing order...';
             });

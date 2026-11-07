@@ -4,6 +4,7 @@ namespace App\Services\Fulfillment;
 
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\LogisticsCoverageRoute;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Rider\RiderProfile;
@@ -29,6 +30,7 @@ class LocalRiderEligibilityService
         LogisticsCenter $center,
         string $provinceCode,
         string $municipalityCode,
+        bool $allowExplicitRemoteCoverage = false,
     ): void {
         $centerAttributes = $center->getAttributes();
         if ($center->status !== 'ACTIVE'
@@ -51,6 +53,10 @@ class LocalRiderEligibilityService
         if (! $canonical
             || $canonical['province_code'] !== trim($provinceCode)
             || $canonical['municipality_code'] !== trim($municipalityCode)) {
+            if ($allowExplicitRemoteCoverage && trim($provinceCode) !== '' && trim($municipalityCode) !== '') {
+                return;
+            }
+
             throw new RuntimeException('A service area must belong to this logistics center’s canonical province and municipality.');
         }
     }
@@ -96,11 +102,56 @@ class LocalRiderEligibilityService
             return null;
         }
 
-        if (! $this->centerCoversMunicipality($center, $location->province_code, $location->municipality_code)) {
+        if (! $this->centerAuthorizesExactLocation($center, $location)) {
             return null;
         }
 
         return $location;
+    }
+
+    /** Authorization comes from the exact configured PSGC area, never proximity alone. */
+    public function centerAuthorizesExactLocation(LogisticsCenter $center, ServiceAreaLocation $location): bool
+    {
+        $location->loadMissing('serviceArea.logisticsCenter');
+        $area = $location->serviceArea;
+        if (! $area || ! $area->is_active || (int) $area->logistics_center_id !== (int) $center->id
+            || (int) $area->logisticsCenter?->id !== (int) $center->id
+            || ! $this->centerCoversApprovedArea($center)) {
+            return false;
+        }
+
+        if ($this->centerCoversMunicipality($center, $location->province_code, $location->municipality_code)) {
+            return true;
+        }
+
+        if ($location->coverage_type === 'PRIMARY') {
+            return true;
+        }
+
+        return $this->hasApprovedExtendedCoverage($center, $location);
+    }
+
+    public function centerAuthorizesAddress(LogisticsCenter $center, object $address): bool
+    {
+        return ServiceAreaLocation::query()
+            ->where('province_code', trim((string) $address->province_code))
+            ->where('municipality_code', trim((string) $address->municipality_code))
+            ->where('barangay_code', trim((string) $address->barangay_code))
+            ->whereHas('serviceArea', fn (Builder $area) => $area
+                ->where('logistics_center_id', $center->id)
+                ->where('is_active', true))
+            ->with('serviceArea.logisticsCenter.address')
+            ->get()
+            ->contains(fn (ServiceAreaLocation $location): bool => $this->centerAuthorizesExactLocation($center, $location));
+    }
+
+    private function centerCoversApprovedArea(LogisticsCenter $center): bool
+    {
+        $attributes = $center->getAttributes();
+
+        return $center->status === 'ACTIVE'
+            && filled($attributes['approved_by_user_id'] ?? null)
+            && filled($attributes['approved_at'] ?? null);
     }
 
     public function assertRiderCanCoverArea(
@@ -110,7 +161,7 @@ class LocalRiderEligibilityService
     ): ServiceAreaLocation {
         $location = $this->singleBarangayLocation($center, $area);
         if (! $location) {
-            throw new RuntimeException('Only active service areas with exactly one barangay in this center’s canonical municipality can be assigned to a local rider.');
+            throw new RuntimeException('Only active, single-barangay areas within the center’s municipality or with approved explicit fallback coverage can be assigned to a local rider.');
         }
 
         if (! $rider->relationLoaded('user')) {
@@ -150,5 +201,29 @@ class LocalRiderEligibilityService
             && $canonical !== null
             && $canonical['province_code'] === trim((string) $provinceCode)
             && $canonical['municipality_code'] === trim((string) $municipalityCode);
+    }
+
+    private function hasApprovedExtendedCoverage(LogisticsCenter $center, ServiceAreaLocation $location): bool
+    {
+        if (! app(LogisticsSchemaReadiness::class)->smartCoverageReady()
+            || ! in_array($location->coverage_type, [LogisticsCoverageRoute::TYPE_SECONDARY, LogisticsCoverageRoute::TYPE_EXTENDED], true)) {
+            return false;
+        }
+
+        return LogisticsCoverageRoute::query()
+            ->approvedActive()
+            ->currentlyValid()
+            ->where('coverage_type', $location->coverage_type)
+            ->where('shipment_type', LogisticsCoverageRoute::SHIPMENT_MARKETPLACE)
+            ->where('destination_service_area_location_id', $location->id)
+            ->whereHas('approvedBy', fn (Builder $admin) => $admin
+                ->where('account_type', User::TYPE_ADMIN)
+                ->where('status', User::STATUS_ACTIVE))
+            ->whereHas('originLogisticsCenter', fn (Builder $origin) => $origin->approvedActive())
+            ->whereHas('destinationLocation.serviceArea', fn (Builder $area) => $area
+                ->where('logistics_center_id', $center->id)
+                ->where('is_active', true)
+                ->whereHas('logisticsCenter', fn (Builder $destination) => $destination->approvedActive()))
+            ->exists();
     }
 }

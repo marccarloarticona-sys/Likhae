@@ -28,10 +28,34 @@ class PhilippineAddressApiTest extends TestCase
             'classification.psa.gov.ph/psgc/Q2_2024/regions*' => Http::response([
                 'results' => [
                     [
-                        'psgc_code' => '0400000000',
-                        'area_name' => 'Region IV-A (CALABARZON)',
+                        'psgc_code' => '0300000000',
+                        'area_name' => 'Region III (Central Luzon)',
                         'geographic_level' => 'Reg',
-                        'reg' => 4,
+                        'reg' => 3,
+                        'prv' => 0,
+                        'mun' => 0,
+                    ],
+                    [
+                        'psgc_code' => '1300000000',
+                        'area_name' => 'National Capital Region (NCR)',
+                        'geographic_level' => 'Reg',
+                        'reg' => 13,
+                        'prv' => 0,
+                        'mun' => 0,
+                    ],
+                    [
+                        'psgc_code' => '0100000000',
+                        'area_name' => 'Region I (Ilocos Region)',
+                        'geographic_level' => 'Reg',
+                        'reg' => 1,
+                        'prv' => 0,
+                        'mun' => 0,
+                    ],
+                    [
+                        'psgc_code' => '1400000000',
+                        'area_name' => 'Cordillera Administrative Region (CAR)',
+                        'geographic_level' => 'Reg',
+                        'reg' => 14,
                         'prv' => 0,
                         'mun' => 0,
                     ],
@@ -39,17 +63,14 @@ class PhilippineAddressApiTest extends TestCase
             ]),
         ]);
 
-        $this->getJson('/address/philippines/regions')
-            ->assertOk()
-            ->assertJson([
-                [
-                    'code' => '0400000000',
-                    'name' => 'Region IV-A (CALABARZON)',
-                    'prv' => 0,
-                    'mun' => 0,
-                    'level' => 'Reg',
-                ],
-            ]);
+        $regions = $this->getJson('/address/philippines/regions')->assertOk()->json();
+        $this->assertSame(
+            ['0100000000', '1400000000', '0300000000', '1300000000'],
+            array_column($regions, 'code'),
+        );
+        $this->assertSame('Region I (Ilocos Region)', $regions[0]['name']);
+        $this->assertSame('Cordillera Administrative Region (CAR)', $regions[1]['name']);
+        $this->assertIsString($regions[0]['code']);
 
         Http::assertSent(fn ($request) => $request->url() === 'https://classification.psa.gov.ph/psgc/Q2_2024/regions?token=fake-token&page_size=1000');
     }
@@ -192,6 +213,29 @@ class PhilippineAddressApiTest extends TestCase
         $this->getJson('/address/philippines/municipalities/0403424000/barangays')
             ->assertOk()
             ->assertJsonFragment(['code' => '0403424001', 'name' => 'Bagong Bayan II-A']);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_region_list_uses_geographic_display_order_and_current_psgc_codes(): void
+    {
+        config(['services.psgc.local_first' => true]);
+        Http::preventStrayRequests();
+
+        $regions = $this->getJson('/address/philippines/regions')->assertOk()->json();
+
+        $this->assertSame([
+            '0100000000', '1400000000', '0200000000', '0300000000', '1300000000', '0400000000',
+            '1700000000', '0500000000', '0600000000', '1800000000', '0700000000', '0800000000',
+            '0900000000', '1000000000', '1600000000', '1900000000', '1200000000', '1100000000',
+        ], array_column($regions, 'code'));
+        $this->assertSame('National Capital Region (NCR)', $regions[4]['name']);
+        $this->assertSame('Cordillera Administrative Region (CAR)', $regions[1]['name']);
+        $this->assertSame('Region IV-A (CALABARZON)', $regions[5]['name']);
+        $this->assertSame('Region XIII (Caraga)', $regions[14]['name']);
+        $this->assertSame('Region XI (Davao Region)', $regions[17]['name']);
+        $this->assertSame('1900000000', $regions[15]['code']);
+        $this->assertIsString($regions[0]['code']);
 
         Http::assertNothingSent();
     }

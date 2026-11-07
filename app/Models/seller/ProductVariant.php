@@ -29,6 +29,9 @@ class ProductVariant extends Model
         'payment_method',
         'stock',
         'weight_kg',
+        'length_cm',
+        'width_cm',
+        'height_cm',
         'is_default',
         'is_active',
     ];
@@ -43,6 +46,9 @@ class ProductVariant extends Model
             'flash_sale_sold' => 'integer',
             'stock' => 'integer',
             'weight_kg' => 'decimal:3',
+            'length_cm' => 'decimal:2',
+            'width_cm' => 'decimal:2',
+            'height_cm' => 'decimal:2',
             'is_default' => 'boolean',
             'is_active' => 'boolean',
         ];

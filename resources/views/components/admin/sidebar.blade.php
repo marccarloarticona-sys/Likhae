@@ -4,30 +4,12 @@
 ])
 
 @php
-    $user = auth()->user();
-    $demoUser = session('demo_user');
-
-    $profileName = data_get($user, 'name')
-        ?? data_get($demoUser, 'name')
-        ?? 'Admin Account';
-
-    $profileInitials = collect(explode(' ', trim($profileName)))
-        ->filter()
-        ->take(2)
-        ->map(fn ($word) => mb_strtoupper(mb_substr($word, 0, 1)))
-        ->implode('') ?: 'LK';
-
-    $avatar = data_get($user, 'profile_photo_url')
-        ?? data_get($user, 'profile_photo_path')
-        ?? data_get($user, 'avatar_url');
-
     $adminUiCounts = $adminUiCounts ?? ['messages' => 0, 'notifications' => 0];
     $sidebarCounts = $sidebarCounts ?? [];
     $notificationCount = $notificationCount ?? ($sidebarCounts['notifications'] ?? ($adminUiCounts['notifications'] ?? 0));
-    $workspaceName = 'Admin Center';
-    $profileLabel = 'LIKHAE Administrator';
+    $workspaceName = __('settings.workspaces.admin');
     $dashboardRoute = 'admin.dashboard';
-    $dashboardLabel = 'Dashboard';
+    $dashboardLabel = __('navigation.items.dashboard');
 
     $icons = [
         'dashboard' => '
@@ -173,7 +155,7 @@
 
     $groups = [
         [
-            'label' => 'User Management',
+            'key' => 'user_management',
             'items' => [
                 [
                     'key' => 'registrations',
@@ -201,7 +183,7 @@
         ],
 
         [
-            'label' => 'Marketplace',
+            'key' => 'marketplace',
             'items' => [
                 [
                     'key' => 'products',
@@ -254,7 +236,7 @@
         ],
 
         [
-            'label' => 'Finance & Analytics',
+            'key' => 'finance_analytics',
             'items' => [
                 [
                     'key' => 'finance',
@@ -294,7 +276,7 @@
         ],
 
         [
-            'label' => 'Communication',
+            'key' => 'communication',
             'items' => [
                 [
                     'key' => 'messages',
@@ -321,7 +303,7 @@
         ],
 
         [
-            'label' => 'System',
+            'key' => 'system',
             'items' => [
                 [
                     'key' => 'settings',
@@ -365,21 +347,22 @@
     class="lk-admin-overlay"
     type="button"
     tabindex="-1"
-    aria-label="Close navigation"
+    aria-label="{{ __('navigation.items.close_navigation') }}"
     aria-hidden="true"
 ></button>
 
 <aside
     id="adminSidebar"
     class="lk-admin-navigation"
-    aria-label="{{ $workspaceName }} navigation"
+    data-setting-save-failed="{{ __('common.messages.setting_save_failed') }}"
+    aria-label="{{ $workspaceName }} {{ __('navigation.sections.navigation') }}"
 >
     <div class="ad-sidebar-head">
         <button
             type="button"
             id="adminSidebarToggle"
             class="ad-side-toggle"
-            aria-label="Toggle admin sidebar"
+            aria-label="{{ __('navigation.items.toggle_admin_sidebar') }}"
             aria-expanded="true"
         >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -399,42 +382,10 @@
         </a>
     </div>
 
-    {{--
-    <section class="ad-side-profile">
-        <span class="ad-side-avatar">
-            @if($avatar)
-                <img
-                    src="{{ $avatar }}"
-                    alt="{{ $profileName }}"
-                >
-            @else
-                {{ $profileInitials }}
-            @endif
-        </span>
-
-        <span class="ad-side-profile-copy">
-            <strong>
-                {{ $profileName }}
-            </strong>
-
-            <small>
-                {{ $profileLabel }}
-            </small>
-        </span>
-
-        <span
-            class="ad-side-verified"
-            title="{{ $profileLabel }}"
-        >
-            ✓
-        </span>
-    </section>
-    --}}
-
     <nav class="ad-sidebar-scroll">
 
         <p class="ad-nav-heading">
-            Navigation
+            {{ __('navigation.sections.navigation') }}
         </p>
 
         <a
@@ -459,7 +410,7 @@
         @foreach($groups as $group)
             <section class="ad-nav-group">
                 <p class="ad-nav-heading">
-                    {{ $group['label'] }}
+                    {{ __('navigation.sections.'.$group['key']) }}
                 </p>
 
                 <div class="ad-nav-list">
@@ -485,7 +436,7 @@
                             </span>
 
                             <span class="ad-nav-text">
-                                {{ $item['label'] }}
+                                {{ __('navigation.admin_items.'.$item['key']) }}
                             </span>
 
                             @if(($item['count'] ?? 0) > 0)
@@ -507,7 +458,7 @@
             type="button"
             id="adminThemeToggle"
             class="ad-nav-link ad-theme-toggle"
-            aria-label="Toggle light and dark mode"
+            aria-label="{{ __('navigation.items.toggle_appearance') }}"
             aria-pressed="false"
         >
             <span class="ad-nav-icon">
@@ -518,19 +469,21 @@
 
             <span class="ad-theme-copy">
                 <strong>
-                    Appearance
+                    {{ __('navigation.items.appearance') }}
                 </strong>
 
                 <small>
-                    Light / Dark Mode
+                    {{ __('navigation.items.light_dark_mode') }}
                 </small>
             </span>
 
             <span
                 id="adminThemeState"
+                data-label-on="{{ __('common.labels.on') }}"
+                data-label-off="{{ __('common.labels.off') }}"
                 class="ad-theme-state"
             >
-                OFF
+                {{ __('common.labels.off') }}
             </span>
         </button>
 
@@ -538,9 +491,9 @@
             <form
                 method="POST"
                 action="{{ route('logout') }}"
-                data-confirm-title="Log out?"
-                data-confirm-message="You will be signed out of your LIKHAE account."
-                data-confirm-label="Log out"
+                data-confirm-title="{{ __('common.confirmation.logout_title') }}"
+                data-confirm-message="{{ __('common.confirmation.logout_message') }}"
+                data-confirm-label="{{ __('common.confirmation.logout_label') }}"
             >
                 @csrf
 
@@ -555,7 +508,7 @@
                     </span>
 
                     <span class="ad-nav-text">
-                        Logout
+                        {{ __('common.confirmation.logout_label') }}
                     </span>
                 </button>
             </form>
@@ -589,6 +542,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const themeState =
         document.getElementById('adminThemeState');
+    const settingSaveFailed =
+        sidebar?.dataset.settingSaveFailed || '';
 
 
     function isMobile() {
@@ -601,8 +556,9 @@ document.addEventListener('DOMContentLoaded', function () {
             root.classList.contains('dark');
 
         if (themeState) {
-            themeState.textContent =
-                dark ? 'ON' : 'OFF';
+            themeState.textContent = dark
+                ? themeState.dataset.labelOn
+                : themeState.dataset.labelOff;
         }
 
         themeToggle?.setAttribute(
@@ -613,11 +569,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
     function restoreTheme() {
-        const buyerPreference = root.dataset.buyerThemePreference;
+        const accountPreference = root.dataset.adminThemePreference;
         const savedTheme =
             localStorage.getItem('likhae-theme') || 'light';
-        const theme = ['light', 'dark', 'system'].includes(buyerPreference)
-            ? buyerPreference
+        const theme = ['light', 'dark', 'system'].includes(accountPreference)
+            ? accountPreference
             : savedTheme;
 
         root.classList.toggle(
@@ -784,16 +740,17 @@ document.addEventListener('DOMContentLoaded', function () {
                     : 'light'
             );
 
-            const buyerThemeUpdateUrl = root.dataset.buyerThemeUpdateUrl;
-            if (buyerThemeUpdateUrl) {
-                const previousTheme = root.dataset.buyerThemePreference || 'system';
-                root.dataset.buyerThemePreference = theme;
+            const themeUpdateUrl = root.dataset.adminThemeUpdateUrl;
+            if (themeUpdateUrl) {
+                const previousTheme = root.dataset.adminThemePreference || 'system';
+                root.dataset.adminThemePreference = theme;
                 const settingsRadio = document.querySelector(`input[name="theme"][value="${theme}"]`);
                 if (settingsRadio) settingsRadio.checked = true;
 
-                fetch(buyerThemeUpdateUrl, {
+                fetch(themeUpdateUrl, {
                     method: 'PATCH',
                     credentials: 'same-origin',
+                    keepalive: true,
                     headers: {
                         'Accept': 'application/json',
                         'Content-Type': 'application/json',
@@ -802,12 +759,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     },
                     body: JSON.stringify({ theme }),
                 }).then((response) => {
-                    if (!response.ok) throw new Error('Theme preference could not be saved.');
+                    if (!response.ok) throw new Error(settingSaveFailed);
                     return response.json();
                 }).then((payload) => {
-                    if (payload.theme !== theme) throw new Error('Theme preference could not be saved.');
+                    if (payload.theme !== theme) throw new Error(settingSaveFailed);
                 }).catch(() => {
-                    root.dataset.buyerThemePreference = previousTheme;
+                    root.dataset.adminThemePreference = previousTheme;
                     const restoredTheme = previousTheme === 'system'
                         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
                         : previousTheme;

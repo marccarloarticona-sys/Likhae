@@ -342,6 +342,130 @@ class ProductCatalogService
         return $payload;
     }
 
+    /** @return array<string, mixed> */
+    public function recommendationCardPayload(Product $product): array
+    {
+        $product->loadMissing([
+            'category',
+            'sellerProfile',
+            'images',
+            'variants' => fn ($variants) => $variants->where('is_active', true),
+        ]);
+
+        $activeVariants = $product->variants->where('is_active', true)->values();
+        $activeVariants->each(fn (ProductVariant $variant) => $variant->setRelation('product', $product));
+        $availableVariants = $activeVariants->filter(fn (ProductVariant $variant): bool => (int) $variant->stock > 0)->values();
+        $displayVariant = $availableVariants
+            ->sortBy(fn (ProductVariant $variant): float => $variant->final_price)
+            ->first();
+        $priceResolver = app(ProductPriceResolver::class);
+
+        $variants = $activeVariants->map(function (ProductVariant $variant) use ($product, $priceResolver): array {
+            $resolvedPrice = $priceResolver->resolve($variant);
+            $flashSaleStatus = $variant->flash_sale_status;
+            $flashSaleVisiblePrice = in_array($flashSaleStatus, ['ACTIVE', 'SCHEDULED'], true)
+                && $variant->flash_sale_price !== null
+                ? number_format((float) $variant->flash_sale_price, 2, '.', '')
+                : null;
+            $discountType = $resolvedPrice['source'] === 'flash_sale'
+                ? 'fixed'
+                : ($resolvedPrice['source'] === 'product_discount' ? $variant->resolved_discount_type : 'none');
+            $discountValue = $resolvedPrice['source'] === 'flash_sale'
+                ? $resolvedPrice['discount_amount']
+                : (float) ($variant->discount_value ?? 0);
+
+            return [
+                'id' => $variant->id,
+                'price' => number_format($resolvedPrice['price'], 2, '.', ''),
+                'original_price' => number_format((float) $variant->price, 2, '.', ''),
+                'discount_type' => $discountType === 'none' ? null : $discountType,
+                'discount_value' => number_format($discountValue, 2, '.', ''),
+                'discount_percentage' => $discountType === 'fixed' ? 0 : $variant->discount_percentage,
+                'discount_amount' => number_format($resolvedPrice['discount_amount'], 2, '.', ''),
+                'flash_sale_active' => $variant->active_flash_sale_price !== null,
+                'flash_sale_price' => $flashSaleVisiblePrice,
+                'flash_sale_remaining' => $variant->flash_sale_price === null ? 0 : (int) $variant->flash_sale_remaining,
+                'flash_sale_status' => $flashSaleStatus,
+                'flash_sale_starts_at' => $product->flash_sale_starts_at?->toIso8601String(),
+                'flash_sale_ends_at' => $product->flash_sale_ends_at?->toIso8601String(),
+                'flash_sale_limit_per_buyer' => $product->flash_sale_limit_per_buyer === null
+                    ? null
+                    : (int) $product->flash_sale_limit_per_buyer,
+                'stock' => (int) $variant->stock,
+                'is_default' => (bool) $variant->is_default,
+                'is_active' => (bool) $variant->is_active,
+            ];
+        })->values();
+
+        $images = $product->images
+            ->map(fn (ProductImage $image): array => [
+                'id' => $image->id,
+                'file_path' => $image->file_path,
+                'url' => $this->publicUrl($image->file_path),
+                'alt_text' => $image->alt_text,
+                'is_primary' => (bool) $image->is_primary,
+                'sort_order' => (int) $image->sort_order,
+            ])
+            ->sortByDesc(fn (array $image): int => ((int) $image['is_primary'] * 100000) + (int) $image['sort_order'])
+            ->values();
+        $primaryImage = $images->firstWhere('is_primary', true) ?: $images->first();
+        $seller = $product->sellerProfile;
+        $currentPrice = $displayVariant?->final_price;
+        $originalPrice = $displayVariant && $displayVariant->discount_amount > 0
+            ? (float) $displayVariant->price
+            : null;
+
+        return [
+            'id' => $product->id,
+            'seller_profile_id' => $product->seller_profile_id,
+            'category_id' => $product->category_id,
+            'name' => $product->name,
+            'slug' => $product->slug,
+            'availability_restricted' => false,
+            'seller_on_vacation' => (bool) ($seller?->vacation_mode ?? false),
+            'purchase_limit_per_buyer' => $product->purchase_limit_per_buyer === null
+                ? null
+                : (int) $product->purchase_limit_per_buyer,
+            'flash_sale_starts_at' => $product->flash_sale_starts_at?->toIso8601String(),
+            'flash_sale_ends_at' => $product->flash_sale_ends_at?->toIso8601String(),
+            'flash_sale_limit_per_buyer' => $product->flash_sale_limit_per_buyer === null
+                ? null
+                : (int) $product->flash_sale_limit_per_buyer,
+            'seller_promotion_badges' => $this->sellerPromotions->forProduct($product)
+                ->map(fn ($offer): string => $offer->promotion_type === \App\Models\Seller\SellerPromotion::TYPE_BUNDLE
+                    ? 'Bundle deal'
+                    : 'Buy '.$offer->buy_quantity.' Get '.$offer->reward_quantity.((float) $offer->reward_discount_percent >= 100 ? ' Free' : ' · '.$offer->reward_discount_percent.'% off'))
+                ->unique()
+                ->values()
+                ->all(),
+            'seller_voucher_badges' => $this->publicVoucherBadgesForProduct($product),
+            'rating' => (float) ($product->reviews_avg_rating ?? 0),
+            'reviews' => (int) ($product->reviews_count ?? 0),
+            'sold' => (int) ($product->order_items_sum_quantity ?? 0),
+            'price' => $currentPrice === null ? null : number_format((float) $currentPrice, 2, '.', ''),
+            'min_price' => $currentPrice === null ? null : number_format((float) $currentPrice, 2, '.', ''),
+            'original_price' => $originalPrice === null ? null : number_format($originalPrice, 2, '.', ''),
+            'old_price' => $originalPrice === null ? null : number_format($originalPrice, 2, '.', ''),
+            'stock' => $activeVariants->sum('stock'),
+            'primary_image' => $primaryImage,
+            'category' => $product->category ? [
+                'id' => $product->category->id,
+                'name' => $product->category->name,
+                'slug' => $product->category->slug,
+            ] : null,
+            'seller' => $seller ? [
+                'id' => $seller->id,
+                'user_id' => $seller->user_id,
+                'business_name' => $seller->business_name,
+                'status' => $seller->status,
+                'store_visibility' => (bool) $seller->store_visibility,
+                'vacation_mode' => (bool) $seller->vacation_mode,
+                'is_on_vacation' => (bool) $seller->vacation_mode,
+            ] : null,
+            'variants' => $variants,
+        ];
+    }
+
     /** @return array<int, array<string, mixed>> */
     private function publicVoucherBadgesForProduct(Product $product): array
     {

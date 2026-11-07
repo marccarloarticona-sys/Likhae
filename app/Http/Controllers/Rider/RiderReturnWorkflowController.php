@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Rider;
 use App\Http\Controllers\Controller;
 use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Services\Fulfillment\ShipmentReturnWorkflowService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -55,43 +56,49 @@ class RiderReturnWorkflowController extends Controller
         ]);
     }
 
-    public function centerHandoff(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function centerHandoff(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         return $this->transition($request, $workflow, $returns, 'center_handoff');
     }
 
-    public function accept(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function accept(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         try {
             $returns->acceptAsReturnRider($workflow, $request->user());
         } catch (RuntimeException $exception) {
-            return back()->withErrors(['return' => $exception->getMessage()]);
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => $exception->getMessage()], 422)
+                : back()->withErrors(['return' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Return assignment accepted. Scan the parcel when you collect it from the center.');
+        $message = 'Return assignment accepted. Scan the parcel when you collect it from the center.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message, 'status' => $workflow->fresh()->status])
+            : back()->with('status', $message);
     }
 
-    public function pickup(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function pickup(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         return $this->transition($request, $workflow, $returns, 'pickup');
     }
 
-    public function sellerHandoff(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function sellerHandoff(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         return $this->transition($request, $workflow, $returns, 'seller_handoff');
     }
 
-    public function handoffFrom(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function handoffFrom(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         return $this->transition($request, $workflow, $returns, 'handoff_from');
     }
 
-    public function handoffTo(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse
+    public function handoffTo(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns): RedirectResponse|JsonResponse
     {
         return $this->transition($request, $workflow, $returns, 'handoff_to');
     }
 
-    private function transition(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns, string $step): RedirectResponse
+    private function transition(Request $request, ShipmentReturnWorkflow $workflow, ShipmentReturnWorkflowService $returns, string $step): RedirectResponse|JsonResponse
     {
         $data = $request->validate([
             'scan_method' => ['required', 'in:QR,BARCODE,MANUAL'],
@@ -109,9 +116,15 @@ class RiderReturnWorkflowController extends Controller
                 default => throw new RuntimeException('Unsupported return custody action.'),
             };
         } catch (RuntimeException $exception) {
-            return back()->withErrors(['return' => $exception->getMessage()])->withInput();
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => $exception->getMessage()], 422)
+                : back()->withErrors(['return' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Return custody scan recorded.');
+        $message = 'Return custody scan recorded.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message, 'status' => $workflow->fresh()->status])
+            : back()->with('status', $message);
     }
 }

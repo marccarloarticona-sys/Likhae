@@ -37,6 +37,7 @@ use App\Services\Marketplace\ProductPriceResolver;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Marketplace\SellerPromotionBuyerService;
 use App\Services\Marketplace\VoucherRedemptionCounter;
+use App\Services\UserPreferenceService;
 use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Support\PhilippineAddressValidator;
@@ -51,6 +52,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -142,7 +144,7 @@ class BuyerController extends Controller
         $pageNumber = max(1, (int) $request->query('recommendation_page', 1));
         $recommendationPage = $this->homepageRecommendationPage($excludedProductIds, $pageNumber);
         $recommendedProducts = $recommendationPage['products']
-            ->map(fn (Product $product): array => $this->catalog->productPayload($product));
+            ->map(fn (Product $product): array => $this->catalog->recommendationCardPayload($product));
 
         return response()->json([
             'html' => view('buyer.partials.home-recommendation-cards', compact('recommendedProducts'))->render(),
@@ -153,7 +155,17 @@ class BuyerController extends Controller
     /** @return array{products: Collection<int, Product>, has_more: bool} */
     private function homepageRecommendationPage(array $excludedProductIds, int $page): array
     {
-        $query = $this->catalog->visibleQuery()
+        $query = Product::query()
+            ->visible()
+            ->with([
+                'category',
+                'sellerProfile',
+                'images',
+                'variants' => fn ($variants) => $variants->where('is_active', true),
+            ])
+            ->withAvg('reviews', 'rating')
+            ->withCount('reviews')
+            ->withSum('orderItems', 'quantity')
             ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
             ->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true)->where('stock', '>', 0));
 
@@ -588,6 +600,49 @@ class BuyerController extends Controller
             'recommendations' => $recommendations,
             'recommendationProducts' => $recommendations?->getCollection()
                 ->map(fn (Product $product) => $this->buyerCatalogPayload($product)) ?? collect(),
+        ]);
+    }
+
+    public function productCatalogPage(Request $request): JsonResponse
+    {
+        [$filters, , $catalogErrors] = $this->validatedCatalogFilters($request);
+        $query = $this->filterBuyerCatalog(
+            $this->catalog->visibleQuery()->with('sellerProfile.businessAddress'),
+            $filters,
+        );
+
+        if ($catalogErrors->has('min_price') || $catalogErrors->has('max_price')) {
+            $query->whereRaw('1 = 0');
+        }
+
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $products = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest')
+            ->simplePaginate(24, ['*'], 'page', $page)
+            ->appends($this->catalogQueryParameters($filters));
+        $cardProducts = $products->getCollection()
+            ->map(fn (Product $product) => $this->buyerCatalogPayload($product));
+        $recommendations = null;
+        $recommendationProducts = collect();
+
+        if ($filters['q'] !== '' && $catalogErrors->getBag('default')->isEmpty() && ! $products->hasMorePages()) {
+            $recommendations = $this->searchRecommendations($filters, 1);
+            $recommendationProducts = $recommendations->getCollection()
+                ->map(fn (Product $product) => $this->buyerCatalogPayload($product));
+        }
+
+        return response()->json([
+            'html' => view('buyer.products.recommendation-cards', ['products' => $cardProducts])->render(),
+            'has_more' => $products->hasMorePages(),
+            'next_page' => $products->hasMorePages() ? $page + 1 : null,
+            'recommendations_html' => $recommendations
+                ? view('buyer.products.search-recommendations', [
+                    'recommendations' => $recommendations,
+                    'recommendationProducts' => $recommendationProducts,
+                    'queryParameters' => $this->catalogQueryParameters($filters),
+                    'catalogFilterValues' => $filters,
+                    'activeView' => $filters['view'] ?? 'grid',
+                ])->render()
+                : '',
         ]);
     }
 
@@ -2534,47 +2589,42 @@ class BuyerController extends Controller
         ]);
     }
 
-    public function updateSettings(Request $request): RedirectResponse
+    public function updateSettings(Request $request, UserPreferenceService $userPreferences): RedirectResponse
     {
         $data = $request->validate([
             'theme' => ['required', Rule::in(['light', 'dark', 'system'])],
-            'language' => ['required', Rule::in(['en'])],
+            'language' => ['required', Rule::in(array_keys(config('app.supported_locales', ['en' => 'English'])))],
             'show_online_status' => ['sometimes', 'boolean'],
         ]);
 
-        $buyerId = $request->user()->getKey();
-        DB::transaction(function () use ($request, $data, $buyerId): void {
-            $buyer = User::query()->whereKey($buyerId)->lockForUpdate()->firstOrFail();
-            $currentPreferences = $this->buyerPreferences($buyer);
-            $preferences = array_merge($currentPreferences, [
-                'order_updates' => $request->boolean('order_updates'),
-                'delivery_updates' => $request->boolean('delivery_updates'),
-                'chat_updates' => $request->boolean('chat_updates'),
-                'promotion_updates' => $request->boolean('promotion_updates'),
-                'show_online_status' => $request->exists('show_online_status')
-                    ? $request->boolean('show_online_status')
-                    : $currentPreferences['show_online_status'],
-                'theme' => $data['theme'],
-                'language' => $data['language'],
-                'notification_sounds' => $request->boolean('notification_sounds'),
-            ]);
+        $changes = [
+            'order_updates' => $request->boolean('order_updates'),
+            'delivery_updates' => $request->boolean('delivery_updates'),
+            'chat_updates' => $request->boolean('chat_updates'),
+            'promotion_updates' => $request->boolean('promotion_updates'),
+            'theme' => $data['theme'],
+            'language' => $data['language'],
+            'notification_sounds' => $request->boolean('notification_sounds'),
+        ];
+        if ($request->exists('show_online_status')) {
+            $changes['show_online_status'] = $request->boolean('show_online_status');
+        }
+        $userPreferences->merge($request->user(), $changes);
+        App::setLocale($data['language']);
 
-            $buyer->forceFill(['notification_preferences' => $preferences])->save();
-        });
-
-        if (! $request->boolean('show_online_status')) {
+        if ($request->exists('show_online_status') && ! $request->boolean('show_online_status')) {
             Cache::store('database')->forget('message-presence:user:'.$request->user()->id);
         }
 
-        return back()->with('buyer_notice', 'System settings updated.');
+        return back()->with('buyer_notice', __('common.messages.settings_saved'));
     }
 
-    public function updateThemePreference(Request $request): JsonResponse
+    public function updateThemePreference(Request $request, UserPreferenceService $userPreferences): JsonResponse
     {
         $unknownFields = array_diff(array_keys($request->all()), ['theme']);
         if ($unknownFields !== []) {
             throw ValidationException::withMessages([
-                (string) reset($unknownFields) => 'This setting field is not allowed.',
+                (string) reset($unknownFields) => __('common.errors.setting_unavailable'),
             ]);
         }
 
@@ -2582,28 +2632,18 @@ class BuyerController extends Controller
             'theme' => ['required', 'string', Rule::in(['light', 'dark', 'system'])],
         ]);
 
-        DB::transaction(function () use ($request, $data): void {
-            $buyer = User::query()
-                ->whereKey($request->user()->getKey())
-                ->lockForUpdate()
-                ->firstOrFail();
-            $preferences = array_merge($this->buyerPreferences($buyer), [
-                'theme' => $data['theme'],
-            ]);
-
-            $buyer->forceFill(['notification_preferences' => $preferences])->save();
-        });
+        $userPreferences->merge($request->user(), ['theme' => $data['theme']]);
 
         return response()->json(['theme' => $data['theme']]);
     }
 
-    public function updateAiPreference(Request $request): JsonResponse
+    public function updateAiPreference(Request $request, UserPreferenceService $userPreferences): JsonResponse
     {
         $allowedFields = ['key', 'enabled'];
         $unknownFields = array_diff(array_keys($request->all()), $allowedFields);
         if ($unknownFields !== []) {
             throw ValidationException::withMessages([
-                (string) reset($unknownFields) => 'This setting field is not allowed.',
+                (string) reset($unknownFields) => __('common.errors.setting_unavailable'),
             ]);
         }
 
@@ -2613,17 +2653,7 @@ class BuyerController extends Controller
         ]);
         $enabled = (bool) $data['enabled'];
 
-        DB::transaction(function () use ($request, $data, $enabled): void {
-            $buyer = User::query()
-                ->whereKey($request->user()->getKey())
-                ->lockForUpdate()
-                ->firstOrFail();
-            $preferences = array_merge($this->buyerPreferences($buyer), [
-                $data['key'] => $enabled,
-            ]);
-
-            $buyer->forceFill(['notification_preferences' => $preferences])->save();
-        });
+        $userPreferences->merge($request->user(), [$data['key'] => $enabled]);
 
         return response()->json([
             'key' => $data['key'],
@@ -2661,7 +2691,7 @@ class BuyerController extends Controller
     /** @return array<string, bool|string> */
     private function buyerPreferences(User $user): array
     {
-        return array_merge([
+        $preferences = array_merge([
             'order_updates' => true,
             'delivery_updates' => true,
             'chat_updates' => true,
@@ -2673,6 +2703,12 @@ class BuyerController extends Controller
             'language' => 'en',
             'notification_sounds' => true,
         ], (array) $user->notification_preferences);
+
+        if (! is_string($preferences['language']) || ! array_key_exists($preferences['language'], config('app.supported_locales', ['en' => 'English']))) {
+            $preferences['language'] = 'en';
+        }
+
+        return $preferences;
     }
 
     public function saveProfile(

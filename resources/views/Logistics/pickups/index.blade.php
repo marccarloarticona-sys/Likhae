@@ -7,7 +7,7 @@
     <header>
         <p class="text-xs font-bold uppercase text-primary">First-mile operations</p>
         <h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Queue</h1>
-        <p class="mt-2 text-sm text-muted">Each pickup assignment visits one seller address. Only online local riders with a recent GPS location and no active jobs appear here. Auto-assign offers the pickup to the nearest idle rider. The rider has 15 minutes to accept; if the offer expires, it moves to the next nearest idle rider. Rider service-area assignment is not required for this GPS-based pickup dispatch.</p>
+        <p class="mt-2 text-sm text-muted">Requests appear here when this center is selected by the Seller or receives an eligible pickup offer. Accept an offer within 15 minutes to confirm the route and assign an eligible local Rider. If declined or unanswered, LIKHAE tries the next eligible center when available.</p>
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -21,7 +21,7 @@
     @endif
 
     <section class="space-y-4" data-seller-pickup-requests>
-        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Each request keeps its selected parcels together and preserves each parcel’s own waybill and scan history.</p></div>
+        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Each request keeps its selected parcels together. Sellers provide one order waybill, and each parcel keeps its scan history.</p></div>
         @forelse($sellerPickupRequests as $pickupRequest)
             @php
                 $requestParcels = $pickupRequest->memberships;
@@ -33,13 +33,32 @@
                         <p class="text-xs font-bold uppercase text-primary">Request #{{ $pickupRequest->id }}</p>
                         <h3 class="mt-1 font-bold text-ink">{{ $pickupRequest->sellerProfile?->business_name ?? 'Seller unavailable' }}</h3>
                         <p class="mt-1 text-sm text-muted">{{ $pickupRequest->pickupAddress?->formatted() ?? 'Pickup address unavailable' }}</p>
+                        @if($pickupRequest->preferredLogisticsCenter)
+                            <p class="mt-1 text-sm text-muted">Selected by Seller: <strong>{{ $pickupRequest->preferredLogisticsCenter->business_name }}</strong></p>
+                        @endif
                         <p class="mt-1 text-sm text-muted">{{ $progress['total'] }} {{ str('parcel')->plural($progress['total']) }} · {{ $progress['collected'] }} / {{ $progress['total'] }} collected</p>
+                        @if($pickupRequest->current_center_offer)
+                            @php
+                                $currentOffer = $pickupRequest->current_center_offer;
+                            @endphp
+                            <p class="mt-2 text-sm font-semibold text-ink">Offer #{{ $currentOffer->attempt_number }} · {{ $currentOffer->estimate_method === 'ROAD_ROUTE' ? 'estimated drive route' : 'estimated straight-line distance' }} {{ number_format(((int) $currentOffer->estimated_distance_meters) / 1000, 1) }} km · response due {{ $currentOffer->expires_at?->timezone(config('app.timezone'))->format('M j, g:i A') }}</p>
+                            @if($currentOffer->estimated_travel_seconds)
+                                <p class="mt-1 text-xs text-muted">Estimated travel time: {{ max(1, (int) ceil($currentOffer->estimated_travel_seconds / 60)) }} min.</p>
+                            @endif
+                        @elseif($pickupRequest->status === 'REQUESTED' && $pickupRequest->preferredLogisticsCenter)
+                            <p class="mt-2 text-sm text-amber-800">Please accept or assign this request by {{ $pickupRequest->updated_at?->copy()->addMinutes(15)->timezone(config('app.timezone'))->format('M j, g:i A') }}. If it is still unaccepted, it returns to the Seller.</p>
+                        @elseif(in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true))
+                            <p class="mt-2 text-sm text-amber-800">Pending follow-up: no complete authorized route or available Rider capacity is confirmed yet. Confirm it within 15 minutes or it will return to the Seller.</p>
+                        @endif
                     </div>
                     <span class="border border-line px-3 py-2 text-xs font-bold uppercase text-ink">{{ str($pickupRequest->status)->replace('_', ' ')->title() }}</span>
                 </header>
                 @php
                     [$pickupRequestNextStep, $pickupRequestNextActor] = match ($pickupRequest->status) {
-                        'REQUESTED' => ['Assign an eligible rider to collect these parcels.', 'Logistics'],
+                        'REQUESTED' => ['Accept or assign this request within 15 minutes. If it remains unaccepted, it returns to the Seller.', 'Logistics'],
+                        'MATCHING' => ['Check this request from the Seller; automatic matching checks route and Rider capacity at this center.', 'Logistics'],
+                        'WAITING_FOR_RESPONSE' => ['Accept within 15 minutes to confirm the saved route and assign an eligible pickup Rider. Declining returns the parcels to the Seller for another center choice.', 'Logistics'],
+                        'PENDING' => ['Confirm route and Rider capacity within 15 minutes. Otherwise the request returns to the Seller.', 'Logistics'],
                         'ASSIGNED' => ['Collect the parcels and hand them to the authorized center.', 'Pickup rider'],
                         'COMPLETED' => ['Scan the collected parcels into center custody.', 'Logistics'],
                         'REJECTED' => ['Review the rejection reason; the Seller may submit a new request.', 'Seller'],
@@ -61,7 +80,18 @@
                         </li>
                     @endforeach
                 </ol>
-                @if($pickupRequest->status === 'REQUESTED' && $pickupSchemaReady)
+                @if($pickupRequest->current_center_offer && $automaticPickupMatchingReady)
+                    <div class="flex flex-wrap gap-3 border-t border-line pt-4">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="Accept this Seller pickup offer?" data-confirm-message="The route and capacity will be rechecked, then the nearest eligible local Rider in this center will receive the pickup assignment." data-confirm-label="Accept offer">
+                            @csrf
+                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">Accept offer and assign Rider</button>
+                        </form>
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="Decline this center offer?" data-confirm-message="This immediately returns the parcels to the Seller so they can choose another covered center." data-confirm-label="Decline offer">
+                            @csrf
+                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">Decline offer</button>
+                        </form>
+                    </div>
+                @elseif($pickupRequest->status === 'REQUESTED' && $pickupSchemaReady)
                     <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf

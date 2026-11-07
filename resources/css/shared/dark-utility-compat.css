@@ -116,3 +116,48 @@ html.dark [style*="background:#fff8e8"] {
     border-color: #705a33 !important;
     color: #f1d08e !important;
 }
+
+/* Keep dark workspace surfaces intact and set foreground colors per role. */
+html.dark body.lk-buyer-body { --lk-role-dark-foreground: #fff; }
+html.dark body.sl-body { --lk-role-dark-foreground: #fff; }
+html.dark body.ad-body { --lk-role-dark-foreground: #fff; }
+html.dark body.rider-shell { --lk-role-dark-foreground: #fff; }
+html.dark body.logistics-shell { --lk-role-dark-foreground: #fff; }
+
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell),
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) *,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) *::before,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) *::after,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) *::placeholder,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) *::marker {
+    color: var(--lk-role-dark-foreground, #fff) !important;
+}
+
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) :is(input, textarea, select) {
+    color: var(--lk-role-dark-foreground, #fff) !important;
+    -webkit-text-fill-color: var(--lk-role-dark-foreground, #fff) !important;
+}
+
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) :is(
+    [class*="icon"],
+    [class*="Icon"],
+    [class*="__icon"],
+    .auth-eye,
+    .lg-side-icon,
+    .logi-nav-icon,
+    i,
+    svg[aria-hidden="true"]
+) {
+    color: var(--lk-role-dark-foreground, #fff) !important;
+}
+
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell) :is(
+    [class*="icon"] svg,
+    [class*="Icon"] svg,
+    [class*="__icon"] svg,
+    svg[aria-hidden="true"],
+    svg[class*="icon"],
+    i[class*="fa-"]
+) {
+    filter: grayscale(1) brightness(0) invert(1) !important;
+}

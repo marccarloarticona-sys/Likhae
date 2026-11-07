@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Finance\FinancialLedgerEntry;
 use App\Models\Finance\SellerSettlement;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\LogisticsCenter;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerOrder;
@@ -17,7 +18,6 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Finance\FinanceSchemaReadiness;
-use App\Services\Maps\MapDataService;
 use App\Services\Reports\SellerSalesSummaryService;
 use App\Services\Reports\SellerReportTrendService;
 use App\Services\Reports\SellerOrderValueChartService;
@@ -214,49 +214,28 @@ class SellerOperationsController extends Controller
         ]);
     }
 
-    public function logistics(Request $request): View
+    public function logistics(Request $request): View|RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller, 403);
-        $returnWorkflowSchemaReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnsReady();
-        $returnEnhancementsReady = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
-
         if ($request->query('view') === 'tracking') {
             $orderNumber = $request->validate([
                 'order' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9-]+$/'],
             ])['order'];
-            $trackingRelations = [
-                'order.address',
-                'sellerProfile.businessAddress',
-                'shipments.orderItem',
-                'shipments.events.actor',
-                'shipments.events.logisticsCenter',
-                'shipments.events.riderAssignment.riderProfile.user',
-                'shipments.riderAssignments.riderProfile.user',
-                'shipments.riderAssignments.liveLocation',
-                'shipments.logisticsCenter.address',
-                'shipments.serviceArea.logisticsCenter.address',
-            ];
-            if ($returnWorkflowSchemaReady) {
-                $trackingRelations[] = 'shipments.returnWorkflow.returnRider.user';
-            }
             $trackingOrder = SellerOrder::query()
                 ->where('seller_profile_id', $seller->id)
                 ->where('seller_order_number', $orderNumber)
-                ->with($trackingRelations)
                 ->firstOrFail();
-            $mapMarkers = app(MapDataService::class)->forShipments($trackingOrder->shipments, includeSeller: true);
 
-            return view('seller.logistics', [
-                'seller' => $seller,
-                'trackingOrder' => $trackingOrder,
-                'mapMarkers' => $mapMarkers,
-                'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
-                'returnEnhancementsReady' => $returnEnhancementsReady,
+            return redirect()->route('seller.orders', [
+                'mode' => 'show',
+                'order' => $trackingOrder->seller_order_number,
             ]);
         }
-
         $pickupRequestSchemaReady = app(LogisticsSchemaReadiness::class)->sellerPickupRequestsReady();
+        $logisticsSchema = app(LogisticsSchemaReadiness::class);
+        $pickupCenterSelectionReady = $logisticsSchema->sellerPickupCenterSelectionReady();
+        $automaticPickupMatchingReady = $logisticsSchema->automaticSellerPickupMatchingReady();
         $pickupAddresses = Address::query()
             ->where('user_id', $seller->user_id)
             ->orderByDesc('is_default')
@@ -265,16 +244,53 @@ class SellerOperationsController extends Controller
         $pickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default)
             ?? $pickupAddresses->firstWhere('id', (int) $seller->business_address_id)
             ?? $pickupAddresses->first();
+        $pickupCenterOptions = collect();
+        if ($pickupCenterSelectionReady && $pickupAddresses->isNotEmpty()) {
+            $pickupCenterOptions = LogisticsCenter::query()
+                ->approvedActive()
+                ->whereHas('owner', fn ($owner) => $owner
+                    ->where('account_type', \App\Models\User::TYPE_LOGISTICS)
+                    ->where('status', \App\Models\User::STATUS_ACTIVE))
+                ->with('address')
+                ->orderBy('business_name')
+                ->get()
+                ->filter(fn (LogisticsCenter $center): bool => $center->address
+                    && is_numeric($center->address->latitude)
+                    && is_numeric($center->address->longitude))
+                ->values();
+            if ($automaticPickupMatchingReady && $pickupAddress
+                && is_numeric($pickupAddress->latitude) && is_numeric($pickupAddress->longitude)) {
+                $pickupCenterOptions = $pickupCenterOptions->sortBy(function (LogisticsCenter $center) use ($pickupAddress): float {
+                    $latitudeDelta = deg2rad((float) $center->address->latitude - (float) $pickupAddress->latitude);
+                    $longitudeDelta = deg2rad((float) $center->address->longitude - (float) $pickupAddress->longitude);
+                    $latitude = deg2rad((float) $pickupAddress->latitude);
+                    $centerLatitude = deg2rad((float) $center->address->latitude);
+                    $a = sin($latitudeDelta / 2) ** 2
+                        + cos($latitude) * cos($centerLatitude) * sin($longitudeDelta / 2) ** 2;
 
-        $orders = SellerOrder::query()
-            ->where('seller_profile_id', $seller->id)
-            ->with(array_merge(
-                ['order.address', 'items', 'shipments.orderItem', 'shipments.events', 'shipments.pickupRequests', 'shipments.riderAssignments.riderProfile.user'],
-                $returnWorkflowSchemaReady ? ['shipments.returnWorkflow.returnRider.user'] : [],
-            ))
-            ->whereHas('shipments')
-            ->latest()
-            ->paginate(15);
+                    return 6371 * 2 * atan2(sqrt($a), sqrt(max(0.0, 1 - $a)));
+                })->values();
+            }
+            if (! $automaticPickupMatchingReady) {
+                $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
+                $pickupCenterOptions = $pickupCenterOptions
+                    ->map(function (LogisticsCenter $center) use ($pickupAddresses, $areaEligibility): LogisticsCenter {
+                        $authorizedAddressIds = $pickupAddresses
+                            ->filter(fn (Address $address): bool => is_numeric($address->latitude)
+                                && is_numeric($address->longitude)
+                                && $areaEligibility->centerAuthorizesAddress($center, $address))
+                            ->pluck('id')
+                            ->map(fn ($id): int => (int) $id)
+                            ->values()
+                            ->all();
+                        $center->setAttribute('authorized_pickup_address_ids', $authorizedAddressIds);
+
+                        return $center;
+                    })
+                    ->filter(fn (LogisticsCenter $center): bool => $center->authorized_pickup_address_ids !== [])
+                    ->values();
+            }
+        }
 
         $readyPickupParcels = collect();
         $pickupRequests = collect();
@@ -289,19 +305,23 @@ class SellerOperationsController extends Controller
                 ->whereDoesntHave('riderAssignments', fn ($query) => $query
                     ->where('assignment_type', 'PICKUP')->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED']))
                 ->whereDoesntHave('sellerPickupMemberships', fn ($query) => $query->where('active_slot', true))
-                ->with(['sellerOrder', 'orderItem', 'waybills'])
+                ->with(['sellerOrder', 'orderItem', 'serviceArea', 'waybills'])
                 ->orderBy('seller_order_id')
                 ->orderBy('id')
                 ->get();
 
+            $pickupRequestRelations = [
+                'pickupAddress',
+                'riderLocalTrip.rider.user',
+                'memberships.sellerOrder',
+                'memberships.shipment.waybills',
+            ];
+            if ($pickupCenterSelectionReady) {
+                $pickupRequestRelations[] = 'preferredLogisticsCenter';
+            }
             $pickupRequests = SellerPickupRequest::query()
                 ->where('seller_profile_id', $seller->id)
-                ->with([
-                    'pickupAddress',
-                    'riderLocalTrip.rider.user',
-                    'memberships.sellerOrder',
-                    'memberships.shipment.waybills',
-                ])
+                ->with($pickupRequestRelations)
                 ->latest('id')
                 ->limit(20)
                 ->get();
@@ -313,15 +333,14 @@ class SellerOperationsController extends Controller
 
         return view('seller.logistics', [
             'seller' => $seller,
-            'trackingOrder' => null,
-            'orders' => $orders,
             'pickupAddress' => $pickupAddress,
             'pickupAddresses' => $pickupAddresses,
+            'pickupCenterOptions' => $pickupCenterOptions,
+            'pickupCenterSelectionReady' => $pickupCenterSelectionReady,
             'readyPickupParcels' => $readyPickupParcels,
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,
-            'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
-            'returnEnhancementsReady' => $returnEnhancementsReady,
+            'automaticPickupMatchingReady' => $automaticPickupMatchingReady,
         ]);
     }
 
@@ -349,39 +368,37 @@ class SellerOperationsController extends Controller
         }
         $sellerOrder->load(['items.shipment', 'items.productVariant', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
         $shipments->each(fn ($shipment) => $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]));
+        $totalParcelCount = $shipments->count();
+        $requestedShipmentId = $request->query('shipment_id');
+        if ($requestedShipmentId !== null) {
+            abort_unless(is_scalar($requestedShipmentId) && ctype_digit((string) $requestedShipmentId), 404);
+            $shipments = $shipments->filter(fn (Shipment $shipment): bool => (int) $shipment->id === (int) $requestedShipmentId);
+            abort_if($shipments->isEmpty(), 404);
+        }
 
         return view('seller.waybills', [
             'sellerOrder' => $sellerOrder,
             'shipments' => $shipments,
+            'totalParcelCount' => $totalParcelCount,
         ]);
     }
 
-    public function waybillItem(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): View
+    public function waybillItem(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
         abort_unless($sellerOrder->canPrintWaybills(), 409, 'Waybills are available after you accept the order.');
         abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+        $shipmentId = $request->query('shipment_id');
+        abort_unless(is_scalar($shipmentId) && ctype_digit((string) $shipmentId), 404);
+        abort_unless($sellerOrder->shipments()
+            ->whereKey((int) $shipmentId)
+            ->where('order_item_id', $orderItem->id)
+            ->exists(), 404);
 
-        try {
-            $shipments = $workflow->ensureItemShipments($sellerOrder, $request->user());
-        } catch (RuntimeException $exception) {
-            if ($sellerOrder->shipments()->whereNull('order_item_id')->exists()) {
-                abort(409, $exception->getMessage());
-            }
-
-            throw $exception;
-        }
-        $shipment = $shipments->firstWhere('order_item_id', $orderItem->id);
-        abort_unless($shipment, 404, 'A parcel label has not been linked to this order item.');
-        $sellerOrder->load(['items.shipment', 'sellerProfile.user', 'sellerProfile.businessAddress', 'order.address']);
-        $shipment->loadMissing(['orderItem', ...$this->waybillRelations()]);
-
-        return view('seller.waybill', [
+        return redirect()->route('seller.orders.waybill', [
             'sellerOrder' => $sellerOrder,
-            'shipment' => $shipment,
-            'item' => $shipment->orderItem,
-            'waybill' => $shipment->waybills()->latest('format_version')->first(),
+            'shipment_id' => (int) $shipmentId,
         ]);
     }
 

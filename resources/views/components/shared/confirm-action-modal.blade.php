@@ -1,4 +1,4 @@
-<dialog class="lk-confirm-dialog" data-shared-confirm-dialog aria-labelledby="sharedConfirmTitle" aria-describedby="sharedConfirmMessage">
+<dialog class="lk-confirm-dialog" data-shared-confirm-dialog data-default-title="{{ __('common.confirmation.title') }}" data-default-message="{{ __('common.confirmation.message') }}" data-default-continue="{{ __('common.confirmation.continue') }}" aria-labelledby="sharedConfirmTitle" aria-describedby="sharedConfirmMessage">
     <div class="lk-confirm-card">
         <div class="lk-confirm-heading">
             <span class="lk-confirm-icon" aria-hidden="true">
@@ -8,15 +8,15 @@
                 </svg>
             </span>
             <div class="lk-confirm-title-wrap">
-                <span class="lk-confirm-eyebrow">LIKHAE <i aria-hidden="true"></i> ACTION CONFIRMATION</span>
-                <h2 id="sharedConfirmTitle" data-shared-confirm-title>Confirm action</h2>
+                <span class="lk-confirm-eyebrow">LIKHAE <i aria-hidden="true"></i> {{ __('common.confirmation.eyebrow') }}</span>
+                <h2 id="sharedConfirmTitle" data-shared-confirm-title>{{ __('common.confirmation.title') }}</h2>
             </div>
         </div>
-        <p id="sharedConfirmMessage" data-shared-confirm-message>Please review this action before continuing.</p>
+        <p id="sharedConfirmMessage" data-shared-confirm-message>{{ __('common.confirmation.message') }}</p>
         <p class="lk-confirm-details" data-shared-confirm-details hidden></p>
         <div class="lk-confirm-actions">
-            <button type="button" class="lk-confirm-cancel" data-shared-confirm-cancel>Cancel</button>
-            <button type="button" class="lk-confirm-accept" data-shared-confirm-accept><span data-shared-confirm-label>Continue</span><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button type="button" class="lk-confirm-cancel" data-shared-confirm-cancel>{{ __('common.confirmation.cancel') }}</button>
+            <button type="button" class="lk-confirm-accept" data-shared-confirm-accept><span data-shared-confirm-label>{{ __('common.confirmation.continue') }}</span><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
     </div>
 </dialog>
@@ -169,6 +169,12 @@
             .lk-confirm-actions button { transition: none; }
             .lk-confirm-actions button:hover { transform: none; }
         }
+        html.dark body .lk-confirm-dialog .lk-confirm-icon {
+            border-color: #594038 !important;
+            color: #FFFFFF !important;
+            background: #30231F !important;
+            box-shadow: 0 0 0 7px rgba(89, 64, 56, .28), 0 7px 16px rgba(0, 0, 0, .3) !important;
+        }
     </style>
     <script>
         (() => {
@@ -206,11 +212,11 @@
                 event.preventDefault();
                 pendingForm = form;
                 pendingSubmitter = submitter;
-                title.textContent = config.confirmTitle || 'Confirm action';
+                title.textContent = config.confirmTitle || dialog.dataset.defaultTitle;
                 message.textContent = config.confirmMessage;
                 details.textContent = config.confirmDetails || '';
                 details.hidden = !config.confirmDetails;
-                acceptLabel.textContent = config.confirmLabel || 'Continue';
+                acceptLabel.textContent = config.confirmLabel || dialog.dataset.defaultContinue;
                 dialog.classList.toggle('is-danger', config.confirmTone === 'danger');
                 dialog.showModal();
                 acceptButton.focus();

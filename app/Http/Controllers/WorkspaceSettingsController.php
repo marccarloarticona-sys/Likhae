@@ -3,10 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\Admin\PlatformPolicy;
+use App\Services\UserPreferenceService;
 use App\Services\PolicyAcceptanceService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\App;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -37,20 +40,20 @@ class WorkspaceSettingsController extends Controller
         ]);
     }
 
-    public function update(Request $request, string $workspace): RedirectResponse
+    public function update(Request $request, string $workspace, UserPreferenceService $userPreferences): RedirectResponse|JsonResponse
     {
         $config = $this->config($workspace);
         foreach (['user_id', 'seller_id', 'seller_profile_id'] as $ownerKey) {
             if ($request->exists($ownerKey)) {
                 throw ValidationException::withMessages([
-                    $ownerKey => 'Account ownership is determined by your signed-in session.',
+                    $ownerKey => __('common.errors.account_owner_from_session'),
                 ]);
             }
         }
 
         $rules = [
             'theme' => ['required', Rule::in(['light', 'dark', 'system'])],
-            'language' => ['sometimes', Rule::in(['en'])],
+            'language' => ['sometimes', Rule::in(array_keys(config('app.supported_locales', ['en' => 'English'])))],
         ];
         foreach ($this->booleanKeys($config) as $key) {
             $rules[$key] = ['sometimes', 'boolean'];
@@ -59,42 +62,69 @@ class WorkspaceSettingsController extends Controller
         $unknownKeys = array_diff(array_keys($request->all()), $allowedKeys);
         if ($unknownKeys !== []) {
             throw ValidationException::withMessages([
-                reset($unknownKeys) => 'This setting is not available for your workspace.',
+                reset($unknownKeys) => __('common.errors.setting_unavailable'),
             ]);
         }
         $data = $request->validate($rules);
-        $current = (array) $request->user()->notification_preferences;
-        $updated = [
-            'theme' => $data['theme'],
-            'language' => $data['language'] ?? ($current['language'] ?? 'en'),
-        ];
+        $updated = ['theme' => $data['theme']];
+        if (array_key_exists('language', $data)) {
+            $updated['language'] = $data['language'];
+        }
 
         foreach ($this->booleanKeys($config) as $key) {
-            $updated[$key] = $key === 'show_online_status' && ! $request->exists($key)
-                ? (bool) ($current[$key] ?? true)
-                : $request->boolean($key);
+            if ($key === 'show_online_status' && ! $request->exists($key)) {
+                continue;
+            }
+            $updated[$key] = $request->boolean($key);
         }
+
+        $preferenceDefaults = [];
         foreach ($config['notifications'] as $notification) {
-            $key = $notification[0];
             if (($notification[3] ?? true) === false) {
-                $updated[$key] = $current[$key] ?? false;
+                $preferenceDefaults[$notification[0]] = false;
             }
         }
+        $preferences = $userPreferences->merge($request->user(), $updated, $preferenceDefaults);
+        $locale = data_get($preferences, 'language', 'en');
+        if (! is_string($locale) || ! array_key_exists($locale, config('app.supported_locales', ['en' => 'English']))) {
+            $locale = 'en';
+        }
+        App::setLocale($locale);
 
-        $request->user()->forceFill([
-            'notification_preferences' => array_merge($current, $updated),
-        ])->save();
-
-        if (! $updated['show_online_status']) {
+        if (array_key_exists('show_online_status', $updated) && ! $updated['show_online_status']) {
             Cache::store('database')->forget('message-presence:user:'.$request->user()->id);
         }
 
-        $status = $config['center'].' settings updated.';
+        $status = __('common.messages.workspace_settings_saved', [
+            'workspace' => __('settings.workspaces.'.$workspace),
+        ]);
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'message' => $status, 'data' => $preferences]);
+        }
         if ($workspace === 'admin') {
             return redirect()->to(route('admin.system-settings').'#system-settings-preferences')->with('status', $status);
         }
 
         return back()->with('status', $status);
+    }
+
+    public function updateThemePreference(Request $request, string $workspace, UserPreferenceService $userPreferences): JsonResponse
+    {
+        $this->config($workspace);
+        $unknownFields = array_diff(array_keys($request->all()), ['theme']);
+        if ($unknownFields !== []) {
+            throw ValidationException::withMessages([
+                (string) reset($unknownFields) => __('common.errors.setting_unavailable'),
+            ]);
+        }
+
+        $data = $request->validate([
+            'theme' => ['required', 'string', Rule::in(['light', 'dark', 'system'])],
+        ]);
+
+        $userPreferences->merge($request->user(), ['theme' => $data['theme']]);
+
+        return response()->json(['theme' => $data['theme']]);
     }
 
     /** @return array<string, mixed> */
@@ -119,7 +149,7 @@ class WorkspaceSettingsController extends Controller
                 'show_ai' => false,
                 'description' => 'Adjust your Admin Center appearance and notification sound preference.',
                 'notifications' => [],
-                'show_language' => false,
+                'show_language' => true,
             ],
             'logistics' => [
                 'view' => 'logistics.settings', 'center' => 'Logistics Center', 'account_route' => 'logistics.profile',

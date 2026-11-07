@@ -13,6 +13,7 @@ use App\Models\Rider\RiderAssignment;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Buyer\OrderItem;
+use App\Models\Buyer\ReturnRefundRequestItem;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -54,10 +55,13 @@ class Shipment extends Model
     protected $fillable = [
         'seller_order_id',
         'order_item_id',
+        'parcel_quantity',
         'tracking_number',
         'logistics_center_id',
         'origin_logistics_center_id',
         'destination_logistics_center_id',
+        'smart_coverage_route_id',
+        'smart_coverage_service_date',
         'service_area_id',
         'origin_province_code',
         'origin_province_name',
@@ -67,6 +71,9 @@ class Shipment extends Model
         'origin_barangay_name',
         'parcel_weight_kg',
         'parcel_volume_liters',
+        'parcel_length_cm',
+        'parcel_width_cm',
+        'parcel_height_cm',
         'destination_province_code',
         'destination_province_name',
         'destination_municipality_code',
@@ -79,8 +86,13 @@ class Shipment extends Model
     protected function casts(): array
     {
         return [
+            'parcel_quantity' => 'integer',
             'parcel_weight_kg' => 'decimal:3',
             'parcel_volume_liters' => 'decimal:3',
+            'parcel_length_cm' => 'decimal:2',
+            'parcel_width_cm' => 'decimal:2',
+            'parcel_height_cm' => 'decimal:2',
+            'smart_coverage_service_date' => 'date',
         ];
     }
 
@@ -113,6 +125,16 @@ class Shipment extends Model
         return $this->belongsTo(OrderItem::class);
     }
 
+    public function getParcelQuantityAttribute(): int
+    {
+        $stored = $this->attributes['parcel_quantity'] ?? null;
+        if (is_numeric($stored) && (int) $stored > 0) {
+            return (int) $stored;
+        }
+
+        return max(0, (int) ($this->orderItem?->quantity ?? 0));
+    }
+
     public function logisticsCenter(): BelongsTo
     {
         return $this->belongsTo(LogisticsCenter::class);
@@ -126,6 +148,11 @@ class Shipment extends Model
     public function destinationLogisticsCenter(): BelongsTo
     {
         return $this->belongsTo(LogisticsCenter::class, 'destination_logistics_center_id');
+    }
+
+    public function smartCoverageRoute(): BelongsTo
+    {
+        return $this->belongsTo(LogisticsCoverageRoute::class, 'smart_coverage_route_id');
     }
 
     /** Transitional alias. */
@@ -194,6 +221,11 @@ class Shipment extends Model
         }
 
         return $relation;
+    }
+
+    public function returnRefundRequestItems(): HasMany
+    {
+        return $this->hasMany(ReturnRefundRequestItem::class, 'shipment_id');
     }
 
     public function buyerReturnWorkflows(): HasMany

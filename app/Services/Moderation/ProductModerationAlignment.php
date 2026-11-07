@@ -9,7 +9,6 @@ class ProductModerationAlignment
 {
     public const SCORE_KEYS = [
         'business_mismatch_probability',
-        'category_mismatch_probability',
         'subcategory_mismatch_probability',
     ];
 

@@ -75,6 +75,7 @@ class AdminProductsRemainingIssuesTest extends TestCase
             'Authorization' => 'Bearer '.$plainToken,
         ])->postJson(route('api.v1.buyer.checkout.store'), [
             'checkout_attempt_key' => '00000000-0000-4000-8000-000000000020',
+            'shipping_quote_token' => str_repeat('a', 64),
             'cart_item_ids' => [$item->id],
             'address_id' => $address->id,
             'payment_method' => 'COD',

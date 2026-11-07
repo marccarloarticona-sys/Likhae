@@ -3,10 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\Buyer\Address;
+use App\Models\Buyer\Order;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\LogisticsCoverageRoute;
+use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Seller\Category;
+use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Fulfillment\PsgcLogisticsRoutingService;
@@ -105,8 +109,80 @@ class PsgcLogisticsRoutingServiceTest extends TestCase
             app(PsgcLogisticsRoutingService::class)->resolveWithCenters($seller, $buyerAddress, $destination->id, $destination->id);
             $this->fail('Manually selected hubs must match the saved address PSGC.');
         } catch (ValidationException $exception) {
-            $this->assertStringContainsString('not active, approved, or authorized', strtolower((string) $exception->errors()['address_id'][0]));
+            $this->assertStringContainsString('seller pickup barangay psgc is not covered', strtolower((string) $exception->errors()['address_id'][0]));
         }
+    }
+
+    public function test_exact_primary_psgc_route_stays_first_when_smart_fallback_is_disabled(): void
+    {
+        config(['likhae.smart_nearby_logistics_fallback' => false]);
+        [$seller, $buyerAddress, $origin, $destination] = $this->routingFixture();
+
+        $resolved = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+
+        $this->assertSame('PRIMARY', $resolved['coverage_type']);
+        $this->assertNull($resolved['coverage_route']);
+        $this->assertSame($origin->id, $resolved['origin']->id);
+        $this->assertSame($destination->id, $resolved['destination']->id);
+    }
+
+    public function test_explicit_approved_secondary_route_serves_an_uncovered_barangay(): void
+    {
+        [$seller, $buyerAddress, $origin, $destination] = $this->fallbackFixture();
+        $this->coverageRoute($origin, $destination, $buyerAddress, LogisticsCoverageRoute::TYPE_SECONDARY);
+
+        $resolved = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+
+        $this->assertSame($origin->id, $resolved['origin']->id);
+        $this->assertSame($destination->id, $resolved['destination']->id);
+        $this->assertSame(LogisticsCoverageRoute::TYPE_SECONDARY, $resolved['coverage_type']);
+        $this->assertInstanceOf(LogisticsCoverageRoute::class, $resolved['coverage_route']);
+        $this->assertSame('0403422016', $resolved['destination_area']->barangay_code);
+        $this->assertNotNull($resolved['service_date']);
+        $this->assertNotNull($resolved['estimated_delivery_at']);
+    }
+
+    public function test_unapproved_or_inactive_nearby_route_does_not_make_address_serviceable(): void
+    {
+        [$seller, $buyerAddress, $origin, $destination] = $this->fallbackFixture();
+        $this->coverageRoute($origin, $destination, $buyerAddress, LogisticsCoverageRoute::TYPE_EXTENDED, active: false);
+
+        try {
+            app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+            $this->fail('An inactive route must not authorize delivery based on hub proximity.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString('no approved secondary or extended', strtolower((string) $exception->errors()['address_id'][0]));
+        }
+    }
+
+    public function test_multiple_approved_routes_are_ranked_deterministically(): void
+    {
+        [$seller, $buyerAddress, $origin, $destination] = $this->fallbackFixture();
+        $this->coverageRoute($origin, $destination, $buyerAddress, LogisticsCoverageRoute::TYPE_SECONDARY);
+        $otherDestination = $this->centerFor('Calamba Backup Hub', '0403405000', 'City of Calamba', '0403405001', 'Bagong Kalsada');
+        $this->coverageRoute($origin, $otherDestination, $buyerAddress, LogisticsCoverageRoute::TYPE_EXTENDED);
+
+        $first = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+        $second = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+
+        $this->assertSame($destination->id, $first['destination']->id);
+        $this->assertSame($first['coverage_route']->id, $second['coverage_route']->id);
+    }
+
+    public function test_full_route_capacity_uses_another_valid_route(): void
+    {
+        [$seller, $buyerAddress, $origin, $destination] = $this->fallbackFixture();
+        $fullRoute = $this->coverageRoute($origin, $destination, $buyerAddress, LogisticsCoverageRoute::TYPE_SECONDARY, capacity: 1);
+        $initialDecision = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+        $fullRoute->update(['valid_until' => $initialDecision['estimated_delivery_at']]);
+        $this->reserveRouteCapacity($seller, $buyerAddress, $fullRoute, $initialDecision['service_date']->toDateString());
+
+        $otherDestination = $this->centerFor('Calamba Capacity Backup', '0403405000', 'City of Calamba', '0403405001', 'Bagong Kalsada');
+        $availableRoute = $this->coverageRoute($origin, $otherDestination, $buyerAddress, LogisticsCoverageRoute::TYPE_EXTENDED);
+
+        $resolved = app(PsgcLogisticsRoutingService::class)->resolve($seller, $buyerAddress);
+
+        $this->assertSame($availableRoute->id, $resolved['coverage_route']->id);
     }
 
     /** @return array{0: SellerProfile, 1: Address, 2: LogisticsCenter, 3: LogisticsCenter} */
@@ -182,5 +258,103 @@ class PsgcLogisticsRoutingServiceTest extends TestCase
         } catch (ValidationException $exception) {
             $this->assertStringContainsString('ambiguous', strtolower((string) $exception->errors()['address_id'][0]));
         }
+    }
+
+    /** @return array{0: SellerProfile, 1: Address, 2: LogisticsCenter, 3: LogisticsCenter} */
+    private function fallbackFixture(): array
+    {
+        [$seller, $buyerAddress, $origin, $destination] = $this->routingFixture();
+        $buyerAddress->forceFill([
+            'barangay_code' => '0403422016',
+            'barangay_name' => 'Santa Clara Norte',
+        ])->save();
+        config(['likhae.smart_nearby_logistics_fallback' => true]);
+
+        return [$seller, $buyerAddress, $origin, $destination];
+    }
+
+    private function coverageRoute(
+        LogisticsCenter $origin,
+        LogisticsCenter $destination,
+        Address $buyerAddress,
+        string $coverageType,
+        bool $active = true,
+        int $capacity = 10,
+    ): LogisticsCoverageRoute {
+        $area = ServiceArea::create([
+            'logistics_center_id' => $destination->id,
+            'code' => 'EXT-'.strtoupper(uniqid()),
+            'name' => 'Approved '.$coverageType.' coverage',
+            'is_active' => true,
+        ]);
+        $location = ServiceAreaLocation::create([
+            'service_area_id' => $area->id,
+            'province_code' => $buyerAddress->province_code,
+            'province_name' => $buyerAddress->province_name,
+            'municipality_code' => $buyerAddress->municipality_code,
+            'municipality_name' => $buyerAddress->municipality_name,
+            'barangay_code' => $buyerAddress->barangay_code,
+            'barangay_name' => $buyerAddress->barangay_name,
+            'coverage_type' => $coverageType,
+        ]);
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+
+        return LogisticsCoverageRoute::query()->create([
+            'origin_logistics_center_id' => $origin->id,
+            'destination_service_area_location_id' => $location->id,
+            'coverage_type' => $coverageType,
+            'shipment_type' => LogisticsCoverageRoute::SHIPMENT_MARKETPLACE,
+            'is_active' => $active,
+            'valid_from' => now()->subDay(),
+            'valid_until' => now()->addDays(30),
+            'max_parcels_per_day' => $capacity,
+            'estimated_sla_hours' => 36,
+            'minimum_pickup_lead_hours' => 24,
+            'dispatch_weekdays' => [0, 1, 2, 3, 4, 5, 6],
+            'dispatch_cutoff_time' => '23:59:00',
+            'created_by_user_id' => $admin->id,
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
+            'updated_by_user_id' => $admin->id,
+        ]);
+    }
+
+    private function reserveRouteCapacity(
+        SellerProfile $seller,
+        Address $buyerAddress,
+        LogisticsCoverageRoute $route,
+        string $serviceDate,
+    ): Shipment {
+        $buyer = User::query()->findOrFail($buyerAddress->user_id);
+        $order = Order::query()->create([
+            'order_number' => 'ROUTE-CAPACITY-'.strtoupper(uniqid()),
+            'buyer_user_id' => $buyer->id,
+            'currency' => 'PHP',
+            'status' => 'PLACED',
+            'payment_status' => 'PENDING',
+        ]);
+        $sellerOrder = SellerOrder::query()->create([
+            'seller_order_number' => 'ROUTE-CAPACITY-SO-'.strtoupper(uniqid()),
+            'order_id' => $order->id,
+            'seller_profile_id' => $seller->id,
+            'status' => 'PLACED',
+            'item_subtotal' => 1,
+            'shipping_fee' => 1,
+            'grand_total' => 2,
+        ]);
+
+        return Shipment::query()->create([
+            'seller_order_id' => $sellerOrder->id,
+            'tracking_number' => 'ROUTE-CAPACITY-'.strtoupper(uniqid()),
+            'smart_coverage_route_id' => $route->id,
+            'smart_coverage_service_date' => $serviceDate,
+            'destination_province_code' => $buyerAddress->province_code,
+            'destination_province_name' => $buyerAddress->province_name,
+            'destination_municipality_code' => $buyerAddress->municipality_code,
+            'destination_municipality_name' => $buyerAddress->municipality_name,
+            'destination_barangay_code' => $buyerAddress->barangay_code,
+            'destination_barangay_name' => $buyerAddress->barangay_name,
+            'current_status' => 'PLACED',
+        ]);
     }
 }

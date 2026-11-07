@@ -29,6 +29,9 @@
             <div class="flex flex-wrap items-start justify-between gap-4">
                 <div>
                     <h2 class="font-bold">Return parcel to Seller</h2>
+                    @if($sellerRequest->shipment)
+                        <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">Original parcel tracking <strong class="font-mono">{{ $sellerRequest->shipment->tracking_number }}</strong> · Return qty {{ $sellerRequest->items->sum('quantity') }}</p>
+                    @endif
                     @if($buyerReturnWorkflow)
                         <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">Return waybill <strong class="font-mono">{{ $buyerReturnWorkflow->return_tracking_number }}</strong> &middot; {{ str($buyerReturnWorkflow->status)->replace('_', ' ')->title() }}</p>
                         <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">Drop-off: {{ $buyerReturnWorkflow->buyerDropoffCenter?->business_name ?? 'Assigned Logistics Center' }} @if($buyerReturnWorkflow->buyerDropoffCenter?->address) &middot; {{ $buyerReturnWorkflow->buyerDropoffCenter->address->formatted() }} @endif</p>

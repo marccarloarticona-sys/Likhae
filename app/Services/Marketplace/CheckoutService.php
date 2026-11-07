@@ -30,7 +30,9 @@ use App\Services\Protection\FragileProtectionRuleService;
 use App\Support\AddressCoordinateValidator;
 use App\Support\FinancialRules;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Database\QueryException;
@@ -59,6 +61,86 @@ class CheckoutService
     public function currentShippingFee(): string
     {
         return $this->shippingRates->currentPolicy()['shipping_fee'];
+    }
+
+    public function checkoutCartToken(User $buyer, Collection $items): string
+    {
+        $encoded = json_encode([
+            'buyer_id' => (int) $buyer->id,
+            'items' => $this->checkoutCartLines($items),
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        return hash_hmac('sha256', $encoded, (string) config('app.key'));
+    }
+
+    public function assertCheckoutCartToken(string $expectedToken, User $buyer, Collection $items): void
+    {
+        if (! hash_equals($this->checkoutCartToken($buyer, $items), $expectedToken)) {
+            throw ValidationException::withMessages([
+                'cart' => 'Your cart changed while checkout was open. Refresh checkout to review the updated products and totals.',
+            ]);
+        }
+    }
+
+    /**
+     * Sign the server-calculated shipping quote for this cart and address.
+     * The token is returned to checkout and verified again inside the order
+     * transaction so a displayed quote cannot be submitted after it changes.
+     *
+     * @param array<string, mixed> $preview
+     */
+    public function shippingQuoteToken(User $buyer, Address $address, Collection $items, array $preview): string
+    {
+        $sellerQuotes = collect($preview['groups'] ?? [])
+            ->mapWithKeys(fn (array $group, int|string $sellerId): array => [(string) $sellerId => [
+                'shipping_fee' => (string) ($group['shipping_fee'] ?? '0.00'),
+                'shipping_voucher_discount' => (string) ($group['shipping_voucher_discount'] ?? '0.00'),
+                'snapshot' => (array) ($group['shipping_rate_snapshot'] ?? []),
+                'routing_decision' => (array) ($group['routing_decision'] ?? []),
+            ]])
+            ->sortKeys()
+            ->all();
+
+        $payload = [
+            'buyer_id' => (int) $buyer->id,
+            'address_id' => (int) $address->id,
+            'items' => $this->checkoutCartLines($items),
+            'seller_quotes' => $sellerQuotes,
+        ];
+        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        return hash_hmac('sha256', $encoded, (string) config('app.key'));
+    }
+
+    /** @return list<array{id:int,variant_id:int,quantity:int,seller_id:int}> */
+    private function checkoutCartLines(Collection $items): array
+    {
+        return $items->map(function (CartItem $item): array {
+            $item->loadMissing('productVariant.product');
+
+            return [
+                'id' => (int) $item->id,
+                'variant_id' => (int) $item->product_variant_id,
+                'quantity' => (int) $item->quantity,
+                'seller_id' => (int) ($item->productVariant?->product?->seller_profile_id ?? 0),
+            ];
+        })->sortBy('id')->values()->all();
+    }
+
+    /** @param array<string, mixed> $preview */
+    private function assertShippingQuoteToken(
+        ?string $expectedToken,
+        User $buyer,
+        Address $address,
+        Collection $items,
+        array $preview,
+    ): void {
+        $currentToken = $this->shippingQuoteToken($buyer, $address, $items, $preview);
+        if (! is_string($expectedToken) || ! hash_equals($currentToken, $expectedToken)) {
+            throw ValidationException::withMessages([
+                'shipping_quote' => 'Shipping fees or the delivery route changed while you were reviewing checkout. Review the updated delivery details before placing the order.',
+            ]);
+        }
     }
 
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
@@ -167,36 +249,62 @@ class CheckoutService
             ->approvedActive()
             ->whereHas('serviceAreas', fn ($query) => $query
                 ->where('is_active', true)
-                ->whereHas('locations'))
+                ->whereHas('locations', fn ($locations) => $locations
+                    ->when($this->schema->coverageTypeReady(), fn ($coverage) => $coverage->where('coverage_type', 'PRIMARY'))))
             ->orderBy('business_name')
             ->get(['id', 'code', 'business_name'])
             ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', $globalShippingFee));
     }
 
-    /** @return array{available: bool, requires_review: bool, message: string|null} */
+    /** @return array{available: bool, requires_review: bool, message: string|null, coverage_type: string|null, estimated_delivery_at: string|null} */
     public function deliveryAvailability(Collection $items, Address $destination, ?LogisticsCenter $provider = null): array
     {
         try {
-            $requiresReview = $this->assertDeliveryAvailable($items, $destination, $provider);
+            $routing = $this->assertDeliveryAvailable($items, $destination, $provider);
+            $fallbackDate = collect($routing['fallback_routes'])
+                ->pluck('estimated_delivery_at')
+                ->filter()
+                ->max();
+            $coverageTypes = collect($routing['coverage_types'])->unique()->values();
 
             return [
                 'available' => true,
-                'requires_review' => $requiresReview,
-                'message' => $requiresReview ? 'Delivery details may need confirmation after your order is placed.' : null,
+                'requires_review' => $routing['requires_review'],
+                'coverage_type' => $coverageTypes->isEmpty() ? 'PRIMARY' : ($coverageTypes->count() === 1 ? $coverageTypes->first() : 'MIXED'),
+                'estimated_sla_hours' => collect($routing['fallback_routes'])->pluck('estimated_sla_hours')->filter()->max(),
+                'estimated_delivery_at' => $fallbackDate,
+                'failure_reason' => null,
+                'message' => $routing['requires_review']
+                    ? 'Delivery details may need confirmation after your order is placed.'
+                    : ($fallbackDate
+                        ? 'An approved delivery route serves this address. Estimated delivery by '.Carbon::parse($fallbackDate)->format('M j, Y').'.'
+                        : null),
             ];
         } catch (ValidationException $exception) {
             $message = collect($exception->errors())->flatten()->filter()->first()
                 ?: 'Delivery is not available for this address.';
+            if ($this->schema->smartFallbackEnabled()) {
+                Log::info('Smart logistics fallback quote is unavailable.', [
+                    'failure_code' => $this->routingFailureCode((string) $message),
+                ]);
+            }
 
             return [
                 'available' => false,
                 'requires_review' => false,
                 'message' => $this->buyerFacingDeliveryError((string) $message),
+                'coverage_type' => null,
+                'estimated_sla_hours' => null,
+                'estimated_delivery_at' => null,
+                'failure_reason' => 'DELIVERY_UNAVAILABLE',
             ];
         }
     }
 
-    private function assertDeliveryAvailable(Collection $items, Address $destination, ?LogisticsCenter $provider = null): bool
+    /**
+     * @return array{requires_review:bool,fallback_routes:list<array{coverage_type:string,estimated_sla_hours:int,estimated_delivery_at:string|null}>,coverage_types:list<string>}
+     */
+    private function assertDeliveryAvailable(Collection $items, Address $destination, ?LogisticsCenter $provider = null): array
     {
         try {
             AddressCoordinateValidator::assertValid([
@@ -228,20 +336,43 @@ class CheckoutService
                 ]);
             }
 
-            return false;
+            return ['requires_review' => false, 'fallback_routes' => [], 'coverage_types' => ['PRIMARY']];
         }
 
         $requiresReview = false;
-        foreach ($items as $item) {
-            $item->loadMissing('productVariant.product.sellerProfile.businessAddress');
-            $seller = $item->productVariant?->product?->sellerProfile;
+        $plannedRouteReservations = [];
+        $fallbackRoutes = [];
+        $coverageTypes = [];
+        $sellerGroups = $items->groupBy(function (CartItem $item): int {
+            $item->loadMissing('productVariant.product.sellerProfile');
+
+            return (int) ($item->productVariant?->product?->seller_profile_id ?? 0);
+        });
+        foreach ($sellerGroups as $sellerItems) {
+            $sellerItems->each(fn (CartItem $item) => $item->loadMissing('productVariant.product.sellerProfile.businessAddress'));
+            $seller = $sellerItems->first()?->productVariant?->product?->sellerProfile;
             if (! $seller) {
                 continue;
             }
 
             try {
-                $route = $this->routing->resolve($seller, $destination);
+                $route = $this->routing->resolve($seller, $destination, [
+                    'required_parcels' => $sellerItems->count(),
+                    'planned_route_reservations' => $plannedRouteReservations,
+                ]);
                 $this->assertCrossHubCustodyReady($route);
+                $coverageTypes[] = (string) $route['coverage_type'];
+                if ($route['coverage_route'] instanceof \App\Models\Logistics\LogisticsCoverageRoute) {
+                    $routeId = (int) $route['coverage_route']->id;
+                    $serviceDate = $route['service_date']->toDateString();
+                    $plannedRouteReservations[$routeId][$serviceDate] = (int) ($plannedRouteReservations[$routeId][$serviceDate] ?? 0)
+                        + $sellerItems->count();
+                    $fallbackRoutes[] = [
+                        'coverage_type' => (string) $route['coverage_type'],
+                        'estimated_sla_hours' => (int) $route['estimated_sla_hours'],
+                        'estimated_delivery_at' => $route['estimated_delivery_at']?->toIso8601String(),
+                    ];
+                }
             } catch (ValidationException $exception) {
                 $reason = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
                 if ($this->isUnserviceableBuyerAddress($reason) || str_contains(mb_strtolower($reason), 'cross-hub fulfillment')) {
@@ -263,18 +394,18 @@ class CheckoutService
             }
         }
 
-        return $requiresReview;
+        if ($requiresReview && $coverageTypes === []) {
+            $coverageTypes[] = 'PRIMARY';
+        }
+
+        return ['requires_review' => $requiresReview, 'fallback_routes' => $fallbackRoutes, 'coverage_types' => array_values(array_unique($coverageTypes))];
     }
 
     private function isUnserviceableBuyerAddress(string $reason): bool
     {
         $message = mb_strtolower($reason);
 
-        return str_contains($message, 'buyer delivery')
-            && (str_contains($message, 'no active logistics hub')
-                || str_contains($message, 'not covered')
-                || str_contains($message, 'missing a canonical')
-                || str_contains($message, 'missing or does not belong'));
+        return str_contains($message, 'buyer delivery');
     }
 
     private function buyerFacingDeliveryError(string $reason): string
@@ -324,6 +455,13 @@ class CheckoutService
                 ->first();
         }
         $shippingQuotes = [];
+        $routingDecisions = [];
+        $plannedRouteReservations = [];
+        $sellerItemCounts = $items->groupBy(function (CartItem $item): int {
+            $item->loadMissing('productVariant.product');
+
+            return (int) ($item->productVariant?->product?->seller_profile_id ?? 0);
+        })->map(fn (Collection $sellerItems): int => $sellerItems->count());
 
         $this->assertFlashSaleAllocations($items);
 
@@ -398,23 +536,41 @@ class CheckoutService
             }
             $groupNeedsRoutingReview = false;
             $groupRoutingReviewReason = null;
+            $route = null;
             if ($this->automaticRoutingReady() && $logisticsProvider === null && $automaticDestination) {
-                try {
-                    $route = $this->routing->resolve($seller, $automaticDestination);
-                } catch (ValidationException $exception) {
-                    // Keep checkout available while preserving an explicit
-                    // unrouted parcel for administrator review after purchase.
-                    $reviewReason = $this->routingReviewReason($exception);
-                    if (! $reviewReason) {
-                        throw $exception;
+                if (! array_key_exists($sellerId, $routingDecisions)) {
+                    try {
+                        $resolved = $this->routing->resolve($seller, $automaticDestination, [
+                            'lock_capacity' => $lockVoucherUsage,
+                            'required_parcels' => max(1, (int) $sellerItemCounts->get($sellerId, 1)),
+                            'planned_route_reservations' => $plannedRouteReservations,
+                        ]);
+                        $this->assertCrossHubCustodyReady($resolved);
+                        $routingDecisions[$sellerId] = ['route' => $resolved, 'review_reason' => null];
+                        if ($resolved['coverage_route'] instanceof \App\Models\Logistics\LogisticsCoverageRoute) {
+                            $routeId = (int) $resolved['coverage_route']->id;
+                            $serviceDate = $resolved['service_date']->toDateString();
+                            $plannedRouteReservations[$routeId][$serviceDate] = (int) ($plannedRouteReservations[$routeId][$serviceDate] ?? 0)
+                                + max(1, (int) $sellerItemCounts->get($sellerId, 1));
+                        }
+                    } catch (ValidationException $exception) {
+                        // Keep seller-origin gaps in the existing Admin review
+                        // flow. Buyer destination gaps and unauthorized fallback
+                        // paths remain checkout blockers.
+                        $routeFailure = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
+                        if ($this->isUnserviceableBuyerAddress($routeFailure)) {
+                            throw $exception;
+                        }
+                        $reviewReason = $this->routingReviewReason($exception);
+                        if (! $reviewReason) {
+                            throw $exception;
+                        }
+                        $routingDecisions[$sellerId] = ['route' => null, 'review_reason' => $reviewReason];
                     }
-                    $groupNeedsRoutingReview = true;
-                    $groupRoutingReviewReason = $reviewReason;
-                    $route = null;
                 }
-                if ($route) {
-                    $this->assertCrossHubCustodyReady($route);
-                }
+                $route = $routingDecisions[$sellerId]['route'];
+                $groupNeedsRoutingReview = $routingDecisions[$sellerId]['review_reason'] !== null;
+                $groupRoutingReviewReason = $routingDecisions[$sellerId]['review_reason'];
             }
 
             $groups[$sellerId] ??= [
@@ -433,6 +589,11 @@ class CheckoutService
                 'shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'shipping_rate_snapshot' => $shippingSnapshot,
+                'routing_decision' => $route ? $this->routingDecisionSnapshot(
+                    $route,
+                    (float) $groupShippingFee,
+                    $ratePolicy['version']?->id,
+                ) : null,
                 'routing_review_required' => $groupNeedsRoutingReview,
                 'routing_review_reason' => $groupRoutingReviewReason,
                 'protection_total' => 0.0,
@@ -673,6 +834,7 @@ class CheckoutService
         int $rewardPointsToRedeem = 0,
         ?string $recipientName = null,
         ?string $contactNumber = null,
+        ?string $expectedShippingQuoteToken = null,
     ): Order
     {
         if (strtoupper($paymentMethod) !== 'COD') {
@@ -724,7 +886,7 @@ class CheckoutService
         }
 
         try {
-            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash, $expectedPriceSnapshot, $rewardPointsToRedeem, $recipientName, $contactNumber): Order {
+            return DB::transaction(function () use ($buyer, $addressId, $cartItemIds, $paymentMethod, $voucherCodes, $logisticsCenterId, $protectionItemIds, $sellerNotes, $keyHash, $requestHash, $expectedPriceSnapshot, $rewardPointsToRedeem, $recipientName, $contactNumber, $expectedShippingQuoteToken): Order {
             $existing = $this->resolveCheckoutAttempt($buyer, $keyHash, $requestHash, true);
             if ($existing) {
                 return $existing;
@@ -921,6 +1083,9 @@ class CheckoutService
                 lockVoucherUsage: true,
                 rewardPointsToRedeem: $rewardPointsToRedeem,
             );
+            if ($expectedShippingQuoteToken !== null) {
+                $this->assertShippingQuoteToken($expectedShippingQuoteToken, $lockedBuyer, $address, $items, $preview);
+            }
 
             $checkoutAttemptId = DB::table('checkout_attempts')->insertGetId([
                 'key_hash' => $keyHash,
@@ -1035,6 +1200,9 @@ class CheckoutService
                     && Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
                     $sellerOrderAttributes['shipping_rate_version_id'] = $group['shipping_rate_version_id'];
                 }
+                if (Schema::hasColumn('seller_orders', 'delivery_routing_snapshot')) {
+                    $sellerOrderAttributes['delivery_routing_snapshot'] = $group['routing_decision'];
+                }
                 if (Schema::hasColumn('seller_orders', 'shipping_rate_snapshot')) {
                     $sellerOrderAttributes['shipping_rate_snapshot'] = $group['shipping_rate_snapshot'];
                 }
@@ -1067,6 +1235,14 @@ class CheckoutService
                         'discount_amount' => $discountAmount,
                         'line_total' => $lineTotal,
                     ];
+                    if (Schema::hasColumns('product_variants', ['length_cm', 'width_cm', 'height_cm'])
+                        && Schema::hasColumns('order_items', ['product_length_cm', 'product_width_cm', 'product_height_cm'])) {
+                        $itemAttributes += [
+                            'product_length_cm' => $variant?->length_cm,
+                            'product_width_cm' => $variant?->width_cm,
+                            'product_height_cm' => $variant?->height_cm,
+                        ];
+                    }
                     if ($snapshotReady) {
                         $itemAttributes['original_unit_price'] = number_format((float) $variant->price, 2, '.', '');
                     }
@@ -1118,7 +1294,13 @@ class CheckoutService
                         }
                     }
 
-                    $shipment = $this->createShipmentForOrderItem($sellerOrder, $orderItem, $address, $logisticsProvider);
+                    $shipment = $this->createShipmentForOrderItem(
+                        $sellerOrder,
+                        $orderItem,
+                        $address,
+                        $logisticsProvider,
+                        $group['routing_decision'] ?? null,
+                    );
                     app(CodCollectionService::class)->initializeForShipment($shipment);
 
                     if (Schema::hasTable('protection_selection_audits')) {
@@ -1637,11 +1819,78 @@ class CheckoutService
         return $normalized;
     }
 
+    /** @param array<string, mixed> $route @return array<string, mixed> */
+    private function routingDecisionSnapshot(array $route, float $shippingFee, ?int $shippingRateVersionId): array
+    {
+        $coverageRoute = $route['coverage_route'] ?? null;
+
+        return [
+            'serviceable' => true,
+            'coverage_type' => (string) ($route['coverage_type'] ?? 'PRIMARY'),
+            'coverage_route_id' => $coverageRoute?->id ? (int) $coverageRoute->id : null,
+            'origin_hub_id' => (int) $route['origin']->id,
+            'selected_hub_id' => (int) $route['destination']->id,
+            'service_area_id' => (int) $route['destination_area']->service_area_id,
+            'service_area_location_id' => (int) $route['destination_area']->id,
+            'service_date' => $route['service_date']?->toDateString(),
+            'scheduled_dispatch_at' => $route['scheduled_dispatch_at']?->toIso8601String(),
+            'estimated_sla_hours' => $route['estimated_sla_hours'] !== null ? (int) $route['estimated_sla_hours'] : null,
+            'estimated_delivery_at' => $route['estimated_delivery_at']?->toIso8601String(),
+            'capacity_remaining_at_quote' => $route['capacity_remaining_at_quote'] !== null
+                ? (int) $route['capacity_remaining_at_quote']
+                : null,
+            'eligibility_version' => (string) ($route['eligibility_version'] ?? ''),
+            'quoted_shipping_fee' => number_format($shippingFee, 2, '.', ''),
+            'shipping_rate_version_id' => $shippingRateVersionId,
+            'failure_reason' => null,
+        ];
+    }
+
+    /** Compare the locked order-creation route to the route shown in the signed checkout quote. */
+    private function assertRoutingDecisionMatches(array $expected, array $current): void
+    {
+        $currentSnapshot = $this->routingDecisionSnapshot(
+            $current,
+            (float) ($expected['quoted_shipping_fee'] ?? 0),
+            isset($expected['shipping_rate_version_id']) ? (int) $expected['shipping_rate_version_id'] : null,
+        );
+        foreach ([
+            'coverage_type',
+            'coverage_route_id',
+            'origin_hub_id',
+            'selected_hub_id',
+            'service_area_id',
+            'service_area_location_id',
+            'service_date',
+            'eligibility_version',
+        ] as $key) {
+            if (($expected[$key] ?? null) !== ($currentSnapshot[$key] ?? null)) {
+                throw ValidationException::withMessages([
+                    'shipping_quote' => 'The delivery route changed while you were reviewing checkout. Review the updated delivery details before placing the order.',
+                ]);
+            }
+        }
+    }
+
+    private function routingFailureCode(string $reason): string
+    {
+        $message = mb_strtolower($reason);
+
+        return match (true) {
+            str_contains($message, 'no approved secondary or extended') => 'NO_FEASIBLE_APPROVED_ROUTE',
+            str_contains($message, 'no active logistics hub') => 'NO_EXACT_HUB',
+            str_contains($message, 'not covered') => 'NO_EXACT_COVERAGE',
+            str_contains($message, 'ambiguous') => 'AMBIGUOUS_EXACT_COVERAGE',
+            default => 'DELIVERY_CHECK_FAILED',
+        };
+    }
+
     private function createShipmentForOrderItem(
         SellerOrder $sellerOrder,
         OrderItem $orderItem,
         Address $address,
         ?LogisticsCenter $logisticsProvider = null,
+        ?array $routingDecision = null,
     ): Shipment
     {
         $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
@@ -1651,7 +1900,42 @@ class CheckoutService
         if ($automaticRouting) {
             $sellerOrder->loadMissing('sellerProfile.businessAddress');
             try {
-                $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
+                $fallbackRouteId = (int) ($routingDecision['coverage_route_id'] ?? 0);
+                if ($fallbackRouteId > 0) {
+                    $route = $this->routing->revalidateStoredFallback(
+                        $sellerOrder->sellerProfile,
+                        $address,
+                        $fallbackRouteId,
+                        lock: true,
+                        serviceDate: isset($routingDecision['service_date']) ? (string) $routingDecision['service_date'] : null,
+                    );
+                    $this->assertRoutingDecisionMatches($routingDecision, $route);
+                    if (! $this->schema->smartCoverageReady()
+                        || blank($routingDecision['service_date'] ?? null)) {
+                        throw ValidationException::withMessages([
+                            'shipping_quote' => 'The approved route capacity reservation is unavailable. Review checkout and try again.',
+                        ]);
+                    }
+                    $serviceDate = Carbon::parse((string) $routingDecision['service_date'])->toDateString();
+                    $bookedForDate = Shipment::query()
+                        ->where('smart_coverage_route_id', $fallbackRouteId)
+                        ->whereDate('smart_coverage_service_date', $serviceDate)
+                        ->where('current_status', '!=', 'CANCELLED')
+                        ->lockForUpdate()
+                        ->get(['id'])
+                        ->count();
+                    if ($bookedForDate >= (int) $route['coverage_route']->max_parcels_per_day) {
+                        throw ValidationException::withMessages([
+                            'shipping_quote' => 'The approved delivery route reached its scheduled capacity. Review checkout for another available route.',
+                        ]);
+                    }
+                    $route['service_date'] = Carbon::parse($serviceDate);
+                } else {
+                    $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
+                    if ($routingDecision !== null) {
+                        $this->assertRoutingDecisionMatches($routingDecision, $route);
+                    }
+                }
             } catch (ValidationException $exception) {
                 $routingReviewReason = $this->routingReviewReason($exception);
                 if (! $routingReviewReason) {
@@ -1688,6 +1972,10 @@ class CheckoutService
             'destination_barangay_name' => $address->barangay_name,
             'current_status' => 'PLACED',
         ];
+        if ($route && ($route['coverage_route'] ?? null) && $this->schema->smartCoverageReady()) {
+            $shipmentAttributes['smart_coverage_route_id'] = (int) $route['coverage_route']->id;
+            $shipmentAttributes['smart_coverage_service_date'] = $route['service_date']?->toDateString();
+        }
         if ($route) {
             $originAddress = $route['origin']->address;
             $shipmentAttributes += [
@@ -1712,12 +2000,26 @@ class CheckoutService
             'rider_assignment_id' => null,
             'notes' => $routingReviewReason
                 ? 'Parcel placed. ROUTING_REVIEW_REQUIRED: '.$routingReviewReason
-                : 'Parcel for order item '.$orderItem->id.' placed by buyer.',
+                : (($route['coverage_type'] ?? null) === 'SECONDARY' || ($route['coverage_type'] ?? null) === 'EXTENDED'
+                    ? 'Parcel for order item '.$orderItem->id.' placed with an approved fallback delivery route.'
+                    : 'Parcel for order item '.$orderItem->id.' placed by buyer.'),
             'occurred_at' => now(),
         ]);
 
         if ($route && (int) $route['origin']->id !== (int) $route['destination']->id) {
             $this->transfers->createPlannedLeg($shipment, $route['origin'], $route['destination']);
+        }
+
+        if ($route && ($route['coverage_route'] ?? null)) {
+            Log::info('Smart logistics fallback route selected for shipment.', [
+                'shipment_id' => (int) $shipment->id,
+                'coverage_route_id' => (int) $route['coverage_route']->id,
+                'origin_hub_id' => (int) $route['origin']->id,
+                'destination_hub_id' => (int) $route['destination']->id,
+                'coverage_type' => (string) $route['coverage_type'],
+                'service_date' => $shipment->smart_coverage_service_date?->toDateString(),
+                'eligibility_version' => (string) ($route['eligibility_version'] ?? ''),
+            ]);
         }
 
         return $shipment;
@@ -1752,6 +2054,7 @@ class CheckoutService
             ->where('province_code', $address->province_code)
             ->where('municipality_code', $address->municipality_code)
             ->where('barangay_code', $address->barangay_code)
+            ->when($this->schema->coverageTypeReady(), fn ($query) => $query->where('coverage_type', 'PRIMARY'))
             ->whereHas('serviceArea', function ($query) use ($logisticsProvider): void {
                 $query->where('is_active', true)
                     ->when($logisticsProvider, fn ($providerQuery) => $providerQuery->where('logistics_center_id', $logisticsProvider->id));

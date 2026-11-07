@@ -31,7 +31,9 @@
         $shipment->current_status === 'DELIVERY_FAILED' && $sellerHasReceivedReturn => 'Seller has received the returned parcel',
         $shipment->current_status === 'DELIVERY_FAILED' => 'Delivery attempt was unsuccessful',
         $shipment->current_status === 'PLACED' => 'Waiting for seller to accept your order',
-        default => 'Seller is preparing your parcel',
+        $shipment->current_status === 'CONFIRMED' => 'Seller accepted your order; waiting for them to prepare your parcel',
+        $shipment->current_status === 'PREPARING' => 'Seller is preparing your parcel',
+        default => 'Tracking status updated',
     };
 @endphp
 

@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\RiderTransferApiController;
 use App\Http\Controllers\Api\RiderVehicleProfileController;
 use App\Http\Controllers\Api\TrackingApiController;
 use App\Http\Controllers\Api\WorkflowApiController;
+use App\Http\Controllers\Communication\SmartMessagingController;
 use App\Http\Controllers\Communication\MessagePresenceController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
@@ -21,6 +22,7 @@ use App\Http\Controllers\Buyer\BuyerOrderController;
 use App\Http\Controllers\PolicyAcceptanceController;
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Http\Middleware\RequireApiPolicyAcceptance;
+use App\Http\Middleware\SetUserLocale;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Route;
@@ -74,7 +76,7 @@ Route::prefix('v1')->group(function (): void {
         ->middleware('throttle:30,1')
         ->name('api.v1.maps.route');
 
-    Route::middleware([AuthenticateApiToken::class, RequireApiPolicyAcceptance::class])->group(function (): void {
+    Route::middleware([AuthenticateApiToken::class, SetUserLocale::class, RequireApiPolicyAcceptance::class])->group(function (): void {
         Route::post('/policies/accept', [PolicyAcceptanceController::class, 'apiStore'])->name('api.v1.policies.accept');
         Route::post('/broadcasting/auth', fn (Request $request) => Broadcast::auth($request))
             ->name('api.v1.broadcasting.auth');
@@ -122,6 +124,14 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/buyer/messages', [BuyerApiController::class, 'conversations'])->name('api.v1.buyer.messages.index');
         Route::get('/buyer/messages/{conversation}', [BuyerApiController::class, 'conversationMessages'])->name('api.v1.buyer.messages.show');
         Route::post('/buyer/messages', [BuyerApiController::class, 'sendMessage'])->name('api.v1.buyer.messages.store');
+        Route::get('/buyer/messages/{conversation}/smart-help', [SmartMessagingController::class, 'bootstrap'])
+            ->whereNumber('conversation')->middleware('throttle:60,1')->name('api.v1.buyer.messages.smart-help.show');
+        Route::post('/buyer/messages/{conversation}/smart-help/answer', [SmartMessagingController::class, 'answer'])
+            ->whereNumber('conversation')->middleware('throttle:120,1')->name('api.v1.buyer.messages.smart-help.answer');
+        Route::post('/buyer/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])
+            ->whereNumber('conversation')->middleware('throttle:60,1')->name('api.v1.buyer.messages.smart-help.feedback');
+        Route::post('/buyer/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])
+            ->whereNumber('conversation')->middleware('throttle:20,1')->name('api.v1.buyer.messages.smart-help.handoff');
         Route::post('/buyer/orders/{order}/messages', [BuyerApiController::class, 'sendOrderMessage'])->name('api.v1.buyer.orders.messages.store');
         Route::post('/buyer/ai/chat', [BuyerAiController::class, 'chat'])->name('api.v1.buyer.ai.chat');
         Route::middleware('rider.operational:INTER_LOGISTICS')
@@ -144,6 +154,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/rider/dashboard', [RiderApiController::class, 'dashboard'])->name('api.v1.rider.dashboard');
         Route::get('/rider/assignments', [RiderApiController::class, 'assignments'])->name('api.v1.rider.assignments.index');
         Route::get('/rider/pickups', [RiderApiController::class, 'pickups'])->name('api.v1.rider.pickups.index');
+        require __DIR__.'/mobile_parity.php';
         Route::get('/rider/pickups/{assignment}/batch', [RiderPickupBatchApiController::class, 'forAssignment'])
             ->whereNumber('assignment')
             ->name('api.v1.rider.pickups.batch');
@@ -179,6 +190,14 @@ Route::prefix('v1')->group(function (): void {
             ->name('api.v1.buyer.messages.presence');
         Route::get('/rider/messages/{conversation}', [RiderApiController::class, 'conversationMessages'])->name('api.v1.rider.messages.show');
         Route::post('/rider/messages', [RiderApiController::class, 'sendMessage'])->name('api.v1.rider.messages.store');
+        Route::get('/rider/messages/{conversation}/smart-help', [SmartMessagingController::class, 'bootstrap'])
+            ->whereNumber('conversation')->middleware('throttle:60,1')->name('api.v1.rider.messages.smart-help.show');
+        Route::post('/rider/messages/{conversation}/smart-help/answer', [SmartMessagingController::class, 'answer'])
+            ->whereNumber('conversation')->middleware('throttle:120,1')->name('api.v1.rider.messages.smart-help.answer');
+        Route::post('/rider/messages/{conversation}/smart-help/feedback', [SmartMessagingController::class, 'feedback'])
+            ->whereNumber('conversation')->middleware('throttle:60,1')->name('api.v1.rider.messages.smart-help.feedback');
+        Route::post('/rider/messages/{conversation}/smart-help/handoff', [SmartMessagingController::class, 'handoff'])
+            ->whereNumber('conversation')->middleware('throttle:20,1')->name('api.v1.rider.messages.smart-help.handoff');
         Route::get('/logistics/dashboard', [LogisticsApiController::class, 'dashboard'])->name('api.v1.logistics.dashboard');
         Route::post('/logistics/scan-receive', [LogisticsApiController::class, 'receiveScan'])->name('api.v1.logistics.scan-receive');
         Route::patch('/seller/orders/{sellerOrder}', [WorkflowApiController::class, 'sellerOrder'])->name('api.v1.seller.orders.transition');

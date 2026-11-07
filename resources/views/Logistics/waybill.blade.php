@@ -23,12 +23,13 @@
 		@php($weightItems = $shipment->orderItem ? collect([$shipment->orderItem]) : ($order?->items ?? collect()))
 		<section class="grid" style="margin-top:16px">
 			<x-shared.waybill-weight :shipment="$shipment" :items="$weightItems" />
+			<x-shared.waybill-dimensions :shipment="$shipment" />
 		</section>
 		@if($shipment->orderItem)
 		<table class="items">
 			<thead><tr><th>Item</th><th>Variant</th><th>Qty</th></tr></thead>
 			<tbody>
-				<tr><td>{{ $shipment->orderItem->product_name }}<br><small>SKU: {{ $shipment->orderItem->sku ?: 'Not provided' }}</small></td><td>{{ $shipment->orderItem->variant_description ?: 'Standard' }}</td><td>{{ $shipment->orderItem->quantity }}</td></tr>
+				<tr><td>{{ $shipment->orderItem->product_name }}<br><small>SKU: {{ $shipment->orderItem->sku ?: 'Not provided' }}</small></td><td>{{ $shipment->orderItem->variant_description ?: 'Standard' }}</td><td>{{ $shipment->parcel_quantity }}</td></tr>
 			</tbody>
 		</table>
 		@else

@@ -24,6 +24,7 @@ class TrackingController extends Controller
             ->with([
                 'sellerOrder.order.buyer',
                 'sellerOrder.order.address',
+                'sellerOrder.shipments',
                 'orderItem',
                 'events.actor',
                 'scans',

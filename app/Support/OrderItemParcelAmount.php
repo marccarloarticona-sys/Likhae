@@ -3,7 +3,9 @@
 namespace App\Support;
 
 use App\Models\Buyer\OrderItem;
+use App\Models\Logistics\Shipment;
 use App\Models\Seller\SellerOrder;
+use Illuminate\Support\Facades\Schema;
 
 final class OrderItemParcelAmount
 {
@@ -122,6 +124,7 @@ final class OrderItemParcelAmount
             'seller_voucher_discount' => $sellerVoucherCents / 100,
             'platform_voucher_discount' => $platformVoucherCents / 100,
             'reward_points_discount' => $rewardPointsCents / 100,
+            'seller_promotion_discount' => max(0, FinancialRules::cents($items[$shareIndex]->promotion_discount_amount ?? 0)) / 100,
             'shipping_fee' => $shippingCents / 100,
             'shipping_discount' => $shippingDiscountCents / 100,
             'platform_shipping_voucher_discount' => $shippingDiscountCents / 100,
@@ -134,6 +137,73 @@ final class OrderItemParcelAmount
             'protection_amount_cents' => $protectionCents,
             'total_cents' => $totalCents,
         ];
+    }
+
+    /** @return array<string, float|int> */
+    public static function forShipment(SellerOrder $sellerOrder, Shipment $shipment): array
+    {
+        $item = $shipment->orderItem;
+        if (! $item) {
+            return [
+                'product_amount' => 0.0, 'discount_amount' => 0.0, 'shipping_fee' => 0.0,
+                'shipping_discount' => 0.0, 'protection_amount' => 0.0, 'total' => 0.0,
+                'product_amount_cents' => 0, 'discount_amount_cents' => 0,
+                'shipping_fee_cents' => 0, 'shipping_discount_cents' => 0,
+                'protection_amount_cents' => 0, 'total_cents' => 0,
+            ];
+        }
+
+        $amounts = self::forItem($sellerOrder, $item);
+        if (! Schema::hasColumn('shipments', 'parcel_quantity')) {
+            return $amounts;
+        }
+
+        $parcels = Shipment::query()
+            ->where('seller_order_id', $sellerOrder->id)
+            ->where('order_item_id', $item->id)
+            ->orderBy('id')
+            ->get(['id', 'parcel_quantity']);
+        if ($parcels->count() < 2) {
+            return $amounts;
+        }
+
+        $weights = $parcels->map(fn (Shipment $parcel): int => max(0, (int) ($parcel->getRawOriginal('parcel_quantity') ?? 0)))->all();
+        if (array_sum($weights) <= 0) {
+            return $amounts;
+        }
+        $parcelIndex = $parcels->search(fn (Shipment $parcel): bool => (int) $parcel->id === (int) $shipment->id);
+        if ($parcelIndex === false) {
+            return $amounts;
+        }
+
+        $components = [
+            'product_amount_cents' => 'product_amount',
+            'discount_amount_cents' => 'discount_amount',
+            'shipping_fee_cents' => 'shipping_fee',
+            'shipping_discount_cents' => 'shipping_discount',
+            'protection_amount_cents' => 'protection_amount',
+        ];
+        foreach ($components as $centsKey => $amountKey) {
+            $shares = FinancialRules::allocateCents(max(0, (int) $amounts[$centsKey]), $weights);
+            $amounts[$centsKey] = $shares[$parcelIndex] ?? 0;
+            $amounts[$amountKey] = $amounts[$centsKey] / 100;
+        }
+
+        foreach (['seller_voucher_discount', 'platform_voucher_discount', 'reward_points_discount', 'seller_promotion_discount'] as $amountKey) {
+            $shares = FinancialRules::allocateCents(max(0, FinancialRules::cents($amounts[$amountKey] ?? 0)), $weights);
+            $amounts[$amountKey] = ($shares[$parcelIndex] ?? 0) / 100;
+        }
+
+        $amounts['platform_shipping_voucher_discount'] = $amounts['shipping_discount'];
+        $amounts['total_cents'] = max(
+            0,
+            (int) $amounts['product_amount_cents'] - (int) $amounts['discount_amount_cents']
+            + (int) $amounts['shipping_fee_cents'] - (int) $amounts['shipping_discount_cents']
+            + (int) $amounts['protection_amount_cents'],
+        );
+        $amounts['total'] = $amounts['total_cents'] / 100;
+
+        return $amounts;
     }
 
     /** @param array<int, int> $weights

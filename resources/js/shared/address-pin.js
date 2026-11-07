@@ -110,6 +110,7 @@ function initialize(shell, maplibregl) {
     const form = shell.closest('form');
     const canvas = shell.querySelector('[data-address-pin-canvas]');
     const pinRequired = shell.dataset.addressPinRequired !== 'false';
+    const preserveAddressFields = shell.dataset.addressPinPreserveExisting === 'true';
     const searchInput = shell.querySelector('[data-address-search]');
     const apiKey = shell.dataset.geoapifyKey?.trim() || '';
     const mapToken = shell.dataset.mapToken?.trim() || '';
@@ -138,6 +139,31 @@ function initialize(shell, maplibregl) {
         attributionControl: {
             customAttribution: apiKey ? '<a href="https://www.geoapify.com/" target="_blank" rel="noopener">Geocoding by Geoapify</a>' : '',
         },
+    });
+    let mapLoaded = false;
+    const mapLoadTimeout = window.setTimeout(() => {
+        if (mapLoaded) return;
+        shell.classList.add('is-map-error');
+        shell.setAttribute('aria-busy', 'false');
+        updateStatus(shell, 'The map is taking too long to load. Try reloading, or use address search or device location to set the pin.', true);
+    }, 12000);
+    map.on('error', () => {
+        if (mapLoaded) return;
+        shell.classList.add('is-map-error');
+        shell.setAttribute('aria-busy', 'false');
+        updateStatus(shell, 'Map tiles could not be loaded. Check the connection or map style URL; address search and device location may still work.', true);
+    });
+    map.on('load', () => {
+        mapLoaded = true;
+        window.clearTimeout(mapLoadTimeout);
+        shell.classList.remove('is-map-error');
+        shell.classList.add('is-map-ready');
+        shell.setAttribute('aria-busy', 'false');
+
+        if (!hasInitial) return;
+        setPending(pending, 'Saved pin loaded. Drag it if the physical location needs correction.', { reliable: true });
+        confirmed = true;
+        if (confirmButton) confirmButton.hidden = true;
     });
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
 
@@ -194,8 +220,9 @@ function initialize(shell, maplibregl) {
         confirmed = true;
         confirmButton.hidden = true;
 
-        if (!apiKey || !form.querySelector('[data-postal-address]')) {
-            updateStatus(shell, `Confirmed pin: ${confirmedCoordinates.latitude.toFixed(6)}, ${confirmedCoordinates.longitude.toFixed(6)}.`);
+        if (preserveAddressFields || !apiKey || !form.querySelector('[data-postal-address]')) {
+            const preservedCopy = preserveAddressFields ? ' Existing address fields were left unchanged.' : '';
+            updateStatus(shell, `Confirmed pin: ${confirmedCoordinates.latitude.toFixed(6)}, ${confirmedCoordinates.longitude.toFixed(6)}.${preservedCopy}`);
             return;
         }
 
@@ -401,13 +428,7 @@ function initialize(shell, maplibregl) {
         );
     });
 
-    if (hasInitial) {
-        map.on('load', () => {
-            setPending(pending, 'Saved pin loaded. Drag it if the physical location needs correction.', { reliable: true });
-            confirmed = true;
-            if (confirmButton) confirmButton.hidden = true;
-        });
-    } else if (!hasInitial && (
+    if (!hasInitial && (
         field(form, ['barangay_name', 'barangay'])?.value?.trim()
         || (field(form, ['street_address', 'street'])?.value?.trim()
             && field(form, ['municipality_name', 'municipality'])?.value?.trim())
@@ -421,18 +442,26 @@ function bootAddressPins() {
     if (!shells.length) return;
     const loadRenderer = mapRenderer.loadMapLibre;
     if (typeof loadRenderer !== 'function') {
-        shells.forEach((shell) => updateStatus(shell, 'Map service is unavailable. Complete the address fields manually.', true));
+        shells.forEach((shell) => {
+            shell.classList.add('is-map-error');
+            shell.setAttribute('aria-busy', 'false');
+            updateStatus(shell, 'Map service is unavailable. Complete the address fields manually.', true);
+        });
         return;
     }
     loadRenderer()
         .then((maplibregl) => shells.forEach((shell) => initialize(shell, maplibregl)))
-        .catch(() => shells.forEach((shell) => updateStatus(
-            shell,
-            shell.dataset.addressPinRequired === 'false'
-                ? 'Map service is unavailable. You can continue registration without an exact pin.'
-                : 'Map service is unavailable. Confirm the exact pin before saving.',
-            true,
-        )));
+        .catch(() => shells.forEach((shell) => {
+            shell.classList.add('is-map-error');
+            shell.setAttribute('aria-busy', 'false');
+            updateStatus(
+                shell,
+                shell.dataset.addressPinRequired === 'false'
+                    ? 'Map service is unavailable. You can continue registration without an exact pin.'
+                    : 'Map service is unavailable. Confirm the exact pin before saving.',
+                true,
+            );
+        }));
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootAddressPins);

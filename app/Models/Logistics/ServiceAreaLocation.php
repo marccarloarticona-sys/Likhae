@@ -15,6 +15,7 @@ class ServiceAreaLocation extends Model
         'municipality_name',
         'barangay_code',
         'barangay_name',
+        'coverage_type',
     ];
 
     public function serviceArea(): BelongsTo

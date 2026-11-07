@@ -6,7 +6,7 @@
     $codAmount = $codCollection?->expected_amount;
     if ($paymentMethod === 'COD' && $codAmount === null) {
         $codAmount = $item
-            ? \App\Support\OrderItemParcelAmount::forItem($sellerOrder, $item)['total']
+            ? \App\Support\OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['total']
             : $sellerOrder->grand_total;
     }
     @endphp
@@ -23,13 +23,14 @@
         <article class="item" aria-label="Parcel item">
             <div class="item-number">Parcel {{ $parcelNumber }}</div>
             <div><div class="item-name">{{ $item->product_name }}</div><div class="item-meta">Variant: {{ $item->variant_description ?: 'Standard' }}<br>SKU: {{ $item->sku ?: 'Not provided' }}</div></div>
-            <strong>Qty {{ $item->quantity }}</strong>
+            <strong>Qty {{ $shipment->parcel_quantity }}</strong>
         </article>
     @else
         <p style="margin-top:18px;padding:12px;border:1px solid #a8a29e">Legacy parcel contents: {{ $sellerOrder->items->pluck('product_name')->implode(', ') }}. This tracking number covers the legacy parcel.</p>
     @endif
-    <section style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+    <section style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px">
         <x-shared.waybill-weight :shipment="$shipment" :items="$weightItems" />
+        <x-shared.waybill-dimensions :shipment="$shipment" />
         <div class="box"><strong>Payment</strong><br>@if($paymentMethod === 'COD') COD - PHP {{ number_format((float) $codAmount, 2) }} @elseif($paymentMethod === 'ONLINE') Prepaid @else Payment method unavailable @endif</div>
     </section>
     <p><strong>Destination:</strong> {{ collect([$shipment->destination_barangay_name, $shipment->destination_municipality_name, $shipment->destination_province_name])->filter()->implode(', ') }}</p>

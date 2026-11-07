@@ -95,15 +95,14 @@ class SellerPickupBatchTest extends TestCase
         $this->assertCount(0, $result['skipped_ids']);
     }
 
-    public function test_remaining_capacity_rejects_oversized_direct_assignment_and_keeps_partial_overflow_unassigned(): void
+    public function test_approved_capacity_rejects_oversized_direct_assignment_and_keeps_partial_overflow_unassigned(): void
     {
-        $alreadyAssigned = $this->readyShipments($this->seller, 5);
-        $this->createBatch($alreadyAssigned);
-
+        $rider = $this->newRider();
+        $rider->update(['approved_parcel_capacity' => 5]);
         $requested = $this->readyShipments($this->seller, 6);
         try {
-            $this->createBatch($requested);
-            $this->fail('A six-parcel assignment must not exceed the five remaining parcel slots.');
+            $this->createBatch($requested, $rider);
+            $this->fail('A six-parcel assignment must not exceed the rider\'s approved five-parcel capacity.');
         } catch (RuntimeException $exception) {
             $this->assertStringContainsString('capacity for 5 more parcel(s)', $exception->getMessage());
         }
@@ -111,16 +110,16 @@ class SellerPickupBatchTest extends TestCase
         $result = app(SellerPickupBatchService::class)->createPartial(
             $this->centerUser,
             $this->center,
-            (int) $this->rider->id,
+            (int) $rider->id,
             array_map(fn (Shipment $shipment): int => (int) $shipment->id, $requested),
         );
 
         $this->assertCount(5, $result['assigned_ids']);
         $this->assertCount(1, $result['skipped_ids']);
-        $this->assertSame(10, $this->rider->assignments()->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])->count());
+        $this->assertSame(5, $rider->assignments()->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])->count());
         $this->assertDatabaseMissing('rider_assignments', [
             'shipment_id' => $result['skipped_ids'][0],
-            'rider_profile_id' => $this->rider->id,
+            'rider_profile_id' => $rider->id,
             'status' => 'ASSIGNED',
         ]);
     }
@@ -209,7 +208,7 @@ class SellerPickupBatchTest extends TestCase
     {
         $otherSeller = $this->newSeller('Neighbor Seller');
         $first = $this->createBatch([$this->readyShipment($this->seller)]);
-        $second = $this->createBatch([$this->readyShipment($otherSeller)]);
+        $second = $this->createBatch([$this->readyShipment($otherSeller)], $this->newRider());
 
         $this->assertNotSame($first->id, $second->id);
         $this->assertSame($this->seller->id, $first->seller_profile_id);
@@ -822,6 +821,351 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame('ASSIGNED', $assigned->status);
         $this->assertDatabaseCount('rider_local_trips', 1);
         $this->assertDatabaseCount('rider_assignments', 1);
+    }
+
+    public function test_automatic_matching_offers_centers_sequentially_after_a_decline(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        [$secondCenterUser, $secondCenter] = $this->additionalMatchingCenter(14.15, 121.40);
+
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $this->assertAutomaticPickupRouteCandidate($shipment);
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+
+        $this->assertSame('WAITING_FOR_RESPONSE', $request->fresh()->status, 'The authorized route and fresh pickup capacity should produce a center offer.');
+        $firstOffer = $request->centerOffers()->firstOrFail();
+        $this->assertSame($this->center->id, $firstOffer->logistics_center_id);
+        $this->assertSame('OFFERED', $firstOffer->status);
+        $this->assertSame('WAITING_FOR_RESPONSE', $request->fresh()->status);
+        $this->assertSame(1, $request->centerOffers()->where('status', 'OFFERED')->count());
+
+        $matching->decline($this->centerUser, $this->center, (int) $request->id, (int) $firstOffer->id);
+        $matching->startRequest((int) $request->id);
+
+        $this->assertSame('DECLINED', $firstOffer->fresh()->status);
+        $this->assertDatabaseHas('seller_pickup_center_offers', [
+            'seller_pickup_request_id' => $request->id,
+            'logistics_center_id' => $secondCenter->id,
+            'attempt_number' => 2,
+            'status' => 'OFFERED',
+        ]);
+        $this->assertSame(1, $request->centerOffers()->where('status', 'OFFERED')->count());
+        $this->assertSame(User::TYPE_LOGISTICS, $secondCenterUser->fresh()->account_type);
+    }
+
+    public function test_accepted_center_offer_rechecks_route_and_assigns_nearest_local_rider(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $this->assertAutomaticPickupRouteCandidate($shipment);
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+        $offer = $request->centerOffers()->firstOrFail();
+
+        $unauthorizedLogisticsUser = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
+        try {
+            $matching->accept(
+                $unauthorizedLogisticsUser,
+                $this->center,
+                (int) $request->id,
+                (int) $offer->id,
+                app(\App\Services\Fulfillment\SellerPickupAutoDispatchService::class),
+            );
+            $this->fail('A different Logistics account must not accept this center offer.');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $exception) {
+            $this->assertSame(403, $exception->getStatusCode());
+        }
+        $this->assertSame('OFFERED', $offer->fresh()->status);
+
+        $accepted = $matching->accept(
+            $this->centerUser,
+            $this->center,
+            (int) $request->id,
+            (int) $offer->id,
+            app(\App\Services\Fulfillment\SellerPickupAutoDispatchService::class),
+        );
+
+        $this->assertTrue($accepted);
+        $this->assertSame('ACCEPTED', $offer->fresh()->status);
+        $this->assertSame('ASSIGNED', $request->fresh()->status);
+        $this->assertNotNull($request->fresh()->rider_local_trip_id);
+        $this->assertSame($this->center->id, $shipment->fresh()->origin_logistics_center_id);
+        $this->assertSame($this->center->id, $shipment->fresh()->destination_logistics_center_id);
+        $this->assertSame([$shipment->id], array_map('intval', array_keys($offer->fresh()->route_snapshot['shipment_routes'])));
+
+        try {
+            $matching->accept(
+                $this->centerUser,
+                $this->center,
+                (int) $request->id,
+                (int) $offer->id,
+                app(\App\Services\Fulfillment\SellerPickupAutoDispatchService::class),
+            );
+            $this->fail('A second acceptance of an already accepted offer must be rejected.');
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $exception) {
+            $this->assertSame(409, $exception->getStatusCode());
+        }
+        $this->assertSame('ACCEPTED', $offer->fresh()->status);
+    }
+
+    public function test_timed_out_center_offer_advances_to_the_next_nearest_authorized_center(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        [, $secondCenter] = $this->additionalMatchingCenter(14.15, 121.40);
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+        $firstOffer = $request->centerOffers()->firstOrFail();
+        $firstOffer->update(['expires_at' => now()->subMinute()]);
+
+        $this->assertSame(1, $matching->expireDueOffers());
+        $matching->startRequest((int) $request->id);
+
+        $this->assertSame('EXPIRED', $firstOffer->fresh()->status);
+        $this->assertDatabaseHas('seller_pickup_center_offers', [
+            'seller_pickup_request_id' => $request->id,
+            'logistics_center_id' => $secondCenter->id,
+            'attempt_number' => 2,
+            'status' => 'OFFERED',
+        ]);
+    }
+
+    public function test_accepted_offer_preserves_an_approved_cross_hub_transfer_leg(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        [$destinationOwner, $destinationCenter] = $this->additionalMatchingCenter(14.15, 121.40);
+        $destinationArea = ServiceArea::create([
+            'logistics_center_id' => $destinationCenter->id,
+            'code' => 'MATCH-DEST-AREA-'.uniqid(),
+            'name' => 'Approved Pagsanjan delivery area',
+            'is_active' => true,
+        ]);
+        $destinationLocation = ServiceAreaLocation::create([
+            'service_area_id' => $destinationArea->id,
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
+            'barangay_code' => '0403419001',
+            'barangay_name' => 'Anibong',
+            'coverage_type' => 'EXTENDED',
+        ]);
+        $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
+        $route = \App\Models\Logistics\LogisticsCoverageRoute::query()->create([
+            'origin_logistics_center_id' => $this->center->id,
+            'destination_service_area_location_id' => $destinationLocation->id,
+            'coverage_type' => 'EXTENDED',
+            'shipment_type' => \App\Models\Logistics\LogisticsCoverageRoute::SHIPMENT_MARKETPLACE,
+            'is_active' => true,
+            'valid_from' => now()->subDay(),
+            'valid_until' => now()->addDays(30),
+            'max_parcels_per_day' => 10,
+            'estimated_sla_hours' => 36,
+            'minimum_pickup_lead_hours' => 24,
+            'dispatch_weekdays' => [0, 1, 2, 3, 4, 5, 6],
+            'dispatch_cutoff_time' => '23:59:00',
+            'created_by_user_id' => $admin->id,
+            'approved_by_user_id' => $admin->id,
+            'approved_at' => now(),
+            'updated_by_user_id' => $admin->id,
+        ]);
+        $destinationRider = RiderProfile::query()->where('logistics_center_id', $destinationCenter->id)->firstOrFail();
+        RiderAreaAssignment::create([
+            'rider_profile_id' => $destinationRider->id,
+            'service_area_id' => $destinationArea->id,
+            'assigned_by_user_id' => $destinationOwner->id,
+            'is_active' => true,
+            'assigned_at' => now(),
+        ]);
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $shipment->sellerOrder->order->address()->update([
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
+            'barangay_code' => '0403419001',
+            'barangay_name' => 'Anibong',
+        ]);
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+        $offer = $request->centerOffers()->firstOrFail();
+        $this->assertSame($route->id, $offer->coverage_route_id);
+        $this->assertSame($destinationCenter->id, $offer->destination_logistics_center_id);
+
+        $accepted = $matching->accept(
+            $this->centerUser,
+            $this->center,
+            (int) $request->id,
+            (int) $offer->id,
+            app(\App\Services\Fulfillment\SellerPickupAutoDispatchService::class),
+        );
+
+        $this->assertTrue($accepted);
+        $this->assertDatabaseHas('shipment_transfer_legs', [
+            'shipment_id' => $shipment->id,
+            'origin_logistics_center_id' => $this->center->id,
+            'destination_logistics_center_id' => $destinationCenter->id,
+            'sequence_no' => 1,
+            'status' => 'PLANNED',
+        ]);
+        $this->assertSame($destinationCenter->id, $shipment->fresh()->destination_logistics_center_id);
+        $this->assertSame($route->id, $shipment->fresh()->smart_coverage_route_id);
+        $this->assertSame(User::TYPE_LOGISTICS, $destinationOwner->fresh()->account_type);
+    }
+
+    public function test_capacity_loss_after_offer_moves_request_to_pending_without_assignment(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+        $offer = $request->centerOffers()->firstOrFail();
+        $this->rider->update(['is_online' => false]);
+
+        $accepted = $matching->accept(
+            $this->centerUser,
+            $this->center,
+            (int) $request->id,
+            (int) $offer->id,
+            app(\App\Services\Fulfillment\SellerPickupAutoDispatchService::class),
+        );
+        $matching->startRequest((int) $request->id);
+
+        $this->assertFalse($accepted);
+        $this->assertSame('NO_CAPACITY', $offer->fresh()->status);
+        $this->assertSame('PENDING', $request->fresh()->status);
+        $this->assertNull($request->fresh()->rider_local_trip_id);
+        $this->assertSame('READY_FOR_PICKUP', $shipment->fresh()->current_status);
+    }
+
+    public function test_missing_exact_buyer_route_leaves_request_pending_and_notifies_seller(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $shipment->sellerOrder->order->address()->update([
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
+            'barangay_code' => '0403419001',
+            'barangay_name' => 'Anibong',
+        ]);
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+
+        app(\App\Services\Fulfillment\SellerPickupMatchingService::class)->startRequest((int) $request->id);
+
+        $this->assertSame('PENDING', $request->fresh()->status);
+        $this->assertSame(0, $request->centerOffers()->count());
+        $this->assertSame(1, $this->seller->user->notifications()->where('type', 'SELLER_PICKUP_PENDING')->count());
+        $this->assertNull($request->fresh()->rider_local_trip_id);
+    }
+
+    public function test_disabling_automatic_matching_returns_open_requests_to_manual_queue_and_keeps_history(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $this->assertAutomaticPickupRouteCandidate($shipment);
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
+        $matching->startRequest((int) $request->id);
+        $offer = $request->centerOffers()->firstOrFail();
+
+        config(['likhae.automatic_seller_pickup_matching' => false]);
+        $this->assertSame(1, $matching->pausePendingWhenDisabled());
+
+        $this->assertSame('REQUESTED', $request->fresh()->status);
+        $this->assertSame('SUPERSEDED', $offer->fresh()->status);
+        $this->assertSame(1, $request->memberships()->where('active_slot', true)->count());
+    }
+
+    private function prepareAutomaticMatchingCapacity(): void
+    {
+        $this->assertTrue(app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->automaticSellerPickupMatchingReady());
+        $this->seller->businessAddress()->update(['latitude' => 14.05, 'longitude' => 121.325]);
+        // The pickup area has no center in its municipality. This approved
+        // center has a deliberately configured exact service-area location.
+        $this->center->address()->update([
+            'latitude' => 14.05,
+            'longitude' => 121.325,
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
+            'barangay_code' => '0403419001',
+            'barangay_name' => 'Anibong',
+        ]);
+        $this->rider->update([
+            'availability_latitude' => 14.05,
+            'availability_longitude' => 121.325,
+            'availability_location_updated_at' => now(),
+            'is_online' => true,
+        ]);
+    }
+
+    private function assertAutomaticPickupRouteCandidate(Shipment $shipment): void
+    {
+        $shipment->loadMissing('sellerOrder.order.address');
+        $plans = app(\App\Services\Fulfillment\PsgcLogisticsRoutingService::class)->resolveForAutomaticPickup(
+            $this->seller,
+            $this->seller->businessAddress,
+            $shipment->sellerOrder->order->address,
+            $this->center,
+        );
+        $this->assertNotEmpty($plans, 'The seeded exact PSGC coverage should resolve to a complete authorized route.');
+    }
+
+    /** @return array{User,LogisticsCenter} */
+    private function additionalMatchingCenter(float $latitude, float $longitude): array
+    {
+        $user = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
+        $address = $this->address($user, 'Additional Matching Center');
+        $address->update(['latitude' => $latitude, 'longitude' => $longitude]);
+        $center = LogisticsCenter::create([
+            'owner_user_id' => $user->id,
+            'address_id' => $address->id,
+            'code' => 'MATCH-CENTER-'.uniqid(),
+            'business_name' => 'Additional Matching Center',
+            'status' => 'ACTIVE',
+            'approved_by_user_id' => $user->id,
+            'approved_at' => now(),
+        ]);
+        $area = ServiceArea::create([
+            'logistics_center_id' => $center->id,
+            'code' => 'MATCH-AREA-'.uniqid(),
+            'name' => 'Additional matching exact area',
+            'is_active' => true,
+        ]);
+        ServiceAreaLocation::create(['service_area_id' => $area->id] + $this->geo());
+        $riderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
+        $rider = RiderProfile::create([
+            'user_id' => $riderUser->id,
+            'logistics_center_id' => $center->id,
+            'vehicle_type' => 'motorcycle',
+            'approved_parcel_capacity' => 10,
+            'plate_number' => 'MATCH-'.uniqid(),
+            'drivers_license_number' => 'MATCH-LICENSE-'.uniqid(),
+            'status' => 'ACTIVE',
+            'is_online' => true,
+            'availability_latitude' => $latitude,
+            'availability_longitude' => $longitude,
+            'availability_location_updated_at' => now(),
+        ]);
+        RiderAreaAssignment::create([
+            'rider_profile_id' => $rider->id,
+            'service_area_id' => $area->id,
+            'assigned_by_user_id' => $user->id,
+            'is_active' => true,
+            'assigned_at' => now(),
+        ]);
+
+        return [$user, $center];
     }
 
     private function createDurableRequest(SellerProfile $seller, array $shipments): \App\Models\Seller\SellerPickupRequest

@@ -32,6 +32,7 @@ use App\Services\Marketplace\SellerPromotionUsageService;
 use App\Models\User;
 use App\Support\RiderVehicleType;
 use App\Support\OrderItemParcelAmount;
+use App\Support\ParcelWeightEstimator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Collection;
@@ -139,6 +140,78 @@ class ShipmentWorkflowService
         });
     }
 
+    public function recordPackedDimensions(Shipment $shipment, User $actor, string $lengthCm, string $widthCm, string $heightCm): Shipment
+    {
+        if (! Schema::hasColumns('shipments', ['parcel_length_cm', 'parcel_width_cm', 'parcel_height_cm'])) {
+            throw new RuntimeException('Packed parcel dimensions are not available until the latest system update is applied.');
+        }
+
+        return DB::transaction(function () use ($shipment, $actor, $lengthCm, $widthCm, $heightCm): Shipment {
+            $locked = Shipment::query()->whereKey($shipment->id)->lockForUpdate()->firstOrFail();
+            $sellerOrder = SellerOrder::query()->whereKey($locked->seller_order_id)->lockForUpdate()->firstOrFail();
+            $actor->loadMissing('sellerProfile');
+            if ($actor->account_type !== User::TYPE_SELLER
+                || $actor->status !== User::STATUS_ACTIVE
+                || (int) $sellerOrder->seller_profile_id !== (int) $actor->sellerProfile?->id) {
+                throw new RuntimeException('Only the active seller who owns this parcel may record its packed dimensions.');
+            }
+            if (! in_array($sellerOrder->status, ['PREPARING', 'READY_FOR_PICKUP'], true)
+                || $locked->current_status !== 'PREPARING'
+                || $locked->order_item_id === null
+                || $this->hasSellerPackedCheckpoint($locked)) {
+                throw new RuntimeException('Packed dimensions can only be saved for an unpacked seller parcel that is still being prepared.');
+            }
+
+            $sealedOrReleased = TransferManifestItem::query()
+                ->whereHas('transferLeg', fn ($query) => $query->where('shipment_id', $locked->id))
+                ->whereHas('manifest', fn ($query) => $query->whereNotIn('status', ['DRAFT', 'CANCELLED']))
+                ->exists();
+            if ($sealedOrReleased) {
+                throw new RuntimeException('Packed dimensions are locked after this parcel is added to a sealed transfer manifest.');
+            }
+
+            $normalize = static function (string $value, string $label): string {
+                $value = trim($value);
+                if (! preg_match('/^\d+(?:\.\d{1,2})?$/D', $value)) {
+                    throw new RuntimeException('Packed parcel '.$label.' must be a positive number with up to two decimal places.');
+                }
+                $number = (float) $value;
+                if (! is_finite($number) || $number <= 0 || $number > 99999999.99) {
+                    throw new RuntimeException('Packed parcel '.$label.' must be greater than zero and within the supported limit.');
+                }
+
+                return number_format($number, 2, '.', '');
+            };
+
+            $dimensions = [
+                'parcel_length_cm' => $normalize($lengthCm, 'length'),
+                'parcel_width_cm' => $normalize($widthCm, 'width'),
+                'parcel_height_cm' => $normalize($heightCm, 'height'),
+            ];
+            $changed = false;
+            foreach ($dimensions as $field => $value) {
+                $changed = $changed || (string) $locked->{$field} !== $value;
+            }
+
+            $locked->loadMissing('orderItem.productVariant');
+            $estimatedWeight = ParcelWeightEstimator::productEstimate($locked);
+            if ($locked->parcel_weight_kg === null && $estimatedWeight !== null) {
+                $dimensions['parcel_weight_kg'] = number_format($estimatedWeight, 3, '.', '');
+                $changed = true;
+            }
+            if (! $changed) {
+                return $locked;
+            }
+
+            $locked->update($dimensions);
+            $this->recordEvent($locked, 'PREPARING', $actor, $estimatedWeight === null
+                ? 'Seller saved the actual packed parcel length, width, and height.'
+                : 'Seller saved the actual packed parcel dimensions. Parcel weight was calculated from saved unit weight × parcel quantity.');
+
+            return $locked->refresh();
+        });
+    }
+
     public function requestSellerHandover(
         SellerOrder $sellerOrder,
         User $actor,
@@ -231,6 +304,131 @@ class ShipmentWorkflowService
             }
 
             return $sellerOrder->shipments->sortBy('id')->values();
+        });
+    }
+
+    /** @param list<int> $quantities */
+    public function splitItemIntoParcels(SellerOrder $sellerOrder, OrderItem $orderItem, array $quantities, User $actor): Collection
+    {
+        return DB::transaction(function () use ($sellerOrder, $orderItem, $quantities, $actor): Collection {
+            if (! Schema::hasColumn('shipments', 'parcel_quantity')) {
+                throw new RuntimeException('Split parcel support is not installed yet. Apply the latest database migration first.');
+            }
+
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['order.address', 'items.shipment', 'shipments.transferLegs'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            $item = OrderItem::query()->whereKey($orderItem->id)->lockForUpdate()->firstOrFail();
+            $actor->loadMissing('sellerProfile');
+
+            if ($actor->account_type !== User::TYPE_SELLER
+                || $actor->status !== User::STATUS_ACTIVE
+                || (int) $sellerOrder->seller_profile_id !== (int) $actor->sellerProfile?->id
+                || (int) $item->seller_order_id !== (int) $sellerOrder->id) {
+                throw new RuntimeException('Only the active seller who owns this order item may split its parcels.');
+            }
+            if (! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'], true)) {
+                throw new RuntimeException('An item can only be split while its parcel is still being prepared.');
+            }
+            if (count($quantities) < 2 || count($quantities) > 10
+                || collect($quantities)->contains(fn ($quantity): bool => ! is_int($quantity) || $quantity < 1)) {
+                throw new RuntimeException('Enter 2 to 10 positive parcel quantities.');
+            }
+            $enteredTotal = array_sum($quantities);
+            if ($enteredTotal !== (int) $item->quantity) {
+                $firstHalf = intdiv((int) $item->quantity + 1, 2);
+                $secondHalf = (int) $item->quantity - $firstHalf;
+
+                throw new RuntimeException('The parcel quantities total '.$enteredTotal.', but this order has '.$item->quantity.' units. Include all units. For two parcels, try '.$firstHalf.', '.$secondHalf.'.');
+            }
+
+            $this->ensureItemShipments($sellerOrder, $actor);
+            $existing = Shipment::query()
+                ->where('seller_order_id', $sellerOrder->id)
+                ->where('order_item_id', $item->id)
+                ->with(['transferLegs.originLogisticsCenter', 'transferLegs.destinationLogisticsCenter'])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            if ($existing->count() !== 1) {
+                throw new RuntimeException('This product line already has multiple parcels or its parcel mapping needs Logistics review.');
+            }
+
+            $source = $existing->first();
+            $dimensionsSaved = Schema::hasColumns('shipments', ['parcel_length_cm', 'parcel_width_cm', 'parcel_height_cm'])
+                && ($source->parcel_length_cm !== null || $source->parcel_width_cm !== null || $source->parcel_height_cm !== null);
+            if (! in_array($source->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true)
+                || $this->hasSellerPackedCheckpoint($source)
+                || $source->parcel_weight_kg !== null
+                || $dimensionsSaved) {
+                throw new RuntimeException('Split the order line before saving packed dimensions, marking it packed, or handing it to Logistics.');
+            }
+            if (Schema::hasTable('cod_collections')) {
+                $collectionStatus = CodCollection::query()->where('shipment_id', $source->id)->value('status');
+                if ($collectionStatus !== null && $collectionStatus !== CodCollection::PENDING) {
+                    throw new RuntimeException('This parcel cannot be split after its COD collection has started.');
+                }
+            }
+
+            $source->update(['parcel_quantity' => $quantities[0]]);
+            $this->recordEvent(
+                $source,
+                $source->current_status,
+                $actor,
+                'Seller split this order line into '.count($quantities).' parcels; this parcel contains '.$quantities[0].' unit(s).',
+            );
+
+            $created = collect([$source->refresh()]);
+            $routingFields = [
+                'logistics_center_id', 'origin_logistics_center_id', 'destination_logistics_center_id',
+                'smart_coverage_route_id', 'smart_coverage_service_date', 'service_area_id',
+                'origin_province_code', 'origin_province_name', 'origin_municipality_code',
+                'origin_municipality_name', 'origin_barangay_code', 'origin_barangay_name',
+                'destination_province_code', 'destination_province_name', 'destination_municipality_code',
+                'destination_municipality_name', 'destination_barangay_code', 'destination_barangay_name',
+            ];
+
+            foreach (array_slice($quantities, 1) as $index => $quantity) {
+                $parcel = Shipment::query()->create([
+                    ...$source->only($routingFields),
+                    'seller_order_id' => $sellerOrder->id,
+                    'order_item_id' => $item->id,
+                    'parcel_quantity' => $quantity,
+                    'tracking_number' => $this->newTrackingNumber(),
+                    'parcel_weight_kg' => null,
+                    'parcel_volume_liters' => null,
+                    'current_status' => $source->current_status,
+                ]);
+
+                $this->recordEvent(
+                    $parcel,
+                    $parcel->current_status,
+                    $actor,
+                    'Additional parcel '.($index + 2).' created from '.$source->tracking_number.'; contains '.$quantity.' unit(s) of order item '.$item->id.'.',
+                );
+
+                foreach ($source->transferLegs as $leg) {
+                    $origin = $leg->originLogisticsCenter;
+                    $destination = $leg->destinationLogisticsCenter;
+                    if (! $origin || ! $destination) {
+                        throw new RuntimeException('A saved cross-center route is incomplete, so this order line cannot be split safely.');
+                    }
+                    $this->transfers->createPlannedLeg($parcel, $origin, $destination);
+                }
+
+                $created->push($parcel);
+            }
+
+            if (Schema::hasTable('cod_collections')) {
+                $cod = app(CodCollectionService::class);
+                foreach ($created as $parcel) {
+                    $cod->initializeForShipment($parcel->load('sellerOrder.order', 'sellerOrder.items', 'orderItem'));
+                }
+            }
+
+            return $created->values();
         });
     }
 
@@ -588,12 +786,8 @@ class ShipmentWorkflowService
                 if (! $pickupCenter
                     || (int) $rider->logistics_center_id !== (int) $pickupCenter->id
                     || ! $sellerAddress
-                    || ! $this->localRiderEligibility->centerCoversMunicipality(
-                        $pickupCenter,
-                        (string) $sellerAddress->province_code,
-                        (string) $sellerAddress->municipality_code,
-                    )) {
-                    throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
+                    || ! $this->localRiderEligibility->centerAuthorizesAddress($pickupCenter, $sellerAddress)) {
+                    throw new RuntimeException('The rider must belong to an active logistics center authorized for the exact seller pickup PSGC.');
                 }
                 if ($pickupArea) {
                     $this->localRiderEligibility->assertRiderCanCoverArea($pickupCenter, $rider, $pickupArea);
@@ -753,6 +947,41 @@ class ShipmentWorkflowService
                 throw new RuntimeException('This parcel belongs to another logistics center.');
             }
 
+            if (filled($shipment->smart_coverage_route_id)) {
+                if (! $shipment->smart_coverage_service_date) {
+                    throw new RuntimeException('This fallback parcel has no reserved service date. Hold it for authorized routing review.');
+                }
+                $sellerOrder = $shipment->sellerOrder()
+                    ->with(['sellerProfile.businessAddress', 'order.address'])
+                    ->first();
+                $buyerAddress = $sellerOrder?->order?->address;
+                if (! $sellerOrder?->sellerProfile || ! $buyerAddress
+                    || trim((string) $buyerAddress->province_code) !== trim((string) $shipment->destination_province_code)
+                    || trim((string) $buyerAddress->municipality_code) !== trim((string) $shipment->destination_municipality_code)
+                    || trim((string) $buyerAddress->barangay_code) !== trim((string) $shipment->destination_barangay_code)) {
+                    throw new RuntimeException('The saved buyer address differs from this parcel’s fallback destination snapshot. Hold the parcel for authorized routing review.');
+                }
+                try {
+                    $storedRoute = app(PsgcLogisticsRoutingService::class)->revalidateStoredFallback(
+                        $sellerOrder->sellerProfile,
+                        $buyerAddress,
+                        (int) $shipment->smart_coverage_route_id,
+                        lock: true,
+                        serviceDate: $shipment->smart_coverage_service_date?->toDateString(),
+                    );
+                } catch (ValidationException $exception) {
+                    throw new RuntimeException('The approved fallback route is no longer eligible. Hold the parcel for authorized routing review.');
+                }
+                if ((int) $storedRoute['origin']->id !== (int) $shipment->origin_logistics_center_id
+                    || (int) $storedRoute['destination']->id !== (int) $shipment->destination_logistics_center_id
+                    || (int) $storedRoute['destination_area']->service_area_id !== (int) $shipment->service_area_id) {
+                    throw new RuntimeException('The approved fallback route no longer matches this parcel’s saved hub assignment. Hold the parcel for authorized routing review.');
+                }
+                if ($destinationCenter && (int) $destinationCenter->id !== (int) $storedRoute['destination']->id) {
+                    throw new RuntimeException('A stored fallback assignment cannot be changed by sorting staff. Request authorized route reassignment.');
+                }
+            }
+
             $manualDestinationSelected = false;
             if ($destinationCenter) {
                 if (! $this->isCrossHubShipmentAtOrigin($shipment, $center)) {
@@ -851,13 +1080,8 @@ class ShipmentWorkflowService
             }
 
             $area->loadMissing('locations');
-            if ($area->locations->isEmpty() || $area->locations->contains(fn ($location): bool =>
-                ! $this->localRiderEligibility->centerCoversMunicipality(
-                    $center,
-                    $location->province_code,
-                    $location->municipality_code,
-                ))) {
-                throw new RuntimeException('The selected delivery area is not fully owned by this center’s canonical municipality.');
+            if ($this->localRiderEligibility->singleBarangayLocation($center, $area) === null) {
+                throw new RuntimeException('The selected delivery area is not a single-barangay location authorized for this center.');
             }
             $matchesDestination = $this->serviceAreaMatchesDestinationCodes($area, $shipment);
 
@@ -1000,11 +1224,7 @@ class ShipmentWorkflowService
             $area = $location->serviceArea;
             $areaCenter = $area?->logisticsCenter;
             if ($area && $areaCenter
-                && $this->localRiderEligibility->centerCoversMunicipality(
-                    $areaCenter,
-                    $location->province_code,
-                    $location->municipality_code,
-                )) {
+                && $this->localRiderEligibility->centerAuthorizesExactLocation($areaCenter, $location)) {
                 return $area;
             }
         }
@@ -1191,6 +1411,13 @@ class ShipmentWorkflowService
             throw new RuntimeException('Select one or more parcels that are still being prepared before marking them packed.');
         }
 
+        if (Schema::hasColumns('shipments', ['parcel_length_cm', 'parcel_width_cm', 'parcel_height_cm'])
+            && $selected->contains(fn (Shipment $shipment): bool => $shipment->parcel_length_cm === null
+                || $shipment->parcel_width_cm === null
+                || $shipment->parcel_height_cm === null)) {
+            throw new RuntimeException('Enter and save the actual packed parcel dimensions before marking it packed.');
+        }
+
         foreach ($selected as $shipment) {
             if (! $this->hasSellerPackedCheckpoint($shipment)) {
                 $this->recordEvent($shipment, 'PREPARING', $actor, 'SELLER_PACKED_CHECKPOINT: Seller marked this item parcel packed.');
@@ -1227,7 +1454,7 @@ class ShipmentWorkflowService
         }
 
         $routeRepairedShipmentIds = [];
-        if ($this->schema->automaticRoutingReady()) {
+        if ($this->schema->automaticRoutingReady() && $sellerDropoff) {
             $routeIsIncomplete = fn (Shipment $shipment): bool => ! $shipment->origin_logistics_center_id
                 || ! $shipment->destination_logistics_center_id
                 || ! $shipment->service_area_id;
@@ -1295,6 +1522,7 @@ class ShipmentWorkflowService
                 $eventNote,
             );
         }
+
     }
 
     /**
@@ -1313,20 +1541,7 @@ class ShipmentWorkflowService
             return false;
         }
 
-        $routeFields = [
-            'logistics_center_id',
-            'origin_logistics_center_id',
-            'destination_logistics_center_id',
-            'service_area_id',
-            'origin_province_code',
-            'origin_province_name',
-            'origin_municipality_code',
-            'origin_municipality_name',
-            'origin_barangay_code',
-            'origin_barangay_name',
-        ];
-        if (collect($routeFields)->contains(fn (string $field): bool => filled($shipment->getAttribute($field)))
-            || ShipmentTransferLeg::query()->where('shipment_id', $shipment->id)->exists()) {
+        if (ShipmentTransferLeg::query()->where('shipment_id', $shipment->id)->exists()) {
             return false;
         }
 

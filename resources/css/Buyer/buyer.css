@@ -2941,6 +2941,33 @@ html.dark .lk-card-actions--home .lk-catalog-add-cart {
     cursor: pointer;
 }
 
+.lk-catalog-infinite-sentinel {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px 0;
+    color: var(--lk-muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.lk-catalog-infinite-sentinel button {
+    border: 1px solid var(--lk-border-strong);
+    border-radius: 10px;
+    background: var(--lk-card);
+    color: var(--lk-maroon);
+    padding: 8px 12px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.lk-catalog-infinite-sentinel button[hidden] {
+    display: none;
+}
+
 .lk-search-recommendations__retry[hidden],
 .lk-search-recommendations__status[hidden] {
     display: none;

@@ -76,7 +76,7 @@
     <section class="grid items-start gap-6 lg:grid-cols-2">
         <article class="rounded-3xl border border-line bg-surface p-8">
             <h2 class="text-lg font-bold text-ink">Recipient</h2>
-            <div class="mt-5 flex flex-wrap gap-3">@foreach(($delivery->shipment?->orderItem ? collect([$delivery->shipment->orderItem]) : ($delivery->shipment?->sellerOrder?->items ?? collect())) as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-shared.product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $item->quantity }}</small></div></div>@endforeach</div>
+            <div class="mt-5 flex flex-wrap gap-3">@foreach(($delivery->shipment?->orderItem ? collect([$delivery->shipment->orderItem]) : ($delivery->shipment?->sellerOrder?->items ?? collect())) as $item)<div class="flex items-center gap-3 rounded-xl border border-line p-3"><x-shared.product-thumbnail :item="$item" size="64"/><div><strong class="block text-sm text-ink">{{ $item->product_name }}</strong><small class="text-muted">{{ $item->variant_description ?: 'Standard' }} Â· Qty {{ $delivery->shipment?->orderItem ? $delivery->shipment->parcel_quantity : $item->quantity }}</small></div></div>@endforeach</div>
             <dl class="mt-5 grid gap-3 text-sm">
                 <div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div>
                 <div><dt class="text-muted">Contact</dt><dd class="font-semibold text-ink">{{ $parcel['contact'] }}</dd></div>

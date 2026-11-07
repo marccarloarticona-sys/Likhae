@@ -19,6 +19,9 @@
         </header>
         <div class="tracking">{{ $workflow->return_tracking_number }}</div>
         <x-shared.waybill-barcode :tracking="$workflow->return_tracking_number" />
+        @php($outboundParcels = $shipment?->sellerOrder?->shipments ?? collect())
+        @php($outboundParcelNumber = $outboundParcels->search(fn ($candidate) => (int) $candidate->id === (int) $shipment?->id) + 1)
+        <p><strong>Original parcel:</strong> Parcel {{ $outboundParcelNumber }} of {{ max(1, $outboundParcels->count()) }} · Tracking {{ $shipment?->tracking_number }}</p>
         <section class="grid">
             <div class="box"><strong>Return from</strong><p>{{ $parent?->order?->address?->recipient_name }}<br>{{ $parent?->order?->address?->formatted() }}</p></div>
             <div class="box"><strong>Return to seller</strong><p>{{ $shipment?->sellerOrder?->sellerProfile?->business_name }}<br>{{ $sellerCenter?->business_name }}<br>{{ $sellerCenter?->address?->formatted() }}</p></div>

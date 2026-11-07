@@ -65,11 +65,14 @@ class BuyerReturnRefundController extends Controller
         }
         abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
         $buyerWaybillReady = app(LogisticsSchemaReadiness::class)->buyerReturnWaybillsReady()
-            && app(LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady();
+            && app(LogisticsSchemaReadiness::class)->shipmentReturnEnhancementsReady()
+            && Schema::hasColumn('seller_return_refund_requests', 'shipment_id')
+            && Schema::hasColumn('return_refund_request_items', 'shipment_id');
         if ($buyerWaybillReady) {
-            $sellerRequest->load('buyerReturnWorkflow.shipment.sellerOrder.sellerProfile', 'buyerReturnWorkflow.logisticsCenter.address', 'buyerReturnWorkflow.buyerDropoffCenter.address');
+            $sellerRequest->load('shipment.orderItem', 'buyerReturnWorkflow.shipment.sellerOrder.sellerProfile', 'buyerReturnWorkflow.logisticsCenter.address', 'buyerReturnWorkflow.buyerDropoffCenter.address');
         } else {
             $sellerRequest->setRelation('buyerReturnWorkflow', null);
+            $sellerRequest->setRelation('shipment', null);
         }
 
         return view('Buyer.return-refund-show', compact('sellerRequest', 'buyerWaybillReady'));
@@ -91,7 +94,7 @@ class BuyerReturnRefundController extends Controller
         $sellerRequest->load(['request.order.address', 'sellerProfile.businessAddress', 'items.orderItem']);
         abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
         abort_unless((int) $workflow->seller_return_refund_request_id === (int) $sellerRequest->id, 404);
-        $workflow->load(['logisticsCenter.address', 'buyerDropoffCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress']);
+        $workflow->load(['logisticsCenter.address', 'buyerDropoffCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.shipments']);
 
         return view('buyer.return-waybill', compact('sellerRequest', 'workflow'));
     }

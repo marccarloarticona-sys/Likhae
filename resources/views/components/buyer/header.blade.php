@@ -9,7 +9,7 @@
     ])->filter()->implode(' '));
     $buyerName = $buyerName
         ?: data_get($demoUser, 'name')
-        ?: (data_get($demoUser, 'role') === 'buyer' || !$guest ? 'Buyer Account' : 'Guest Shopper');
+        ?: (data_get($demoUser, 'role') === 'buyer' || !$guest ? __('common.labels.buyer_account') : 'Guest Shopper');
     $initials = collect(explode(' ', trim($buyerName)))->filter()->take(2)->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))->implode('') ?: 'BA';
     $searchRoute = $guest ? route('home') : route('buyer.products');
     $searchValue = request()->query('q', request()->query('search', ''));
@@ -75,12 +75,12 @@
             <button type="button" class="lk-profile-container" data-account-menu-toggle aria-expanded="false" aria-controls="buyerAccountMenu">
                 <span class="lk-profile-avatar">
                     <x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" />
-                </span><span class="lk-profile-info"><strong>{{ $buyerName }}</strong><small>Buyer Account</small></span><svg class="lk-profile-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+                </span><span class="lk-profile-info"><strong>{{ $buyerName }}</strong><small>{{ __('common.labels.buyer_account') }}</small></span><svg class="lk-profile-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
             </button>
             <div id="buyerAccountMenu" class="lk-account-dropdown" data-account-menu-panel hidden>
-                <a href="{{ route('buyer.account') }}" class="lk-account-dropdown__current"><span class="lk-account-dropdown__avatar"><x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" /></span><span><strong>{{ $buyerName }}</strong><small>Manage Buyer Account</small></span></a>
+                <a href="{{ route('buyer.account') }}" class="lk-account-dropdown__current"><span class="lk-account-dropdown__avatar"><x-shared.profile-image :path="$profilePhoto" role="buyer" :alt="$buyerName" /></span><span><strong>{{ $buyerName }}</strong><small>{{ __('common.labels.manage_buyer_account') }}</small></span></a>
                 <div class="lk-account-dropdown__divider"></div>
-                <p class="lk-account-dropdown__label">Saved accounts</p>
+                <p class="lk-account-dropdown__label">{{ __('common.labels.saved_accounts') }}</p>
                 @forelse($savedAccounts as $account)
                     @php $accountInitials = collect(explode(' ', trim((string) ($account['name'] ?? $account['email']))))->filter()->take(2)->map(fn ($part) => mb_strtoupper(mb_substr($part, 0, 1)))->implode('') ?: 'LK'; @endphp
                     <form method="POST" action="{{ route('account.switch') }}">
@@ -89,10 +89,10 @@
                         <button type="submit" class="lk-account-dropdown__account"><span class="lk-account-dropdown__avatar">{{ $accountInitials }}</span><span><strong>{{ $account['name'] ?? $account['email'] }}</strong><small>{{ str($account['account_type'] ?? 'Account')->headline() }} · {{ $account['email'] }}</small></span></button>
                     </form>
                 @empty
-                    <p class="lk-account-dropdown__empty">Other accounts you sign in to here will appear in this list.</p>
+                    <p class="lk-account-dropdown__empty">{{ __('common.labels.other_accounts_empty') }}</p>
                 @endforelse
                 <div class="lk-account-dropdown__divider"></div>
-                <form method="POST" action="{{ route('account.switch') }}">@csrf<button type="submit" class="lk-account-dropdown__switch"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10l-3-3M17 17H7l3 3M17 7l3 3M7 17l-3-3"/></svg>Switch another account</button></form>
+                <form method="POST" action="{{ route('account.switch') }}">@csrf<button type="submit" class="lk-account-dropdown__switch"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10l-3-3M17 17H7l3 3M17 7l3 3M7 17l-3-3"/></svg>{{ __('common.labels.switch_another_account') }}</button></form>
             </div>
         </div>
     @endif

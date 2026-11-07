@@ -9,7 +9,7 @@
 <header class="sl-header">
     <div class="sl-header-left">
         <button class="sl-icon-btn sl-mobile-menu" type="button" data-sl-mobile-menu data-open-label="Open navigation" data-close-label="Close navigation" aria-controls="seller-sidebar" aria-label="Open navigation" aria-expanded="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <span class="sl-mobile-menu-icon" aria-hidden="true"><span></span><span></span><span></span></span>
         </button>
         <div class="sl-header-title">
             <h1>{{ $title }}</h1>
@@ -59,6 +59,6 @@
             @php($notificationCount = (int) ($sellerUiCounts['notifications'] ?? 0))
             <span class="sl-action-badge" data-seller-notification-count style="{{ $notificationCount > 0 ? '' : 'display:none' }}">{{ $notificationCount }}</span>
         </button>
-        <x-shared.workspace.account-menu label="Seller Account" profile-route="seller.account" />
+        <x-shared.workspace.account-menu :label="__('settings.workspaces.seller')" profile-route="seller.account" />
     </div>
 </header>

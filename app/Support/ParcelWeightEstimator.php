@@ -20,7 +20,7 @@ final class ParcelWeightEstimator
     public static function productEstimate(?Shipment $shipment): ?float
     {
         $unitWeight = $shipment?->orderItem?->productVariant?->weight_kg;
-        $quantity = (int) ($shipment?->orderItem?->quantity ?? 0);
+        $quantity = (int) ($shipment?->parcel_quantity ?? $shipment?->orderItem?->quantity ?? 0);
 
         if (! is_numeric($unitWeight) || ! is_finite((float) $unitWeight) || (float) $unitWeight <= 0 || $quantity <= 0) {
             return null;

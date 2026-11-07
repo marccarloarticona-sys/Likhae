@@ -189,4 +189,28 @@ class ReturnRefundWorkflowService
             })
             ->sum('items.quantity');
     }
+
+    public function activeClaimedQuantityForShipment(int $orderItemId, int $shipmentId): int
+    {
+        if (! DB::getSchemaBuilder()->hasTable('seller_return_refund_requests')
+            || ! Schema::hasColumn('return_refund_request_items', 'shipment_id')) {
+            return 0;
+        }
+
+        return (int) DB::table('return_refund_request_items as items')
+            ->leftJoin('seller_return_refund_requests as seller_requests', 'seller_requests.id', '=', 'items.seller_return_refund_request_id')
+            ->join('return_refund_requests as requests', 'requests.id', '=', 'items.return_refund_request_id')
+            ->where('items.order_item_id', $orderItemId)
+            ->where(fn ($query) => $query->where('items.shipment_id', $shipmentId)->orWhereNull('items.shipment_id'))
+            ->where(function ($query): void {
+                $query
+                    ->where('seller_requests.status', '<>', SellerReturnRefundRequest::STATUS_REJECTED)
+                    ->orWhere(function ($legacy): void {
+                        $legacy
+                            ->whereNull('items.seller_return_refund_request_id')
+                            ->where('requests.status', '<>', 'REJECTED');
+                    });
+            })
+            ->sum('items.quantity');
+    }
 }

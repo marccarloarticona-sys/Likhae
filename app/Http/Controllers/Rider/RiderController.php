@@ -205,7 +205,9 @@ class RiderController extends Controller
                 'address' => $sellerOrder?->sellerProfile?->businessAddress?->formatted()
                     ?? $sellerOrder?->order?->address?->formatted()
                     ?? 'Address unavailable',
-                'items' => (int) ($sellerOrder?->items?->sum('quantity') ?? 0),
+                'items' => $shipment?->orderItem
+                    ? (int) $shipment->parcel_quantity
+                    : (int) ($sellerOrder?->items?->sum('quantity') ?? 0),
                 'status_label' => str($assignment->status)->headline(),
             ];
         });
@@ -635,7 +637,7 @@ class RiderController extends Controller
         return redirect()->to(route('rider.profile').'#personal')->with('status', 'Account profile updated.');
     }
 
-    public function submitProfileUpdate(Request $request): RedirectResponse
+    public function submitProfileUpdate(Request $request): RedirectResponse|JsonResponse
     {
         abort_unless(
             Schema::hasTable('rider_profile_update_requests') && Schema::hasTable('rider_profile_update_documents'),
@@ -726,7 +728,11 @@ class RiderController extends Controller
             throw $exception;
         }
 
-        return redirect()->to(route('rider.profile').'#vehicle')->with('status', 'Vehicle and document updates were sent to Logistics for re-verification.');
+        $message = 'Vehicle and document updates were sent to Logistics for re-verification.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message, 'status' => 'PENDING'], 201)
+            : redirect()->to(route('rider.profile').'#vehicle')->with('status', $message);
     }
 
     public function updateResidentialAddress(Request $request): RedirectResponse

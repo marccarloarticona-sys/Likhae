@@ -324,7 +324,9 @@
                 [$shipmentNextStep, $shipmentNextActor] = $isCancelledShipment
                     ? ['No further delivery action is required for this parcel.', 'No action pending']
                     : match ($shipmentStatus) {
-                        'PLACED', 'CONFIRMED', 'PREPARING' => ['Wait for the seller to prepare and confirm the parcel.', 'Seller'],
+                        'PLACED' => ['Wait for the seller to accept your order.', 'Seller'],
+                        'CONFIRMED' => ['The seller accepted your order. Wait for them to prepare the parcel.', 'Seller'],
+                        'PREPARING' => ['The seller is preparing your parcel.', 'Seller'],
                         'READY_FOR_PICKUP' => ['Logistics will assign a pickup rider.', 'Logistics'],
                         'PICKUP_ASSIGNED' => ['The pickup rider will collect the parcel from the seller.', 'Pickup rider'],
                         'PICKED_UP' => ['The sorting center will scan the parcel into its facility.', 'Logistics'],
@@ -383,7 +385,7 @@
                             <a class="mt-4 inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto" href="{{ $proofUrl }}" target="_blank" rel="noopener noreferrer">View Full Photo</a>
                         </section>
                     @endif
-                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@if((float) $item->discount_amount > 0)<span class="mt-1 block text-xs font-semibold text-rose-700">{{ (int) $item->flash_sale_quantity > 0 ? 'Flash Sale' : 'Product Discount' }} · @if($item->original_unit_price !== null)Original &#8369;{{ number_format((float) $item->original_unit_price, 2) }} / unit · @endif saved &#8369;{{ number_format((float) $item->discount_amount, 2) }}</span>@endif @if((float) $item->seller_voucher_discount > 0)<span class="block text-xs text-emerald-700">Seller voucher · −&#8369;{{ number_format((float) $item->seller_voucher_discount, 2) }}</span>@endif @if((float) $item->platform_voucher_discount > 0)<span class="block text-xs text-blue-700">Platform voucher · −&#8369;{{ number_format((float) $item->platform_voucher_discount, 2) }}</span>@endif @foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_set', data_get($component, 'quantity')))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
+                <div class="mt-5 divide-y divide-stone-100">@foreach(($shipment->orderItem ? collect([$shipment->orderItem]) : $sellerOrder->items) as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $shipment->orderItem ? $shipment->parcel_quantity : $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@if((float) $item->discount_amount > 0)<span class="mt-1 block text-xs font-semibold text-rose-700">{{ (int) $item->flash_sale_quantity > 0 ? 'Flash Sale' : 'Product Discount' }} · @if($item->original_unit_price !== null)Original &#8369;{{ number_format((float) $item->original_unit_price, 2) }} / unit · @endif saved &#8369;{{ number_format((float) $item->discount_amount, 2) }}</span>@endif @if((float) $item->seller_voucher_discount > 0)<span class="block text-xs text-emerald-700">Seller voucher · −&#8369;{{ number_format((float) $item->seller_voucher_discount, 2) }}</span>@endif @if((float) $item->platform_voucher_discount > 0)<span class="block text-xs text-blue-700">Platform voucher · −&#8369;{{ number_format((float) $item->platform_voucher_discount, 2) }}</span>@endif @foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_set', data_get($component, 'quantity')))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div>
             </section>
           @empty
             <section class="mt-5 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm"><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><p class="mt-1 text-sm text-stone-600">Parcel tracking has not been assigned yet.</p><div class="mt-4 divide-y divide-stone-100">@foreach($sellerOrder->items as $item)<div class="flex min-w-0 items-center justify-between gap-4 py-3 text-sm"><div class="flex min-w-0 items-center gap-3"><x-shared.product-thumbnail :item="$item" size="64"/><div class="min-w-0"><strong class="block break-words">{{ $item->product_name }}</strong><span class="block text-xs text-stone-500">{{ $item->variant_description ?: 'Standard' }} &#183; Qty {{ $item->quantity }} &#183; Unit price &#8369;{{ number_format((float) $item->unit_price, 2) }}</span>@if((float) $item->discount_amount > 0)<span class="mt-1 block text-xs font-semibold text-rose-700">{{ (int) $item->flash_sale_quantity > 0 ? 'Flash Sale' : 'Product Discount' }} · @if($item->original_unit_price !== null)Original &#8369;{{ number_format((float) $item->original_unit_price, 2) }} / unit · @endif saved &#8369;{{ number_format((float) $item->discount_amount, 2) }}</span>@endif @if((float) $item->seller_voucher_discount > 0)<span class="block text-xs text-emerald-700">Seller voucher · −&#8369;{{ number_format((float) $item->seller_voucher_discount, 2) }}</span>@endif @if((float) $item->platform_voucher_discount > 0)<span class="block text-xs text-blue-700">Platform voucher · −&#8369;{{ number_format((float) $item->platform_voucher_discount, 2) }}</span>@endif @foreach((array) $item->promotion_snapshot as $promotionSnapshot)<span class="mt-1 block text-xs font-semibold text-emerald-700">{{ data_get($promotionSnapshot, 'name', 'Seller promotion') }} · {{ str_replace('_', ' ', data_get($promotionSnapshot, 'promotion_type', '')) }} · −&#8369;{{ number_format((float) data_get($promotionSnapshot, 'discount_amount', 0), 2) }}</span>@if(data_get($promotionSnapshot, 'components'))<span class="block text-xs text-stone-500">Bundle includes: {{ collect(data_get($promotionSnapshot, 'components'))->map(fn ($component) => data_get($component, 'product_name').' × '.data_get($component, 'quantity_per_set', data_get($component, 'quantity')))->join(', ') }}</span>@elseif(data_get($promotionSnapshot, 'buy_product_name') || data_get($promotionSnapshot, 'reward_product_name'))<span class="block text-xs text-stone-500">Buy {{ data_get($promotionSnapshot, 'buy_quantity') }} × {{ data_get($promotionSnapshot, 'buy_product_name') }} · Get {{ data_get($promotionSnapshot, 'reward_quantity') }} × {{ data_get($promotionSnapshot, 'reward_product_name') }}</span>@endif @endforeach</div></div><strong class="shrink-0">&#8369;{{ number_format((float) $item->line_total, 2) }}</strong></div>@endforeach</div></section>
@@ -614,12 +616,12 @@
                             if (! $parcelTabKey) {
                                 return true;
                             }
-                            $shipment = $sellerOrder->shipments->first(fn ($candidate) => (int) $candidate->order_item_id === (int) $item->id);
-                            if (! $shipment) {
+                            $itemShipments = $sellerOrder->shipments->where('order_item_id', $item->id);
+                            if ($itemShipments->isEmpty()) {
                                 return $activeTabKey === 'completed' && $order->status === 'COMPLETED';
                             }
 
-                            return $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey;
+                            return $itemShipments->contains(fn ($shipment) => $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey);
                         })->values();
 
                         $hasShipmentForTab = $parcelTabKey && $sellerOrder->shipments->contains(
@@ -636,14 +638,23 @@
                             $itemsForTab = $sellerItems->values();
                         }
 
+                        $parcelUnitsForTab = $sellerOrder->shipments
+                            ->filter(fn ($shipment) => $sellerItems->contains('id', (int) $shipment->order_item_id)
+                                && $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey)
+                            ->sum(fn ($shipment) => (int) $shipment->parcel_quantity);
+                        $unitCountForTab = ! $parcelTabKey || $showSellerItemsAsFallback || $parcelUnitsForTab === 0
+                            ? $itemsForTab->sum('quantity')
+                            : $parcelUnitsForTab;
+
                         return [(int) $sellerOrder->id => [
                             'items' => $itemsForTab,
                             'uses_order_fallback' => $showSellerItemsAsFallback,
+                            'unit_count' => $unitCountForTab,
                         ]];
                     });
                     $orderItemsForTab = $sellerItemsByTab->flatMap(fn (array $sellerData) => $sellerData['items']);
                     $orderUsesItemFallback = $sellerItemsByTab->contains(fn (array $sellerData) => $sellerData['uses_order_fallback']);
-                    $unitCount = $orderItemsForTab->sum('quantity');
+                    $unitCount = $sellerItemsByTab->sum('unit_count');
                     $orderDisplayTotal = $orderItemsForTab->sum(fn ($item) => (float) $item->line_total);
                     $returnRequests = $returnRefundReady ? $order->returnRefundRequests->sortByDesc('submitted_at') : collect();
                     $returnRequest = $returnRequests->first();
@@ -749,7 +760,7 @@
                                         @endphp
                                         <li class="py-3" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
-                                                <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} · Tracking {{ $returnShipment->tracking_number }}</span>
+                                                <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} of {{ $sellerOrder->shipments->count() }} · Tracking {{ $returnShipment->tracking_number }}</span>
                                                 @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                             <div class="mt-3 flex items-start gap-3">
@@ -769,7 +780,7 @@
                                     @foreach($returnWorkflowUnmapped as $returnShipment)
                                         @php $returnParcelNumber = $sellerOrder->shipments->search(fn ($candidate) => (int) $candidate->id === (int) $returnShipment->id) + 1; @endphp
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
-                                            <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} · Tracking {{ $returnShipment->tracking_number }}</span>
+                                            <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} of {{ $sellerOrder->shipments->count() }} · Tracking {{ $returnShipment->tracking_number }}</span>
                                             @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
@@ -788,7 +799,7 @@
                     @foreach($order->sellerOrders as $sellerOrder)
                         @php
                             $sellerShipments = $sellerOrder->shipments;
-                            $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false]);
+                            $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false, 'unit_count' => 0]);
                             $sellerItemsForTab = $sellerTabData['items'];
                             $sellerItemsNeedFallback = $sellerTabData['uses_order_fallback'];
                             $unmappedShipmentsForTab = $sellerShipments->filter(fn ($shipment) =>
@@ -802,8 +813,15 @@
                                     'RETURNS' => 'Return / Refund',
                                 }
                                 : $sellerOrderDisplayStatuses->get($sellerOrder->id, str($sellerOrder->status)->replace('_', ' ')->title()->toString());
-                            $sellerUnitCount = $sellerItemsForTab->sum('quantity');
-                            $sellerDisplayTotal = $sellerItemsForTab->sum(fn ($item) => (float) $item->line_total);
+                            $sellerUnitCount = (int) $sellerTabData['unit_count'];
+                            $sellerDisplayTotal = $parcelTabKey && ! $sellerItemsNeedFallback
+                                ? $sellerShipments
+                                    ->filter(fn ($shipment) => $sellerItemsForTab->contains('id', (int) $shipment->order_item_id)
+                                        && $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey)
+                                    ->sum(fn ($shipment) => $shipment->orderItem
+                                        ? \App\Support\OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['product_amount']
+                                        : 0)
+                                : $sellerItemsForTab->sum(fn ($item) => (float) $item->line_total);
                         @endphp
                         @if($sellerItemsForTab->isNotEmpty() || $unmappedShipmentsForTab->isNotEmpty())
                         <section class="px-5 py-4">
@@ -822,7 +840,7 @@
                                 <div class="my-3 grid gap-2">
                                     @foreach($unmappedShipmentsForTab as $shipment)
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
-                                            <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
+                                            <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} of {{ $sellerShipments->count() }} · Tracking {{ $shipment->tracking_number }}</span>
                                             @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
@@ -834,16 +852,20 @@
                             <ul class="divide-y divide-stone-100 px-5">
                                 @foreach($sellerItemsForTab as $item)
                                     @php
-                                        $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
-                                        $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
+                                        $shipmentsForItem = $sellerShipments->filter(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id
+                                            && (! $parcelTabKey || $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey));
+                                        $shipmentForItem = $shipmentsForItem->first();
                                     @endphp
                                     <li class="flex flex-col gap-3 py-4">
-                                        @if($shipmentForItem)
+                                        @foreach($shipmentsForItem as $shipmentForItem)
+                                            @php
+                                                $shipmentParcelNumber = $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1;
+                                            @endphp
                                             <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
-                                                <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
+                                                <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }} · Qty {{ $shipmentForItem->parcel_quantity }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
                                                 @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
-                                        @endif
+                                        @endforeach
                                         <div class="flex items-start gap-3">
                                             <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
                                             <div class="min-w-0 flex-1">
@@ -894,7 +916,7 @@
                         @foreach($order->sellerOrders as $sellerOrder)
                                 @php
                                     $sellerShipments = $sellerOrder->shipments;
-                                    $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false]);
+                                    $sellerTabData = $sellerItemsByTab->get((int) $sellerOrder->id, ['items' => collect(), 'uses_order_fallback' => false, 'unit_count' => 0]);
                                     $sellerItemsForTab = $sellerTabData['items'];
                                     $sellerItemsNeedFallback = $sellerTabData['uses_order_fallback'];
                                     $unmappedShipmentsForTab = $sellerShipments->filter(fn ($shipment) =>
@@ -923,7 +945,7 @@
                                     <div class="mb-3 grid gap-2">
                                         @foreach($unmappedShipmentsForTab as $shipment)
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
-                                                <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} · Tracking {{ $shipment->tracking_number }}</span>
+                                                <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} of {{ $sellerShipments->count() }} · Tracking {{ $shipment->tracking_number }}</span>
                                                 @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
@@ -935,24 +957,28 @@
                                 <ul class="divide-y divide-stone-100">
                                     @foreach($sellerItemsForTab as $item)
                                         @php
-                                            $shipmentForItem = $sellerShipments->first(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id);
-                                            $shipmentParcelNumber = $shipmentForItem ? $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1 : null;
+                                            $shipmentsForItem = $sellerShipments->filter(fn ($shipment) => (int) $shipment->order_item_id === (int) $item->id
+                                                && (! $parcelTabKey || $shipmentTabKeys->get((int) $shipment->id) === $parcelTabKey));
+                                            $shipmentForItem = $shipmentsForItem->first();
                                         @endphp
                                         <li class="flex flex-col gap-3 py-3 first:pt-0 last:pb-0">
-                                            @if($shipmentForItem)
+                                            @foreach($shipmentsForItem as $shipmentForItem)
+                                                @php
+                                                    $shipmentParcelNumber = $sellerShipments->search(fn ($shipment) => (int) $shipment->id === (int) $shipmentForItem->id) + 1;
+                                                @endphp
                                                 <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
-                                                    <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
+                                                    <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }} · Qty {{ $shipmentForItem->parcel_quantity }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
                                                     <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
                                                         @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                                         @if(in_array($activeTabKey, ['all', 'to-receive'], true))
-                                                            <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $shipmentForItem]) }}" data-confirm-shipment-action="{{ $shipmentForItem->id }}" @if(! in_array((int) $shipmentForItem->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $shipmentParcelNumber }}? Only this parcel will move to Completed.');">
+                                                            <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $shipmentForItem]) }}" data-confirm-shipment-action="{{ $shipmentForItem->id }}" @if(! in_array((int) $shipmentForItem->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }}? Only this parcel will move to Completed.');">
                                                                 @csrf<input type="hidden" name="confirm_receipt" value="1">
                                                                 <button class="lk-btn lk-btn-red px-3 py-1.5 text-xs" type="submit">Confirm received</button>
                                                             </form>
                                                         @endif
                                                     </div>
                                                 </div>
-                                            @endif
+                                            @endforeach
                                             <div class="flex items-start gap-3">
                                                 <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
                                                 <div class="min-w-0 flex-1">

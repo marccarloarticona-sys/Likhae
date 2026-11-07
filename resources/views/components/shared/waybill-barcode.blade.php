@@ -1,7 +1,8 @@
-@props(['tracking'])
+@props(['tracking', 'height' => 88])
 
 @php
     $trackingValue = (string) $tracking;
+    $barcodeHeight = max(32, (int) $height);
     $barcode = null;
 
     if (class_exists(\Picqer\Barcode\BarcodeGeneratorSVG::class)) {
@@ -10,10 +11,10 @@
             $trackingValue,
             \Picqer\Barcode\BarcodeGenerator::TYPE_CODE_128,
             2.5,
-            88,
+            $barcodeHeight,
         );
     } else {
-        $barcode = \App\Support\Code128Svg::render($trackingValue, 3, 88);
+        $barcode = \App\Support\Code128Svg::render($trackingValue, 3, $barcodeHeight);
     }
 
     // Keep the SVG markup valid when it is embedded directly into the page.

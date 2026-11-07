@@ -37,6 +37,11 @@
 
 @section('content')
 <div class="sl-page">
+    @if(! $seller->store_visibility)
+        <div class="sl-alert" role="status">
+            Your store is hidden from buyers. Active listings will appear when you turn on <a href="{{ route('seller.store') }}#visibility">Store Visibility</a>.
+        </div>
+    @endif
     @if(session('product_saved'))
         @php
             $savedProduct = session('product_saved');
@@ -47,7 +52,9 @@
                 default => 'Draft saved successfully',
             };
             $saveConfirmationMessage = match ($savedStatus) {
-                'ACTIVE' => 'is now published and available to buyers.',
+                'ACTIVE' => $seller->store_visibility
+                    ? 'is now published and available to buyers.'
+                    : 'is published, but your store is hidden from buyers. Turn on Store Visibility to show it.',
                 'SUSPENDED' => 'was updated but remains hidden from buyers until Admin reviews it.',
                 default => 'has been saved as a draft and is not visible to buyers.',
             };
@@ -98,7 +105,7 @@
             @endif
         </div>
 
-        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}" data-saved-variant-prices='@json($savedVariantPrices)'>
+        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}" data-saved-variant-prices='@json($savedVariantPrices)' data-product-dimensions-ready="{{ $productDimensionsReady ? 'true' : 'false' }}">
             @csrf
             @if($editing) @method('PUT') @endif
             @unless($editing)<input type="hidden" name="idempotency_key" value="{{ old('idempotency_key', $submissionToken) }}">@endunless
@@ -194,6 +201,13 @@
                         <label class="sl-field"><span>Price <b>* for publishing</b></span><div class="sl-input-prefix"><i>₱</i><input name="price" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($singleVariant, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($singleVariant, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($singleVariant, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($singleVariant, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($singleVariant, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($singleVariant, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($singleVariant, 'flash_sale_remaining', 0) }}" value="{{ old('price', data_get($product, 'base_price')) }}"></div>@error('price')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Stock <b>* for publishing</b></span><input name="stock" type="number" min="0" value="{{ old('stock', data_get($product, 'stock')) }}">@error('stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Weight (kg)</span><input name="weight_kg" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ old('weight_kg', data_get($singleVariant, 'weight_kg')) }}" placeholder="e.g. 0.500"><small>Weight of one item, before packing.</small></label>
+                        @if($productDimensionsReady)
+                            <label class="sl-field"><span>Length (cm)</span><input name="length_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('length_cm', data_get($singleVariant, 'length_cm')) }}" placeholder="e.g. 20.00">@error('length_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                            <label class="sl-field"><span>Width (cm)</span><input name="width_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('width_cm', data_get($singleVariant, 'width_cm')) }}" placeholder="e.g. 12.00">@error('width_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                            <label class="sl-field"><span>Height (cm)</span><input name="height_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('height_cm', data_get($singleVariant, 'height_cm')) }}" placeholder="e.g. 8.00">@error('height_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                        @else
+                            <p class="sl-span-2 sl-sidebar-help" role="status">Product dimensions will be available after the dimension snapshot migration is installed.</p>
+                        @endif
                         <label class="sl-field sl-span-2"><span>SKU</span><input name="sku" maxlength="100" value="{{ old('sku', data_get($singleVariant, 'sku')) }}" placeholder="Generated automatically when blank"><small>Leave blank to create a SKU automatically.</small></label>
                         <label class="sl-field"><span>Accepted payment</span><select name="payment_method"><option value="cod_online" @selected($singlePaymentMethod === 'cod_online')>COD + Online</option><option value="cod" @selected($singlePaymentMethod === 'cod')>COD only</option><option value="online" @selected($singlePaymentMethod === 'online')>Online only</option></select></label>
                         <label class="sl-field"><span>Availability</span><select name="is_active"><option value="1" @selected((bool) $singleActive)>Available</option><option value="0" @selected(! (bool) $singleActive)>Unavailable</option></select></label>
@@ -213,7 +227,7 @@
                         <button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-apply-bulk>Apply</button>
                     </div>
                     <div class="sl-variation-table" data-variation-list>
-                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span><span>Payment</span><span>Availability</span><span></span></div>
+                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span>@if($productDimensionsReady)<span>Dimensions (cm)</span>@endif<span>Payment</span><span>Availability</span><span></span></div>
                         @foreach($variationRows as $index => $row)
                             <div class="sl-variation-row">
                                 <label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label>
@@ -225,6 +239,13 @@
                                 <input name="variants[{{ $index }}][price]" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($row, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($row, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($row, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($row, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($row, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($row, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($row, 'flash_sale_remaining', 0) }}" value="{{ data_get($row, 'price') }}" placeholder="Price" aria-label="Variant price">
                                 <input name="variants[{{ $index }}][stock]" type="number" min="0" value="{{ data_get($row, 'stock') }}" aria-label="Variant stock">
                                 <input name="variants[{{ $index }}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ data_get($row, 'weight_kg') }}" placeholder="kg" aria-label="Weight per item in kilograms">
+                                @if($productDimensionsReady)
+                                    <div class="sl-variant-dimensions" role="group" aria-label="Product dimensions in centimeters">
+                                        <input name="variants[{{ $index }}][length_cm]" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ data_get($row, 'length_cm') }}" placeholder="L" aria-label="Length in centimeters">
+                                        <input name="variants[{{ $index }}][width_cm]" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ data_get($row, 'width_cm') }}" placeholder="W" aria-label="Width in centimeters">
+                                        <input name="variants[{{ $index }}][height_cm]" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ data_get($row, 'height_cm') }}" placeholder="H" aria-label="Height in centimeters">
+                                    </div>
+                                @endif
                                 <select name="variants[{{ $index }}][payment_method]" aria-label="Payment method"><option value="cod_online" @selected(data_get($row, 'payment_method', 'cod_online') === 'cod_online')>COD + Online</option><option value="cod" @selected(data_get($row, 'payment_method') === 'cod')>COD</option><option value="online" @selected(data_get($row, 'payment_method') === 'online')>Online</option></select>
                                 <select name="variants[{{ $index }}][is_active]" aria-label="Availability"><option value="1" @selected(filter_var(data_get($row, 'is_active', true), FILTER_VALIDATE_BOOLEAN))>Available</option><option value="0" @selected(! filter_var(data_get($row, 'is_active', true), FILTER_VALIDATE_BOOLEAN))>Unavailable</option></select>
                                 <button type="button" class="sl-icon-btn" data-remove-variant aria-label="Remove variation">&times;</button>

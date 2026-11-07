@@ -616,7 +616,10 @@ class RiderApiController extends Controller
             'buyer_contact' => $address?->contact_number ?? $order?->buyer?->contact_number ?? 'Not available',
             'seller_name' => $sellerOrder?->sellerProfile?->business_name ?? 'Seller unavailable',
             'address' => $assignment->assignment_type === RiderAssignment::TYPE_PICKUP ? ($sellerOrder?->sellerProfile?->businessAddress?->formatted() ?? $address?->formatted() ?? '') : ($address?->formatted() ?? ''),
-            'amount' => (float) ($sellerOrder?->grand_total ?? 0), 'items' => (int) ($sellerOrder?->items?->sum('quantity') ?? 0),
+            'amount' => (float) ($sellerOrder?->grand_total ?? 0),
+            'items' => $shipment?->orderItem
+                ? (int) $shipment->parcel_quantity
+                : (int) ($sellerOrder?->items?->sum('quantity') ?? 0),
             'status' => $status, 'status_label' => str($status)->replace('_', ' ')->headline()->toString(),
             'image_url' => $this->assignmentImage($assignment), 'failure_reason' => $latestAttempt?->failure_reason,
             'delivery_latitude' => $destination?->latitude !== null ? (float) $destination->latitude : null,

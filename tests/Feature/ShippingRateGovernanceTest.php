@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Models\Finance\ShippingRateChangeRequest;
 use App\Models\Finance\ShippingRateVersion;
+use App\Models\Admin\PlatformSetting;
+use App\Models\Buyer\Address;
 use App\Models\Buyer\CartItem;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Seller\Product;
@@ -12,6 +14,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Finance\ShippingRateGovernanceService;
 use App\Services\Finance\ShippingRatePolicyService;
+use App\Services\Finance\RegionShippingRateService;
 use App\Services\Marketplace\CheckoutService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -330,6 +333,45 @@ class ShippingRateGovernanceTest extends TestCase
             ->assertOk()
             ->assertSee('Shipping Rate Requests')
             ->assertSee('GLOBAL rate policy');
+    }
+
+    public function test_logistics_can_save_automatic_regional_shipping_settings_and_route_overrides(): void
+    {
+        $this->actingAs($this->logistics)
+            ->post(route('logistics.shipping-rate.regional-tiers.update'), [
+                'additional_region_tier_fee' => '8.25',
+                'regional_shipping_distance_km_per_tier' => '80',
+                'regional_shipping_interisland_tier_surcharge' => '3',
+                'shipping_region_tiers' => "Region IV-A | NCR | 4\nNCR | Region IV-A | 2",
+            ])
+            ->assertRedirect(route('logistics.shipping-rate'));
+
+        $this->assertSame(8.25, PlatformSetting::valueOf('additional_region_tier_fee'));
+        $this->assertSame(80.0, PlatformSetting::valueOf('regional_shipping_distance_km_per_tier'));
+        $this->assertSame(3, PlatformSetting::valueOf('regional_shipping_interisland_tier_surcharge'));
+        $savedRoutes = app(RegionShippingRateService::class)->parseTierMap(
+            (string) PlatformSetting::valueOf('shipping_region_tiers', ''),
+        );
+        $this->assertCount(2, $savedRoutes);
+        $this->assertSame(4, $savedRoutes[0]['tier']);
+        $this->assertSame(2, $savedRoutes[1]['tier']);
+
+        $quote = app(RegionShippingRateService::class)->quote(
+            (new Address())->forceFill(['region_name' => 'CALABARZON']),
+            (new Address())->forceFill(['region_name' => 'National Capital Region']),
+            '50.00',
+        );
+        $this->assertSame('83.00', $quote['shipping_fee']);
+        $this->assertSame('route_override', $quote['snapshot']['rate_source']);
+
+        $reverseQuote = app(RegionShippingRateService::class)->quote(
+            (new Address())->forceFill(['region_name' => 'National Capital Region']),
+            (new Address())->forceFill(['region_name' => 'CALABARZON']),
+            '50.00',
+        );
+        $this->assertSame('66.50', $reverseQuote['shipping_fee']);
+        $this->assertSame(2, $reverseQuote['snapshot']['additional_region_tiers']);
+        $this->assertSame('route_override', $reverseQuote['snapshot']['rate_source']);
     }
 
     public function test_stale_baseline_is_exposed_and_concurrent_approvals_serialize_into_auditable_versions(): void

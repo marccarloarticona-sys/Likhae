@@ -5,6 +5,7 @@ namespace App\Models\Seller;
 use App\Models\Admin\Dispute;
 use App\Models\Buyer\ReturnRefundRequest;
 use App\Models\Buyer\ReturnRefundRequestItem;
+use App\Models\Logistics\Shipment;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -30,6 +31,7 @@ class SellerReturnRefundRequest extends Model
     protected $fillable = [
         'return_refund_request_id',
         'seller_order_id',
+        'shipment_id',
         'seller_profile_id',
         'status',
         'requested_amount',
@@ -67,6 +69,11 @@ class SellerReturnRefundRequest extends Model
     public function sellerOrder(): BelongsTo
     {
         return $this->belongsTo(SellerOrder::class);
+    }
+
+    public function shipment(): BelongsTo
+    {
+        return $this->belongsTo(Shipment::class);
     }
 
     public function sellerProfile(): BelongsTo

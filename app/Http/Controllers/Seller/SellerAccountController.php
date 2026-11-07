@@ -14,6 +14,7 @@ use App\Services\Account\BuyerMobileChangeOtpService;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
 use App\Services\Media\ImageOptimizationService;
+use App\Services\UserPreferenceService;
 use App\Support\PhilippineMobileNumber;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -180,6 +181,10 @@ class SellerAccountController extends Controller
         if ($businessAddress && $shop->sellerOrders()->exists()) {
             $pickupAddressEditProtectedIds[] = (int) $businessAddress->id;
         }
+        $pickupAddressCompletionIds = $businessAddress && $shop->sellerOrders()->exists()
+            && ! in_array((int) $businessAddress->id, $pickupRequestAddressIds, true)
+            ? [(int) $businessAddress->id]
+            : [];
         $pickupAddressDeleteProtectedIds = array_values(array_unique([
             ...$pickupRequestAddressIds,
             ...($businessAddress ? [(int) $businessAddress->id] : []),
@@ -191,7 +196,10 @@ class SellerAccountController extends Controller
         if ($request->filled('pickup_edit')) {
             $pickupAddressToEdit = $pickupAddresses->firstWhere('id', (int) $request->input('pickup_edit'));
             abort_unless($pickupAddressToEdit, 404);
-            abort_if(in_array((int) $pickupAddressToEdit->id, $pickupAddressEditProtectedIds, true), 409, 'This address is used by existing pickup or order routes. Add a new address to preserve those routes.');
+            abort_if(in_array((int) $pickupAddressToEdit->id, $pickupAddressEditProtectedIds, true)
+                && ! in_array((int) $pickupAddressToEdit->id, $pickupAddressCompletionIds, true),
+                409,
+                'This address is used by existing pickup routes. Add another address to preserve those routes.');
         }
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($shop);
@@ -213,6 +221,7 @@ class SellerAccountController extends Controller
             'defaultPickupAddress' => $defaultPickupAddress,
             'pickupAddressToEdit' => $pickupAddressToEdit,
             'pickupAddressEditProtectedIds' => array_values(array_unique($pickupAddressEditProtectedIds)),
+            'pickupAddressCompletionIds' => $pickupAddressCompletionIds,
             'pickupAddressDeleteProtectedIds' => $pickupAddressDeleteProtectedIds,
             'payoutProfile' => $shop,
             'payoutDestinationReady' => $payoutDestinationReady,
@@ -608,7 +617,7 @@ class SellerAccountController extends Controller
         return back()->with('status', 'Password changed successfully.');
     }
 
-    public function updateNotifications(Request $request): RedirectResponse
+    public function updateNotifications(Request $request, UserPreferenceService $userPreferences): RedirectResponse
     {
         $notificationKeys = [
             'new_order', 'order_cancellation', 'pickup_shipping', 'inventory_alerts',
@@ -638,12 +647,9 @@ class SellerAccountController extends Controller
             }
         }
 
-        $user = $this->shop($request)->user;
-        $user->forceFill([
-            'notification_preferences' => array_merge((array) $user->notification_preferences, $preferences),
-        ])->save();
+        $userPreferences->merge($this->shop($request)->user, $preferences);
 
-        return back()->with('status', 'Notification preferences saved.');
+        return back()->with('status', __('common.messages.notification_preferences_saved'));
     }
 
     private function shop(Request $request): SellerProfile

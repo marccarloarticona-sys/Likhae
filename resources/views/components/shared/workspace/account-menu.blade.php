@@ -6,7 +6,7 @@
 
 @php
     $accountUser = auth()->user();
-    $accountName = $accountUser?->name ?? 'Account';
+    $accountName = $accountUser?->name ?? __('common.labels.account');
     $accountInitials = collect(explode(' ', trim($accountName)))
         ->filter()
         ->take(2)
@@ -76,11 +76,11 @@
         <svg class="workspace-account__chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
     </summary>
     <div class="workspace-account__panel">
-        <a class="workspace-account__link" href="{{ route($profileRoute) }}">Account settings</a>
+        <a class="workspace-account__link" href="{{ route($profileRoute) }}">{{ __('common.labels.account_settings') }}</a>
         <div class="workspace-account__divider"></div>
-        <form method="POST" action="{{ route('logout') }}" data-confirm-title="Log out?" data-confirm-message="You will be signed out of your LIKHAE account." data-confirm-label="Log out">
+        <form method="POST" action="{{ route('logout') }}" data-confirm-title="{{ __('common.confirmation.logout_title') }}" data-confirm-message="{{ __('common.confirmation.logout_message') }}" data-confirm-label="{{ __('common.confirmation.logout_label') }}">
             @csrf
-            <button type="submit" class="workspace-account__logout">Sign out</button>
+            <button type="submit" class="workspace-account__logout">{{ __('common.buttons.sign_out') }}</button>
         </form>
     </div>
 </details>

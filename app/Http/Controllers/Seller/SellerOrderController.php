@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Seller;
 
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\OrderItem;
+use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Rider\RiderLocalTrip;
@@ -11,8 +12,8 @@ use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\ShipmentWorkflowService;
-use App\Services\Maps\MapDataService;
 use App\Support\FinancialRules;
+use App\Support\ParcelWeightEstimator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -54,6 +55,7 @@ class SellerOrderController extends Controller
         $orderRelations = [...$orderRelations,
             'items.shipment.events',
             'shipments.events',
+            'shipments.orderItem.productVariant',
             'shipments.pickupRequests',
             'shipments.riderAssignments.riderProfile.user',
             'shipments.riderAssignments.liveLocation',
@@ -74,6 +76,9 @@ class SellerOrderController extends Controller
                 'shipments.riderAssignments.localTripItems.trip.items',
                 'shipments.riderAssignments.localTripItems.trip.items.riderAssignment.shipment',
             ];
+        }
+        if ($schema->sellerPickupCenterSelectionReady()) {
+            $orderRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.preferredLogisticsCenter';
         }
         $ownedOrders = SellerOrder::query()->where('seller_profile_id', $seller->id);
         $ordersQuery = (clone $ownedOrders)
@@ -307,30 +312,60 @@ class SellerOrderController extends Controller
         return back()->with('status', 'Seller order updated successfully.');
     }
 
-    public function recordParcelMeasurements(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): RedirectResponse
+    public function splitParcels(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
         abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
 
         $data = $request->validate([
-            'parcel_weight_kg' => ['required', 'numeric', 'gt:0', 'max:9999999.999', 'decimal:0,3'],
-            'parcel_volume_liters' => ['required', 'numeric', 'gt:0', 'max:999999999.999', 'decimal:0,3'],
+            'parcel_quantities' => ['required', 'string', 'max:80', 'regex:/^\s*\d+(?:\s*,\s*\d+){1,9}\s*$/'],
         ]);
-        $shipment = $orderItem->shipment()->firstOrFail();
+        $quantities = array_map('intval', preg_split('/\s*,\s*/', trim($data['parcel_quantities'])) ?: []);
 
         try {
-            $workflow->recordPackedMeasurements(
-                $shipment,
-                $request->user(),
-                (string) $data['parcel_weight_kg'],
-                (string) $data['parcel_volume_liters'],
-            );
+            $parcels = $workflow->splitItemIntoParcels($sellerOrder, $orderItem, $quantities, $request->user());
         } catch (RuntimeException $exception) {
-            return back()->withErrors(['measurements' => $exception->getMessage()])->withInput();
+            return back()->withErrors(['parcel_split' => $exception->getMessage()])
+                ->withInput()
+                ->with('parcel_split_item_id', $orderItem->id)
+                ->with('parcel_split_message', $exception->getMessage());
         }
 
-        return back()->with('status', 'Measured packed weight and volume saved for this parcel.');
+        return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
+            ->with('status', 'Parcel split saved. Every parcel is listed on the single order waybill with its own scan code. The existing order shipping fee remains unchanged.');
+    }
+
+    public function saveParcelDimensions(Request $request, SellerOrder $sellerOrder, Shipment $shipment, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $shipment->seller_order_id === (int) $sellerOrder->id, 404);
+        abort_unless(Schema::hasColumns('shipments', ['parcel_length_cm', 'parcel_width_cm', 'parcel_height_cm']), 503);
+
+        $data = $request->validate([
+            'length_cm' => ['required', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'width_cm' => ['required', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'height_cm' => ['required', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+        ]);
+
+        try {
+            $savedShipment = $workflow->recordPackedDimensions(
+                $shipment,
+                $request->user(),
+                (string) $data['length_cm'],
+                (string) $data['width_cm'],
+                (string) $data['height_cm'],
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['parcel_dimensions' => $exception->getMessage()])->withInput();
+        }
+
+        $status = ParcelWeightEstimator::recordedWeight($savedShipment) !== null
+            ? 'Packed parcel dimensions saved. Total parcel weight is calculated automatically from product weight and parcel quantity.'
+            : 'Packed parcel dimensions saved. Add a unit weight to the product to calculate total parcel weight.';
+
+        return back()->with('status', $status);
     }
 
     public function ensureParcels(Request $request, SellerOrder $sellerOrder, ShipmentWorkflowService $workflow): RedirectResponse
@@ -346,7 +381,7 @@ class SellerOrderController extends Controller
         }
 
         return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
-            ->with('status', $shipments->count().' parcel waybill(s) are now linked to their product lines. Print each label before handoff.');
+            ->with('status', 'Parcel scan codes are ready. Print one order waybill before handoff.');
     }
 
     public function handover(Request $request, SellerOrder $sellerOrder, ShipmentWorkflowService $workflow): RedirectResponse
@@ -380,9 +415,13 @@ class SellerOrderController extends Controller
             return back()->withErrors(['parcels' => $exception->getMessage()]);
         }
 
-        return redirect()->route('seller.orders')->with('status', $data['handover_method'] === 'seller_dropoff'
-            ? 'Drop-off registered. Print each selected waybill and take the parcel(s) to your assigned logistics center for an intake scan.'
-            : 'Logistics pickup requested.');
+        if ($data['handover_method'] === 'seller_dropoff') {
+            return redirect()->route('seller.orders')
+                ->with('status', 'Drop-off registered. Print the order waybill and take the selected parcel(s) to your assigned logistics center for intake scanning.');
+        }
+
+        return redirect()->route('seller.logistics')
+            ->with('status', 'Parcels are ready. Choose a nearby Logistics center or keep the nearest suggested center, then submit the pickup request here.');
     }
 
     private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady, array $successfulPickupScanKeys): array
@@ -390,14 +429,20 @@ class SellerOrderController extends Controller
         $address = $order->order?->address;
         $items = $order->items;
         $shipments = $order->shipments;
+        $parcelDimensionsReady = Schema::hasColumns('shipments', ['parcel_length_cm', 'parcel_width_cm', 'parcel_height_cm']);
         $packedCheckpoint = fn ($shipment): bool => $shipment && $shipment->events->contains(
             fn ($event): bool => $event->status === 'PREPARING' && str_starts_with((string) $event->notes, 'SELLER_PACKED_CHECKPOINT:'),
         );
-        $parcelRows = $items->map(fn ($item): array => [
-            'item' => $item,
-            'shipment' => $item->shipment,
-            'packed' => $packedCheckpoint($item->shipment),
-        ])->values();
+        $shipmentsByItem = $shipments->whereNotNull('order_item_id')->groupBy('order_item_id');
+        $parcelRows = $shipments->filter(fn ($shipment): bool => $shipment->order_item_id !== null)
+            ->map(fn ($shipment): array => [
+                'item' => $items->firstWhere('id', (int) $shipment->order_item_id),
+                'shipment' => $shipment,
+                'packed' => $packedCheckpoint($shipment),
+                'can_mark_packed' => ! $parcelDimensionsReady || ($shipment->parcel_length_cm !== null && $shipment->parcel_width_cm !== null && $shipment->parcel_height_cm !== null),
+            ])
+            ->filter(fn (array $parcel): bool => $parcel['item'] !== null)
+            ->values();
         $assignments = $shipments->flatMap->riderAssignments;
         $assignment = $assignments
             ?->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
@@ -436,6 +481,42 @@ class SellerOrderController extends Controller
             default => null,
         };
 
+        $selectedPickupCenterNames = $shipments
+            ->flatMap(function ($shipment): Collection {
+                if (! $shipment->relationLoaded('sellerPickupMemberships')) {
+                    return collect();
+                }
+
+                return $shipment->sellerPickupMemberships
+                    ->filter(fn ($membership): bool => $membership->active_slot === true)
+                    ->map(function ($membership): ?string {
+                        if (! $membership->relationLoaded('pickupRequest')) {
+                            return null;
+                        }
+
+                        $pickupRequest = $membership->pickupRequest;
+                        if (! $pickupRequest?->relationLoaded('preferredLogisticsCenter')) {
+                            return null;
+                        }
+
+                        return $pickupRequest->preferredLogisticsCenter?->business_name;
+                    });
+            })
+            ->filter(fn ($name): bool => filled($name))
+            ->unique()
+            ->values();
+        $assignedCenterNames = $shipments
+            ->map(fn ($shipment) => $shipment->relationLoaded('logisticsCenter') ? $shipment->logisticsCenter?->business_name : null)
+            ->filter(fn ($name): bool => filled($name))
+            ->unique()
+            ->values();
+        $logisticsProviderNames = $selectedPickupCenterNames->isNotEmpty()
+            ? $selectedPickupCenterNames
+            : $assignedCenterNames;
+        $logisticsProvider = $logisticsProviderNames->isNotEmpty()
+            ? $logisticsProviderNames->implode(', ')
+            : ($pickupStatus === 'Waiting for Logistics' ? 'Not selected' : 'Not assigned');
+
         $itemSubtotalCents = FinancialRules::cents($order->item_subtotal);
         $voucherCents = FinancialRules::cents($order->voucher_discount);
         $rewardPointsDiscountCents = FinancialRules::cents($order->reward_points_discount ?? 0);
@@ -449,7 +530,11 @@ class SellerOrderController extends Controller
             ->filter();
         $codAmountCents = $codCollections->isNotEmpty()
             ? $codCollections->sum(fn ($collection): int => FinancialRules::cents($collection->expected_amount))
-            : $items->sum(fn ($item): int => FinancialRules::cents(\App\Support\OrderItemParcelAmount::forItem($order, $item)['total']));
+            : ($shipments->contains(fn ($shipment): bool => $shipment->order_item_id !== null)
+                ? $shipments->sum(fn ($shipment): int => $shipment->order_item_id !== null
+                    ? (int) \App\Support\OrderItemParcelAmount::forShipment($order, $shipment)['total_cents']
+                    : 0)
+                : $items->sum(fn ($item): int => FinancialRules::cents(\App\Support\OrderItemParcelAmount::forItem($order, $item)['total'])));
         $paidOnline = $order->order?->payments?->contains(fn ($payment): bool => $payment->method === 'ONLINE' && $payment->status === 'PAID') ?? false;
         $pickupIrreversible = $assignments->contains(fn ($candidate): bool => $candidate->assignment_type === 'PICKUP'
             && in_array($candidate->status, ['IN_PROGRESS', 'COMPLETED'], true));
@@ -477,6 +562,9 @@ class SellerOrderController extends Controller
             'buyer_note' => $order->buyer_note,
             'items' => $items->values(),
             'parcels' => $parcelRows,
+            'shipments_by_item' => $shipmentsByItem,
+            'parcel_splitting_ready' => Schema::hasColumn('shipments', 'parcel_quantity'),
+            'parcel_dimensions_ready' => $parcelDimensionsReady,
             'seller_dropoff_shipment_ids' => $sellerDropoffShipmentIds,
             'ready_parcels' => $parcelRows->filter(fn (array $parcel): bool => $parcel['packed']
                 && $parcel['shipment']?->current_status === 'PREPARING')->values(),
@@ -486,7 +574,7 @@ class SellerOrderController extends Controller
             'unresolved_legacy_shipments' => $shipments->whereNull('order_item_id')->values(),
             'has_unresolved_legacy_shipment' => $items->count() > 1
                 && $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
-            'parcels_need_setup' => $items->contains(fn ($item): bool => ! $item->shipment)
+            'parcels_need_setup' => $items->contains(fn ($item): bool => ! $shipments->contains(fn ($shipment): bool => (int) $shipment->order_item_id === (int) $item->id))
                 || $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
             'can_print_waybills' => $order->canPrintWaybills(),
             'packed' => $shipments->isNotEmpty() && $shipments->every($packedCheckpoint),
@@ -515,8 +603,8 @@ class SellerOrderController extends Controller
             'can_cancel' => in_array($order->status, ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'], true)
                 && ! $paidOnline && ! $pickupIrreversible && ! $codCollected,
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),
-            'logistics_provider' => $shipments->firstWhere('current_status', 'READY_FOR_PICKUP')?->logisticsCenter?->business_name
-                ?? $shipments->first()?->logisticsCenter?->business_name ?? 'Not assigned',
+            'logistics_provider' => $logisticsProvider,
+            'has_selected_logistics_center' => $selectedPickupCenterNames->isNotEmpty(),
             'shipping' => $assignment?->riderProfile?->user?->name ?? $pickupAssignment?->riderProfile?->user?->name ?? 'Waiting for Logistics',
             'pickup_status' => $pickupStatus,
             'pickup_batch' => $pickupBatch ? 'P-'.$pickupBatch->id : null,
@@ -543,7 +631,6 @@ class SellerOrderController extends Controller
             'status_key' => $this->statusKey($order->status),
             'buyer_receipt_pending' => $buyerReceiptPending,
             'delivery' => $shipments->first(),
-            'map_markers' => app(MapDataService::class)->forShipments($shipments, includeSeller: true),
         ];
     }
 

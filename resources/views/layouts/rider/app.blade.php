@@ -1,5 +1,11 @@
+@php
+    $riderThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    if (! in_array($riderThemePreference, ['light', 'dark', 'system'], true)) {
+        $riderThemePreference = 'system';
+    }
+@endphp
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" data-theme-preference="{{ $riderThemePreference }}">
 
 <head>
     <x-shared.likhae-favicon />
@@ -19,12 +25,14 @@
 
     <script>
         (function () {
-            const savedTheme =
-                localStorage.getItem('likhae-theme');
-
+            const theme = @json($riderThemePreference);
+            try {
+                if (theme === 'system') localStorage.removeItem('likhae-theme');
+                else localStorage.setItem('likhae-theme', theme);
+            } catch (_) {}
             document.documentElement.classList.toggle(
                 'dark',
-                savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
+                theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
             );
         })();
     </script>

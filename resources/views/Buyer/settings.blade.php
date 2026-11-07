@@ -1,5 +1,5 @@
 @extends('layouts.buyer.app')
-@section('title', 'System Settings')
+@section('title', __('settings.buyer_title'))
 @section('active', 'settings')
 @push('head')
     @vite('resources/css/Buyer/settings.css')
@@ -8,22 +8,16 @@
 @section('content')
 @php
     $value = fn (string $key) => old($key, $preferences[$key] ?? false);
+    $supportedLocales = config('app.supported_locales', ['en' => 'English']);
+    $selectedLanguage = old('language', $preferences['language'] ?? 'en');
+    if (! is_string($selectedLanguage) || ! array_key_exists($selectedLanguage, $supportedLocales)) {
+        $selectedLanguage = 'en';
+    }
     $soundCatalog = [
-        ['order_updates', 'Order tone', 'Order confirmation, processing, and status changes.'],
-        ['delivery_updates', 'Delivery tone', 'Pickup, sorting, rider, and delivery updates.'],
-        ['chat_updates', 'Message tone', 'New messages from the Messages feature.'],
-        ['promotion_updates', 'Promotion tone', 'Vouchers, discounts, and campaign updates.'],
-        ['earnings_updates', 'Payment tone', 'Payment, refund, and account balance updates.'],
-        ['warning_updates', 'Warning tone', 'Security, failed actions, and urgent alerts.'],
-        ['return_updates', 'Return tone', 'Returns, refunds, and dispute updates.'],
-        ['general_updates', 'General tone', 'Other supported LIKHAE notifications.'],
+        'order_updates', 'delivery_updates', 'chat_updates', 'promotion_updates',
+        'earnings_updates', 'warning_updates', 'return_updates', 'general_updates',
     ];
-    $notificationOptions = [
-        ['order_updates', 'Order Updates', 'Order confirmation, processing, and status changes.'],
-        ['delivery_updates', 'Delivery Updates', 'Pickup, sorting, rider, and delivery updates.'],
-        ['chat_updates', 'Chat Notifications', 'New messages from the existing Messages feature.'],
-        ['promotion_updates', 'Promotions & Vouchers', 'Eligible voucher, discount, and promotion updates.'],
-    ];
+    $notificationOptions = ['order_updates', 'delivery_updates', 'chat_updates', 'promotion_updates'];
 @endphp
 
 <div class="lk-settings-page">
@@ -36,12 +30,12 @@
 
     <header class="lk-settings-hero">
         <div class="lk-settings-hero-copy">
-            <span class="lk-settings-eyebrow">Buyer Center</span>
-            <h1>System Settings</h1>
-            <p>Fine-tune how LIKHAE looks, sounds, and keeps you informed.</p>
+            <span class="lk-settings-eyebrow">{{ __('settings.workspaces.buyer') }}</span>
+            <h1>{{ __('settings.buyer_title') }}</h1>
+            <p>{{ __('settings.descriptions.buyer') }}</p>
         </div>
         <a href="{{ route('buyer.account') }}" class="lk-settings-account-link">
-            <span>My Account</span>
+            <span>{{ __('navigation.items.my_account') }}</span>
             <span aria-hidden="true">→</span>
         </a>
     </header>
@@ -55,15 +49,15 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">●</span>
                     <div>
-                        <h2>Account Visibility</h2>
-                        <p>Choose whether other users can see when you are online in Messages.</p>
+                        <h2>{{ __('settings.account_visibility') }}</h2>
+                        <p>{{ __('settings.account_visibility_description') }}</p>
                     </div>
                 </header>
                 <div class="lk-settings-list">
                     <label class="lk-settings-row">
                         <span class="lk-settings-copy">
-                            <strong>Show Online Status</strong>
-                            <small>When off, you appear offline to everyone while you continue using LIKHAE.</small>
+                            <strong>{{ __('settings.show_online_status') }}</strong>
+                            <small>{{ __('settings.online_status_description') }}</small>
                         </span>
                         <span class="lk-settings-switch">
                             <input type="hidden" name="show_online_status" value="0">
@@ -78,35 +72,35 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">✦</span>
                     <div>
-                        <h2>LIKHAE AI Assistant</h2>
-                        <p>Control the optional Buyer AI assistant.</p>
+                        <h2>{{ __('settings.ai_assistant') }}</h2>
+                        <p>{{ __('settings.ai_description') }}</p>
                     </div>
                 </header>
                 <div class="lk-settings-list">
                     <label class="lk-settings-row">
                         <span class="lk-settings-copy">
-                            <strong>Show AI Assistant</strong>
-                            <small>Show the floating AI chat head on Buyer pages.</small>
+                            <strong>{{ __('settings.show_ai') }}</strong>
+                            <small>{{ __('settings.show_ai_description', ['workspace' => __('settings.workspaces.buyer')]) }}</small>
                         </span>
                         <span class="lk-settings-control">
                             <span class="lk-settings-switch">
-                                <input type="checkbox" name="ai_assistant_enabled" value="1" role="switch" data-ai-setting aria-label="Show AI Assistant" @checked((bool) $value('ai_assistant_enabled'))>
+                                <input type="checkbox" name="ai_assistant_enabled" value="1" role="switch" data-ai-setting aria-label="{{ __('settings.show_ai') }}" @checked((bool) $value('ai_assistant_enabled'))>
                                 <i aria-hidden="true"></i>
                             </span>
-                            <small class="lk-settings-switch-state" data-ai-setting-state>{{ $value('ai_assistant_enabled') ? 'On' : 'Off' }}</small>
+                            <small class="lk-settings-switch-state" data-ai-setting-state>{{ $value('ai_assistant_enabled') ? __('common.labels.on') : __('common.labels.off') }}</small>
                         </span>
                     </label>
                     <label class="lk-settings-row">
                         <span class="lk-settings-copy">
-                            <strong>AI Response Sound</strong>
-                            <small>Play a subtle sound after the assistant replies.</small>
+                            <strong>{{ __('settings.ai_response_sound') }}</strong>
+                            <small>{{ __('settings.ai_response_sound_description') }}</small>
                         </span>
                         <span class="lk-settings-control">
                             <span class="lk-settings-switch">
-                                <input type="checkbox" name="ai_response_sound" value="1" role="switch" data-ai-setting aria-label="AI Response Sound" @checked((bool) $value('ai_response_sound'))>
+                                <input type="checkbox" name="ai_response_sound" value="1" role="switch" data-ai-setting aria-label="{{ __('settings.ai_response_sound') }}" @checked((bool) $value('ai_response_sound'))>
                                 <i aria-hidden="true"></i>
                             </span>
-                            <small class="lk-settings-switch-state" data-ai-setting-state>{{ $value('ai_response_sound') ? 'On' : 'Off' }}</small>
+                            <small class="lk-settings-switch-state" data-ai-setting-state>{{ $value('ai_response_sound') ? __('common.labels.on') : __('common.labels.off') }}</small>
                         </span>
                     </label>
                 </div>
@@ -116,16 +110,16 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">⌁</span>
                     <div>
-                        <h2>Notifications</h2>
-                        <p>Choose the Buyer updates you want LIKHAE to send.</p>
+                        <h2>{{ __('settings.notifications') }}</h2>
+                        <p>{{ __('settings.buyer_notifications_intro') }}</p>
                     </div>
                 </header>
                 <div class="lk-settings-list lk-settings-list--notifications">
-                    @foreach($notificationOptions as [$key, $label, $description])
+                    @foreach($notificationOptions as $key)
                         <label class="lk-settings-row">
                             <span class="lk-settings-copy">
-                                <strong>{{ $label }}</strong>
-                                <small>{{ $description }}</small>
+                                <strong>{{ __('settings.buyer_notifications.'.$key.'.label') }}</strong>
+                                <small>{{ __('settings.buyer_notifications.'.$key.'.description') }}</small>
                             </span>
                             <span class="lk-settings-switch">
                                 <input type="checkbox" name="{{ $key }}" value="1" role="switch" @checked((bool) $value($key))>
@@ -140,28 +134,28 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">♪</span>
                     <div>
-                        <h2>Sounds</h2>
-                        <p>Manage LIKHAE interface sound cues.</p>
+                        <h2>{{ __('settings.sounds') }}</h2>
+                        <p>{{ __('settings.buyer_sounds_description') }}</p>
                     </div>
                 </header>
                 <div class="lk-settings-list lk-settings-sound-list">
                     <label class="lk-settings-row lk-settings-sound-master">
                         <span class="lk-settings-copy">
-                            <strong>Notification Sounds</strong>
-                            <small>Play sounds for supported LIKHAE notifications.</small>
+                            <strong>{{ __('settings.notification_sounds') }}</strong>
+                            <small>{{ __('settings.buyer_notification_sounds_description') }}</small>
                         </span>
                         <span class="lk-settings-switch">
                             <input type="checkbox" name="notification_sounds" value="1" role="switch" data-notification-sound-toggle @checked((bool) $value('notification_sounds'))>
                             <i aria-hidden="true"></i>
                         </span>
                     </label>
-                    @foreach($soundCatalog as [$key, $label, $description])
+                    @foreach($soundCatalog as $key)
                         <div class="lk-settings-row lk-settings-sound-row">
                             <span class="lk-settings-copy">
-                                <strong>{{ $label }}</strong>
-                                <small>{{ $description }}</small>
+                                <strong>{{ __('settings.buyer_sounds.'.$key.'.label') }}</strong>
+                                <small>{{ __('settings.buyer_sounds.'.$key.'.description') }}</small>
                             </span>
-                            <button type="button" class="lk-sound-preview" data-notification-preview="{{ $key }}" aria-label="Preview {{ $label }}">▶ <span>Preview</span></button>
+                            <button type="button" class="lk-sound-preview" data-notification-preview="{{ $key }}" aria-label="{{ __('common.labels.preview_notification', ['label' => __('settings.buyer_sounds.'.$key.'.label')]) }}">▶ <span>{{ __('settings.preview') }}</span></button>
                         </div>
                     @endforeach
                 </div>
@@ -171,15 +165,15 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">◐</span>
                     <div>
-                        <h2>Appearance</h2>
-                        <p>Apply your preferred LIKHAE theme.</p>
+                        <h2>{{ __('settings.appearance') }}</h2>
+                        <p>{{ __('settings.appearance_description') }}</p>
                     </div>
                 </header>
-                <div class="lk-settings-theme-options" role="radiogroup" aria-label="Display theme">
-                    @foreach(['light' => ['☀', 'Light'], 'dark' => ['◐', 'Dark'], 'system' => ['◌', 'System']] as $key => [$icon, $label])
+                <div class="lk-settings-theme-options" role="radiogroup" aria-label="{{ __('common.labels.display_theme') }}">
+                    @foreach(['light' => '☀', 'dark' => '◐', 'system' => '◌'] as $key => $icon)
                         <label>
                             <input type="radio" name="theme" value="{{ $key }}" @checked($value('theme') === $key)>
-                            <span><b aria-hidden="true">{{ $icon }}</b>{{ $label }}</span>
+                            <span><b aria-hidden="true">{{ $icon }}</b>{{ __('settings.themes.'.$key) }}</span>
                         </label>
                     @endforeach
                 </div>
@@ -189,23 +183,25 @@
                 <header class="lk-settings-card-head">
                     <span class="lk-settings-icon" aria-hidden="true">A</span>
                     <div>
-                        <h2>Language</h2>
-                        <p>More languages will appear when translations are ready.</p>
+                        <h2>{{ __('settings.language') }}</h2>
+                        <p>{{ __('settings.language_description') }}</p>
                     </div>
                 </header>
                 <label class="lk-settings-select-label">
-                    <span>Display language</span>
+                    <span>{{ __('settings.display_language') }}</span>
                     <select name="language">
-                        <option value="en" @selected($value('language') === 'en')>English</option>
+                        @foreach($supportedLocales as $localeCode => $localeName)
+                            <option value="{{ $localeCode }}" @selected($selectedLanguage === $localeCode)>{{ $localeName }}</option>
+                        @endforeach
                     </select>
                 </label>
             </section>
         </div>
 
         <footer class="lk-settings-save">
-            <p>Your online visibility setting applies across LIKHAE.</p>
+            <p>{{ __('settings.online_visibility_footer') }}</p>
             <span class="lk-settings-feedback" data-ai-settings-feedback role="status" aria-live="polite" aria-atomic="true"></span>
-            <button type="submit">Save Settings</button>
+            <button type="submit">{{ __('common.buttons.save_settings') }}</button>
         </footer>
     </form>
 </div>
@@ -213,6 +209,13 @@
 @push('scripts')
 <script>
 (() => {
+    const messages = @js([
+        'on' => __('common.labels.on'),
+        'off' => __('common.labels.off'),
+        'saving' => __('common.messages.ai_preference_saving'),
+        'saved' => __('common.messages.ai_preference_saved'),
+        'saveFailed' => __('common.messages.setting_save_failed'),
+    ]);
     const form = document.querySelector('[data-likhae-settings-form]');
     if (!form) return;
 
@@ -227,8 +230,8 @@
         const themeToggle = document.getElementById('adminThemeToggle');
         const dark = document.documentElement.classList.contains('dark');
         themeToggle?.setAttribute('aria-pressed', String(dark));
-        const themeState = document.getElementById('adminThemeState');
-        if (themeState) themeState.textContent = dark ? 'ON' : 'OFF';
+        const themeState = document.getElementById('adminThemeState') || document.getElementById('themeToggleBadge');
+        if (themeState) themeState.textContent = dark ? themeState.dataset.labelOn : themeState.dataset.labelOff;
     };
     form.querySelectorAll('input[name="theme"]').forEach((input) => {
         input.addEventListener('change', () => applyTheme(input.value));
@@ -248,7 +251,7 @@
     const updateStatus = (input, enabled) => {
         input.checked = enabled;
         const state = input.closest('.lk-settings-row')?.querySelector('[data-ai-setting-state]');
-        if (state) state.textContent = enabled ? 'On' : 'Off';
+        if (state) state.textContent = enabled ? messages.on : messages.off;
     };
     const emitPreference = (key, enabled) => {
         window.dispatchEvent(new CustomEvent('likhae:buyer-ai-preference', {
@@ -259,7 +262,7 @@
     form.querySelectorAll('[data-ai-setting]').forEach((input) => {
         savedValues.set(input.name, input.checked);
         input.closest('.lk-settings-row')?.querySelector('[data-ai-setting-state]')
-            ?.replaceChildren(document.createTextNode(input.checked ? 'On' : 'Off'));
+            ?.replaceChildren(document.createTextNode(input.checked ? messages.on : messages.off));
 
         input.addEventListener('change', () => {
             const key = input.name;
@@ -268,7 +271,7 @@
             generations.set(key, generation);
             updateStatus(input, enabled);
             emitPreference(key, enabled);
-            if (feedback) feedback.textContent = 'Saving AI preference…';
+            if (feedback) feedback.textContent = messages.saving;
 
             const save = async () => {
                 const response = await fetch(form.dataset.aiSettingsUrl, {
@@ -285,10 +288,10 @@
                 const payload = await response.json().catch(() => ({}));
                 if (!response.ok || payload.key !== key || payload.enabled !== enabled) {
                     const validationMessage = Object.values(payload.errors || {}).flat()[0];
-                    throw new Error(validationMessage || payload.message || 'This setting could not be saved. Please try again.');
+                    throw new Error(validationMessage || payload.message || messages.saveFailed);
                 }
                 savedValues.set(key, enabled);
-                if (generations.get(key) === generation && feedback) feedback.textContent = 'AI preference saved.';
+                if (generations.get(key) === generation && feedback) feedback.textContent = messages.saved;
             };
 
             const previous = queues.get(key) || Promise.resolve();
@@ -297,7 +300,7 @@
                     const restored = savedValues.get(key) || false;
                     updateStatus(input, restored);
                     emitPreference(key, restored);
-                    if (feedback) feedback.textContent = error instanceof Error ? error.message : 'This setting could not be saved. Please try again.';
+                    if (feedback) feedback.textContent = error instanceof Error ? error.message : messages.saveFailed;
                 }
             });
             queues.set(key, queued);

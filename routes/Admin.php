@@ -9,7 +9,6 @@ use App\Http\Controllers\Admin\AdminOperationsController;
 use App\Http\Controllers\Admin\AdminProductModerationController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
 use App\Http\Controllers\Admin\AdminShippingRateController;
-use App\Http\Controllers\Admin\AdminRoutingReviewController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Admin\SystemSettingsMonitoringController;
@@ -25,9 +24,6 @@ Route::prefix('admin')
     ->middleware(['auth', 'verified', EnsureWorkspaceRole::class.':admin'])
     ->group(function () {
         Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
-        Route::get('/routing-review', [AdminRoutingReviewController::class, 'index'])->name('routing-review');
-        Route::post('/routing-review/{shipment}/resolve', [AdminRoutingReviewController::class, 'resolve'])->name('routing-review.resolve');
-
         /*
         |--------------------------------------------------------------------------
         | Registration Applications
@@ -89,7 +85,6 @@ Route::prefix('admin')
         Route::post('/shipping-rate-requests/initialize-global-rate', [AdminShippingRateController::class, 'initializeGlobalRate'])->name('shipping-rate-requests.initialize');
         Route::post('/shipping-rate-requests/commission-split', [AdminShippingRateController::class, 'updateCommissionSplit'])->name('shipping-rate-requests.commission-split');
         Route::patch('/shipping-rate-requests/transfer-commission', [AdminShippingRateController::class, 'updateTransferCommission'])->name('shipping-rate-requests.transfer-commission.update');
-        Route::patch('/shipping-rate-requests/regional-tiers', [AdminShippingRateController::class, 'updateRegionalShippingTiers'])->name('shipping-rate-requests.regional-tiers.update');
         Route::get('/shipping-rate-requests/{shippingRateRequest}', [AdminShippingRateController::class, 'show'])
             ->whereNumber('shippingRateRequest')->name('shipping-rate-requests.show');
         Route::post('/shipping-rate-requests/{shippingRateRequest}/approve', [AdminShippingRateController::class, 'approve'])
@@ -156,6 +151,7 @@ Route::prefix('admin')
         Route::patch('/system-settings/product-moderation', [SystemSettingsMonitoringController::class, 'updateProductModeration'])
             ->middleware('throttle:10,1')->name('system-settings.product-moderation.update');
         Route::put('/system-settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'admin')->name('system-settings.update');
+        Route::patch('/system-settings/theme', [WorkspaceSettingsController::class, 'updateThemePreference'])->defaults('workspace', 'admin')->name('system-settings.theme.update');
         Route::get('/account', [AdminOperationsController::class, 'account'])->name('account');
         Route::get('/notifications', [AdminOperationsController::class, 'notifications'])->name('notifications');
         Route::post('/notifications/read-all', [AdminOperationsController::class, 'markNotificationsRead'])->name('notifications.read-all');

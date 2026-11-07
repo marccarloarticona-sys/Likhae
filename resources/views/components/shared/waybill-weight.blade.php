@@ -4,9 +4,11 @@
     $packedWeight = is_numeric($shipment->parcel_weight_kg) && is_finite((float) $shipment->parcel_weight_kg) && (float) $shipment->parcel_weight_kg > 0
         ? (float) $shipment->parcel_weight_kg
         : null;
-    $itemWeights = collect($items)->map(function ($item): ?float {
+    $itemWeights = collect($items)->map(function ($item) use ($shipment): ?float {
         $unitWeight = $item?->productVariant?->weight_kg;
-        $quantity = (int) ($item?->quantity ?? 0);
+        $quantity = $shipment?->order_item_id && (int) $shipment->order_item_id === (int) $item?->id
+            ? (int) $shipment->parcel_quantity
+            : (int) ($item?->quantity ?? 0);
 
         return is_numeric($unitWeight) && is_finite((float) $unitWeight) && (float) $unitWeight > 0 && $quantity > 0
             ? round((float) $unitWeight * $quantity, 3, PHP_ROUND_HALF_UP)

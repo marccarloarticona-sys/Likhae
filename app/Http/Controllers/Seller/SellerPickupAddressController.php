@@ -70,11 +70,17 @@ class SellerPickupAddressController extends Controller
             ->where('user_id', $seller->user_id)
             ->whereKey($addressId)
             ->firstOrFail();
-        $this->assertAddressEditable($seller, $address);
+        if ($request->input('pin_only') === '1') {
+            return $this->saveFirstPinOnly($request, $seller, $addressId);
+        }
 
         $data = $this->validatedAddress($request);
-        AddressCoordinateValidator::assertFreshForAddress($address, $data);
         $contactNumber = $this->normalizedMobile($data['contact_number']);
+        $data['contact_number'] = $contactNumber;
+        $completionOnly = $this->assertAddressEditable($seller, $address, $data);
+        if (! $completionOnly) {
+            AddressCoordinateValidator::assertFreshForAddress($address, $data);
+        }
 
         DB::transaction(function () use ($seller, $addressId, $data, $contactNumber): void {
             $lockedSeller = SellerProfile::query()->whereKey($seller->id)->lockForUpdate()->firstOrFail();
@@ -83,7 +89,7 @@ class SellerPickupAddressController extends Controller
                 ->whereKey($addressId)
                 ->lockForUpdate()
                 ->firstOrFail();
-            $this->assertAddressEditable($lockedSeller, $lockedAddress);
+            $this->assertAddressEditable($lockedSeller, $lockedAddress, $data);
             $lockedAddress->fill([
                 'label' => trim($data['label']),
                 'recipient_name' => trim($data['recipient_name']),
@@ -95,6 +101,47 @@ class SellerPickupAddressController extends Controller
         });
 
         return $this->accountRedirect()->with('status', 'Pickup address updated.');
+    }
+
+    private function saveFirstPinOnly(Request $request, SellerProfile $seller, int $addressId): RedirectResponse
+    {
+        $data = $request->validate(AddressCoordinateValidator::rules());
+        AddressCoordinateValidator::assertValid($data);
+
+        DB::transaction(function () use ($seller, $addressId, $data): void {
+            $lockedSeller = SellerProfile::query()->whereKey($seller->id)->lockForUpdate()->firstOrFail();
+            $address = Address::query()
+                ->where('user_id', $lockedSeller->user_id)
+                ->whereKey($addressId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($this->hasPickupHistory($lockedSeller, $address)) {
+                throw ValidationException::withMessages([
+                    'pickup_address' => 'This address is part of pickup history. Its pin cannot be changed; add another address to preserve those routes.',
+                ]);
+            }
+
+            if ((int) $lockedSeller->business_address_id !== (int) $address->id
+                || ! SellerOrder::query()->where('seller_profile_id', $lockedSeller->id)->exists()) {
+                throw ValidationException::withMessages([
+                    'pickup_address' => 'Pin-only completion is available only for a Seller origin address already used by orders.',
+                ]);
+            }
+
+            if (filled($address->latitude) || filled($address->longitude)) {
+                throw ValidationException::withMessages([
+                    'latitude' => 'This address already has a saved pin. Use the regular address edit flow to replace it.',
+                ]);
+            }
+
+            $address->update([
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+            ]);
+        });
+
+        return $this->accountRedirect()->with('status', 'Pickup pin saved. Existing address details and routes were not changed.');
     }
 
     public function setDefault(Request $request, int $addressId): RedirectResponse
@@ -205,7 +252,7 @@ class SellerPickupAddressController extends Controller
         return $normalized;
     }
 
-    private function assertAddressEditable(SellerProfile $seller, Address $address): void
+    private function assertAddressEditable(SellerProfile $seller, Address $address, ?array $data = null): bool
     {
         if ($this->hasPickupHistory($seller, $address)) {
             throw ValidationException::withMessages([
@@ -215,10 +262,57 @@ class SellerPickupAddressController extends Controller
 
         if ((int) $seller->business_address_id === (int) $address->id
             && SellerOrder::query()->where('seller_profile_id', $seller->id)->exists()) {
+            if ($data !== null && $this->onlyCompletesMissingDetails($address, $data)) {
+                return true;
+            }
+
             throw ValidationException::withMessages([
-                'pickup_address' => 'This address has been used to route Seller orders. Add a new pickup address to preserve those routes.',
+                'pickup_address' => 'This address is used by existing orders. You can only add missing address details or its first map pin; existing saved details cannot be changed. Add a separate address to change the pickup location.',
             ]);
         }
+
+        return false;
+    }
+
+    /**
+     * Allow safe completion of a routed business address without changing any
+     * existing address value, route fields, contact details, or confirmed pin.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function onlyCompletesMissingDetails(Address $address, array $data): bool
+    {
+        foreach (['label', 'recipient_name', 'contact_number'] as $field) {
+            if (trim((string) $address->{$field}) !== trim((string) ($data[$field] ?? ''))) {
+                return false;
+            }
+        }
+
+        foreach ([
+            'region_code', 'region_name',
+            'province_code', 'province_name',
+            'municipality_code', 'municipality_name',
+            'barangay_code', 'barangay_name',
+            'postal_code', 'house_number', 'street_address', 'landmark',
+        ] as $field) {
+            $saved = trim((string) ($address->{$field} ?? ''));
+            $submitted = trim((string) ($data[$field] ?? ''));
+            if ($saved !== '' && $saved !== $submitted) {
+                return false;
+            }
+        }
+
+        foreach (['latitude', 'longitude'] as $field) {
+            $saved = $address->{$field};
+            $submitted = $data[$field] ?? null;
+            if (filled($saved)
+                && (! is_numeric($saved) || ! is_numeric($submitted)
+                    || abs((float) $saved - (float) $submitted) > 0.0000001)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function hasPickupHistory(SellerProfile $seller, Address $address): bool

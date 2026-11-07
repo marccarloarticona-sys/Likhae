@@ -751,11 +751,26 @@ class SellerCatalogService
         bool $wasProductActive,
     ): void
     {
+        $dimensionFields = ['length_cm', 'width_cm', 'height_cm'];
+        $dimensionSnapshotFields = ['product_length_cm', 'product_width_cm', 'product_height_cm'];
+        $dimensionsReady = Schema::hasTable('product_variants')
+            && Schema::hasColumns('product_variants', $dimensionFields)
+            && Schema::hasTable('order_items')
+            && Schema::hasColumns('order_items', $dimensionSnapshotFields);
+        $dimensionsWereSubmitted = collect($dimensionFields)->contains(fn (string $field): bool => filled($request->input($field)))
+            || collect((array) $request->input('variants', []))->contains(fn ($row): bool => is_array($row)
+                && collect($dimensionFields)->contains(fn (string $field): bool => filled(Arr::get($row, $field))));
+        if (! $dimensionsReady && $dimensionsWereSubmitted) {
+            throw ValidationException::withMessages([
+                'length_cm' => 'Product dimensions are unavailable until the product and order snapshot migration is installed.',
+            ]);
+        }
+
         $options = $product->options()->with('values')->orderBy('sort_order')->get();
         $protectedVariantIds = $this->unfinishedOrderVariantIds($product);
         $variantRows = collect((array) $request->input('variants', []))
             ->filter(fn ($row): bool => is_array($row))
-            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')))
+            ->filter(fn ($row) => filled(Arr::get($row, 'sku')) || filled(Arr::get($row, 'values')) || filled(Arr::get($row, 'price')) || filled(Arr::get($row, 'stock')) || filled(Arr::get($row, 'weight_kg')) || collect($dimensionFields)->contains(fn (string $field): bool => filled(Arr::get($row, $field))))
             ->values();
 
         if ($variantRows->isEmpty() && $options->isNotEmpty()) {
@@ -775,6 +790,9 @@ class SellerCatalogService
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
                 'weight_kg' => $request->input('weight_kg'),
+                'length_cm' => $request->input('length_cm'),
+                'width_cm' => $request->input('width_cm'),
+                'height_cm' => $request->input('height_cm'),
                 'values' => '',
                 'is_active' => true,
             ];
@@ -926,6 +944,13 @@ class SellerCatalogService
                 'is_default' => $index === 0,
                 'is_active' => filter_var(Arr::get($row, 'is_active', $request->input('is_active', true)), FILTER_VALIDATE_BOOLEAN),
             ];
+            if ($dimensionsReady) {
+                $variantAttributes += [
+                    'length_cm' => Arr::get($row, 'length_cm', $request->input('length_cm')),
+                    'width_cm' => Arr::get($row, 'width_cm', $request->input('width_cm')),
+                    'height_cm' => Arr::get($row, 'height_cm', $request->input('height_cm')),
+                ];
+            }
             if (! $wasExistingVariant) {
                 $variantAttributes['flash_sale_price'] = null;
                 $variantAttributes['flash_sale_allocation'] = null;
@@ -1013,6 +1038,9 @@ class SellerCatalogService
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
                 'weight_kg' => $request->input('weight_kg'),
+                'length_cm' => $request->input('length_cm'),
+                'width_cm' => $request->input('width_cm'),
+                'height_cm' => $request->input('height_cm'),
                 'values' => implode(',', $values),
                 'payment_method' => $request->input('payment_method', 'cod_online'),
                 'is_active' => true,

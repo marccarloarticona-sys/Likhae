@@ -31,7 +31,7 @@ class CodCollectionService
         }
 
         $expectedAmount = $shipment->orderItem
-            ? OrderItemParcelAmount::forItem($sellerOrder, $shipment->orderItem)['total']
+            ? OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['total']
             : (float) $sellerOrder->grand_total;
 
         $collection = CodCollection::query()->firstOrCreate(
@@ -177,7 +177,7 @@ class CodCollectionService
                 $campaignBudgets->recordRewardPointsExpense($shipment->orderItem, $actor);
             }
             $parcelAmount = $shipment->orderItem
-                ? OrderItemParcelAmount::forItem($shipment->sellerOrder, $shipment->orderItem)
+                ? OrderItemParcelAmount::forShipment($shipment->sellerOrder, $shipment)
                 : null;
             $productAmountCents = $parcelAmount
                 ? max(0, FinancialRules::cents($parcelAmount['product_amount']) - FinancialRules::cents($parcelAmount['discount_amount']))

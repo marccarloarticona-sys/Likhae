@@ -34,7 +34,7 @@ const initializeWorkspaceShell = () => {
 
         document.body.classList.toggle('sl-sidebar-collapsed', collapsed);
         collapseButton?.setAttribute('aria-expanded', String(!collapsed));
-        collapseButton?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+        collapseButton?.setAttribute('aria-label', collapsed ? collapseButton.dataset.openLabel : collapseButton.dataset.collapseLabel);
 
         if (persist) {
             try {
@@ -72,20 +72,53 @@ const initializeWorkspaceShell = () => {
 
     const themeToggle = document.getElementById('themeToggle');
     const themeBadge = document.getElementById('themeToggleBadge');
+    const themePreferenceUrl = themeToggle?.dataset.themePreferenceUrl;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
     const updateThemeToggle = () => {
         const isDark = document.documentElement.classList.contains('dark');
         themeToggle?.setAttribute('aria-pressed', String(isDark));
-        themeBadge && (themeBadge.textContent = isDark ? 'ON' : 'OFF');
+        themeBadge && (themeBadge.textContent = isDark ? themeBadge.dataset.labelOn : themeBadge.dataset.labelOff);
     };
 
-    themeToggle?.addEventListener('click', () => {
-        const isDark = document.documentElement.classList.toggle('dark');
+    themeToggle?.addEventListener('click', async () => {
+        const previousTheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+        const nextTheme = previousTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.classList.toggle('dark', nextTheme === 'dark');
         try {
-            window.localStorage.setItem('likhae-theme', isDark ? 'dark' : 'light');
+            window.localStorage.setItem('likhae-theme', nextTheme);
         } catch {
             // The theme still applies for this page if storage is unavailable.
         }
         updateThemeToggle();
+
+        if (!themePreferenceUrl) return;
+
+        try {
+            const response = await fetch(themePreferenceUrl, {
+                method: 'PATCH',
+                credentials: 'same-origin',
+                keepalive: true,
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ theme: nextTheme }),
+            });
+            if (!response.ok) throw new Error('Could not save the appearance preference.');
+            const result = await response.json();
+            if (result.theme !== nextTheme) throw new Error('The saved appearance preference did not match.');
+        } catch (error) {
+            document.documentElement.classList.toggle('dark', previousTheme === 'dark');
+            try {
+                window.localStorage.setItem('likhae-theme', previousTheme);
+            } catch {
+                // The account preference remains the source of truth.
+            }
+            updateThemeToggle();
+            console.error(error);
+        }
     });
     updateThemeToggle();
 };

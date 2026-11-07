@@ -45,7 +45,7 @@ class ProductModerationAlignmentTest extends TestCase
 
     public function test_missing_scores_or_context_require_manual_review_instead_of_implying_a_match(): void
     {
-        foreach ([$this->assess(image: ['category_mismatch_probability' => null]), $this->assess([])] as $alignment) {
+        foreach ([$this->assess(image: ['business_mismatch_probability' => null]), $this->assess([])] as $alignment) {
             $this->assertTrue($alignment['incomplete']);
             $this->assertSame('UNKNOWN', $this->risk($alignment)['overall_risk']);
             $this->assertSame('MANUAL_REVIEW', $this->risk($alignment)['recommended_action']);
@@ -74,17 +74,17 @@ class ProductModerationAlignmentTest extends TestCase
         $this->assertNotSame($before, $hasher->hash($product));
     }
 
-    public function test_selected_parent_and_subcategory_are_scored_separately(): void
+    public function test_business_and_subcategory_are_scored_separately(): void
     {
         $scores = [
             'available' => true,
             'business_mismatch_probability' => 0.01,
-            'category_mismatch_probability' => 0.02,
             'subcategory_mismatch_probability' => 0.88,
         ];
         $alignment = ProductModerationAlignment::assess($this->context(), $scores, $scores, true);
 
-        $this->assertSame('NO_MISMATCH_SIGNAL', $alignment['checks']['category_mismatch_probability']['status']);
+        $this->assertSame('NO_MISMATCH_SIGNAL', $alignment['checks']['business_mismatch_probability']['status']);
+        $this->assertArrayNotHasKey('category_mismatch_probability', $alignment['checks']);
         $this->assertSame('POSSIBLE_MISMATCH', $alignment['checks']['subcategory_mismatch_probability']['status']);
     }
 
@@ -110,7 +110,7 @@ class ProductModerationAlignmentTest extends TestCase
 
     private function assess(?array $context = null, array $image = []): array
     {
-        $signal = ['available' => true, 'business_mismatch_probability' => 0.01, 'category_mismatch_probability' => 0.02, 'subcategory_mismatch_probability' => 0.03];
+        $signal = ['available' => true, 'business_mismatch_probability' => 0.01, 'subcategory_mismatch_probability' => 0.03];
 
         return ProductModerationAlignment::assess($context ?? $this->context(), $signal, array_replace($signal, $image), true);
     }

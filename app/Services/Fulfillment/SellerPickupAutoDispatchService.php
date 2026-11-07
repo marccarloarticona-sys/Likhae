@@ -49,6 +49,40 @@ final class SellerPickupAutoDispatchService
         return $this->batches->createAutomatically($actor, $center, (int) $candidate->id, [(int) $shipment->id]);
     }
 
+    /** True only when an idle, online local Rider can carry the full request. */
+    public function hasAvailablePickupCapacity(LogisticsCenter $center, object $address, int $parcelCount): bool
+    {
+        return $this->nearestAvailableRiders($center, $address, collect(), max(1, $parcelCount))->isNotEmpty();
+    }
+
+    /** Assign the full Seller request to the nearest idle Rider in the accepted center. */
+    public function assignRequestToNearest(User $actor, LogisticsCenter $center, SellerPickupRequest $request): RiderLocalTrip
+    {
+        $request->loadMissing('pickupAddress', 'memberships.shipment');
+        $shipmentIds = $request->memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
+        $count = count($shipmentIds);
+        $address = $request->pickupAddress;
+        if ($count < 1 || $count > 10 || ! $address
+            || ! is_numeric($address->latitude) || ! is_numeric($address->longitude)) {
+            throw new RuntimeException('This pickup request is missing parcels or a confirmed Seller pickup map pin.');
+        }
+
+        $excluded = $this->previouslyTriedRiderIds($shipmentIds);
+        $candidate = $this->nearestAvailableRiders($center, $address, $excluded, $count)->first();
+        if (! $candidate) {
+            throw new RuntimeException('No idle online local Rider has enough approved capacity and a recent GPS location for every parcel in this request.');
+        }
+
+        return $this->pickupRequests->assign(
+            $actor,
+            $center,
+            (int) $request->id,
+            (int) $candidate->id,
+            true,
+            'The center accepted this automatic Seller pickup offer and assigned its nearest eligible local Rider.',
+        )->riderLocalTrip;
+    }
+
     /** Retry declined and expired offers with the next nearest rider at each center. */
     public function retryFailedOffers(): int
     {
@@ -179,7 +213,7 @@ final class SellerPickupAutoDispatchService
             ->values();
     }
 
-    private function nearestAvailableRiders(LogisticsCenter $center, object $address, Collection $excludedRiders): Collection
+    private function nearestAvailableRiders(LogisticsCenter $center, object $address, Collection $excludedRiders, ?int $requiredCapacity = null): Collection
     {
         $riders = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
@@ -191,6 +225,7 @@ final class SellerPickupAutoDispatchService
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
+            ->when($requiredCapacity !== null, fn ($query) => $query->where('approved_parcel_capacity', '>=', $requiredCapacity))
             ->when($excludedRiders->isNotEmpty(), fn ($query) => $query->whereNotIn('id', $excludedRiders))
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', User::TYPE_RIDER)

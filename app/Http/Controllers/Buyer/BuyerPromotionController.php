@@ -7,6 +7,7 @@ use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerPromotion;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\SellerPromotionUsageService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,7 +16,7 @@ use Illuminate\Validation\ValidationException;
 
 class BuyerPromotionController extends Controller
 {
-    public function addBundle(Request $request, int $promotion, CartService $cart): RedirectResponse
+    public function addBundle(Request $request, int $promotion, CartService $cart): RedirectResponse|JsonResponse
     {
         $data = $request->validate([
             'sets' => ['nullable', 'integer', 'min:1', 'max:99'],
@@ -56,10 +57,14 @@ class BuyerPromotionController extends Controller
             }
         }, attempts: 3);
 
-        return back()->with('buyer_notice', 'Bundle items were added to your cart. The bundle price is confirmed at checkout.');
+        $message = 'Bundle items were added to your cart. The bundle price is confirmed at checkout.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message])
+            : back()->with('buyer_notice', $message);
     }
 
-    public function claimBuyXGetY(Request $request, int $promotion, CartService $cart): RedirectResponse
+    public function claimBuyXGetY(Request $request, int $promotion, CartService $cart): RedirectResponse|JsonResponse
     {
         $data = $request->validate([
             'sets' => ['nullable', 'integer', 'min:1', 'max:99'],
@@ -108,7 +113,11 @@ class BuyerPromotionController extends Controller
             }
         }, attempts: 3);
 
-        return back()->with('buyer_notice', 'The qualifying item and reward were added to your cart. Your offer will be applied at checkout.');
+        $message = 'The qualifying item and reward were added to your cart. Your offer will be applied at checkout.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message])
+            : back()->with('buyer_notice', $message);
     }
 
     private function currentPromotion(int $id, string $type): SellerPromotion

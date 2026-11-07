@@ -5,6 +5,7 @@ namespace App\Services\Fulfillment;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Rider\RiderAssignment;
@@ -529,13 +530,23 @@ final class LocalRiderTripService
 
     private function assertCanonicalBarangay(LogisticsCenter $center, ?string $provinceCode, ?string $municipalityCode, ?string $barangayCode): void
     {
-        if (blank($provinceCode) || blank($municipalityCode) || blank($barangayCode)
-            || ! $this->eligibility->centerCoversMunicipality($center, $provinceCode, $municipalityCode)) {
-            throw new RuntimeException('The trip requires a valid PSGC province, municipality, and barangay owned by the logistics center.');
+        if (blank($provinceCode) || blank($municipalityCode) || blank($barangayCode)) {
+            throw new RuntimeException('The trip requires a valid PSGC province, municipality, and barangay.');
         }
         $records = PhilippineAddressController::barangayRecordsForMunicipality(trim((string) $municipalityCode));
         $valid = collect($records)->contains(fn (array $record): bool => trim((string) ($record['code'] ?? '')) === trim((string) $barangayCode));
-        if (! $valid) {
+        $centerOwnsMunicipality = $this->eligibility->centerCoversMunicipality($center, $provinceCode, $municipalityCode);
+        $centerHasExactAuthorizedArea = ServiceAreaLocation::query()
+            ->where('province_code', trim((string) $provinceCode))
+            ->where('municipality_code', trim((string) $municipalityCode))
+            ->where('barangay_code', trim((string) $barangayCode))
+            ->whereHas('serviceArea', fn ($area) => $area
+                ->where('logistics_center_id', $center->id)
+                ->where('is_active', true))
+            ->with('serviceArea.logisticsCenter.address')
+            ->get()
+            ->contains(fn (ServiceAreaLocation $location): bool => $this->eligibility->centerAuthorizesExactLocation($center, $location));
+        if (! $valid || (! $centerOwnsMunicipality && ! $centerHasExactAuthorizedArea)) {
             throw new RuntimeException('The selected barangay PSGC is not valid for the selected municipality.');
         }
     }

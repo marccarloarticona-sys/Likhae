@@ -46,6 +46,7 @@ use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Reports\AdminReportPdfService;
 use App\Services\RefundProofStorageService;
 use App\Services\PolicyAcceptanceService;
+use App\Services\UserPreferenceService;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Services\Finance\PayoutDestinationManager;
@@ -2016,7 +2017,7 @@ class AdminOperationsController extends Controller
         ]);
     }
 
-    public function updatePreferences(Request $request): RedirectResponse
+    public function updatePreferences(Request $request, UserPreferenceService $userPreferences): RedirectResponse
     {
         $keys = ['registrations', 'risk', 'finance', 'messages'];
         $data = $request->validate(collect($keys)->mapWithKeys(fn (string $key): array => [
@@ -2026,9 +2027,9 @@ class AdminOperationsController extends Controller
             $key => (bool) ($data[$key] ?? false),
         ])->all();
 
-        $request->user()->forceFill(['notification_preferences' => $preferences])->save();
+        $userPreferences->merge($request->user(), $preferences);
 
-        return back()->with('status', 'Notification preferences saved.');
+        return back()->with('status', __('common.messages.notification_preferences_saved'));
     }
 
     public function exportProducts(Request $request, AdminReportPdfService $pdf)

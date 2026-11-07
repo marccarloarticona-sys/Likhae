@@ -6,7 +6,6 @@
 @php
     $admin = auth()->user();
     $adminName = data_get($admin, 'name', 'Admin User');
-    $initials = collect(explode(' ', $adminName))->filter()->take(2)->map(fn ($word) => mb_strtoupper(mb_substr($word, 0, 1)))->implode('') ?: 'A';
     $adminUiCounts = $adminUiCounts ?? ['messages' => 0, 'notifications' => 0];
 @endphp
 
@@ -45,7 +44,6 @@
             @if(($adminUiCounts['notifications'] ?? 0) > 0)<span class="ad-badge">{{ $adminUiCounts['notifications'] }}</span>@endif
         </button>
         <a class="ad-profile" href="{{ route('admin.account') }}">
-            <span class="ad-avatar">{{ $initials }}</span>
             <span><strong>{{ $adminName }}</strong><small>Platform Administrator</small></span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 10 3 3 3-3"/></svg>
         </a>

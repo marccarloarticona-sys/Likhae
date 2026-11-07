@@ -30,6 +30,11 @@ use App\Services\Marketplace\FlashSaleReminderService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\VoucherRedemptionCounter;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Finance\PayoutDestinationManager;
+use App\Services\Finance\PayoutDestinationReadiness;
+use App\Support\PayoutDestinationInput;
+use App\Services\UserPreferenceService;
+use Illuminate\Support\Facades\App;
 use App\Support\AddressCoordinateValidator;
 use App\Support\PhilippineAddressValidator;
 use App\Support\PhilippineMobileNumber;
@@ -95,6 +100,7 @@ class BuyerParityApiController extends Controller
             array_map('intval', (array) ($data['protection_item_ids'] ?? [])),
             rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
         );
+        $quote['shipping_quote_token'] = $checkout->shippingQuoteToken($request->user(), $address, $items, $quote);
         $quote['groups'] = collect($quote['groups'])->map(fn (array $group): array => $this->quoteGroupPayload($group))->values();
         $quote['price_snapshot'] = $items->mapWithKeys(fn (CartItem $item): array => [
             (string) $item->id => (float) $item->productVariant?->final_price,
@@ -140,6 +146,7 @@ class BuyerParityApiController extends Controller
             'logistics_center_id' => ['nullable', 'integer'],
             'reward_points' => ['nullable', 'integer', 'min:0'],
             'checkout_attempt_key' => ['required', 'uuid'],
+            'shipping_quote_token' => ['required', 'string', 'size:64'],
             'expected_price_snapshot' => ['nullable', 'array'],
             'expected_price_snapshot.*' => ['required', 'numeric', 'min:0'],
         ]);
@@ -170,6 +177,7 @@ class BuyerParityApiController extends Controller
             recipientName: trim($data['recipient_name']),
             contactNumber: PhilippineMobileNumber::normalize($data['contact_number'])
                 ?? throw ValidationException::withMessages(['contact_number' => 'Enter a valid Philippine mobile number.']),
+            expectedShippingQuoteToken: $data['shipping_quote_token'],
         );
 
         return response()->json(['success' => true, 'data' => [
@@ -458,12 +466,12 @@ class BuyerParityApiController extends Controller
         return response()->json(['success' => true, 'data' => $this->preferences($request->user())]);
     }
 
-    public function updateBuyerSettings(Request $request): JsonResponse
+    public function updateBuyerSettings(Request $request, UserPreferenceService $userPreferences): JsonResponse
     {
         $this->authorizeBuyer($request);
         $data = $request->validate([
             'theme' => ['sometimes', Rule::in(['light', 'dark', 'system'])],
-            'language' => ['sometimes', Rule::in(['en'])],
+            'language' => ['sometimes', Rule::in(array_keys(config('app.supported_locales', ['en' => 'English'])))],
             'order_updates' => ['sometimes', 'boolean'],
             'delivery_updates' => ['sometimes', 'boolean'],
             'chat_updates' => ['sometimes', 'boolean'],
@@ -474,8 +482,10 @@ class BuyerParityApiController extends Controller
             'notification_sounds' => ['sometimes', 'boolean'],
         ]);
         $user = $request->user();
-        $current = $this->preferences($user);
-        $user->forceFill(['notification_preferences' => array_merge($current, $data)])->save();
+        $userPreferences->merge($user, $data);
+        if (isset($data['language'])) {
+            App::setLocale($data['language']);
+        }
         if (array_key_exists('show_online_status', $data) && ! $data['show_online_status']) {
             cache()->forget('message-presence:user:'.$user->id);
         }
@@ -594,8 +604,13 @@ class BuyerParityApiController extends Controller
     public function returnRequests(Request $request): JsonResponse
     {
         $this->authorizeBuyer($request);
-        $rows = ReturnRefundRequest::query()->where('buyer_user_id', $request->user()->id)
-            ->with(['order', 'sellerRequests.sellerProfile', 'sellerRequests.items.orderItem', 'sellerRequests.payouts'])
+        $parcelReturnsReady = Schema::hasColumn('seller_return_refund_requests', 'shipment_id');
+        $query = ReturnRefundRequest::query()->where('buyer_user_id', $request->user()->id)
+            ->with(['order', 'sellerRequests.sellerProfile', 'sellerRequests.items.orderItem', 'sellerRequests.payouts']);
+        if ($parcelReturnsReady) {
+            $query->with('sellerRequests.shipment');
+        }
+        $rows = $query
             ->latest('submitted_at')->paginate(min(max($request->integer('per_page', 20), 1), 50));
         return response()->json(['success' => true, 'data' => $rows->getCollection()->map(fn (ReturnRefundRequest $row): array => [
             'id' => (string) $row->id, 'request_number' => $row->request_number, 'status' => $row->status,
@@ -607,6 +622,7 @@ class BuyerParityApiController extends Controller
                 'id' => (string) $case->id, 'seller_name' => $case->sellerProfile?->business_name,
                 'status' => $case->status, 'requested_amount' => (float) $case->requested_amount,
                 'approved_amount' => $case->approved_amount === null ? null : (float) $case->approved_amount,
+                'parcel_tracking_number' => $parcelReturnsReady ? $case->shipment?->tracking_number : null,
             ])->values(),
         ])->values(), 'meta' => ['current_page' => $rows->currentPage(), 'last_page' => $rows->lastPage(), 'total' => $rows->total()]]);
     }
@@ -618,6 +634,13 @@ class BuyerParityApiController extends Controller
         $relations = ['order', 'items.orderItem', 'evidence', 'events.actor', 'sellerRequests.sellerProfile', 'sellerRequests.items.orderItem', 'sellerRequests.payouts', 'sellerRequests.events.actor'];
         if (Schema::hasTable('cash_refund_obligations')) {
             $relations[] = 'sellerRequests.cashRefundObligation';
+        }
+        $parcelReturnsReady = Schema::hasColumn('seller_return_refund_requests', 'shipment_id')
+            && Schema::hasColumn('return_refund_request_items', 'shipment_id');
+        if ($parcelReturnsReady) {
+            $relations[] = 'sellerRequests.shipment';
+            $relations[] = 'items.shipment';
+            $relations[] = 'sellerRequests.items.shipment';
         }
         $returnRequest->load($relations);
         $sellerEvidence = ReturnRefundEvidence::query()
@@ -631,10 +654,10 @@ class BuyerParityApiController extends Controller
             'refund_method' => $returnRequest->refund_method, 'refundable_amount' => (float) $returnRequest->refundable_amount,
             'submitted_at' => $returnRequest->submitted_at?->toIso8601String(),
             'order' => ['id' => (string) $returnRequest->order_id, 'order_number' => $returnRequest->order?->order_number],
-            'items' => $returnRequest->items->map(fn ($item): array => ['product_name' => $item->orderItem?->product_name, 'quantity' => (int) $item->quantity, 'amount' => (float) $item->requested_amount])->values(),
+            'items' => $returnRequest->items->map(fn ($item): array => ['product_name' => $item->orderItem?->product_name, 'quantity' => (int) $item->quantity, 'amount' => (float) $item->refundable_amount, 'parcel_tracking_number' => $parcelReturnsReady ? $item->shipment?->tracking_number : null])->values(),
             'events' => $returnRequest->events->sortBy('created_at')->map(fn ($event): array => ['event' => $event->event, 'note' => $event->note, 'created_at' => $event->created_at?->toIso8601String()])->values(),
             'evidence' => $returnRequest->evidence->map(fn ($evidence): array => ['id' => (string) $evidence->id, 'name' => $evidence->original_name, 'mime_type' => $evidence->mime_type])->values(),
-            'seller_cases' => $returnRequest->sellerRequests->map(function (SellerReturnRefundRequest $case) use ($sellerEvidence): array {
+            'seller_cases' => $returnRequest->sellerRequests->map(function (SellerReturnRefundRequest $case) use ($sellerEvidence, $parcelReturnsReady): array {
                 $cashRefund = $case->relationLoaded('cashRefundObligation')
                     ? $case->getRelation('cashRefundObligation')
                     : null;
@@ -645,6 +668,7 @@ class BuyerParityApiController extends Controller
                     'status' => $case->status,
                     'requested_amount' => (float) $case->requested_amount,
                     'approved_amount' => $case->approved_amount === null ? null : (float) $case->approved_amount,
+                    'parcel_tracking_number' => $parcelReturnsReady ? $case->shipment?->tracking_number : null,
                     'can_confirm_refund' => $case->status === SellerReturnRefundRequest::STATUS_REFUND_SENT && $case->payouts->isNotEmpty(),
                     'cash_refund_obligation_id' => $cashRefund?->id === null ? null : (string) $cashRefund->id,
                     'can_confirm_cash_refund' => $cashRefund?->state === CashRefundObligation::CASH_PAID,
@@ -671,6 +695,62 @@ class BuyerParityApiController extends Controller
                 ];
             })->values(),
         ]]);
+    }
+
+    public function refundDestinations(
+        Request $request,
+        PayoutDestinationReadiness $readiness,
+        PayoutDestinationManager $manager,
+    ): JsonResponse {
+        $this->authorizeBuyer($request);
+        abort_unless($readiness->supportsMultipleFor('users'), 503, 'Refund destinations are unavailable until the payment destination migration is installed.');
+
+        return response()->json([
+            'success' => true,
+            'data' => ['destinations' => $manager->accounts($request->user())],
+        ])->header('Cache-Control', 'private, no-store');
+    }
+
+    public function updateRefundDestination(
+        Request $request,
+        PayoutDestinationReadiness $readiness,
+        PayoutDestinationManager $manager,
+        PayoutDestinationInput $input,
+    ): JsonResponse {
+        $this->authorizeBuyer($request);
+        abort_unless($readiness->supportsMultipleFor('users'), 503, 'Refund destinations are unavailable until the payment destination migration is installed.');
+
+        $buyer = $request->user();
+        $action = (string) $request->input('destination_action', 'add');
+        $message = match ($action) {
+            'set_default' => 'Default refund destination updated.',
+            'remove' => 'Refund destination removed.',
+            'update' => 'Refund destination updated.',
+            'add' => 'Refund destination saved securely.',
+            default => null,
+        };
+        abort_unless($message !== null, 422, 'Unsupported refund destination action.');
+
+        if (in_array($action, ['set_default', 'remove', 'update'], true)) {
+            $data = $request->validate(['destination_id' => ['required', 'string', 'max:80']]);
+            if ($action === 'set_default') {
+                $manager->setDefault($buyer, $data['destination_id']);
+            } elseif ($action === 'remove') {
+                $manager->remove($buyer, $data['destination_id']);
+            } else {
+                $destination = $input->validate($request, true);
+                $manager->update($buyer, $data['destination_id'], $destination, (bool) ($destination['make_default'] ?? false));
+            }
+        } else {
+            $destination = $input->validate($request, true);
+            $manager->add($buyer, $destination, (bool) ($destination['make_default'] ?? false));
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data' => ['destinations' => $manager->accounts($buyer->fresh())],
+        ])->header('Cache-Control', 'private, no-store');
     }
 
     private function normalizeVoucherCodes(array $codes): array

@@ -26,106 +26,106 @@
     $notificationActive = $active === 'notifications' || request()->routeIs('notifications.index', 'seller.notifications');
 @endphp
 
-<aside id="seller-sidebar" class="sl-sidebar" data-sl-sidebar data-sidebar-workspace="seller" aria-label="Seller Center navigation">
+<aside id="seller-sidebar" class="sl-sidebar" data-sl-sidebar data-sidebar-workspace="seller" aria-label="{{ __('navigation.items.seller_center') }}">
     <div class="sl-sidebar-head">
-        <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle aria-controls="seller-sidebar" aria-label="Collapse sidebar" aria-expanded="true">
-            <svg class="sl-sidebar-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-            <svg class="sl-sidebar-close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        <button class="sl-icon-btn sl-sidebar-toggle" type="button" data-sl-sidebar-toggle data-collapse-label="{{ __('navigation.items.collapse_sidebar') }}" data-open-label="{{ __('navigation.items.open_sidebar') }}" aria-controls="seller-sidebar" aria-label="{{ __('navigation.items.collapse_sidebar') }}" aria-expanded="true">
+            <span class="sl-sidebar-menu-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+            <span class="sl-sidebar-close-icon" aria-hidden="true"><span></span><span></span></span>
         </button>
-        <a href="{{ route('seller.dashboard') }}" class="sl-brand" aria-label="LIKHAE Seller Center">
+        <a href="{{ route('seller.dashboard') }}" class="sl-brand" aria-label="LIKHAE {{ __('settings.workspaces.seller') }}">
             <x-shared.likhae-logo context="Seller Center" class="likhae-logo--sidebar" />
         </a>
     </div>
 
-    <nav class="sl-sidebar-scroll" aria-label="Seller Center pages">
+    <nav class="sl-sidebar-scroll" aria-label="{{ __('navigation.items.seller_center') }}">
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Navigation</span>
-            <a href="{{ route('seller.dashboard') }}" class="sl-nav-link {{ $active === 'dashboard' ? 'is-active' : '' }}" data-title="Dashboard" @if($active === 'dashboard') aria-current="page" @endif>
+            <span class="sl-nav-label">{{ __('navigation.sections.navigation') }}</span>
+            <a href="{{ route('seller.dashboard') }}" class="sl-nav-link {{ $active === 'dashboard' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.dashboard') }}" @if($active === 'dashboard') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('dashboard') !!}</span>
-                <span class="sl-nav-text">Dashboard</span>
+                <span class="sl-nav-text">{{ __('navigation.items.dashboard') }}</span>
             </a>
         </div>
 
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Store Operations</span>
-            <a href="{{ route('seller.products') }}" class="sl-nav-link {{ $productActive ? 'is-active' : '' }}" data-title="Products" @if($productActive) aria-current="page" @endif>
+            <span class="sl-nav-label">{{ __('navigation.sections.store_operations') }}</span>
+            <a href="{{ route('seller.products') }}" class="sl-nav-link {{ $productActive ? 'is-active' : '' }}" data-title="{{ __('navigation.items.products') }}" @if($productActive) aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('products') !!}</span>
-                <span class="sl-nav-text">Products</span>
+                <span class="sl-nav-text">{{ __('navigation.items.products') }}</span>
             </a>
-            <a href="{{ route('seller.products', ['mode' => 'inventory']) }}" class="sl-nav-link {{ $inventoryActive ? 'is-active' : '' }}" data-title="Inventory" @if($inventoryActive) aria-current="page" @endif>
+            <a href="{{ route('seller.products', ['mode' => 'inventory']) }}" class="sl-nav-link {{ $inventoryActive ? 'is-active' : '' }}" data-title="{{ __('navigation.items.inventory') }}" @if($inventoryActive) aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('inventory') !!}</span>
-                <span class="sl-nav-text">Inventory</span>
+                <span class="sl-nav-text">{{ __('navigation.items.inventory') }}</span>
             </a>
-            <a href="{{ route('seller.orders') }}" class="sl-nav-link {{ $ordersActive ? 'is-active' : '' }}" data-title="Orders" @if($ordersActive) aria-current="page" @endif>
+            <a href="{{ route('seller.orders') }}" class="sl-nav-link {{ $ordersActive ? 'is-active' : '' }}" data-title="{{ __('navigation.items.orders') }}" @if($ordersActive) aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('orders') !!}</span>
-                <span class="sl-nav-text">Orders</span>
+                <span class="sl-nav-text">{{ __('navigation.items.orders') }}</span>
                 @if(($sellerSidebarCounts['to_process'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sellerSidebarCounts['to_process'] }}</span>@endif
             </a>
         </div>
 
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Customer Service</span>
-            <a href="{{ route('seller.messages') }}" class="sl-nav-link {{ $active === 'messages' ? 'is-active' : '' }}" data-title="Messages" @if($active === 'messages') aria-current="page" @endif>
+            <span class="sl-nav-label">{{ __('navigation.sections.customer_service') }}</span>
+            <a href="{{ route('seller.messages') }}" class="sl-nav-link {{ $active === 'messages' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.messages') }}" @if($active === 'messages') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('messages') !!}</span>
-                <span class="sl-nav-text">Messages</span>
+                <span class="sl-nav-text">{{ __('navigation.items.messages') }}</span>
                 @if(($sellerSidebarCounts['messages'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sellerSidebarCounts['messages'] }}</span>@endif
             </a>
-            <a href="{{ route('notifications.index') }}" class="sl-nav-link {{ $notificationActive ? 'is-active' : '' }}" data-title="Notifications" @if($notificationActive) aria-current="page" @endif>
+            <a href="{{ route('notifications.index') }}" class="sl-nav-link {{ $notificationActive ? 'is-active' : '' }}" data-title="{{ __('navigation.items.notifications') }}" @if($notificationActive) aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('notifications') !!}</span>
-                <span class="sl-nav-text">Notifications</span>
+                <span class="sl-nav-text">{{ __('navigation.items.notifications') }}</span>
                 <span class="sl-nav-badge" data-seller-notification-count style="{{ ($sellerUiCounts['notifications'] ?? 0) > 0 ? '' : 'display:none' }}">{{ $sellerUiCounts['notifications'] ?? 0 }}</span>
             </a>
-            <a href="{{ route('seller.reviews') }}" class="sl-nav-link {{ $active === 'reviews' ? 'is-active' : '' }}" data-title="Reviews" @if($active === 'reviews') aria-current="page" @endif>
+            <a href="{{ route('seller.reviews') }}" class="sl-nav-link {{ $active === 'reviews' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.reviews') }}" @if($active === 'reviews') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('reviews') !!}</span>
-                <span class="sl-nav-text">Reviews</span>
+                <span class="sl-nav-text">{{ __('navigation.items.reviews') }}</span>
             </a>
         </div>
 
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Growth &amp; Finance</span>
-            <a href="{{ route('seller.marketing') }}" class="sl-nav-link {{ $active === 'marketing' ? 'is-active' : '' }}" data-title="Marketing" @if($active === 'marketing') aria-current="page" @endif>
+            <span class="sl-nav-label">{{ __('navigation.sections.growth_finance') }}</span>
+            <a href="{{ route('seller.marketing') }}" class="sl-nav-link {{ $active === 'marketing' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.marketing') }}" @if($active === 'marketing') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('marketing') !!}</span>
-                <span class="sl-nav-text">Marketing</span>
+                <span class="sl-nav-text">{{ __('navigation.items.marketing') }}</span>
             </a>
-            <a href="{{ route('seller.wallet') }}" class="sl-nav-link {{ $active === 'payouts' ? 'is-active' : '' }}" data-title="Wallet &amp; Payouts" @if($active === 'payouts') aria-current="page" @endif>
+            <a href="{{ route('seller.wallet') }}" class="sl-nav-link {{ $active === 'payouts' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.wallet_payouts') }}" @if($active === 'payouts') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('payouts') !!}</span>
-                <span class="sl-nav-text">Wallet &amp; Payouts</span>
+                <span class="sl-nav-text">{{ __('navigation.items.wallet_payouts') }}</span>
                 @if(($sellerSidebarCounts['payout_requests'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sellerSidebarCounts['payout_requests'] }}</span>@endif
             </a>
-            <a href="{{ route('seller.reports') }}" class="sl-nav-link {{ $active === 'reports' ? 'is-active' : '' }}" data-title="Reports" @if($active === 'reports') aria-current="page" @endif>
+            <a href="{{ route('seller.reports') }}" class="sl-nav-link {{ $active === 'reports' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.analytics_reports') }}" @if($active === 'reports') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('reports') !!}</span>
-                <span class="sl-nav-text">Analytics &amp; Reports</span>
+                <span class="sl-nav-text">{{ __('navigation.items.analytics_reports') }}</span>
             </a>
-            <a href="{{ route('seller.store', ['tab' => 'settings']) }}" class="sl-nav-link {{ $active === 'store' ? 'is-active' : '' }}" data-title="Store Settings" @if($active === 'store') aria-current="page" @endif>
+            <a href="{{ route('seller.store', ['tab' => 'settings']) }}" class="sl-nav-link {{ $active === 'store' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.store_settings') }}" @if($active === 'store') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('store') !!}</span>
-                <span class="sl-nav-text">Store Settings</span>
+                <span class="sl-nav-text">{{ __('navigation.items.store_settings') }}</span>
             </a>
         </div>
 
         <div class="sl-nav-section">
-            <span class="sl-nav-label">Account</span>
-            <a href="{{ route('seller.account', ['tab' => 'profile']) }}" class="sl-nav-link {{ $active === 'account' ? 'is-active' : '' }}" data-title="My Account" @if($active === 'account') aria-current="page" @endif>
+            <span class="sl-nav-label">{{ __('navigation.sections.account') }}</span>
+            <a href="{{ route('seller.account', ['tab' => 'profile']) }}" class="sl-nav-link {{ $active === 'account' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.my_account') }}" @if($active === 'account') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('account') !!}</span>
-                <span class="sl-nav-text">My Account</span>
+                <span class="sl-nav-text">{{ __('navigation.items.my_account') }}</span>
             </a>
-            <a href="{{ route('seller.settings') }}" class="sl-nav-link {{ $active === 'settings' ? 'is-active' : '' }}" data-title="System Settings" @if($active === 'settings') aria-current="page" @endif>
+            <a href="{{ route('seller.settings') }}" class="sl-nav-link {{ $active === 'settings' ? 'is-active' : '' }}" data-title="{{ __('navigation.items.system_settings') }}" @if($active === 'settings') aria-current="page" @endif>
                 <span class="sl-nav-icon">{!! $icon('settings') !!}</span>
-                <span class="sl-nav-text">System Settings</span>
+                <span class="sl-nav-text">{{ __('navigation.items.system_settings') }}</span>
             </a>
         </div>
     </nav>
 
     <div class="sl-sidebar-foot">
-        <button id="themeToggle" type="button" class="sl-nav-link sl-appearance" data-title="Appearance" aria-label="Toggle light or dark mode">
+        <button id="themeToggle" type="button" class="sl-nav-link sl-appearance" data-theme-preference-url="{{ route('seller.settings.theme.update') }}" data-title="{{ __('navigation.items.appearance') }}" aria-label="{{ __('navigation.items.toggle_appearance') }}">
             <span class="sl-nav-icon">{!! $icon('appearance') !!}</span>
-            <span class="sl-nav-text"><strong>Appearance</strong><small>Light / Dark Mode</small></span>
-            <span id="themeToggleBadge" class="sl-theme-badge">ON</span>
+            <span class="sl-nav-text"><strong>{{ __('navigation.items.appearance') }}</strong><small>{{ __('navigation.items.light_dark_mode') }}</small></span>
+            <span id="themeToggleBadge" class="sl-theme-badge" data-label-on="{{ __('common.labels.on') }}" data-label-off="{{ __('common.labels.off') }}">{{ __('common.labels.on') }}</span>
         </button>
-        <form method="POST" action="{{ Route::has('logout') ? route('logout') : url('/logout') }}" data-confirm-title="Log out?" data-confirm-message="You will be signed out of your LIKHAE account." data-confirm-label="Log out">
+        <form method="POST" action="{{ Route::has('logout') ? route('logout') : url('/logout') }}" data-confirm-title="{{ __('common.confirmation.logout_title') }}" data-confirm-message="{{ __('common.confirmation.logout_message') }}" data-confirm-label="{{ __('common.confirmation.logout_label') }}">
             @csrf
-            <button type="submit" class="sl-nav-link sl-logout" data-title="Logout">
+            <button type="submit" class="sl-nav-link sl-logout" data-title="{{ __('navigation.items.logout') }}">
                 <span class="sl-nav-icon">{!! $icon('logout') !!}</span>
-                <span class="sl-nav-text">Logout</span>
+                <span class="sl-nav-text">{{ __('navigation.items.logout') }}</span>
             </button>
         </form>
     </div>

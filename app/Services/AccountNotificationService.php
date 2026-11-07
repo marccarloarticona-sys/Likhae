@@ -8,15 +8,18 @@ use App\Models\Buyer\Order;
 use App\Models\Buyer\Review;
 use App\Models\Finance\CodCollection;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\LogisticsCenter;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderEarning;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPickupRequest;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class AccountNotificationService
@@ -215,6 +218,72 @@ class AccountNotificationService
             'SELLER_PICKUP_BATCH',
             $trip->id,
             '/seller/orders',
+        );
+    }
+
+    public function sellerPickupMatchingStatus(
+        SellerPickupRequest $request,
+        string $state,
+        ?LogisticsCenter $center = null,
+    ): void {
+        $request->loadMissing('sellerProfile.user');
+        $hasSelectedCenterColumn = Schema::hasColumn('seller_pickup_requests', 'preferred_logistics_center_id');
+        if ($hasSelectedCenterColumn) {
+            $request->loadMissing('preferredLogisticsCenter');
+        }
+        $selectedCenterName = $hasSelectedCenterColumn ? $request->preferredLogisticsCenter?->business_name : null;
+        [$type, $title, $message] = match ($state) {
+            'TIMED_OUT' => [
+                'SELLER_PICKUP_RETURNED',
+                'Pickup request returned to you',
+                'No response from '.($selectedCenterName ?: 'the selected Logistics center').' within 15 minutes. Your parcels are available again; choose another covered center to try again.',
+            ],
+            'DECLINED' => [
+                'SELLER_PICKUP_RETURNED',
+                'Pickup request returned to you',
+                ($selectedCenterName ?: 'The selected Logistics center').' declined the pickup. Your parcels are available again; choose another covered center to try again.',
+            ],
+            'NO_CAPACITY' => [
+                'SELLER_PICKUP_RETURNED',
+                'Pickup request returned to you',
+                'The selected center could not confirm route and Rider capacity within 15 minutes. Your parcels are available again; choose another covered center to try again.',
+            ],
+            'WAITING' => [
+                'SELLER_PICKUP_WAITING',
+                'Logistics center reviewing pickup',
+                ($selectedCenterName ?: $center?->business_name ?: 'Your selected Logistics center')
+                    .' received your pickup request. We are still waiting for its response.',
+            ],
+            'PENDING' => [
+                'SELLER_PICKUP_PENDING',
+                'Pickup request pending',
+                $hasSelectedCenterColumn && ! $selectedCenterName
+                    ? 'This older pickup request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.'
+                    : ($selectedCenterName
+                        ? 'Your pickup request is with '.$selectedCenterName.'. If its route or Rider capacity is not confirmed within 15 minutes, the request returns to you so you can choose another center.'
+                        : 'Your pickup request remains open. We could not confirm a complete route and available capacity yet; Logistics will retry when service is available.'),
+            ],
+            default => [
+                'SELLER_PICKUP_FINDING',
+                $hasSelectedCenterColumn && ! $selectedCenterName
+                    ? 'Center choice required'
+                    : ($selectedCenterName ? 'Checking selected Logistics center' : 'Finding Logistics for pickup'),
+                $hasSelectedCenterColumn && ! $selectedCenterName
+                    ? 'This older pickup request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.'
+                    : ($selectedCenterName
+                        ? 'We are checking the route and available Rider capacity at '.$selectedCenterName.'.'
+                        : 'We are checking authorized Logistics centers and a complete route to the Buyer before assigning a pickup Rider.'),
+            ],
+        };
+
+        $this->record(
+            $request->sellerProfile?->user,
+            $type,
+            $title,
+            $message.' Pickup request #'.$request->id.'.',
+            'SELLER_PICKUP_REQUEST',
+            (int) $request->id,
+            '/seller/logistics',
         );
     }
 

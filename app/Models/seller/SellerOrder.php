@@ -48,6 +48,7 @@ class SellerOrder extends Model
         'shipping_voucher_discount',
         'shipping_rate_version_id',
         'shipping_rate_snapshot',
+        'delivery_routing_snapshot',
         'grand_total',
         'protection_total',
     ];
@@ -70,6 +71,7 @@ class SellerOrder extends Model
             'grand_total' => 'decimal:2',
             'protection_total' => 'decimal:2',
             'shipping_rate_snapshot' => 'array',
+            'delivery_routing_snapshot' => 'array',
         ];
     }
 

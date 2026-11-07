@@ -7,6 +7,7 @@ use App\Models\Finance\FinancialLedgerEntry;
 use App\Services\Finance\EarningPayoutService;
 use App\Services\Finance\PayoutDestinationReadiness;
 use App\Support\RiderVehicleType;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -14,7 +15,7 @@ use Illuminate\Validation\ValidationException;
 
 class RiderFinanceController extends Controller
 {
-    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse
+    public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations): RedirectResponse|JsonResponse
     {
         $rider = $request->user()->riderProfile;
         abort_unless($rider, 403);
@@ -31,12 +32,16 @@ class RiderFinanceController extends Controller
         unset($data['return_to']);
         $rider->forceFill($data)->save();
 
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'message' => 'Online payout details saved securely.']);
+        }
+
         return $returnTo === 'profile'
             ? redirect()->to(route('rider.profile').'#payment')->with('status', 'Online payout details saved securely.')
             : back()->with('status', 'Online payout details saved securely.');
     }
 
-    public function requestPayout(Request $request, EarningPayoutService $payouts): RedirectResponse
+    public function requestPayout(Request $request, EarningPayoutService $payouts): RedirectResponse|JsonResponse
     {
         abort_unless(! RiderVehicleType::isInterLogistics($request->user()->riderProfile?->vehicle_type), 403, 'Interhub drivers are paid through Logistics payroll, not parcel payouts.');
         $data = $request->validate([
@@ -49,10 +54,14 @@ class RiderFinanceController extends Controller
             throw ValidationException::withMessages(['participant_ids' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Payout request submitted to your Logistics center.');
+        $message = 'Payout request submitted to your Logistics center.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message], 201)
+            : back()->with('status', $message);
     }
 
-    public function acknowledgePayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $payouts): RedirectResponse
+    public function acknowledgePayout(Request $request, FinancialLedgerEntry $entry, EarningPayoutService $payouts): RedirectResponse|JsonResponse
     {
         abort_unless(! RiderVehicleType::isInterLogistics($request->user()->riderProfile?->vehicle_type), 403, 'Interhub drivers are paid through Logistics payroll, not parcel payouts.');
         $data = $request->validate([
@@ -65,6 +74,10 @@ class RiderFinanceController extends Controller
             throw ValidationException::withMessages(['amount_received' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Rider payout receipt acknowledged.');
+        $message = 'Rider payout receipt acknowledged.';
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => $message])
+            : back()->with('status', $message);
     }
 }

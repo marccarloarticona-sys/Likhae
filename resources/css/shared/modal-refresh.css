@@ -19,6 +19,14 @@ html.dark {
     --lk-modal-brand: #78372f;
 }
 
+/* Keep native modal dialogs centered in the viewport across every workspace. */
+dialog[open] {
+    position: fixed;
+    inset: 0;
+    height: fit-content;
+    margin: auto;
+}
+
 .lk-confirm-dialog {
     width: min(420px, calc(100% - 28px));
     max-height: calc(100dvh - 40px);
@@ -52,6 +60,12 @@ html.dark {
     color: var(--lk-modal-ink);
     background: linear-gradient(145deg, rgba(255,255,255,.76), rgba(247,235,220,.8));
     box-shadow: 0 0 0 12px rgba(213, 190, 168, .13), 0 12px 30px rgba(86, 47, 33, .1);
+}
+html.dark body .lk-confirm-dialog .lk-confirm-icon {
+    border-color: #594038 !important;
+    color: #FFFFFF !important;
+    background: #30231F !important;
+    box-shadow: 0 0 0 7px rgba(89, 64, 56, .28), 0 7px 16px rgba(0, 0, 0, .3) !important;
 }
 .lk-confirm-icon svg { width: 23px; height: 23px; }
 .lk-confirm-eyebrow {
@@ -227,4 +241,32 @@ html.dark {
         from { opacity: 0; transform: translateY(12px) scale(.985); }
         to { opacity: 1; transform: translateY(0) scale(1); }
     }
+}
+
+/* Keep role icon tiles dark and glyphs white after page-specific icon styles load. */
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)
+    :is([class][class*="icon"], [class][class*="Icon"]) {
+    color: #FFFFFF !important;
+    background: #2A1E1A !important;
+    border-color: #49342B !important;
+}
+
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class]
+    :is(.lk-status, .sl-status, .ad-status, .ad-priority, .sl-account-status,
+        .sl-inventory-report-status, .sl-faq-status, .sl-inventory-badge,
+        .lk-search-recommendations__status, .lk-order-map-status,
+        .lk-logistics-wallet__status, .rider-directory__status) {
+    color: #FFFFFF !important;
+    background: #2A1E1A !important;
+    border-color: #49342B !important;
+}
+
+/* Apply the requested white foreground after role-specific dark palettes. */
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class],
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class] *,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class] *::before,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class] *::after,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class] *::placeholder,
+html.dark body:is(.lk-buyer-body, .sl-body, .ad-body, .rider-shell, .logistics-shell)[class][class] *::marker {
+    color: #FFFFFF !important;
 }

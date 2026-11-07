@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\View;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
@@ -23,6 +24,7 @@ class WorkspaceSettingsTest extends TestCase
             User::TYPE_RIDER => ['rider.settings', 'rider.settings.update'],
         ] as $accountType => $route) {
             $user = User::factory()->create(['account_type' => $accountType, 'status' => User::STATUS_ACTIVE]);
+            App::setLocale('en');
 
             $this->withoutMiddleware()
                 ->actingAs($user)
@@ -32,8 +34,94 @@ class WorkspaceSettingsTest extends TestCase
                 ->assertSee('ws-settings-page')
                 ->assertSee('ws-settings-card')
                 ->assertSee('data-notification-preview="general_updates"', false)
+                ->assertSee('value="en"', false)
+                ->assertSee('value="fil"', false)
+                ->assertSee('value="ceb"', false)
                 ->assertSee('action="'.route($route[1]).'"', false);
         }
+    }
+
+    public function test_workspace_documents_render_the_selected_language_metadata(): void
+    {
+        View::share('errors', new ViewErrorBag);
+
+        foreach ([
+            User::TYPE_SELLER => 'seller.settings',
+            User::TYPE_ADMIN => 'admin.system-settings',
+            User::TYPE_LOGISTICS => 'logistics.settings',
+            User::TYPE_RIDER => 'rider.settings',
+        ] as $accountType => $settingsRoute) {
+            $user = User::factory()->create([
+                'account_type' => $accountType,
+                'status' => User::STATUS_ACTIVE,
+                'notification_preferences' => ['language' => 'fil'],
+            ]);
+            App::setLocale('fil');
+
+            $response = $this->withoutMiddleware()
+                ->actingAs($user)
+                ->get(route($settingsRoute))
+                ->assertOk();
+
+            $this->assertMatchesRegularExpression('/<html\\b[^>]*\\blang="fil"/si', $response->getContent());
+        }
+    }
+
+    public function test_each_workspace_can_save_all_supported_languages_and_preserves_other_preferences(): void
+    {
+        $workspaces = [
+            User::TYPE_SELLER => 'seller.settings.update',
+            User::TYPE_ADMIN => 'admin.system-settings.update',
+            User::TYPE_LOGISTICS => 'logistics.settings.update',
+            User::TYPE_RIDER => 'rider.settings.update',
+        ];
+
+        foreach ($workspaces as $accountType => $updateRoute) {
+            foreach (array_keys(config('app.supported_locales')) as $locale) {
+                $user = User::factory()->create([
+                    'account_type' => $accountType,
+                    'status' => User::STATUS_ACTIVE,
+                    'notification_preferences' => [
+                        'unrelated_preference' => 'keep-me',
+                    ],
+                ]);
+
+                $this->withoutMiddleware()
+                    ->actingAs($user)
+                    ->put(route($updateRoute), [
+                        'theme' => 'system',
+                        'language' => $locale,
+                    ])
+                    ->assertRedirect();
+
+                $preferences = $user->fresh()->notification_preferences;
+                $this->assertSame($locale, $preferences['language']);
+                $this->assertSame('keep-me', $preferences['unrelated_preference']);
+            }
+        }
+    }
+
+    public function test_workspace_language_rejects_unsupported_values_without_changing_preferences(): void
+    {
+        $seller = User::factory()->create([
+            'account_type' => User::TYPE_SELLER,
+            'status' => User::STATUS_ACTIVE,
+            'notification_preferences' => ['language' => 'fil', 'unrelated_preference' => 'keep-me'],
+        ]);
+
+        $this->withoutMiddleware()
+            ->actingAs($seller)
+            ->from(route('seller.settings'))
+            ->put(route('seller.settings.update'), [
+                'theme' => 'dark',
+                'language' => 'fr',
+            ])
+            ->assertRedirect(route('seller.settings'));
+
+        $this->assertSame([
+            'language' => 'fil',
+            'unrelated_preference' => 'keep-me',
+        ], $seller->fresh()->notification_preferences);
     }
 
     public function test_workspace_settings_are_saved_without_removing_existing_preferences(): void

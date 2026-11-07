@@ -45,6 +45,9 @@ class SaveSellerProductRequest extends FormRequest
             'price' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'numeric', 'min:0', 'max:999999.99'],
             'stock' => [Rule::requiredIf(fn (): bool => $this->isPublishing() && $this->input('product_type') === 'single'), 'nullable', 'integer', 'min:0', 'max:999999'],
             'weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
+            'length_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'width_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'height_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
             'sku' => ['nullable', 'string', 'max:100'],
             'single_variant_id' => ['nullable', 'integer'],
             'payment_method' => ['nullable', Rule::in(['cod', 'online', 'cod_online'])],
@@ -68,6 +71,9 @@ class SaveSellerProductRequest extends FormRequest
             'variants.*.price' => ['nullable', 'numeric', 'min:0', 'max:999999.99'],
             'variants.*.stock' => ['nullable', 'integer', 'min:0', 'max:999999'],
             'variants.*.weight_kg' => ['nullable', 'numeric', 'min:0.001', 'max:9999999.999'],
+            'variants.*.length_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'variants.*.width_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
+            'variants.*.height_cm' => ['nullable', 'numeric', 'gt:0', 'max:99999999.99', 'decimal:0,2'],
             'variants.*.values' => ['nullable', 'string', 'max:500'],
             'variants.*.payment_method' => ['nullable', Rule::in(['cod', 'online', 'cod_online'])],
             'variants.*.is_active' => ['nullable', 'boolean'],
@@ -93,6 +99,26 @@ class SaveSellerProductRequest extends FormRequest
     public function withValidator($validator): void
     {
         $validator->after(function ($validator): void {
+            $dimensionFields = ['length_cm', 'width_cm', 'height_cm'];
+            $validateDimensions = function (array $values, string $prefix) use ($validator, $dimensionFields): void {
+                $provided = collect($dimensionFields)->filter(fn (string $field): bool => filled($values[$field] ?? null));
+                if ($provided->isEmpty() || $provided->count() === count($dimensionFields)) {
+                    return;
+                }
+
+                foreach ($dimensionFields as $field) {
+                    if (! filled($values[$field] ?? null)) {
+                        $validator->errors()->add($prefix.$field, 'Enter length, width, and height together for complete product dimensions.');
+                    }
+                }
+            };
+            $validateDimensions($this->all(), '');
+            foreach ((array) $this->input('variants', []) as $index => $row) {
+                if (is_array($row)) {
+                    $validateDimensions($row, 'variants.'.$index.'.');
+                }
+            }
+
             $seller = $this->user()?->sellerProfile?->loadMissing('primaryCategory');
             $lineOfBusinessId = (int) ($seller?->primary_category_id ?? 0);
             $categoryId = (int) $this->input('category_id');

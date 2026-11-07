@@ -130,7 +130,7 @@ class CheckoutController extends Controller
                         rewardPointsToRedeem: 0,
                     );
                 } catch (ValidationException $fallbackException) {
-                    $checkoutBlocked = true;
+                    $checkoutBlocked = array_key_exists('cart', $fallbackException->errors());
                     $previewError = collect($fallbackException->errors())->flatten()->filter()->first()
                         ?: 'Checkout could not be prepared. Return to your cart and review the selected items.';
                 }
@@ -149,6 +149,16 @@ class CheckoutController extends Controller
         });
 
         $checkoutAttemptKey = (string) old('checkout_attempt_key', Str::uuid());
+        $checkoutCartToken = $this->checkoutService->checkoutCartToken($request->user(), $items);
+        $shippingQuoteToken = null;
+        if ($selectedAddress && ! $checkoutBlocked && $preview['groups']->isNotEmpty()) {
+            $shippingQuoteToken = $this->checkoutService->shippingQuoteToken(
+                $request->user(),
+                $selectedAddress,
+                $items,
+                $preview,
+            );
+        }
         $priceSnapshot = $items->mapWithKeys(fn ($item): array => [
             (string) $item->id => number_format((float) $item->productVariant?->final_price, 2, '.', ''),
         ])->all();
@@ -189,11 +199,65 @@ class CheckoutController extends Controller
             'previewError' => $previewError,
             'checkoutBlocked' => $checkoutBlocked,
             'checkoutAttemptKey' => $checkoutAttemptKey,
+            'checkoutCartToken' => $checkoutCartToken,
+            'shippingQuoteToken' => $shippingQuoteToken,
             'selectedAddressId' => $selectedAddress?->id,
             'selectedProviderId' => $selectedProvider?->id,
             'deliveryAvailability' => $deliveryAvailability,
             'priceChangeNotice' => $request->session()->pull('checkout_price_change_notice'),
         ]);
+    }
+
+    public function shippingQuote(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'address_id' => ['required', 'integer'],
+            'checkout_attempt_key' => ['required', 'uuid'],
+            'cart_quote_token' => ['required', 'string', 'size:64'],
+        ]);
+        $address = Address::query()
+            ->where('user_id', $request->user()->id)
+            ->whereKey((int) $data['address_id'])
+            ->first();
+        if (! $address) {
+            throw ValidationException::withMessages([
+                'address_id' => 'Choose one of your saved delivery addresses.',
+            ]);
+        }
+
+        $selectedIds = array_map('intval', (array) $request->session()->get('checkout_cart_item_ids', []));
+        $items = $this->cartService->selectedItems($request->user(), $selectedIds);
+        if ($items->isEmpty()) {
+            throw ValidationException::withMessages([
+                'cart' => 'Your checkout selection expired. Return to your cart and choose the items again.',
+            ]);
+        }
+        $this->checkoutService->assertCheckoutCartToken($data['cart_quote_token'], $request->user(), $items);
+
+        $voucherSelection = $this->currentVoucherSelection($request, $items);
+        $preview = $this->checkoutService->preview(
+            $items,
+            $voucherSelection,
+            $request->user(),
+            null,
+            $address,
+        );
+        $groups = collect($preview['groups'])->mapWithKeys(fn (array $group, int|string $sellerId): array => [
+            (string) $sellerId => [
+                'shipping_fee' => number_format((float) $group['shipping_fee'], 2, '.', ''),
+                'shipping_voucher_discount' => number_format((float) $group['shipping_voucher_discount'], 2, '.', ''),
+                'snapshot' => $group['shipping_rate_snapshot'],
+            ],
+        ]);
+        $token = $this->checkoutService->shippingQuoteToken($request->user(), $address, $items, $preview);
+
+        return response()->json([
+            'address_id' => (int) $address->id,
+            'groups' => $groups,
+            'shipping_total' => number_format((float) $preview['shipping_total'], 2, '.', ''),
+            'shipping_voucher_discount' => number_format((float) $preview['shipping_voucher_discount'], 2, '.', ''),
+            'quote_token' => $token,
+        ])->header('Cache-Control', 'no-store, private');
     }
 
     public function applyVoucher(Request $request): RedirectResponse
@@ -393,6 +457,7 @@ class CheckoutController extends Controller
             : ['required', 'integer', Rule::exists('logistics_centers', 'id')->where('status', 'ACTIVE')];
         $data = $request->validate([
             'checkout_attempt_key' => ['required', 'uuid'],
+            'shipping_quote_token' => ['required', 'string', 'size:64'],
             'cart_item_ids' => ['required', 'array', 'min:1'],
             'cart_item_ids.*' => ['required', 'integer', 'distinct'],
             'address_id' => ['required', 'integer'],
@@ -454,6 +519,7 @@ class CheckoutController extends Controller
                 $data['checkout_attempt_key'],
                 is_array($expectedPriceSnapshot) ? $expectedPriceSnapshot : null,
                 $rewardPointsToRedeem,
+                expectedShippingQuoteToken: $data['shipping_quote_token'],
             );
         } catch (ValidationException $exception) {
             foreach (array_keys($exception->errors()) as $field) {

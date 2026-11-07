@@ -582,7 +582,7 @@ final class TransferManifestService
             }
 
             $unitWeight = $shipment->orderItem?->productVariant?->weight_kg;
-            $quantity = (int) ($shipment->orderItem?->quantity ?? 0);
+            $quantity = (int) $shipment->parcel_quantity;
             $estimate = ParcelWeightEstimator::productEstimate($shipment);
             if ($estimate === null) {
                 throw new RuntimeException('A parcel is missing its packed weight and its product has no usable per-item weight. Record a packed weight before sealing.');

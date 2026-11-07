@@ -314,7 +314,7 @@ class BuyerApiController extends Controller
             $voucherCodes,
             $request->user(),
             $provider,
-            $automaticRouting ? $address : null,
+            $address,
             $protectionItemIds,
             rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
         );
@@ -341,6 +341,12 @@ class BuyerApiController extends Controller
                 (string) $item->id => (float) ($protectionQuote['fee'] ?? 0),
             ];
         })->all();
+        $shippingQuotes = collect($preview['groups'])->mapWithKeys(fn (array $group, int|string $sellerId): array => [
+            (string) $sellerId => [
+                'shipping_fee' => number_format((float) $group['shipping_fee'], 2, '.', ''),
+                'snapshot' => $group['shipping_rate_snapshot'],
+            ],
+        ]);
 
         return response()->json([
             'success' => true,
@@ -348,6 +354,8 @@ class BuyerApiController extends Controller
                 'subtotal' => (float) $preview['subtotal'],
                 'total_discount' => (float) $preview['total_discount'],
                 'shipping_total' => (float) $preview['shipping_total'],
+                'shipping_quotes' => $shippingQuotes,
+                'shipping_quote_token' => $checkout->shippingQuoteToken($request->user(), $address, $items, $preview),
                 'protection_total' => (float) $preview['protection_total'],
                 'protection_fees' => $protectionFees,
                 'grand_total' => (float) $preview['grand_total'],
@@ -380,6 +388,7 @@ class BuyerApiController extends Controller
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['required', 'integer', 'distinct'],
             'checkout_attempt_key' => ['nullable', 'uuid'],
+            'shipping_quote_token' => ['required', 'string', 'size:64'],
             'expected_price_snapshot' => ['nullable', 'array'],
             'expected_price_snapshot.*' => ['nullable', 'numeric', 'min:0'],
             'reward_points' => ['nullable', 'integer', 'min:0'],
@@ -404,6 +413,7 @@ class BuyerApiController extends Controller
             rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
             recipientName: $data['recipient_name'] ?? null,
             contactNumber: $data['contact_number'] ?? null,
+            expectedShippingQuoteToken: $data['shipping_quote_token'],
         );
 
         return response()->json([

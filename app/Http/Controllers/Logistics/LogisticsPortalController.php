@@ -44,6 +44,7 @@ use App\Support\PhilippineAddressValidator;
 use App\Support\AddressCoordinateValidator;
 use App\Support\RiderVehicleType;
 use App\Support\LocalTripCapacityRules;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -1285,12 +1286,10 @@ class LogisticsPortalController extends Controller
 
             if ($locations->count() !== 1) {
                 $reason = 'The existing area has missing or multiple barangay locations.';
-            } elseif (! $this->localRiderEligibility->centerCoversMunicipality(
-                $center,
-                $locations->first()->province_code,
-                $locations->first()->municipality_code,
-            )) {
-                $reason = 'The existing barangay PSGC does not match the center canonical province and municipality.';
+            } elseif ($this->localRiderEligibility->singleBarangayLocation($center, $area) === null) {
+                $reason = in_array($locations->first()->coverage_type, ['SECONDARY', 'EXTENDED'], true)
+                    ? 'This fallback PSGC area has no currently approved active route.'
+                    : 'The existing barangay PSGC does not match the center canonical province and municipality.';
             }
 
             return $reason ? [$area->id => $reason] : [];
@@ -1352,6 +1351,7 @@ class LogisticsPortalController extends Controller
                 $center,
                 (string) $data['province_code'],
                 (string) $data['municipality_code'],
+                allowExplicitRemoteCoverage: (bool) config('likhae.automatic_seller_pickup_matching', false),
             );
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['municipality_code' => $exception->getMessage()])->withInput();
@@ -1461,23 +1461,205 @@ class LogisticsPortalController extends Controller
 
         $financeReady = app(FinanceSchemaReadiness::class)->parcelSettlementReady();
         $financialReports = app(LogisticsFinancialReportService::class);
-        $filters = $financeReady ? $this->financialReportFilters($request, $center) : [];
+        $filters = $this->financialReportFilters($request, $center);
+        $analyticsFilters = $this->analyticsReportFilters($request, $center);
+        $shipmentStatus = $request->validate([
+            'shipment_status' => ['nullable', Rule::in(Shipment::STATUSES)],
+        ])['shipment_status'] ?? null;
+
+        $analyticsDateFilters = [
+            'from_date' => $analyticsFilters['from_date'],
+            'to_date' => $analyticsFilters['to_date'],
+        ];
+        $analyticsShipments = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $analyticsDateFilters);
+        if ($analyticsFilters['area_id'] !== null) {
+            $analyticsShipments->where('service_area_id', $analyticsFilters['area_id']);
+        }
+        if ($analyticsFilters['rider_id'] !== null) {
+            $analyticsShipments->whereHas('riderAssignments', fn ($assignments) => $assignments
+                ->where('assignment_type', 'DELIVERY')
+                ->where('rider_profile_id', $analyticsFilters['rider_id'])
+                ->whereHas('riderProfile', fn ($riders) => $riders->where('logistics_center_id', $center->id)));
+        }
+
+        $statusTotals = (clone $analyticsShipments)
+            ->selectRaw('current_status, COUNT(*) AS total')
+            ->groupBy('current_status')
+            ->pluck('total', 'current_status')
+            ->map(fn ($total): int => (int) $total);
+        $categoryTotals = $shipmentQuery->counts($analyticsShipments);
+        $analyticsTotal = (clone $analyticsShipments)->count();
+        $closedOutcomes = (int) ($categoryTotals['delivered'] ?? 0) + (int) ($categoryTotals['failed'] ?? 0);
+        $exceptionTotal = (int) ($categoryTotals['failed'] ?? 0) + (int) ($statusTotals['CANCELLED'] ?? 0);
+        $analyticsMetrics = [
+            'total' => $analyticsTotal,
+            'pending' => (int) ($categoryTotals['pending'] ?? 0),
+            'in_transit' => (int) ($categoryTotals['in_transit'] ?? 0),
+            'delivered' => (int) ($categoryTotals['delivered'] ?? 0),
+            'exceptions' => $exceptionTotal,
+            'success_rate' => $closedOutcomes > 0 ? round(((int) ($categoryTotals['delivered'] ?? 0) / $closedOutcomes) * 100, 1) : 0.0,
+            'riders' => $center->riders()->count(),
+        ];
+
+        $timezone = config('app.timezone', 'Asia/Manila');
+        $rangeStart = CarbonImmutable::createFromFormat('!Y-m-d', $analyticsFilters['from_date'], $timezone);
+        $rangeEnd = CarbonImmutable::createFromFormat('!Y-m-d', $analyticsFilters['to_date'], $timezone);
+        $rangeDays = $rangeStart->diffInDays($rangeEnd) + 1;
+        $granularity = $rangeDays <= 90 ? 'day' : ($rangeDays <= 366 ? 'week' : 'month');
+        $bucketStart = match ($granularity) {
+            'week' => $rangeStart->startOfWeek(),
+            'month' => $rangeStart->startOfMonth(),
+            default => $rangeStart,
+        };
+        $dailyTotals = (clone $analyticsShipments)
+            ->selectRaw('DATE(shipments.created_at) AS report_day, COUNT(*) AS total')
+            ->groupBy('report_day')
+            ->orderBy('report_day')
+            ->pluck('total', 'report_day');
+        $bucketTotals = [];
+        foreach ($dailyTotals as $day => $total) {
+            $date = CarbonImmutable::createFromFormat('!Y-m-d', (string) $day, $timezone);
+            $bucketDate = match ($granularity) {
+                'week' => $date->startOfWeek(),
+                'month' => $date->startOfMonth(),
+                default => $date,
+            };
+            $key = $bucketDate->toDateString();
+            $bucketTotals[$key] = ($bucketTotals[$key] ?? 0) + (int) $total;
+        }
+
+        $analyticsTrend = [];
+        $cursor = $bucketStart;
+        $stepMethod = match ($granularity) {
+            'week' => 'addWeek',
+            'month' => 'addMonth',
+            default => 'addDay',
+        };
+        while ($cursor <= $rangeEnd) {
+            $key = $cursor->toDateString();
+            $analyticsTrend[] = [
+                'date' => $key,
+                'label' => match ($granularity) {
+                    'week' => $cursor->format('M j'),
+                    'month' => $cursor->format('M Y'),
+                    default => $cursor->format('M j'),
+                },
+                'total' => (int) ($bucketTotals[$key] ?? 0),
+            ];
+            $cursor = $cursor->{$stepMethod}();
+        }
+        $chartMax = max(array_column($analyticsTrend, 'total'));
+        $chartScale = max(1, $chartMax);
+        $chartPoints = [];
+        $pointCount = count($analyticsTrend);
+        foreach ($analyticsTrend as $index => $point) {
+            $chartPoints[] = [
+                'x' => round(34 + ($pointCount > 1 ? ($index / ($pointCount - 1)) * 832 : 416), 1),
+                'y' => round(174 - (((int) $point['total'] / $chartScale) * 136), 1),
+                'label' => $point['label'],
+                'total' => $point['total'],
+            ];
+        }
+        $linePath = implode(' ', array_map(
+            fn (array $point, int $index): string => ($index === 0 ? 'M ' : 'L ').$point['x'].' '.$point['y'],
+            $chartPoints,
+            array_keys($chartPoints),
+        ));
+        $areaPath = $chartPoints === [] ? '' : 'M '.$chartPoints[0]['x'].' 174 L '.implode(' ', array_map(
+            fn (array $point): string => $point['x'].' '.$point['y'],
+            $chartPoints,
+        )).' L '.$chartPoints[array_key_last($chartPoints)]['x'].' 174 Z';
+        $statusBreakdown = $statusTotals->map(fn (int $total, string $status): array => [
+            'label' => (string) str($status)->replace('_', ' ')->headline(),
+            'total' => $total,
+        ])->sortByDesc('total')->values();
+        $analyticsFinancialSummary = $financeReady ? $financialReports->summary($center, [
+            'date_from' => $analyticsFilters['from_date'],
+            'date_to' => $analyticsFilters['to_date'],
+            'rider_id' => $analyticsFilters['rider_id'],
+            'area_id' => $analyticsFilters['area_id'],
+            'status' => null,
+        ]) : [];
 
         return view('logistics.reports.index', [
             'center' => $center,
-            'shipmentsByStatus' => $shipmentQuery->operationalFor($center)->selectRaw('current_status, COUNT(*) as total')->groupBy('current_status')->pluck('total', 'current_status'),
-            'riderCount' => RiderProfile::where('logistics_center_id', $center->id)->count(),
+            'activeTab' => $request->query('tab') === 'reports' ? 'reports' : 'analytics',
+            'analyticsFilters' => $analyticsFilters,
+            'analyticsMetrics' => $analyticsMetrics,
+            'analyticsTrend' => $analyticsTrend,
+            'analyticsChartPoints' => $chartPoints,
+            'analyticsChartLine' => $linePath,
+            'analyticsChartArea' => $areaPath,
+            'analyticsChartMax' => $chartMax,
+            'analyticsGranularity' => $granularity,
+            'analyticsStatusBreakdown' => $statusBreakdown,
+            'analyticsFinancialSummary' => $analyticsFinancialSummary,
             'financeReady' => $financeReady,
             'financialFilters' => $filters,
             'financialSummary' => $financeReady ? $financialReports->summary($center, $filters) : [],
             'financialStatuses' => $financeReady ? $financialReports->statuses($center) : [],
-            'financialRiders' => $financeReady ? $center->riders()->with('user')->orderBy('id')->get() : collect(),
-            'financialAreas' => $financeReady ? $center->serviceAreas()->orderBy('name')->get() : collect(),
+            'financialRiders' => $center->riders()->with('user')->orderBy('id')->get(),
+            'financialAreas' => $center->serviceAreas()->orderBy('name')->get(),
+            'shipmentStatus' => $shipmentStatus,
+            'shipmentStatusOptions' => Shipment::STATUSES,
+            'shipmentExportFilters' => [
+                'date_from' => $filters['date_from'] ?? null,
+                'date_to' => $filters['date_to'] ?? null,
+                'area_id' => $filters['area_id'] ?? null,
+                'rider_id' => $filters['rider_id'] ?? null,
+                'shipment_status' => $shipmentStatus,
+            ],
             'financialTransactions' => $financeReady
                 ? $financialReports->query($center, $filters)->paginate(25)->withQueryString()
                     ->through(fn (FinancialLedgerEntry $entry): array => $financialReports->row($entry))
                 : null,
         ]);
+    }
+
+    /** @return array{period:string,from_date:string,to_date:string,rider_id:?int,area_id:?int} */
+    private function analyticsReportFilters(Request $request, LogisticsCenter $center): array
+    {
+        $validated = $request->validate([
+            'analytics_period' => ['nullable', Rule::in(['7d', '30d', '90d', 'custom'])],
+            'analytics_from' => ['nullable', 'date_format:Y-m-d'],
+            'analytics_to' => ['nullable', 'date_format:Y-m-d'],
+            'analytics_rider_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('rider_profiles', 'id')->where(fn ($query) => $query->where('logistics_center_id', $center->id)),
+            ],
+            'analytics_area_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('service_areas', 'id')->where(fn ($query) => $query->where('logistics_center_id', $center->id)),
+            ],
+        ]);
+
+        $period = $validated['analytics_period'] ?? '30d';
+        $today = CarbonImmutable::now(config('app.timezone', 'Asia/Manila'))->startOfDay();
+        if ($period === 'custom') {
+            $from = $validated['analytics_from'] ?? $today->subDays(29)->toDateString();
+            $to = $validated['analytics_to'] ?? $today->toDateString();
+            if ($to < $from) {
+                throw ValidationException::withMessages(['analytics_to' => 'The end date must be on or after the start date.']);
+            }
+        } else {
+            $days = match ($period) {
+                '7d' => 7,
+                '90d' => 90,
+                default => 30,
+            };
+            $from = $today->subDays($days - 1)->toDateString();
+            $to = $today->toDateString();
+        }
+
+        return [
+            'period' => $period,
+            'from_date' => $from,
+            'to_date' => $to,
+            'rider_id' => filled($validated['analytics_rider_id'] ?? null) ? (int) $validated['analytics_rider_id'] : null,
+            'area_id' => filled($validated['analytics_area_id'] ?? null) ? (int) $validated['analytics_area_id'] : null,
+        ];
     }
 
     public function exportFinancialTransactionsCsv(Request $request, LogisticsFinancialReportService $reports)
@@ -1598,21 +1780,98 @@ class LogisticsPortalController extends Controller
         ];
     }
 
+    /** @return array{query:\Illuminate\Database\Eloquent\Builder,filters:array<string,mixed>,shipment_status:?string} */
+    private function shipmentReportQuery(Request $request, LogisticsCenter $center, LogisticsShipmentQuery $shipmentQuery): array
+    {
+        $filters = $this->financialReportFilters($request, $center);
+        $shipmentStatus = $request->validate([
+            'shipment_status' => ['nullable', Rule::in(Shipment::STATUSES)],
+        ])['shipment_status'] ?? null;
+        $query = $shipmentQuery->dated($shipmentQuery->operationalFor($center), [
+            'from_date' => $filters['date_from'],
+            'to_date' => $filters['date_to'],
+        ]);
+        if ($filters['area_id'] !== null) {
+            $query->where('service_area_id', $filters['area_id']);
+        }
+        if ($filters['rider_id'] !== null) {
+            $query->whereHas('riderAssignments', fn ($assignments) => $assignments
+                ->where('assignment_type', 'DELIVERY')
+                ->where('rider_profile_id', $filters['rider_id'])
+                ->whereHas('riderProfile', fn ($riders) => $riders->where('logistics_center_id', $center->id)));
+        }
+        if ($shipmentStatus !== null) {
+            $query->where('current_status', $shipmentStatus);
+        }
+
+        return [
+            'query' => $query->with([
+                'serviceArea',
+                'riderAssignments' => fn ($assignments) => $assignments
+                    ->where('assignment_type', 'DELIVERY')
+                    ->whereHas('riderProfile', fn ($riders) => $riders->where('logistics_center_id', $center->id))
+                    ->orderByDesc('id'),
+                'riderAssignments.riderProfile.user',
+            ]),
+            'filters' => $filters,
+            'shipment_status' => $shipmentStatus,
+        ];
+    }
+
+    public function exportShipmentsCsv(Request $request, LogisticsShipmentQuery $shipmentQuery)
+    {
+        $center = $request->user()->logisticsCenter;
+        abort_unless($center, 403);
+        $report = $this->shipmentReportQuery($request, $center, $shipmentQuery);
+        $filename = 'logistics-shipments-'.$center->id.'-'.now()->format('Ymd-His').'.csv';
+
+        return response()->streamDownload(function () use ($report): void {
+            $stream = fopen('php://output', 'w');
+            if ($stream === false) {
+                return;
+            }
+
+            fputcsv($stream, ['Tracking number', 'Current status', 'Service area', 'Destination', 'Delivery rider', 'Created at', 'Last updated']);
+            $report['query']->reorder()->lazyById(500, 'shipments.id', 'id')->each(function (Shipment $shipment) use ($stream): void {
+                fputcsv($stream, [
+                    (string) $shipment->tracking_number,
+                    (string) $shipment->current_status,
+                    (string) ($shipment->serviceArea?->name ?? ''),
+                    collect([
+                        $shipment->destination_barangay_name,
+                        $shipment->destination_municipality_name,
+                        $shipment->destination_province_name,
+                    ])->filter()->implode(', '),
+                    (string) ($shipment->riderAssignments?->first()?->riderProfile?->user?->name ?? ''),
+                    (string) ($shipment->created_at?->toDateTimeString() ?? ''),
+                    (string) ($shipment->updated_at?->toDateTimeString() ?? ''),
+                ]);
+            });
+            fclose($stream);
+        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
+    }
+
     public function exportReport(Request $request, LogisticsShipmentQuery $shipmentQuery, WorkspaceExportPdfService $pdf)
     {
         $center = $request->user()->logisticsCenter;
         abort_unless($center, 403);
-        $rows = $shipmentQuery->operationalFor($center)
-            ->orderByDesc('shipments.id')
+        $report = $this->shipmentReportQuery($request, $center, $shipmentQuery);
+        $filters = $report['filters'];
+        $shipmentStatus = $report['shipment_status'];
+        $rows = $report['query']
+            ->reorder()
             ->lazyById(500, 'shipments.id', 'id')
             ->map(fn (Shipment $shipment): array => [
                 (string) $shipment->tracking_number,
                 (string) $shipment->current_status,
+                (string) ($shipment->serviceArea?->name ?? ''),
                 collect([
                     $shipment->destination_barangay_name,
                     $shipment->destination_municipality_name,
                     $shipment->destination_province_name,
                 ])->filter()->implode(', '),
+                (string) ($shipment->riderAssignments?->first()?->riderProfile?->user?->name ?? ''),
+                (string) ($shipment->created_at?->toDateTimeString() ?? ''),
                 (string) ($shipment->updated_at?->toDateTimeString() ?? ''),
             ]);
         $filename = 'logistics-report-'.$center->id.'-'.now()->format('Ymd-His').'.pdf';
@@ -1622,12 +1881,22 @@ class LogisticsPortalController extends Controller
             'title' => 'Shipment operations report',
             'description' => 'Operational shipments visible to '.$center->business_name.'.',
             'generated_at' => now()->format('Y-m-d H:i:s T'),
+            'filters' => [
+                'From' => $filters['date_from'] ?? '',
+                'To' => $filters['date_to'] ?? '',
+                'Status' => $shipmentStatus ?? '',
+                'Delivery rider ID' => $filters['rider_id'] ?? '',
+                'Service area ID' => $filters['area_id'] ?? '',
+            ],
             'orientation' => 'landscape',
             'columns' => [
-                ['label' => 'Tracking', 'width' => 0.25],
-                ['label' => 'Status', 'width' => 0.2],
-                ['label' => 'Destination', 'width' => 0.35],
-                ['label' => 'Updated', 'width' => 0.2],
+                ['label' => 'Tracking', 'width' => 0.15],
+                ['label' => 'Status', 'width' => 0.10],
+                ['label' => 'Service area', 'width' => 0.14],
+                ['label' => 'Destination', 'width' => 0.20],
+                ['label' => 'Delivery rider', 'width' => 0.14],
+                ['label' => 'Created', 'width' => 0.13],
+                ['label' => 'Updated', 'width' => 0.14],
             ],
             'rows' => $rows,
             'empty_message' => 'No operational shipments are available to this logistics center.',

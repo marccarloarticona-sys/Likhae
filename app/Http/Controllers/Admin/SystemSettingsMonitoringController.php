@@ -367,7 +367,7 @@ class SystemSettingsMonitoringController extends Controller
             'sound_key' => 'admin_notification_sounds',
             'description' => 'Adjust your Admin Center appearance and notification sound preference.',
             'notifications' => [],
-            'show_language' => false,
+            'show_language' => true,
         ];
     }
 

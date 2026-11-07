@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../shared/dark-utility-compat.css";
 
 @source "../../../../views/guest/auth/login.blade.php";
 @source "../../../../views/guest/auth/**/*.blade.php";
@@ -515,6 +516,32 @@ html.dark .likhae-logo {
         470px,
         100%
     );
+}
+
+
+@media (min-width: 851px) {
+    .auth-signin-page .auth-shell {
+        height: 100vh;
+        height: 100svh;
+        min-height: 100vh;
+        min-height: 100svh;
+        overflow: hidden;
+    }
+
+    .auth-signin-page .auth-hero {
+        height: 100%;
+        min-height: 0;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+    }
+
+    .auth-signin-page .auth-panel {
+        height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+        padding-block: clamp(18px, 3.5vh, 36px);
+    }
 }
 
 

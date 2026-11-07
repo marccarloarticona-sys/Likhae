@@ -3,6 +3,7 @@
     'class' => '',
     'address' => null,
     'required' => true,
+    'preserveAddressFields' => false,
 ])
 
 @php
@@ -29,6 +30,8 @@
     data-map-center="{{ json_encode(config('maps.default_center')) }}"
     data-address-signature="{{ $addressSignature }}"
     data-address-pin-required="{{ $required ? 'true' : 'false' }}"
+    data-address-pin-preserve-existing="{{ $preserveAddressFields ? 'true' : 'false' }}"
+    aria-busy="true"
     style="--lk-map-height: {{ $height }}"
 >
     <div class="lk-map-toolbar">

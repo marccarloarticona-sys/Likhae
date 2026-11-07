@@ -12,7 +12,6 @@
     @endif
 
     <section class="ad-account-identity" aria-label="Administrator account overview">
-        <div class="ad-account-avatar" aria-hidden="true">{{ mb_strtoupper(mb_substr((string) $adminUser->name, 0, 1)) }}</div>
         <div class="ad-account-identity-copy">
             <span class="ad-overline">Administrator account</span>
             <h2>{{ $adminUser->name }}</h2>

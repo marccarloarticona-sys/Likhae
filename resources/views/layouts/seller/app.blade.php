@@ -8,7 +8,7 @@
         && in_array(request()->query('mode'), ['add', 'edit'], true);
 @endphp
 <!doctype html>
-<html lang="en">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 <head>
     <x-shared.likhae-favicon />
     <meta charset="utf-8">

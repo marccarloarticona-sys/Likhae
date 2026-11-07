@@ -2894,6 +2894,7 @@
             let hasMore = true;
             let observer = null;
             const observerSupported = 'IntersectionObserver' in window;
+            const prefetchMargin = 1200;
 
             const loadMore = async () => {
                 if (isLoading || !hasMore) return;
@@ -2942,7 +2943,7 @@
                     if (!grid.children.length && emptyState) emptyState.hidden = false;
 
                     if (hasMore) {
-                        status.textContent = 'Scroll to load more recommendations.';
+                        status.textContent = 'More recommendations will load as you scroll.';
                         retryButton.textContent = 'Load more recommendations';
                         retryButton.hidden = observerSupported;
                     } else {
@@ -2958,6 +2959,10 @@
                 } finally {
                     isLoading = false;
                     grid.setAttribute('aria-busy', 'false');
+                    if (hasMore && observerSupported && retryButton.hidden
+                        && sentinel.getBoundingClientRect().top <= window.innerHeight + prefetchMargin) {
+                        window.requestAnimationFrame(loadMore);
+                    }
                 }
             };
 
@@ -2969,7 +2974,7 @@
             if (observerSupported) {
                 observer = new IntersectionObserver((entries) => {
                     if (entries.some((entry) => entry.isIntersecting)) loadMore();
-                }, { rootMargin: '480px 0px' });
+                }, { rootMargin: `${prefetchMargin}px 0px` });
                 observer.observe(sentinel);
             } else {
                 retryButton.hidden = false;

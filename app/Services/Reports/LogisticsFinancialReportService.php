@@ -3,6 +3,7 @@
 namespace App\Services\Reports;
 
 use App\Models\Finance\FinancialLedgerEntry;
+use App\Models\Finance\ShipmentFinancialAllocation;
 use App\Models\Logistics\LogisticsCenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -45,6 +46,7 @@ final class LogisticsFinancialReportService
                 'shipment.sellerOrder.order',
                 'shipment.riderAssignments' => fn ($assignments) => $assignments
                     ->where('assignment_type', 'DELIVERY')
+                    ->whereHas('riderProfile', fn ($riders) => $riders->where('logistics_center_id', $center->id))
                     ->orderByDesc('id'),
                 'shipment.riderAssignments.riderProfile.user',
             ]);
@@ -67,7 +69,8 @@ final class LogisticsFinancialReportService
         if (filled($filters['rider_id'] ?? null)) {
             $query->whereHas('shipment.riderAssignments', fn ($assignments) => $assignments
                 ->where('assignment_type', 'DELIVERY')
-                ->where('rider_profile_id', $filters['rider_id']));
+                ->where('rider_profile_id', $filters['rider_id'])
+                ->whereHas('riderProfile', fn ($riders) => $riders->where('logistics_center_id', $center->id)));
         }
 
         if (filled($filters['area_id'] ?? null)) {
@@ -91,18 +94,25 @@ final class LogisticsFinancialReportService
         $proceedsEntries = fn () => (clone $base)->where('entry_type', 'PRODUCT_PROCEEDS_REMITTANCE');
         $payoutEntries = fn () => (clone $base)->where('entry_type', 'LOGISTICS_PAYOUT');
 
-        $shippingAndCommission = $allocationEntries()
-            ->join('shipment_financial_allocations as report_allocations', 'report_allocations.id', '=', 'financial_ledger_entries.shipment_financial_allocation_id');
+        // A single saved allocation can produce multiple ledger rows (for example,
+        // split shares). Sum the allocation once while preserving the filters that
+        // selected the matching ledger entries.
+        $allocationIds = $allocationEntries()
+            ->whereNotNull('financial_ledger_entries.shipment_financial_allocation_id')
+            ->select('financial_ledger_entries.shipment_financial_allocation_id')
+            ->distinct()
+            ->reorder();
+        $allocations = fn () => ShipmentFinancialAllocation::query()->whereIn('id', clone $allocationIds);
         $hasAdditionalCareColumn = Schema::hasColumn('shipment_financial_allocations', 'protection_amount');
 
         return [
             'parcel_count' => (clone $allocationEntries())->distinct('shipment_id')->count('shipment_id'),
             'transaction_count' => (clone $base)->count(),
-            'shipping_fees' => (float) (clone $shippingAndCommission)->sum('report_allocations.shipping_fee'),
-            'additional_care' => $hasAdditionalCareColumn ? (float) (clone $shippingAndCommission)->sum('report_allocations.protection_amount') : 0.0,
+            'shipping_fees' => (float) $allocations()->sum('shipping_fee'),
+            'additional_care' => $hasAdditionalCareColumn ? (float) $allocations()->sum('protection_amount') : 0.0,
             'delivery_charges' => $hasAdditionalCareColumn
-                ? (float) (clone $shippingAndCommission)->sum(DB::raw('report_allocations.shipping_fee + report_allocations.protection_amount'))
-                : (float) (clone $shippingAndCommission)->sum('report_allocations.shipping_fee'),
+                ? (float) $allocations()->sum(DB::raw('shipping_fee + protection_amount'))
+                : (float) $allocations()->sum('shipping_fee'),
             'logistics_share' => (float) $allocationEntries()->sum('financial_ledger_entries.amount'),
             'proceeds_expected' => (float) $proceedsEntries()->sum('financial_ledger_entries.amount'),
             'proceeds_received' => $this->receivedProceedsTotal($proceedsEntries()),
@@ -110,7 +120,7 @@ final class LogisticsFinancialReportService
             'payout_requested' => (float) $payoutEntries()->where('status', 'PAYOUT_REQUESTED')->sum('financial_ledger_entries.amount'),
             'payout_pending_ack' => (float) $payoutEntries()->where('status', 'PAYOUT_PENDING_ACK')->sum('financial_ledger_entries.amount'),
             'payout_paid' => (float) $payoutEntries()->where('status', 'PAID')->sum('financial_ledger_entries.amount'),
-            'admin_product_commission' => (float) (clone $shippingAndCommission)->sum('report_allocations.platform_commission'),
+            'admin_product_commission' => (float) $allocations()->sum('platform_commission'),
         ];
     }
 

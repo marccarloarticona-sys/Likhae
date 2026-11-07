@@ -1,5 +1,11 @@
+@php
+    $adminThemePreference = data_get(auth()->user()?->notification_preferences, 'theme', 'system');
+    if (! in_array($adminThemePreference, ['light', 'dark', 'system'], true)) {
+        $adminThemePreference = 'system';
+    }
+@endphp
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" data-admin-theme-preference="{{ $adminThemePreference }}" data-admin-theme-update-url="{{ route('admin.system-settings.theme.update') }}">
 <head>
     <x-shared.likhae-favicon />
     <meta charset="utf-8">
@@ -120,7 +126,7 @@
     @stack('head')
 
     <script>
-        (function(){var t=localStorage.getItem('likhae-theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}})();
+        (function(){var t=@json($adminThemePreference);try{if(t==='system')localStorage.removeItem('likhae-theme');else localStorage.setItem('likhae-theme',t)}catch(_){}document.documentElement.classList.toggle('dark',t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches))})();
     </script></head>
 <body class="ad-body">
     <div class="ad-app" data-admin-shell>

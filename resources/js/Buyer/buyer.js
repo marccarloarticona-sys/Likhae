@@ -120,7 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const overlay = one('[data-lk-overlay]');
     const toast = one('#lkBuyerToast');
     const desktop = window.matchMedia('(min-width: 1024px)');
-    const buyerHomeAutoCollapse = body.classList.contains('lk-buyer-home-sidebar-hover');
+    const buyerSidebarAutoCollapse = body.classList.contains('lk-buyer-sidebar-auto-collapse');
     const storageKey = 'likhae-buyer-sidebar-collapsed';
     const accountMenu = one('[data-account-menu]');
     const accountMenuToggle = one('[data-account-menu-toggle]', accountMenu || document);
@@ -537,6 +537,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let catalogRequestController = null;
     let catalogRequestId = 0;
     let recommendationState = null;
+    let catalogInfiniteState = null;
 
     const initializeSearchRecommendations = () => {
         recommendationState?.observer?.disconnect();
@@ -632,6 +633,119 @@ document.addEventListener('DOMContentLoaded', () => {
             retry.hidden = false;
         }
     };
+
+    const initializeCatalogInfiniteScroll = () => {
+        catalogInfiniteState?.observer?.disconnect();
+        catalogInfiniteState?.controller?.abort();
+        const grid = one('[data-catalog-infinite-grid]', catalogResults || document);
+        const sentinel = one('[data-catalog-infinite-sentinel]', catalogResults || document);
+        const status = one('[data-catalog-infinite-status]', sentinel || document);
+        const retry = one('[data-catalog-infinite-retry]', sentinel || document);
+        catalogInfiniteState = null;
+        if (!grid || !sentinel || !status || !retry || !grid.dataset.nextPage) return;
+
+        const state = { observer: null, controller: null, loading: false };
+        const prefetchMargin = 900;
+        catalogInfiniteState = state;
+        const loadNext = async () => {
+            if (state.loading || catalogInfiniteState !== state || !grid.dataset.nextPage) return;
+            state.loading = true;
+            retry.hidden = true;
+            status.hidden = false;
+            status.textContent = 'Loading more products…';
+            catalogResults?.setAttribute('aria-busy', 'true');
+
+            const controller = new AbortController();
+            state.controller = controller;
+            const timeout = window.setTimeout(() => controller.abort(), 15000);
+
+            try {
+                const url = new URL(grid.dataset.infiniteUrl, window.location.href);
+                const currentUrl = normalizeCatalogUrl(window.location.href);
+                currentUrl.searchParams.forEach((value, key) => {
+                    if (key !== 'page') url.searchParams.set(key, value);
+                });
+                url.searchParams.set('page', grid.dataset.nextPage);
+
+                const response = await fetch(url, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    signal: controller.signal,
+                });
+                if (!response.ok) throw new Error('More products could not be loaded.');
+                const payload = await response.json();
+                if (typeof payload.html !== 'string' || typeof payload.has_more !== 'boolean') {
+                    throw new Error('More products could not be loaded.');
+                }
+                if (catalogInfiniteState !== state) return;
+
+                const template = document.createElement('template');
+                template.innerHTML = payload.html;
+                const seenIds = new Set(all('[data-product-card]', grid).map((card) => card.dataset.productId));
+                const cards = all('[data-product-card]', template.content).filter((card) => {
+                    if (!card.dataset.productId || seenIds.has(card.dataset.productId)) return false;
+                    seenIds.add(card.dataset.productId);
+                    return true;
+                });
+                grid.append(...cards);
+                if (cards.length) {
+                    document.dispatchEvent(new CustomEvent('catalog:results-updated', { detail: { root: grid } }));
+                }
+                applyCatalogView(new URL(window.location.href).searchParams.get('view') === 'list' ? 'list' : 'grid');
+
+                const hasMore = payload.has_more && cards.length > 0;
+                grid.dataset.nextPage = hasMore && payload.next_page ? String(payload.next_page) : '';
+                status.textContent = hasMore ? '' : 'You’ve reached the end of the products.';
+                status.hidden = hasMore;
+                if (hasMore) state.observer?.observe(sentinel);
+
+                if (typeof payload.recommendations_html === 'string' && payload.recommendations_html.trim()
+                    && !one('[data-catalog-recommendations]', catalogResults || document)) {
+                    const recommendationTemplate = document.createElement('template');
+                    recommendationTemplate.innerHTML = payload.recommendations_html;
+                    const recommendationSection = recommendationTemplate.content.firstElementChild;
+                    if (recommendationSection) {
+                        catalogResults?.append(recommendationSection);
+                        initializeSearchRecommendations();
+                    }
+                }
+
+                if (!hasMore) state.observer?.disconnect();
+            } catch (error) {
+                if (catalogInfiniteState !== state) return;
+                status.textContent = 'More products could not be loaded. Please try again.';
+                status.hidden = false;
+                retry.hidden = false;
+                state.observer?.disconnect();
+            } finally {
+                window.clearTimeout(timeout);
+                state.loading = false;
+                state.controller = null;
+                if (catalogInfiniteState === state) {
+                    catalogResults?.setAttribute('aria-busy', 'false');
+                    if (grid.dataset.nextPage && retry.hidden
+                        && sentinel.getBoundingClientRect().top <= window.innerHeight + prefetchMargin) {
+                        window.requestAnimationFrame(loadNext);
+                    }
+                }
+            }
+        };
+
+        retry.addEventListener('click', () => {
+            loadNext();
+        });
+        if ('IntersectionObserver' in window) {
+            state.observer = new IntersectionObserver((entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) loadNext();
+            }, { rootMargin: `${prefetchMargin}px 0px` });
+            state.observer.observe(sentinel);
+        } else {
+            status.textContent = 'Load more products when ready.';
+            retry.textContent = 'Load more products';
+            retry.hidden = false;
+        }
+    };
+    initializeCatalogInfiniteScroll();
     initializeSearchRecommendations();
 
     const syncCatalogFilterFields = (url) => {
@@ -773,6 +887,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!catalogResults || !catalogResultCount) return;
 
         const url = normalizeCatalogUrl(requestedUrl);
+        catalogInfiniteState?.observer?.disconnect();
+        catalogInfiniteState?.controller?.abort();
+        catalogInfiniteState = null;
         catalogRequestController?.abort();
         const controller = new AbortController();
         catalogRequestController = controller;
@@ -799,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
             syncCatalogToolbar(responseDocument, url);
             syncCatalogCategoryNav(responseDocument);
             applyCatalogView(url.searchParams.get('view') === 'list' ? 'list' : 'grid');
+            initializeCatalogInfiniteScroll();
             initializeSearchRecommendations();
 
             if (pushHistory && url.href !== window.location.href) {
@@ -809,6 +927,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             if (error?.name !== 'AbortError') {
                 showToast(error instanceof Error ? error.message : 'The product results could not be refreshed.');
+                if (requestId === catalogRequestId) initializeCatalogInfiniteScroll();
             }
         } finally {
             if (requestId === catalogRequestId) {
@@ -892,7 +1011,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sidebar || !desktop.matches) return;
         sidebar.classList.toggle('lk-sidebar-collapsed', collapsed);
         body.classList.toggle('lk-sidebar-is-collapsed', collapsed);
-        if (buyerHomeAutoCollapse) body.classList.toggle('lk-buyer-home-sidebar-expanded', !collapsed);
+        if (buyerSidebarAutoCollapse) body.classList.toggle('lk-buyer-home-sidebar-expanded', !collapsed);
         collapseButton?.setAttribute('aria-expanded', String(!collapsed));
         collapseButton?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
         if (persist) {
@@ -908,8 +1027,8 @@ document.addEventListener('DOMContentLoaded', () => {
         mobileButton?.setAttribute('aria-expanded', String(open));
     };
 
-    if (desktop.matches) setCollapsed(buyerHomeAutoCollapse || storedCollapsed(), false);
-    if (buyerHomeAutoCollapse && sidebar) {
+    if (desktop.matches) setCollapsed(buyerSidebarAutoCollapse || storedCollapsed(), false);
+    if (buyerSidebarAutoCollapse && sidebar) {
         sidebar.addEventListener('pointerenter', () => setCollapsed(false, false));
         sidebar.addEventListener('pointerleave', () => {
             if (!sidebar.contains(document.activeElement)) setCollapsed(true, false);
@@ -928,7 +1047,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setMobileOpen(false);
             return;
         }
-        setCollapsed(!sidebar?.classList.contains('lk-sidebar-collapsed'), !buyerHomeAutoCollapse);
+        setCollapsed(!sidebar?.classList.contains('lk-sidebar-collapsed'), !buyerSidebarAutoCollapse);
     });
 
     const submenuFor = (toggle) => toggle.nextElementSibling?.matches('[data-nav-submenu]') ? toggle.nextElementSibling : null;
@@ -967,7 +1086,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body.classList.remove('lk-sidebar-is-collapsed');
         sidebar?.classList.remove('lk-sidebar-collapsed');
         body.classList.remove('lk-buyer-home-sidebar-expanded');
-        if (event.matches) setCollapsed(buyerHomeAutoCollapse || storedCollapsed(), false);
+        if (event.matches) setCollapsed(buyerSidebarAutoCollapse || storedCollapsed(), false);
     });
 
     document.addEventListener('keydown', (event) => {
@@ -1807,9 +1926,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const guidance = document.querySelector(`[data-shipment-guidance-id="${shipment.id}"]`);
             if (guidance) {
                 const guidanceByStatus = {
-                    PLACED: ['Placed', 'Wait for the seller to prepare and confirm the parcel.', 'Seller'],
-                    CONFIRMED: ['Confirmed', 'Wait for the seller to prepare the parcel.', 'Seller'],
-                    PREPARING: ['Preparing', 'Wait for the seller to finish preparing the parcel.', 'Seller'],
+                    PLACED: ['Placed', 'Wait for the seller to accept your order.', 'Seller'],
+                    CONFIRMED: ['Confirmed', 'The seller accepted your order. Wait for them to prepare the parcel.', 'Seller'],
+                    PREPARING: ['Preparing', 'The seller is preparing your parcel.', 'Seller'],
                     READY_FOR_PICKUP: ['Ready for Pickup', 'Logistics will assign a pickup rider.', 'Logistics'],
                     PICKUP_ASSIGNED: ['Pickup Assigned', 'The pickup rider will collect the parcel from the seller.', 'Pickup rider'],
                     PICKED_UP: ['Picked Up', 'The sorting center will scan the parcel into its facility.', 'Logistics'],
@@ -1884,9 +2003,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'].includes(shipment.status)) return 'Parcel is out for delivery';
                     if (shipment.status === 'PICKED_UP') return 'Parcel has been picked up from seller';
                     if (shipment.status === 'READY_FOR_PICKUP') return 'Ready to ship';
+                    if (shipment.status === 'PICKUP_ASSIGNED') return 'Pickup rider assigned';
                     if (shipment.status === 'DELIVERY_FAILED') return 'Delivery attempt was unsuccessful';
                     if (shipment.status === 'PLACED') return 'Waiting for seller to accept your order';
-                    return 'Seller is preparing your parcel';
+                    if (shipment.status === 'CONFIRMED') return 'Seller accepted your order; waiting for them to prepare your parcel';
+                    if (shipment.status === 'PREPARING') return 'Seller is preparing your parcel';
+                    return 'Tracking status updated';
                 };
                 (payload.orders || []).forEach((order) => {
                     const currentTabKey = (orderPage.dataset.orderTabKey || 'all').toUpperCase().replaceAll('-', '_');

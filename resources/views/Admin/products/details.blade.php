@@ -64,6 +64,10 @@
             <div class="ad-note is-warning" role="alert">{{ $errors->first() }}</div>
         @endif
 
+        @if($product->status === 'ACTIVE' && ! $product->sellerProfile?->store_visibility)
+            <div class="ad-note is-warning" role="status">This listing is active, but the seller's store is hidden from buyers. The seller can turn on Store Visibility in the Seller workspace.</div>
+        @endif
+
         <section class="ad-card ad-card-body ad-product-moderation-grid" aria-label="Product moderation">
             <div>
                 <span class="ad-overline">Admin action</span>
@@ -191,14 +195,13 @@
                                     @if(is_array($alignment))
                                         <p><strong>Seller line of business:</strong> {{ data_get($alignment, 'context.seller_line_of_business.name') ?: 'Not recorded' }}</p>
                                         <p><strong>Selected category / subcategory:</strong> {{ collect([data_get($alignment, 'context.selected_parent_category.name'), data_get($alignment, 'context.selected_category.name')])->filter()->implode(' / ') ?: 'Not recorded' }}</p>
-                                        <p><strong>Selected category path check:</strong> {{ match ($alignment['hierarchy_status'] ?? 'UNKNOWN') { 'MATCH' => 'The selected category is listed under the seller’s registered line of business. This checks the category tree only; it does not assess the product.', 'MISMATCH' => 'The selected category is outside the seller’s registered line of business. Admin review required.', 'UNAVAILABLE' => 'The selected category is unavailable. Admin review required.', default => 'Unable to check the category tree.' } }}</p>
-                                        @foreach(['business_mismatch_probability' => 'Product content vs seller line of business', 'category_mismatch_probability' => 'Product content vs selected category', 'subcategory_mismatch_probability' => 'Product content vs selected subcategory'] as $key => $label)
+                                        @foreach(['business_mismatch_probability' => 'Product content vs seller line of business', 'subcategory_mismatch_probability' => 'Product content vs selected subcategory'] as $key => $label)
                                             @php $check = data_get($alignment, 'checks.'.$key, []); @endphp
                                             <p><strong>{{ $label }}:</strong> {{ match ($check['status'] ?? 'UNKNOWN') { 'POSSIBLE_MISMATCH' => 'Model flagged a possible mismatch; Admin review required', 'NO_MISMATCH_SIGNAL' => 'Model found no mismatch', 'NOT_APPLICABLE' => 'No subcategory is selected', default => 'Unable to assess; manual review required' } }}@if(is_numeric($check['probability'] ?? null)) ({{ number_format($check['probability'] * 100, 1) }}% mismatch score)@endif</p>
                                         @endforeach
-                                        <small>Product-fit checks compare the listing text and images with the recorded business and category names. AI scores are review signals only; a human Admin decides the outcome.</small>
+                                        <small>Product-fit checks compare the listing text and images with the recorded business and subcategory names. AI scores are review signals only; a human Admin decides the outcome.</small>
                                     @else
-                                        <p>Not assessed in this scan. Queue a manual rescan to compare the actual listing with the seller’s business, category, and subcategory.</p>
+                                        <p>Not assessed in this scan. Queue a manual rescan to compare the actual listing with the seller’s business and subcategory.</p>
                                     @endif
                                 </div>
                                 @if($scan->evidence_summary)<p>{{ $scan->evidence_summary }}</p>@endif

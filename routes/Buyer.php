@@ -40,6 +40,9 @@ Route::prefix('buyer')
         Route::get('/bundle-deals', [BuyerController::class, 'bundleDeals'])->name('bundle-deals');
         Route::get('/free-gifts', [BuyerController::class, 'freeGifts'])->name('free-gifts');
         Route::get('/products', [BuyerController::class, 'products'])->name('products');
+        Route::get('/products/infinite', [BuyerController::class, 'productCatalogPage'])
+            ->middleware('throttle:60,1')
+            ->name('products.infinite');
         Route::get('/products/recommendations', [BuyerController::class, 'productRecommendations'])
             ->middleware('throttle:60,1')
             ->name('products.recommendations');
@@ -73,6 +76,7 @@ Route::prefix('buyer')
         Route::post('/buy-now/{product}', [BuyerController::class, 'buyNow'])->name('buy-now');
 
         Route::get('/checkout', [CheckoutController::class, 'show'])->name('checkout');
+        Route::post('/checkout/shipping-quote', [CheckoutController::class, 'shippingQuote'])->middleware('throttle:30,1')->name('checkout.shipping-quote');
         Route::post('/checkout', [CheckoutController::class, 'select'])->name('checkout.post');
         Route::post('/checkout/voucher', [CheckoutController::class, 'applyVoucher'])->middleware('throttle:20,1')->name('checkout.voucher');
         Route::post('/order', [CheckoutController::class, 'store'])->middleware('throttle:10,1')->name('order.store');

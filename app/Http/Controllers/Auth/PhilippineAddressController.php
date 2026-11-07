@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Support\PhilippineRegionCatalog;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -378,7 +379,14 @@ class PhilippineAddressController extends Controller
                     'prv' => 56, 'mun' => 43, 'level' => 'City',
                 ]))
             ->unique('code')
-            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->when($level === 'regions', fn ($rows) => $rows->sortBy(
+                fn (array $row): string => sprintf(
+                    '%02d|%s',
+                    PhilippineRegionCatalog::displayOrderForCode((string) $row['code']) ?? 99,
+                    mb_strtolower((string) $row['name']),
+                ),
+                SORT_STRING,
+            ), fn ($rows) => $rows->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE))
             ->values()
             ->all();
     }

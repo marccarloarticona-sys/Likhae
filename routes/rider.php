@@ -42,6 +42,7 @@ Route::prefix('rider')
         Route::get('/scan', [RiderParcelScanController::class, 'resolve'])->name('scan');
         Route::get('/settings', [WorkspaceSettingsController::class, 'show'])->defaults('workspace', 'rider')->name('settings');
         Route::put('/settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'rider')->name('settings.update');
+        Route::patch('/settings/theme', [WorkspaceSettingsController::class, 'updateThemePreference'])->defaults('workspace', 'rider')->name('settings.theme.update');
 
         Route::middleware('rider.operational:LOCAL_BARANGAY')->group(function (): void {
             Route::patch('/availability', [RiderController::class, 'updateAvailability'])->name('availability.update');

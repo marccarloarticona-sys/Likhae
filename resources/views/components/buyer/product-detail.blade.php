@@ -1681,7 +1681,7 @@
                     <strong>Delivery</strong>
 
                     <span>
-                        {{ data_get($product, 'shipping', 'Metro Manila: 1–3 days') }}
+                        {{ data_get($product, 'shipping', 'Delivery time varies by destination') }}
                     </span>
                 </div>
 

@@ -13,10 +13,23 @@ return new class extends Migration
             throw new RuntimeException('Install shipment return and seller return request migrations before adding buyer return waybills.');
         }
 
-        $shipmentUnique = collect(Schema::getIndexes('shipment_return_workflows'))
+        $workflowIndexes = collect(Schema::getIndexes('shipment_return_workflows'));
+        $shipmentUnique = $workflowIndexes
             ->first(fn (array $index): bool => ($index['unique'] ?? false)
                 && ($index['columns'] ?? []) === ['shipment_id']);
         if ($shipmentUnique) {
+            $shipmentForeignKeyIndex = $workflowIndexes->contains(
+                fn (array $index): bool => ($index['name'] ?? null) !== $shipmentUnique['name']
+                    && array_slice($index['columns'] ?? [], 0, 1) === ['shipment_id'],
+            );
+            if (! $shipmentForeignKeyIndex) {
+                // MySQL requires a remaining index for the shipment FK before
+                // it will allow the unique constraint to be removed.
+                Schema::table('shipment_return_workflows', function (Blueprint $table): void {
+                    $table->index('shipment_id', 'shipment_return_workflows_shipment_id_index');
+                });
+            }
+
             Schema::table('shipment_return_workflows', function (Blueprint $table) use ($shipmentUnique): void {
                 $table->dropUnique($shipmentUnique['name']);
             });

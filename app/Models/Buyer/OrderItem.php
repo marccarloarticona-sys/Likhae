@@ -23,6 +23,9 @@ class OrderItem extends Model
         'product_name',
         'sku',
         'variant_description',
+        'product_length_cm',
+        'product_width_cm',
+        'product_height_cm',
         'unit_price',
         'original_unit_price',
         'flash_sale_quantity',
@@ -49,6 +52,9 @@ class OrderItem extends Model
     {
         return [
             'unit_price' => 'decimal:2',
+            'product_length_cm' => 'decimal:2',
+            'product_width_cm' => 'decimal:2',
+            'product_height_cm' => 'decimal:2',
             'original_unit_price' => 'decimal:2',
             'flash_sale_quantity' => 'integer',
             'discount_amount' => 'decimal:2',
@@ -74,7 +80,12 @@ class OrderItem extends Model
 
     public function shipment(): HasOne
     {
-        return $this->hasOne(Shipment::class);
+        return $this->hasOne(Shipment::class)->oldestOfMany();
+    }
+
+    public function shipments(): HasMany
+    {
+        return $this->hasMany(Shipment::class)->orderBy('id');
     }
 
     public function returnRefundRequestItems(): HasMany

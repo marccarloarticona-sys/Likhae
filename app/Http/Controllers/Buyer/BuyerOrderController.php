@@ -191,13 +191,17 @@ class BuyerOrderController extends Controller
         $returnRefundReady = $actions->returnRefundStorageReady();
         $logisticsReadiness = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
         $shipmentReturnsReady = $logisticsReadiness->shipmentReturnsReady();
+        $shipmentColumns = ['id', 'seller_order_id', 'order_item_id', 'current_status', 'updated_at', 'logistics_center_id'];
+        if (Schema::hasColumn('shipments', 'parcel_quantity')) {
+            $shipmentColumns[] = 'parcel_quantity';
+        }
 
         $orderQuery = $request->user()->orders()
             ->select(['id', 'status', 'updated_at'])
             ->when($ids->isNotEmpty(), fn ($query) => $query->whereIn('id', $ids))
             ->with([
                 'sellerOrders' => fn ($query) => $query->select(['id', 'order_id', 'status']),
-                'sellerOrders.shipments' => fn ($query) => $query->select(['id', 'seller_order_id', 'order_item_id', 'current_status', 'updated_at', 'logistics_center_id']),
+                'sellerOrders.shipments' => fn ($query) => $query->select($shipmentColumns),
                 'sellerOrders.shipments.logisticsCenter:id,business_name',
                 'disputes',
                 'sellerOrders.shipments.transferLegs' => function ($query): void {
@@ -685,13 +689,56 @@ class BuyerOrderController extends Controller
         if (! $this->returnRefundStorageReady()) {
             return redirect()->route('buyer.orders.show', $order)->with('buyer_error', 'Return & Refund is still being set up. Please try again after the latest deployment finishes.');
         }
-        [$deliveredAt, $deadline] = $this->returnRefundEligibility($order);
-        if ($this->activeReturnRefund($order, $request->user()->id)) {
-            return redirect()->route('buyer.orders', ['status' => 'RETURNS'])->with('buyer_notice', 'Your return/refund request is already under review.');
+        if (! $this->shipmentSpecificReturnsReady()) {
+            return redirect()->route('buyer.orders.show', $order)->with('buyer_error', 'Parcel-specific returns are being set up. Please try again after the latest deployment finishes.');
         }
+        [$deliveredAt, $deadline] = $this->returnRefundEligibility($order);
+
+        $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipments.orderItem', 'sellerOrders.shipments.events', 'payments']);
+        $returnWorkflow = app(ReturnRefundWorkflowService::class);
+        $buyerId = (int) $request->user()->id;
+        $returnParcels = $order->sellerOrders->flatMap(function ($sellerOrder) use ($returnWorkflow, $order, $buyerId) {
+            $shipments = $sellerOrder->shipments->values();
+            $total = $shipments->count();
+
+            return $shipments->values()->map(function (Shipment $shipment, int $index) use ($sellerOrder, $shipments, $total, $returnWorkflow, $order, $buyerId): ?array {
+                if (! in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true)) {
+                    return null;
+                }
+
+                $active = $this->activeReturnRefundForShipment($order, $buyerId, $shipment);
+                $items = $shipment->order_item_id !== null
+                    ? collect([$shipment->orderItem])->filter()
+                    : $sellerOrder->items;
+                $returnableItems = $active ? collect() : $items->map(function (OrderItem $item) use ($shipment, $returnWorkflow): ?array {
+                    $claimed = $returnWorkflow->activeClaimedQuantity((int) $item->id);
+                    $claimedForShipment = $returnWorkflow->activeClaimedQuantityForShipment((int) $item->id, (int) $shipment->id);
+                    $parcelCapacity = $shipment->order_item_id !== null
+                        ? (int) $shipment->parcel_quantity
+                        : (int) $item->quantity;
+                    $available = max(0, min((int) $item->quantity - $claimed, $parcelCapacity - $claimedForShipment));
+
+                    return $available > 0 ? ['item' => $item, 'available' => $available] : null;
+                })->filter()->values();
+
+                if ($returnableItems->isEmpty() && ! $active) {
+                    return null;
+                }
+
+                return [
+                    'shipment' => $shipment,
+                    'seller_order' => $sellerOrder,
+                    'number' => $index + 1,
+                    'total' => $total,
+                    'active' => $active,
+                    'items' => $returnableItems,
+                ];
+            })->filter();
+        })->values();
 
         return view('buyer.return-refund', [
-            'order' => $order->load(['sellerOrders.items.product.images', 'sellerOrders.items.productVariant', 'sellerOrders.shipments.events', 'payments']),
+            'order' => $order,
+            'returnParcels' => $returnParcels,
             'issues' => $this->returnRefundIssues(),
             'refundMethods' => $this->refundMethods($order),
             'deliveredAt' => $deliveredAt,
@@ -719,13 +766,19 @@ class BuyerOrderController extends Controller
                 ? response()->json(['message' => $message], 503)
                 : back()->with('buyer_error', $message);
         }
+        if (! $this->shipmentSpecificReturnsReady()) {
+            $message = 'Parcel-specific returns are being set up. Please try again after the latest deployment finishes.';
+            return $request->expectsJson()
+                ? response()->json(['message' => $message], 503)
+                : back()->with('buyer_error', $message);
+        }
         [$deliveredAt] = $this->returnRefundEligibility($order);
-        abort_if($this->activeReturnRefund($order, $request->user()->id), 409, 'Your return/refund request is already under review.');
 
         $issues = $this->returnRefundIssues();
         $data = $request->validate([
             'issue_category' => ['required', 'string', Rule::in(array_keys($issues))],
             'issue_reason' => ['required', 'string', 'max:150'],
+            'shipment_id' => ['required', 'integer'],
             'item_ids' => ['required', 'array', 'min:1'],
             'item_ids.*' => ['integer'],
             'quantities' => ['required', 'array'],
@@ -787,29 +840,44 @@ class BuyerOrderController extends Controller
         $itemIds = collect($data['item_ids'])->map(fn ($id): int => (int) $id)->unique()->values();
         $items = $order->items()->whereIn('order_items.id', $itemIds)->get()->keyBy('id');
         abort_unless($items->count() === $itemIds->count(), 422, 'One or more selected items do not belong to this order.');
+        $shipmentId = (int) $data['shipment_id'];
+        $selectedShipment = Shipment::query()
+            ->whereKey($shipmentId)
+            ->whereHas('sellerOrder', fn ($query) => $query->where('order_id', $order->id))
+            ->with(['sellerOrder', 'orderItem'])
+            ->firstOrFail();
+        abort_unless(in_array($selectedShipment->current_status, ['DELIVERED', 'COMPLETED'], true), 422, 'Choose a delivered parcel from this order.');
 
         $selectedItems = [];
         $totalRefund = 0.0;
         foreach ($itemIds as $itemId) {
             $item = $items->get($itemId);
+            abort_unless((int) $item->seller_order_id === (int) $selectedShipment->seller_order_id
+                && ($selectedShipment->order_item_id === null || (int) $selectedShipment->order_item_id === (int) $item->id),
+                422, 'Choose products that belong to the selected parcel.');
             $quantity = (int) ($data['quantities'][$itemId] ?? 0);
-            $remaining = max(0, (int) $item->quantity - $workflow->activeClaimedQuantity((int) $item->id));
+            $claimed = $workflow->activeClaimedQuantity((int) $item->id);
+            $claimedForShipment = $workflow->activeClaimedQuantityForShipment((int) $item->id, $shipmentId);
+            $parcelCapacity = $selectedShipment->order_item_id !== null
+                ? (int) $selectedShipment->parcel_quantity
+                : (int) $item->quantity;
+            $remaining = max(0, min((int) $item->quantity - $claimed, $parcelCapacity - $claimedForShipment));
             abort_unless($quantity > 0 && $quantity <= $remaining, 422, 'Choose a valid quantity that has not already been claimed.');
             $sellerOrder = $order->sellerOrders->firstWhere('id', (int) $item->seller_order_id);
             abort_unless($sellerOrder, 422, 'The selected item has no valid seller order.');
             $amount = OrderItemParcelAmount::buyerProductRefundSliceCents(
                 $sellerOrder,
                 $item,
-                $workflow->activeClaimedQuantity((int) $item->id),
+                $claimed,
                 $quantity,
             ) / 100;
-            $selectedItems[] = ['item' => $item, 'quantity' => $quantity, 'amount' => $amount];
+            $selectedItems[] = ['item' => $item, 'shipment_id' => $shipmentId, 'quantity' => $quantity, 'amount' => $amount];
             $totalRefund += $amount;
         }
 
         $storedProofPaths = [];
         try {
-            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
+            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $shipmentId, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $lockedItems = OrderItem::query()
@@ -819,24 +887,40 @@ class BuyerOrderController extends Controller
                 ->get()
                 ->keyBy('id');
             abort_unless($lockedItems->count() === $itemIds->count(), 422, 'One or more selected items are no longer available.');
+            $lockedShipment = Shipment::query()->whereKey($shipmentId)->lockForUpdate()->firstOrFail();
+            abort_unless(in_array($lockedShipment->current_status, ['DELIVERED', 'COMPLETED'], true), 409, 'The selected parcel is no longer eligible for a return request.');
+            abort_if(
+                $this->activeReturnRefundForShipment($lockedOrder, (int) $request->user()->id, $lockedShipment),
+                409,
+                'A return/refund request is already under review for this parcel.'
+            );
             $lockedSellerOrders = $lockedOrder->sellerOrders()
                 ->with('items')
-                ->whereIn('id', $lockedItems->pluck('seller_order_id')->unique())
+                ->whereKey($lockedShipment->seller_order_id)
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
+            abort_unless($lockedSellerOrders->isNotEmpty(), 422, 'The selected parcel does not belong to this order.');
             $selectedItems = [];
             $totalRefundCents = 0;
             foreach ($itemIds as $itemId) {
                 $freshItem = $lockedItems->get($itemId);
+                abort_unless((int) $freshItem->seller_order_id === (int) $lockedShipment->seller_order_id
+                    && ($lockedShipment->order_item_id === null || (int) $lockedShipment->order_item_id === (int) $freshItem->id),
+                    422, 'One or more selected products do not belong to this parcel.');
                 $quantity = (int) ($data['quantities'][$itemId] ?? 0);
                 $claimed = $workflow->activeClaimedQuantity((int) $freshItem->id);
-                abort_unless($quantity > 0 && $quantity <= ((int) $freshItem->quantity - $claimed), 422, 'One or more item quantities were claimed while this request was being submitted.');
+                $claimedForShipment = $workflow->activeClaimedQuantityForShipment((int) $freshItem->id, $shipmentId);
+                $parcelCapacity = $lockedShipment->order_item_id !== null
+                    ? (int) $lockedShipment->parcel_quantity
+                    : (int) $freshItem->quantity;
+                $remaining = max(0, min((int) $freshItem->quantity - $claimed, $parcelCapacity - $claimedForShipment));
+                abort_unless($quantity > 0 && $quantity <= $remaining, 422, 'One or more parcel quantities were already claimed.');
                 $sellerOrder = $lockedSellerOrders->get((int) $freshItem->seller_order_id);
                 abort_unless($sellerOrder, 422, 'The selected item has no valid seller order.');
                 $amountCents = OrderItemParcelAmount::buyerProductRefundSliceCents($sellerOrder, $freshItem, $claimed, $quantity);
-                $selectedItems[] = ['item' => $freshItem, 'quantity' => $quantity, 'amount' => FinancialRules::amount($amountCents)];
+                $selectedItems[] = ['item' => $freshItem, 'shipment_id' => $shipmentId, 'quantity' => $quantity, 'amount' => FinancialRules::amount($amountCents)];
                 $totalRefundCents += $amountCents;
             }
             $totalRefund = $totalRefundCents / 100;
@@ -887,45 +971,42 @@ class BuyerOrderController extends Controller
                 'submitted_at' => now(),
             ]);
 
-            $selectedBySeller = collect($selectedItems)->groupBy(fn (array $selected): int => (int) $selected['item']->seller_order_id);
-            foreach ($selectedBySeller as $sellerOrderId => $sellerItems) {
-                $sellerOrder = $lockedOrder->sellerOrders()->with('sellerProfile.user')->whereKey($sellerOrderId)->firstOrFail();
-                $sellerTotal = FinancialRules::amount($sellerItems->sum(fn (array $selected): int => FinancialRules::cents($selected['amount'])));
-                $sellerRequest = SellerReturnRefundRequest::create([
+            $sellerOrder = $lockedSellerOrders->get((int) $lockedShipment->seller_order_id);
+            $sellerOrder->loadMissing('sellerProfile.user');
+            $sellerTotal = FinancialRules::amount(collect($selectedItems)->sum(fn (array $selected): int => FinancialRules::cents($selected['amount'])));
+            $sellerRequest = SellerReturnRefundRequest::create([
+                'return_refund_request_id' => $returnRequest->id,
+                'seller_order_id' => $sellerOrder->id,
+                'shipment_id' => $lockedShipment->id,
+                'seller_profile_id' => $sellerOrder->seller_profile_id,
+                'status' => SellerReturnRefundRequest::STATUS_SELLER_REVIEW,
+                'requested_amount' => $sellerTotal,
+            ]);
+
+            foreach ($selectedItems as $selected) {
+                ReturnRefundRequestItem::create([
                     'return_refund_request_id' => $returnRequest->id,
-                    'seller_order_id' => $sellerOrder->id,
-                    'seller_profile_id' => $sellerOrder->seller_profile_id,
-                    'status' => SellerReturnRefundRequest::STATUS_SELLER_REVIEW,
-                    'requested_amount' => $sellerTotal,
+                    'seller_return_refund_request_id' => $sellerRequest->id,
+                    'order_item_id' => $selected['item']->id,
+                    'shipment_id' => $lockedShipment->id,
+                    'quantity' => $selected['quantity'],
+                    'refundable_amount' => $selected['amount'],
                 ]);
+            }
 
-                foreach ($sellerItems as $selected) {
-                    $freshItem = $sellerOrder->items()->whereKey($selected['item']->id)->lockForUpdate()->firstOrFail();
-                    $claimed = $workflow->activeClaimedQuantity((int) $freshItem->id);
-                    abort_unless($selected['quantity'] <= ((int) $freshItem->quantity - $claimed), 422, 'One or more item quantities were claimed while this request was being submitted.');
-                    ReturnRefundRequestItem::create([
-                        'return_refund_request_id' => $returnRequest->id,
-                        'seller_return_refund_request_id' => $sellerRequest->id,
-                        'order_item_id' => $freshItem->id,
-                        'quantity' => $selected['quantity'],
-                        'refundable_amount' => $selected['amount'],
-                    ]);
-                }
-
-                $workflow->recordEvent($returnRequest, 'REQUEST_SUBMITTED', $request->user(), $sellerRequest, null, $sellerRequest->status, 'Buyer submitted a seller-scoped return/refund request.');
-                $sellerUser = $sellerOrder->sellerProfile?->user;
-                if ($sellerUser) {
-                    Notification::create([
-                        'user_id' => $sellerUser->id,
-                        'type' => 'RETURN_REFUND',
-                        'title' => 'New return/refund request',
-                        'message' => 'Request '.$returnRequest->request_number.' is ready for your review for order '.$lockedOrder->order_number.'.',
-                        'reference_type' => SellerReturnRefundRequest::class,
-                        'reference_id' => $sellerRequest->id,
-                        'action_url' => route('seller.orders.refunds.show', $sellerRequest),
-                    ]);
-                    $workflow->recordEvent($returnRequest, 'SELLER_NOTIFIED', $request->user(), $sellerRequest, $sellerRequest->status, $sellerRequest->status, 'Responsible Seller notification persisted.');
-                }
+            $workflow->recordEvent($returnRequest, 'REQUEST_SUBMITTED', $request->user(), $sellerRequest, null, $sellerRequest->status, 'Buyer submitted a seller-scoped parcel return/refund request.');
+            $sellerUser = $sellerOrder->sellerProfile?->user;
+            if ($sellerUser) {
+                Notification::create([
+                    'user_id' => $sellerUser->id,
+                    'type' => 'RETURN_REFUND',
+                    'title' => 'New return/refund request',
+                    'message' => 'Request '.$returnRequest->request_number.' is ready for your review for order '.$lockedOrder->order_number.'.',
+                    'reference_type' => SellerReturnRefundRequest::class,
+                    'reference_id' => $sellerRequest->id,
+                    'action_url' => route('seller.orders.refunds.show', $sellerRequest),
+                ]);
+                $workflow->recordEvent($returnRequest, 'SELLER_NOTIFIED', $request->user(), $sellerRequest, $sellerRequest->status, $sellerRequest->status, 'Responsible Seller notification persisted.');
             }
 
             foreach ((array) $request->file('images', []) as $image) {
@@ -999,6 +1080,13 @@ class BuyerOrderController extends Controller
             'Return or refund can only be requested after delivery.'
         );
 
+        $shipmentCount = $order->sellerOrders->sum(fn ($sellerOrder): int => $sellerOrder->shipments->count());
+        abort_unless(
+            $shipmentCount === 1,
+            422,
+            'This request format cannot identify one parcel. Submit a parcel-specific return request with the parcel, affected item quantities, and evidence.'
+        );
+
         $deliveredAt = $order->sellerOrders
             ->flatMap(fn ($sellerOrder) => $sellerOrder->shipments->flatMap->events)
             ->where('status', 'DELIVERED')
@@ -1019,24 +1107,40 @@ class BuyerOrderController extends Controller
             && Schema::hasTable('return_refund_events');
     }
 
-    private function activeReturnRefund(Order $order, int $buyerId): mixed
+    private function shipmentSpecificReturnsReady(): bool
+    {
+        return $this->returnRefundStorageReady()
+            && Schema::hasColumn('return_refund_request_items', 'shipment_id')
+            && Schema::hasColumn('seller_return_refund_requests', 'shipment_id');
+    }
+
+    private function activeReturnRefundForShipment(Order $order, int $buyerId, Shipment $shipment): bool
     {
         if (! $this->returnRefundStorageReady()) {
-            return null;
+            return false;
         }
 
-        $request = $order->returnRefundRequests()
+        $activeRequests = ReturnRefundRequest::query()
+            ->where('order_id', $order->id)
             ->where('buyer_user_id', $buyerId)
-            ->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED'])
-            ->latest('submitted_at')
-            ->first();
+            ->whereNotIn('status', ['COMPLETED', 'REJECTED', 'RESOLVED']);
 
-        return $request ?: $order->disputes()
+        if ((clone $activeRequests)->whereDoesntHave('sellerRequests')->exists()) {
+            return true;
+        }
+
+        if ((clone $activeRequests)->whereHas('sellerRequests', fn ($query) => $query
+            ->where('seller_order_id', $shipment->seller_order_id)
+            ->where(fn ($parcel) => $parcel->where('shipment_id', $shipment->id)->orWhereNull('shipment_id')))
+            ->exists()) {
+            return true;
+        }
+
+        return $order->disputes()
             ->where('opened_by_user_id', $buyerId)
             ->where('type', 'RETURN_REFUND')
             ->whereIn('status', ['OPEN', 'UNDER_REVIEW'])
-            ->latest('opened_at')
-            ->first();
+            ->exists();
     }
 
     private function returnRefundIssues(): array

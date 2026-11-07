@@ -255,22 +255,37 @@ class FinancialAllocationService
         ];
     }
 
+    private function fundingSnapshotForShipment($sellerOrder, $item, array $parcelAmounts): ?array
+    {
+        if ((int) ($sellerOrder->funding_snapshot_version ?? 0) !== 1
+            || (int) ($item->funding_snapshot_version ?? 0) !== 1) {
+            return null;
+        }
+
+        return [
+            'seller_voucher_discount' => $parcelAmounts['seller_voucher_discount'] ?? 0,
+            'platform_voucher_discount' => $parcelAmounts['platform_voucher_discount'] ?? 0,
+            'seller_promotion_discount' => $parcelAmounts['seller_promotion_discount'] ?? 0,
+            'reward_points_discount' => $parcelAmounts['reward_points_discount'] ?? 0,
+        ];
+    }
+
     /** @return array<string, string|null> */
     private function parcelAttributes(Shipment $shipment, $sellerOrder, $item): array
     {
-        $parcelAmounts = OrderItemParcelAmount::forItem($sellerOrder, $item);
+        $parcelAmounts = OrderItemParcelAmount::forShipment($sellerOrder, $shipment);
         $riderPoolPercentage = FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE;
         $calculation = FinancialRules::allocation(
             [[
                 'original_unit_price' => $item->original_unit_price,
                 'charged_unit_price' => $item->unit_price,
-                'quantity' => $item->quantity,
+                'quantity' => $shipment->parcel_quantity,
             ]],
             $parcelAmounts['discount_amount'],
             FinancialRules::amount($parcelAmounts['shipping_fee_cents']),
             $riderPoolPercentage,
             FinancialRules::amount($parcelAmounts['shipping_discount_cents']),
-            $this->fundingSnapshotForItem($sellerOrder, $item),
+            $this->fundingSnapshotForShipment($sellerOrder, $item, $parcelAmounts),
             $this->commissionRateFor($sellerOrder),
             FinancialRules::amount($parcelAmounts['protection_amount_cents']),
         );

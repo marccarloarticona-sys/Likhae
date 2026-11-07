@@ -34,6 +34,10 @@
         (function () {
             var root = document.documentElement;
             root.dataset.buyerThemePreference = root.dataset.buyerThemePreference || 'system';
+            try {
+                if (root.dataset.buyerThemePreference === 'system') localStorage.removeItem('likhae-theme');
+                else localStorage.setItem('likhae-theme', root.dataset.buyerThemePreference);
+            } catch (_) {}
             var systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
             var applyTheme = function () {
                 var preference = root.dataset.buyerThemePreference;
@@ -47,7 +51,11 @@
         })();
     </script>
 </head>
-<body @class(['lk-buyer-body', 'lk-buyer-home-sidebar-hover' => request()->routeIs('buyer.home')])>
+<body @class([
+    'lk-buyer-body',
+    'lk-buyer-home-sidebar-hover' => request()->routeIs('buyer.home'),
+    'lk-buyer-sidebar-auto-collapse' => request()->routeIs('buyer.home', 'buyer.products'),
+])>
     <div class="lk-buyer-app" data-lk-buyer-app data-buyer-user-id="{{ auth()->id() }}">
         <x-buyer.sidebar :active="$activePage" />
         <div class="lk-shell" data-sidebar-content>

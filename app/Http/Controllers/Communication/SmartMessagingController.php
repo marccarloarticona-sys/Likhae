@@ -10,6 +10,21 @@ use Illuminate\Http\Request;
 
 class SmartMessagingController extends Controller
 {
+    public function bootstrap(Request $request, Conversation $conversation, SmartMessagingService $smartMessaging): JsonResponse
+    {
+        $data = $request->validate([
+            'product_id' => ['nullable', 'integer', 'exists:products,id'],
+            'variant_id' => ['nullable', 'integer', 'exists:product_variants,id'],
+        ]);
+
+        return response()->json($smartMessaging->bootstrapForRequester(
+            $request->user(),
+            $conversation,
+            isset($data['product_id']) ? (int) $data['product_id'] : null,
+            isset($data['variant_id']) ? (int) $data['variant_id'] : null,
+        ))->header('Cache-Control', 'no-store, private');
+    }
+
     public function answer(Request $request, Conversation $conversation, SmartMessagingService $smartMessaging): JsonResponse
     {
         $data = $request->validate([

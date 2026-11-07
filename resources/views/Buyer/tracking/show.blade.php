@@ -44,7 +44,9 @@
     [$trackingNextStep, $trackingNextActor] = $hasCancellation
         ? ['No further delivery action is required for this parcel.', 'No action pending']
         : match ($shipment->current_status) {
-            'PLACED', 'CONFIRMED', 'PREPARING' => ['Wait for the seller to prepare the parcel.', 'Seller'],
+            'PLACED' => ['Wait for the seller to accept your order.', 'Seller'],
+            'CONFIRMED' => ['The seller accepted your order. Wait for them to prepare the parcel.', 'Seller'],
+            'PREPARING' => ['The seller is preparing your parcel.', 'Seller'],
             'READY_FOR_PICKUP' => ['Assign a pickup rider to collect the parcel.', 'Logistics'],
             'PICKUP_ASSIGNED' => ['Collect the parcel from the seller.', 'Pickup rider'],
             'PICKED_UP' => ['Scan the parcel into the sorting center.', 'Logistics'],
@@ -61,10 +63,13 @@
 @endphp
 <div class="space-y-6">
     <h1 class="text-2xl font-bold">Tracking {{ $shipment->tracking_number }}</h1>
+    @php($sellerShipments = $shipment->sellerOrder?->shipments ?? collect([$shipment]))
+    @php($parcelNumber = $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1)
     <div class="rounded-2xl border bg-white p-5">
         <p>Status: {{ str($shipment->current_status)->replace('_', ' ')->title() }}</p>
+        <p class="mt-2">Parcel {{ $parcelNumber }} of {{ max(1, $sellerShipments->count()) }}</p>
         @if($shipment->orderItem)
-            <p class="mt-2">Parcel: {{ $shipment->orderItem->product_name }} · SKU {{ $shipment->orderItem->sku ?: 'Not provided' }} · Qty {{ $shipment->orderItem->quantity }}</p>
+            <p class="mt-2">Parcel: {{ $shipment->orderItem->product_name }} · SKU {{ $shipment->orderItem->sku ?: 'Not provided' }} · Qty {{ $shipment->parcel_quantity }}</p>
         @endif
         <p>Destination: {{ $shipment->destination_barangay_name }}, {{ $shipment->destination_municipality_name }}</p>
     </div>

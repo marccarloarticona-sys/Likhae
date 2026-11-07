@@ -649,6 +649,12 @@ class ProductModerationService
     {
         $configured = $this->provider->configured();
         $enabled = $this->featureEnabled();
+        $primaryConfigured = strtolower((string) config('product_moderation.provider')) === 'gemini'
+            ? filled(config('services.gemini.key'))
+            : (filled(config('services.cloudflare.account_id')) && filled(config('services.cloudflare.ai_token')));
+        $fallbackConfigured = strtolower((string) config('product_moderation.fallback.provider')) === 'gemini'
+            ? filled(config('services.gemini.key'))
+            : (filled(config('services.cloudflare.account_id')) && filled(config('services.cloudflare.ai_token')));
         $tableReady = false;
         $lastSuccess = null;
         $recentFailures = null;
@@ -667,13 +673,19 @@ class ProductModerationService
             $tableReady = false;
         }
 
-        $status = ! $enabled
-            ? 'DISABLED'
-            : (! $configured
-                ? 'NOT CONFIGURED'
-            : (! $tableReady || (int) $totalScans === 0
-                ? 'UNKNOWN'
-                : (((int) $recentFailures > 0) ? 'DEGRADED' : 'HEALTHY')));
+        if (! $enabled) {
+            $status = 'DISABLED';
+        } elseif (! $configured) {
+            $status = 'NOT CONFIGURED';
+        } elseif (! $tableReady) {
+            $status = 'UNKNOWN';
+        } elseif (! $primaryConfigured || (int) $recentFailures > 0) {
+            $status = 'DEGRADED';
+        } elseif ((int) $totalScans === 0) {
+            $status = 'UNKNOWN';
+        } else {
+            $status = 'HEALTHY';
+        }
 
         return [
             'status' => $status,
@@ -683,12 +695,9 @@ class ProductModerationService
             'secondary_model' => config('product_moderation.models.secondary'),
             'enabled' => $enabled,
             'configured' => $configured,
-            'primary_configured' => strtolower((string) config('product_moderation.provider')) === 'gemini'
-                ? filled(config('services.gemini.key'))
-                : (filled(config('services.cloudflare.account_id')) && filled(config('services.cloudflare.ai_token'))),
-            'fallback_configured' => strtolower((string) config('product_moderation.fallback.provider')) === 'gemini'
-                ? filled(config('services.gemini.key'))
-                : (filled(config('services.cloudflare.account_id')) && filled(config('services.cloudflare.ai_token'))),
+            'primary_configured' => $primaryConfigured,
+            'fallback_configured' => $fallbackConfigured,
+            'queue_connection' => config('queue.default'),
             'table_ready' => $tableReady,
             'last_successful_scan' => $lastSuccess,
             'recent_failures_24h' => $recentFailures,
@@ -871,7 +880,6 @@ class ProductModerationService
             'mismatch_probability' => $evaluation['mismatch_probability'] ?? null,
             'disguised_probability' => $evaluation['disguised_probability'] ?? null,
             'business_mismatch_probability' => $evaluation['business_mismatch_probability'] ?? null,
-            'category_mismatch_probability' => $evaluation['category_mismatch_probability'] ?? null,
             'subcategory_mismatch_probability' => $evaluation['subcategory_mismatch_probability'] ?? null,
         ];
     }

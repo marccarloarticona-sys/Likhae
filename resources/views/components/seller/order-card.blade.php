@@ -28,7 +28,6 @@
                     </li>
                 @endforeach
             </ul>
-            @if(data_get($order, 'delivery'))<small class="mt-2 block">Shared shipment: {{ str(data_get($order, 'delivery.current_status'))->replace('_', ' ')->title() }} · Tracking {{ data_get($order, 'delivery.tracking_number') }}</small>@endif
         </div>
         <dl class="sl-order-details" style="grid-column: 1 / -1"><div><dt>Buyer</dt><dd>{{ data_get($order,'buyer') }}</dd></div><div><dt>Payment</dt><dd>{{ data_get($order,'payment') }}</dd></div><div><dt>Shipping</dt><dd>{{ data_get($order,'shipping') }}</dd></div><div><dt>Total</dt><dd><strong>₱{{ number_format((float) data_get($order,'total'),2) }}</strong></dd></div></dl>
     </div>
@@ -62,34 +61,45 @@
                     <button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Mark selected parcels packed</button>
                 </form>
             @elseif($order['ready_parcels']->isNotEmpty())
-                <details class="sl-courier-select">
-                    <summary class="sl-btn sl-btn-primary sl-btn-sm cursor-pointer">Choose Handover Method</summary>
+                @php($handoverDialogId = 'seller-handover-dialog-'.$dbId)
+                <button type="button" class="sl-btn sl-btn-primary sl-btn-sm" data-handover-dialog-open="{{ $handoverDialogId }}" aria-haspopup="dialog" aria-controls="{{ $handoverDialogId }}">Choose Handover Method</button>
+                <dialog id="{{ $handoverDialogId }}" class="sl-handover-dialog" data-handover-dialog aria-labelledby="{{ $handoverDialogId }}-title">
+                    <header>
+                        <div><strong id="{{ $handoverDialogId }}-title">Choose Handover Method</strong><small>Select how these ready parcels will be handed to Logistics.</small></div>
+                        <button type="button" class="sl-handover-dialog-close" data-handover-dialog-close aria-label="Close handover dialog">&times;</button>
+                    </header>
                     <form method="POST" action="{{ route('seller.logistics.pickup',$dbId) }}">
                         @csrf
-                        <div class="sl-provider-list">
-                            <label class="sl-provider-option"><input type="radio" name="handover_method" value="logistics_pickup" checked><span class="sl-radio-mark"></span><span class="sl-provider-logo">LP</span><span class="sl-provider-main"><strong>Request Logistics Pickup</strong><small>Logistics assigns an eligible rider to collect the parcel.</small></span></label>
-                            <label class="sl-provider-option"><input type="radio" name="handover_method" value="seller_dropoff"><span class="sl-radio-mark"></span><span class="sl-provider-logo">DO</span><span class="sl-provider-main"><strong>Seller Drop-off</strong><small>Bring the parcel and waybill to your assigned center.</small></span></label>
+                        <div class="sl-handover-dialog__body">
+                            <div class="sl-provider-list">
+                                <label class="sl-provider-option"><input type="radio" name="handover_method" value="logistics_pickup" checked><span class="sl-radio-mark"></span><span class="sl-provider-main"><strong>Request Logistics Pickup</strong><small>Logistics assigns an eligible rider to collect the parcel.</small></span></label>
+                                <label class="sl-provider-option"><input type="radio" name="handover_method" value="seller_dropoff"><span class="sl-radio-mark"></span><span class="sl-provider-main"><strong>Seller Drop-off</strong><small>Bring the parcel and waybill to your assigned center.</small></span></label>
+                            </div>
+                            <strong class="block px-4 pt-4">Select 1 to 10 packed parcels for this batch (the first parcel is selected by default)</strong>
+                            <div class="space-y-1 px-4 pt-2">
+                                @foreach($order['ready_parcels']->take(10) as $parcel)
+                                    <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}</span></label>
+                                @endforeach
+                            </div>
+                            <div class="sl-form-grid">
+                                <label class="sl-field"><span>Preferred pickup date</span><input name="pickup_date" type="date" min="{{ today()->toDateString() }}" value="{{ now()->addDay()->toDateString() }}"></label>
+                                <label class="sl-field"><span>Pickup window</span><select name="pickup_window"><option>10:00 AM - 12:00 PM</option><option>1:00 PM - 3:00 PM</option><option>3:00 PM - 5:00 PM</option></select></label>
+                                <label class="sl-field sl-span-2"><span>Handover note</span><textarea name="pickup_note" rows="2" maxlength="1000">Package is sealed and the waybill is attached.</textarea></label>
+                            </div>
                         </div>
-                        <strong class="block px-4 pt-4">Select 1 to 10 packed parcels for this batch (the first parcel is selected by default)</strong>
-                        <div class="space-y-1 px-4 pt-2">
-                            @foreach($order['ready_parcels']->take(10) as $parcel)
-                                <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}</span></label>
-                            @endforeach
-                        </div>
-                        <div class="sl-form-grid">
-                            <label class="sl-field"><span>Preferred pickup date</span><input name="pickup_date" type="date" min="{{ today()->toDateString() }}" value="{{ now()->addDay()->toDateString() }}"></label>
-                            <label class="sl-field"><span>Pickup window</span><select name="pickup_window"><option>10:00 AM - 12:00 PM</option><option>1:00 PM - 3:00 PM</option><option>3:00 PM - 5:00 PM</option></select></label>
-                            <label class="sl-field sl-span-2"><span>Handover note</span><textarea name="pickup_note" rows="2" maxlength="1000">Package is sealed and the waybill is attached.</textarea></label>
-                        </div>
-                        <div class="px-4 pb-4"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Save Handover Choice</button></div>
+                        <footer>
+                            <button type="button" class="sl-btn sl-btn-ghost sl-btn-sm" data-handover-dialog-close>Cancel</button>
+                            <button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Save Handover Choice</button>
+                        </footer>
                     </form>
-                </details>
+                </dialog>
             @endif
         @elseif ($statusKey === 'ready-for-pickup')
             <span class="sl-status is-info">{{ data_get($order, 'pickup_status', 'Waiting for Logistics') }}</span>
+            @if(data_get($order, 'pickup_status') === 'Waiting for Logistics')
+                @if(data_get($order, 'has_selected_logistics_center'))<small class="text-muted">Pickup request sent to {{ data_get($order, 'logistics_provider') }}.</small>@else<a href="{{ route('seller.logistics') }}" class="sl-btn sl-btn-primary sl-btn-sm">Choose Logistics center</a>@endif
+            @endif
             @if(data_get($order, 'pickup_status') === 'Pickup scheduled')<small class="text-muted">{{ data_get($order, 'pickup_batch') }} · {{ data_get($order, 'pickup_rider') }} · {{ data_get($order, 'pickup_batch_size') }} parcels</small>@endif
-        @elseif ($statusKey === 'shipping')
-            <a href="{{ route('seller.logistics',['view'=>'tracking','order'=>$id]) }}" class="sl-btn sl-btn-primary sl-btn-sm">Track Shipment</a>
         @elseif ($statusKey === 'returns')
             <form method="POST" action="{{ route('seller.orders.status',$dbId) }}">@csrf @method('PATCH')<input type="hidden" name="status" value="completed"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Resolve Return</button></form>
         @endif

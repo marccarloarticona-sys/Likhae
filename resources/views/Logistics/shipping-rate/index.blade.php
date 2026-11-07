@@ -23,6 +23,54 @@
     @if(session('status'))<div role="status" class="rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">{{ session('status') }}</div>@endif
     @if($errors->any())<div role="alert" class="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ $errors->first() }}</div>@endif
 
+    <section class="rounded-xl border border-line bg-surface p-5 shadow-sm sm:p-6" aria-labelledby="regional-tiers-title">
+        <div>
+            <span class="text-[10px] font-bold uppercase tracking-wider text-primary">Shipping settings</span>
+            <h2 id="regional-tiers-title" class="mt-1 text-xl font-semibold text-ink">Automatic regional shipping estimates</h2>
+            <p class="mt-1 text-sm text-muted">Checkout estimates each seller parcel from the saved business and delivery regions. No route entry is needed for normal checkout.</p>
+        </div>
+
+        <form method="POST" action="{{ route('logistics.shipping-rate.regional-tiers.update') }}" class="mt-5 grid gap-4 sm:grid-cols-2">
+            @csrf
+            <label class="text-sm font-medium text-ink">
+                Estimated add-on per tier (PHP)
+                <input type="number" name="additional_region_tier_fee" min="0" max="1000000" step="0.01" value="{{ old('additional_region_tier_fee', $regionalShippingSettings['additional_region_tier_fee']) }}" required class="mt-1 block w-full rounded-lg border border-line bg-surface px-3 py-2 text-ink">
+                <small class="mt-1 block font-normal text-muted">Multiplied by the calculated distance tier and added to the base fee.</small>
+                @error('additional_region_tier_fee')<small class="mt-1 block text-red-700">{{ $message }}</small>@enderror
+            </label>
+
+            <label class="text-sm font-medium text-ink">
+                Kilometers per distance tier
+                <input type="number" name="regional_shipping_distance_km_per_tier" min="1" max="1000" step="1" value="{{ old('regional_shipping_distance_km_per_tier', $regionalShippingSettings['regional_shipping_distance_km_per_tier']) }}" required class="mt-1 block w-full rounded-lg border border-line bg-surface px-3 py-2 text-ink">
+                <small class="mt-1 block font-normal text-muted">The default estimate adds one tier per 100 km between regional centers.</small>
+                @error('regional_shipping_distance_km_per_tier')<small class="mt-1 block text-red-700">{{ $message }}</small>@enderror
+            </label>
+
+            <label class="text-sm font-medium text-ink">
+                Extra tiers for inter-island routes
+                <input type="number" name="regional_shipping_interisland_tier_surcharge" min="0" max="20" step="1" value="{{ old('regional_shipping_interisland_tier_surcharge', $regionalShippingSettings['regional_shipping_interisland_tier_surcharge']) }}" required class="mt-1 block w-full rounded-lg border border-line bg-surface px-3 py-2 text-ink">
+                <small class="mt-1 block font-normal text-muted">Added when a route crosses the Luzon, Visayas, Mindanao, or MIMAROPA island groups.</small>
+                @error('regional_shipping_interisland_tier_surcharge')<small class="mt-1 block text-red-700">{{ $message }}</small>@enderror
+            </label>
+
+            <label class="text-sm font-medium text-ink sm:col-span-2">
+                Optional route overrides
+                <textarea name="shipping_region_tiers" rows="6" maxlength="10000" spellcheck="false" placeholder="National Capital Region | Central Luzon | 1&#10;Central Luzon | CALABARZON | 2" class="mt-1 block w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-ink">{{ old('shipping_region_tiers', $regionalShippingSettings['shipping_region_tiers']) }}</textarea>
+                <small class="mt-1 block font-normal text-muted">Optional: one route per line using Origin Region | Destination Region | Tier. Each entry applies in that direction only; add a reversed route separately when needed.</small>
+                @error('shipping_region_tiers')<small class="mt-1 block text-red-700">{{ $message }}</small>@enderror
+            </label>
+
+            <div class="rounded-lg border border-line bg-page-secondary p-4 text-sm text-muted sm:col-span-2">
+                <strong class="text-ink">How checkout estimates work</strong>
+                <p class="mt-1">Same-region routes use the base fee. Other routes use approximate distance between region centers, then add the configured inter-island tiers where needed. The IV-A reference routes keep their specified PHP 5, PHP 10, and PHP 25 regional add-ons unless an override is entered.</p>
+                <p class="mt-2">These are checkout estimates, not official courier rates. Changes apply to new checkouts; saved order snapshots remain unchanged.</p>
+            </div>
+            <div class="sm:col-span-2">
+                <button type="submit" class="min-h-10 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90">Save shipping tiers</button>
+            </div>
+        </form>
+    </section>
+
     @if(! $schemaReady)
         <section class="rounded-xl border border-line bg-surface p-5 shadow-sm"><strong class="text-ink">Rate requests are not available yet.</strong><p class="mt-2 text-sm text-muted">The reviewed migration must be executed separately before request history can be stored. Checkout continues to use the current ₱50 config fallback.</p></section>
     @elseif(! $policy['initialized'])
@@ -66,6 +114,6 @@
         @if(method_exists($requests, 'links'))<div class="mt-3">{{ $requests->links() }}</div>@endif
     </section>
 
-    <p class="text-xs text-muted">Shipping uses the configured base fee for same-region deliveries. Cross-region prices use the named-region tier map configured by Admin; unsupported region pairs are held from checkout until a tier is set.</p>
+    <p class="text-xs text-muted">The base fee applies to same-region delivery. Every supported region pair receives an automatic distance estimate; optional route overrides are available for special cases.</p>
 </div>
 @endsection

@@ -189,7 +189,101 @@ class SellerModuleAuditRepairTest extends TestCase
             ->assertSee('PAGE-21');
     }
 
-    public function test_packing_is_required_before_ready_or_direct_handover_and_waybill_uses_recorded_measurements(): void
+    public function test_split_parcels_cover_full_quantity_and_keep_per_parcel_weight_and_dimensions(): void
+    {
+        [$seller, $profile] = $this->seller('Split Parcel Shop');
+        $fixture = $this->orderFixture($profile, 'SPLIT-PARCEL-ORDER', 'PLACED');
+        $product = Product::create([
+            'seller_profile_id' => $profile->id,
+            'category_id' => $profile->primary_category_id,
+            'name' => 'Split Weight Product',
+            'slug' => 'split-weight-'.uniqid(),
+            'status' => 'ACTIVE',
+        ]);
+        $variant = ProductVariant::create([
+            'product_id' => $product->id,
+            'sku' => 'SPLIT-WEIGHT-'.uniqid(),
+            'price' => '25.00',
+            'stock' => 20,
+            'weight_kg' => '0.100',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $fixture['item']->update([
+            'product_id' => $product->id,
+            'product_variant_id' => $variant->id,
+            'quantity' => 12,
+        ]);
+
+        $this->actingAs($seller);
+        $statusRoute = route('seller.orders.status', $fixture['sellerOrder']);
+        $this->patch($statusRoute, ['action' => 'confirm'])->assertRedirect();
+        $this->patch($statusRoute, ['action' => 'prepare'])->assertRedirect();
+
+        $splitRoute = route('seller.orders.parcels.split', [$fixture['sellerOrder'], $fixture['item']]);
+        $detailRoute = route('seller.orders', [
+            'mode' => 'show',
+            'order' => $fixture['sellerOrder']->seller_order_number,
+        ]);
+        $this->post($splitRoute, ['parcel_quantities' => '3,3'])
+            ->assertRedirect()
+            ->assertSessionHasErrors(['parcel_split' => 'The parcel quantities total 6, but this order has 12 units. Include all units. For two parcels, try 6, 6.']);
+        $this->assertSame(1, Shipment::query()->where('seller_order_id', $fixture['sellerOrder']->id)->count());
+        $this->assertSame(12, $fixture['item']->shipment()->firstOrFail()->parcel_quantity);
+
+        $this->get($detailRoute)
+            ->assertOk()
+            ->assertSee('value="3,3"', false)
+            ->assertSee('For two parcels, an even split is 6, 6.')
+            ->assertSee('The parcel quantities total 6, but this order has 12 units.');
+
+        $this->post($splitRoute, ['parcel_quantities' => '6,6'])
+            ->assertRedirect($detailRoute)
+            ->assertSessionHasNoErrors();
+
+        $parcels = Shipment::query()
+            ->where('seller_order_id', $fixture['sellerOrder']->id)
+            ->with('orderItem.productVariant')
+            ->orderBy('id')
+            ->get();
+        $this->assertSame([6, 6], $parcels->pluck('parcel_quantity')->all());
+        $this->assertCount(2, $parcels);
+        $this->assertNotSame($parcels[0]->tracking_number, $parcels[1]->tracking_number);
+        $this->assertSame([0.6, 0.6], $parcels->map(fn (Shipment $parcel): ?float => \App\Support\ParcelWeightEstimator::productEstimate($parcel))->all());
+
+        $detail = $this->get($detailRoute)->assertOk()->assertSee('0.600 kg');
+        $this->assertSame(2, substr_count($detail->getContent(), 'name="length_cm"'));
+
+        $this->post(route('seller.orders.parcels.dimensions', [$fixture['sellerOrder'], $parcels[0]->id]), [
+            'length_cm' => '20.00',
+            'width_cm' => '10.00',
+            'height_cm' => '8.00',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->post(route('seller.orders.parcels.dimensions', [$fixture['sellerOrder'], $parcels[1]->id]), [
+            'length_cm' => '15.00',
+            'width_cm' => '12.00',
+            'height_cm' => '9.00',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('shipments', [
+            'id' => $parcels[0]->id,
+            'parcel_quantity' => 6,
+            'parcel_weight_kg' => '0.600',
+            'parcel_length_cm' => '20.00',
+            'parcel_width_cm' => '10.00',
+            'parcel_height_cm' => '8.00',
+        ]);
+        $this->assertDatabaseHas('shipments', [
+            'id' => $parcels[1]->id,
+            'parcel_quantity' => 6,
+            'parcel_weight_kg' => '0.600',
+            'parcel_length_cm' => '15.00',
+            'parcel_width_cm' => '12.00',
+            'parcel_height_cm' => '9.00',
+        ]);
+    }
+
+    public function test_packed_dimensions_gate_ready_and_order_waybill_uses_calculated_weight(): void
     {
         [$seller, $profile] = $this->seller('Packing Shop');
         $fixture = $this->orderFixture($profile, 'PACK-ORDER', 'PLACED');
@@ -206,7 +300,6 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->assertSame('PREPARING', $fixture['sellerOrder']->fresh()->status);
 
         $shipmentId = $fixture['item']->shipment()->value('id');
-        $this->patch($statusRoute, ['action' => 'pack', 'shipment_ids' => [$shipmentId]])->assertRedirect();
 
         $centerUser = $this->user(User::TYPE_LOGISTICS);
         $centerAddress = Address::create([
@@ -258,11 +351,32 @@ class SellerModuleAuditRepairTest extends TestCase
             'origin_barangay_code' => '0403424001',
             'origin_barangay_name' => 'Bagong Bayan II-A',
         ]);
-        $this->patch(route('seller.orders.parcels.measurements', [$fixture['sellerOrder'], $fixture['item']]), [
-            'parcel_weight_kg' => '1.275',
-            'parcel_volume_liters' => '2.500',
+        $product = Product::create([
+            'seller_profile_id' => $profile->id,
+            'category_id' => $profile->primary_category_id,
+            'name' => 'Packed Weight Product',
+            'slug' => 'packed-weight-'.uniqid(),
+            'status' => 'ACTIVE',
+        ]);
+        $variant = ProductVariant::create([
+            'product_id' => $product->id,
+            'sku' => 'PACKED-WEIGHT-'.uniqid(),
+            'price' => '25.00',
+            'stock' => 10,
+            'weight_kg' => '0.638',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $fixture['item']->update(['product_id' => $product->id, 'product_variant_id' => $variant->id]);
+        $this->post(route('seller.orders.parcels.dimensions', [$fixture['sellerOrder'], $shipmentId]), [
+            'length_cm' => '20.00',
+            'width_cm' => '15.00',
+            'height_cm' => '10.00',
         ])->assertRedirect();
-        $this->patch($statusRoute, ['action' => 'ready', 'shipment_ids' => [$shipmentId]])->assertRedirect();
+        $this->patch($statusRoute, ['action' => 'pack', 'shipment_ids' => [$shipmentId]])->assertRedirect();
+        $this->patch($statusRoute, ['action' => 'ready', 'shipment_ids' => [$shipmentId]])
+            ->assertRedirect()
+            ->assertSessionHasNoErrors();
         $this->assertSame('READY_FOR_PICKUP', $fixture['sellerOrder']->fresh()->status);
         $this->assertDatabaseHas('shipment_events', [
             'shipment_id' => $fixture['item']->shipment()->value('id'),
@@ -271,16 +385,16 @@ class SellerModuleAuditRepairTest extends TestCase
         ]);
 
         $shipment = $fixture['item']->shipment()->firstOrFail();
-        $this->get(route('seller.orders.waybill.item', [$fixture['sellerOrder'], $fixture['item']]))
-            ->assertOk()->assertSee($shipment->tracking_number)->assertSee('1.275 kg')->assertSee('COD - PHP 53.00');
+        $this->get(route('seller.orders.waybill', $fixture['sellerOrder']))
+            ->assertOk()->assertSee($shipment->tracking_number)->assertSee('1.276 kg')->assertSee('COD · PHP 53.00');
 
         $onlineFixture = $this->orderFixture($profile, 'UNWEIGHED-ORDER', 'PLACED');
         Payment::create(['order_id' => $onlineFixture['order']->id, 'method' => 'ONLINE', 'amount' => '53.00']);
-        $this->get(route('seller.orders.waybill.item', [$onlineFixture['sellerOrder'], $onlineFixture['item']]))
+        $this->get(route('seller.orders.waybill', $onlineFixture['sellerOrder']))
             ->assertStatus(409);
         $onlineFixture['sellerOrder']->update(['status' => 'CONFIRMED']);
-        $this->get(route('seller.orders.waybill.item', [$onlineFixture['sellerOrder'], $onlineFixture['item']]))
-            ->assertOk()->assertSee('Weight not recorded')->assertSee('Prepaid');
+        $this->get(route('seller.orders.waybill', $onlineFixture['sellerOrder']))
+            ->assertOk()->assertSee('Not recorded')->assertSee('Prepaid');
     }
 
     public function test_cod_cancellation_requires_reason_restores_variant_stock_once_and_releases_voucher_usage(): void
@@ -483,7 +597,7 @@ class SellerModuleAuditRepairTest extends TestCase
         $this->assertNotSame($fixture['sellerOrder']->id, $foreign['sellerOrder']->id);
     }
 
-    public function test_parcel_waybill_print_controls_appear_only_after_seller_acceptance(): void
+    public function test_one_order_waybill_print_control_appears_only_after_seller_acceptance(): void
     {
         [$seller, $profile] = $this->seller('Waybill Gate Shop');
         $fixture = $this->orderFixture($profile, 'WAYBILL-GATE', 'PLACED');
@@ -514,14 +628,24 @@ class SellerModuleAuditRepairTest extends TestCase
         $orderUrl = route('seller.orders', ['mode' => 'show', 'order' => $fixture['sellerOrder']->seller_order_number]);
         $this->actingAs($seller)->get($orderUrl)
             ->assertOk()
-            ->assertDontSee('Print all waybills')
+            ->assertDontSee('Print order waybill')
             ->assertDontSee('Print this parcel waybill');
 
         $fixture['sellerOrder']->update(['status' => 'CONFIRMED']);
         $this->actingAs($seller)->get($orderUrl)
             ->assertOk()
-            ->assertSee('Print all waybills')
-            ->assertSee('Print this parcel waybill');
+            ->assertSee('Print order waybill')
+            ->assertDontSee('Print this parcel waybill');
+
+        $this->get(route('seller.orders.waybill.item', [$fixture['sellerOrder'], $fixture['item']]))
+            ->assertRedirect(route('seller.orders.waybill', $fixture['sellerOrder']));
+
+        $waybillResponse = $this->get(route('seller.orders.waybill', $fixture['sellerOrder']))
+            ->assertOk()
+            ->assertSee('Seller Order Waybill')
+            ->assertSee('WAYBILL-GATE-1')
+            ->assertSee('WAYBILL-GATE-2');
+        $this->assertSame(1, substr_count($waybillResponse->getContent(), 'Seller Order Waybill'));
     }
 
     public function test_reviews_are_seller_scoped_filterable_and_show_persisted_replies(): void

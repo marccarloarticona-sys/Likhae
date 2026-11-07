@@ -30,6 +30,29 @@ final class LogisticsSchemaReadiness
             && $this->hasColumn('parcel_scans', 'transfer_leg_id');
     }
 
+    public function smartCoverageReady(): bool
+    {
+        return $this->coverageTypeReady()
+            && $this->hasColumns('logistics_coverage_routes', [
+                'origin_logistics_center_id', 'destination_service_area_location_id', 'coverage_type', 'shipment_type',
+                'is_active', 'valid_from', 'valid_until', 'max_parcels_per_day', 'estimated_sla_hours',
+                'minimum_pickup_lead_hours', 'dispatch_weekdays', 'dispatch_cutoff_time', 'approved_by_user_id', 'approved_at',
+            ])
+            && $this->hasColumns('shipments', ['smart_coverage_route_id', 'smart_coverage_service_date'])
+            && $this->hasColumn('seller_orders', 'delivery_routing_snapshot');
+    }
+
+    public function coverageTypeReady(): bool
+    {
+        return $this->hasColumn('service_area_locations', 'coverage_type');
+    }
+
+    public function smartFallbackEnabled(): bool
+    {
+        return (bool) config('likhae.smart_nearby_logistics_fallback', false)
+            && $this->smartCoverageReady();
+    }
+
     public function transferReady(): bool
     {
         return $this->automaticRoutingReady()
@@ -105,6 +128,37 @@ final class LogisticsSchemaReadiness
             'seller_received_at',
             'updated_at',
         ]);
+    }
+
+    public function sellerPickupCenterOffersReady(): bool
+    {
+        return $this->hasColumns('seller_pickup_center_offers', [
+            'seller_pickup_request_id', 'logistics_center_id', 'attempt_number', 'status', 'offered_at',
+            'expires_at', 'responded_at', 'destination_logistics_center_id',
+            'destination_service_area_location_id', 'coverage_route_id', 'service_date',
+            'reserved_parcel_count', 'route_snapshot',
+        ]);
+    }
+
+    public function sellerPickupCenterSelectionReady(): bool
+    {
+        return $this->sellerPickupRequestsReady()
+            && $this->hasColumn('seller_pickup_requests', 'preferred_logistics_center_id');
+    }
+
+    public function automaticSellerPickupMatchingReady(): bool
+    {
+        return (bool) config('likhae.automatic_seller_pickup_matching', false)
+            && $this->sellerPickupRequestsReady()
+            && $this->sellerPickupCenterSelectionReady()
+            && $this->sellerPickupCenterOffersReady()
+            && $this->automaticRoutingReady()
+            && $this->manifestReady()
+            && $this->coverageTypeReady()
+            && $this->hasColumns('rider_profiles', [
+                'is_online', 'availability_latitude', 'availability_longitude',
+                'availability_location_updated_at', 'approved_parcel_capacity',
+            ]);
     }
 
     public function shipmentReturnEnhancementsReady(): bool

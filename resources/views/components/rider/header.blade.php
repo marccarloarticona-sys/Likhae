@@ -34,7 +34,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>
         @if($notificationCount > 0)<span class="rider-notification-badge">{{ $notificationCount }}</span>@endif
     </button>
-    <x-shared.workspace.account-menu label="Rider Account" profile-route="rider.profile" compact />
+    <x-shared.workspace.account-menu :label="__('settings.workspaces.rider')" profile-route="rider.profile" compact />
     @if($isLocalRider)
         <div class="rider-mobile-status-row">
             <div class="rider-mobile-status-copy" role="status" aria-live="polite">
@@ -91,7 +91,7 @@
         @elseif($isLocalRider)
             <span class="rider-topbar-status" role="status">{{ $availabilitySchemaReady ? 'Unavailable · Contact Logistics' : 'Availability setup unavailable' }}</span>
         @endif
-        <x-shared.workspace.account-menu label="Rider Account" profile-route="rider.profile" />
+        <x-shared.workspace.account-menu :label="__('settings.workspaces.rider')" profile-route="rider.profile" />
     </div>
 </header>
 @if($errors->has('is_online') || $errors->has('latitude') || $errors->has('longitude'))

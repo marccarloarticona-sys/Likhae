@@ -5,12 +5,14 @@ namespace App\Models\Buyer;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use App\Models\Seller\SellerReturnRefundRequest;
+use App\Models\Logistics\Shipment;
 
 class ReturnRefundRequestItem extends Model
 {
     protected $fillable = [
         'return_refund_request_id',
         'order_item_id',
+        'shipment_id',
         'quantity',
         'refundable_amount',
         'seller_return_refund_request_id',
@@ -29,6 +31,11 @@ class ReturnRefundRequestItem extends Model
     public function orderItem(): BelongsTo
     {
         return $this->belongsTo(OrderItem::class);
+    }
+
+    public function shipment(): BelongsTo
+    {
+        return $this->belongsTo(Shipment::class);
     }
 
     public function sellerRequest(): BelongsTo

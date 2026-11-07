@@ -479,7 +479,7 @@ a.ad-stat:hover { border-color: var(--ad-blue-border); transform: translateY(-1p
     .ad-report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .ad-report-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .lk-admin-topbar { grid-template-columns: minmax(210px, .75fr) minmax(240px, 420px) auto; }
-    .ad-profile > span:not(.ad-avatar), .ad-profile > svg { display: none; }
+    .lk-admin-topbar .ad-profile { display: none; }
     .ad-report-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -3599,6 +3599,26 @@ html.dark .ad-marketing-modal { background: rgba(0, 0, 0, .72); }
         color: #EBA99D !important;
     }
 
+    html.dark .ad-users-page .ad-btn-danger-soft {
+        background: #2D1117 !important;
+        border-color: #B91C1C !important;
+        color: #FFC9C3 !important;
+    }
+
+    html.dark .ad-users-page .ad-btn-danger-soft:not(:disabled):hover {
+        background: #421A20 !important;
+        border-color: #F87171 !important;
+        color: #FFF8F2 !important;
+    }
+
+    html.dark .ad-users-page .ad-btn-danger-soft:disabled {
+        background: #30231F !important;
+        border-color: #594038 !important;
+        color: #C8B7AD !important;
+        opacity: 1;
+        cursor: not-allowed;
+    }
+
 /* Page-specific styles: User Details */
 .ad-user-details-page .ad-application-meta {
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4641,8 +4661,7 @@ a.ad-dispute-stat:hover { border-color: var(--ad-maroon, #561C17); transform: tr
 .ad-disputes-empty .ad-btn { margin-top: 4px; }
 .ad-disputes-pagination { padding: 4px 18px 18px; }
 .ad-admin-account-page { display: grid; gap: 16px; }
-.ad-account-identity { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 20px 22px; border: 1px solid var(--ad-border); border-radius: 16px; background: radial-gradient(circle at 90% 0%, rgba(193,151,113,.13), transparent 28%), var(--ad-card); box-shadow: var(--ad-shadow); }
-.ad-account-avatar { display: grid; width: 56px; height: 56px; place-items: center; border: 1px solid var(--ad-border); border-radius: 16px; color: #FFF8F1; background: var(--ad-maroon, #561C17); font-family: Georgia, serif; font-size: 23px; font-weight: 700; }
+.ad-account-identity { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 20px 22px; border: 1px solid var(--ad-border); border-radius: 16px; background: radial-gradient(circle at 90% 0%, rgba(193,151,113,.13), transparent 28%), var(--ad-card); box-shadow: var(--ad-shadow); }
 .ad-account-identity-copy { display: grid; min-width: 0; gap: 3px; }
 .ad-account-identity-copy h2 { margin: 0; overflow-wrap: anywhere; color: var(--ad-text); font-size: 22px; letter-spacing: -.035em; line-height: 1.2; }
 .ad-account-identity-copy p { margin: 0; overflow-wrap: anywhere; color: var(--ad-muted); font-size: 11px; }
@@ -4739,8 +4758,7 @@ html.dark .ad-account-shortcut-number { color: #F0B6AA; background: #361B17; }
 }
 
 @media (max-width: 760px) {
-    .ad-account-identity { grid-template-columns: auto minmax(0, 1fr); padding: 16px; }
-    .ad-account-avatar { width: 48px; height: 48px; border-radius: 14px; font-size: 20px; }
+    .ad-account-identity { grid-template-columns: minmax(0, 1fr); padding: 16px; }
     .ad-account-identity-copy h2 { font-size: 18px; }
     .ad-account-identity-meta { grid-column: 1 / -1; }
     .ad-account-identity-meta > div { flex: 1; }
@@ -5365,28 +5383,9 @@ html.dark .ad-campaign-budget-history > summary { color: var(--ad-blue); }
     .ad-platform-policy > summary { align-items: flex-start; flex-direction: column; }
 }
 
-/* Keep the admin account avatar visible in the compact mobile header. */
+/* Keep the compact Admin header clear after removing the avatar. */
 @media (max-width: 760px) {
-    .lk-admin-topbar .ad-profile {
-        display: flex;
-        flex: 0 0 auto;
-        align-items: center;
-        justify-content: center;
-        margin-left: 0;
-        padding: 0;
-    }
-
-    .lk-admin-topbar .ad-profile > span:not(.ad-avatar),
-    .lk-admin-topbar .ad-profile > svg {
-        display: none;
-    }
-
-    .lk-admin-topbar .ad-profile .ad-avatar {
-        width: 35px;
-        height: 35px;
-        flex: 0 0 35px;
-        border-radius: 50%;
-    }
+    .lk-admin-topbar .ad-profile { display: none; }
 }
 /* Support FAQs still uses inline light colors for its panels and controls. */
 html.dark .ad-support-faq-page :is(section, article, div):not([role="alert"])[style*="background:#fff"] {
@@ -5409,4 +5408,29 @@ html.dark .ad-support-faq-page button[style*="background:#fff"] {
     background: #2a1e1a !important;
     border-color: var(--ad-border) !important;
     color: #f0aaa0 !important;
+}
+
+/* Keep the Admin sidebar foreground white above Admin's maroon icon rules. */
+html.dark body.ad-body .lk-admin-navigation,
+html.dark body.ad-body .lk-admin-navigation * {
+    color: #fff !important;
+}
+
+html.dark body.ad-body .lk-admin-navigation svg {
+    color: #fff !important;
+    filter: grayscale(1) brightness(0) invert(1) !important;
+}
+
+/* Keep Admin dashboard stat tiles dark while giving their glyphs white contrast. */
+html.dark body.ad-body .ad-stat-icon,
+html.dark body.ad-body .ad-report-stat-icon {
+    background: #2A1E1A !important;
+    border-color: var(--ad-border) !important;
+    color: #fff !important;
+}
+
+html.dark body.ad-body .ad-stat-icon svg,
+html.dark body.ad-body .ad-report-stat-icon svg {
+    color: #fff !important;
+    stroke: #fff !important;
 }

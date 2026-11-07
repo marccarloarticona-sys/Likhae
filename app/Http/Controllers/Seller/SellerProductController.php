@@ -183,6 +183,10 @@ class SellerProductController extends Controller
             'inventoryStatus' => $request->query('status', 'all'),
             'expandedInventoryProductId' => $request->integer('expanded_product'),
             'selectedProduct' => $selected,
+            'productDimensionsReady' => Schema::hasTable('product_variants')
+                && Schema::hasColumns('product_variants', ['length_cm', 'width_cm', 'height_cm'])
+                && Schema::hasTable('order_items')
+                && Schema::hasColumns('order_items', ['product_length_cm', 'product_width_cm', 'product_height_cm']),
             'savedVariantPrices' => $selectedProductModel
                 ? $selectedProductModel->variants->mapWithKeys(fn (ProductVariant $variant) => [(int) $variant->id => (float) $variant->price])->all()
                 : [],
@@ -363,7 +367,7 @@ class SellerProductController extends Controller
                         'is_default' => $sourceVariant->is_default,
                         'is_active' => $sourceVariant->is_active,
                     ];
-                    foreach (['discount_type', 'discount_value', 'payment_method', 'weight_kg'] as $copiedColumn) {
+                    foreach (['discount_type', 'discount_value', 'payment_method', 'weight_kg', 'length_cm', 'width_cm', 'height_cm'] as $copiedColumn) {
                         if (Schema::hasColumn('product_variants', $copiedColumn)) {
                             $variantAttributes[$copiedColumn] = $sourceVariant->{$copiedColumn};
                         }
@@ -807,6 +811,9 @@ class SellerProductController extends Controller
                     'payment_method' => $variant->payment_method ?: 'cod_online',
                     'stock' => $variant->stock,
                     'weight_kg' => $variant->weight_kg,
+                    'length_cm' => $variant->length_cm,
+                    'width_cm' => $variant->width_cm,
+                    'height_cm' => $variant->height_cm,
                     'values' => $variant->optionValues->sortBy(fn ($value) => $value->option?->sort_order ?? 0)->pluck('value')->join(', '),
                     'option_value_ids' => $variant->optionValues->pluck('id')->values()->all(),
                     'product_image_id' => $variant->product_image_id,

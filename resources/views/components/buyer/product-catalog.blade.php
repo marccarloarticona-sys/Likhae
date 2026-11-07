@@ -155,7 +155,12 @@
                     <p class="lk-filter-error" role="alert">{{ $catalogErrors->first($generalErrorKey) }}</p>
                 @endif
                 @if($visibleProducts->isNotEmpty())
-                    <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}">
+                    <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}"
+                        @if(! $guest && $paginator)
+                            data-catalog-infinite-grid
+                            data-infinite-url="{{ route('buyer.products.infinite') }}"
+                            data-next-page="{{ $paginator->hasMorePages() ? $paginator->currentPage() + 1 : '' }}"
+                        @endif>
                         @foreach($visibleProducts as $product)
                             <x-buyer.product-card :product="$product" :guest="$guest" catalog-listing />
                         @endforeach
@@ -166,34 +171,23 @@
                         <p class="lk-search-suggestions" aria-live="polite">Did you mean: @foreach($searchSuggestions as $index => $suggestion)<a href="{{ $catalogUrl(['q' => $suggestion]) }}">{{ $suggestion }}</a>{{ $index < $searchSuggestions->count() - 1 ? ', ' : '' }}@endforeach</p>
                     @endif
                 @endif
-                @if($paginator && $paginator->hasPages())
+                @if($guest && $paginator && $paginator->hasPages())
                     <div class="mt-5">{{ $paginator->links() }}</div>
                 @endif
+                @if(! $guest && $paginator?->hasMorePages())
+                    <div class="lk-catalog-infinite-sentinel" data-catalog-infinite-sentinel>
+                        <span data-catalog-infinite-status role="status" aria-live="polite">Scroll to load more products.</span>
+                        <button type="button" data-catalog-infinite-retry hidden>Try again</button>
+                    </div>
+                @endif
                 @if(! $guest && $recommendations)
-                    <section class="lk-search-recommendations" data-catalog-recommendations
-                        data-recommendation-url="{{ route('buyer.products.recommendations', array_merge($queryParameters, ['recommendation_page' => 2])) }}"
-                        data-next-page="{{ $recommendations->hasMorePages() ? 2 : '' }}"
-                        aria-labelledby="searchRecommendationsTitle">
-                        <div class="lk-search-recommendations__heading">
-                            <span class="lk-search-recommendations__eyebrow">More to explore</span>
-                            <div class="lk-search-recommendations__title-row">
-                                <h2 id="searchRecommendationsTitle">You might also like</h2>
-                                @if(filled($catalogFilterValues['q'] ?? null))
-                                    <span class="lk-search-recommendations__query">Based on <strong>&ldquo;{{ $catalogFilterValues['q'] }}&rdquo;</strong></span>
-                                @endif
-                            </div>
-                            <p>Discover more products from trusted local sellers.</p>
-                        </div>
-                        <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}" data-recommendation-grid>
-                            @include('buyer.products.recommendation-cards', ['products' => $recommendationProducts])
-                        </div>
-                        @if($recommendationProducts->isEmpty())
-                            <p class="lk-search-recommendations__status">No other products are available for these filters right now.</p>
-                        @endif
-                        <p class="lk-search-recommendations__status" data-recommendation-status role="status" aria-live="polite" hidden></p>
-                        <button class="lk-search-recommendations__retry" type="button" data-recommendation-retry hidden>Try again</button>
-                        <div data-recommendation-sentinel aria-hidden="true"></div>
-                    </section>
+                    @include('buyer.products.search-recommendations', [
+                        'recommendations' => $recommendations,
+                        'recommendationProducts' => $recommendationProducts,
+                        'queryParameters' => $queryParameters,
+                        'catalogFilterValues' => $catalogFilterValues,
+                        'activeView' => $activeView,
+                    ])
                 @endif
             </div>
         </main>

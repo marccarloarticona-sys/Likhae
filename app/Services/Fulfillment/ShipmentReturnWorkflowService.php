@@ -13,6 +13,7 @@ use App\Services\ReturnRefundWorkflowService;
 use App\Services\Returns\ReturnCustodyService;
 use App\Support\RiderVehicleType;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -127,8 +128,12 @@ class ShipmentReturnWorkflowService
         if (! $this->schema->buyerReturnWaybillsReady() || ! $this->schema->shipmentReturnEnhancementsReady()) {
             throw new RuntimeException('Buyer return waybills are unavailable until the return waybill migration is installed.');
         }
+        if (! Schema::hasColumn('seller_return_refund_requests', 'shipment_id')
+            || ! Schema::hasColumn('return_refund_request_items', 'shipment_id')) {
+            throw new RuntimeException('Parcel-specific return data is unavailable until the latest return migration is installed.');
+        }
 
-        $sellerRequest->loadMissing(['request', 'sellerOrder.shipments.riderAssignments']);
+        $sellerRequest->loadMissing(['request', 'sellerOrder.shipments.riderAssignments', 'items.orderItem', 'shipment']);
         abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $buyer->id, 403);
         if (trim((string) $sellerRequest->request?->solution) !== 'Return & Refund') {
             throw new RuntimeException('This request is not eligible for a physical return waybill.');
@@ -138,7 +143,7 @@ class ShipmentReturnWorkflowService
         }
 
         return DB::transaction(function () use ($sellerRequest, $buyer): ShipmentReturnWorkflow {
-            $lockedRequest = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with(['request', 'sellerOrder.shipments.riderAssignments'])->firstOrFail();
+            $lockedRequest = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with(['request', 'sellerOrder.shipments.riderAssignments', 'items.orderItem', 'shipment'])->firstOrFail();
             abort_unless((int) $lockedRequest->request?->buyer_user_id === (int) $buyer->id, 403);
             if (trim((string) $lockedRequest->request?->solution) !== 'Return & Refund'
                 || ! in_array($lockedRequest->status, [SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true)) {
@@ -152,10 +157,28 @@ class ShipmentReturnWorkflowService
                 return $existing;
             }
 
-            $shipment = $lockedRequest->sellerOrder?->shipments
-                ->first(fn (Shipment $candidate): bool => in_array($candidate->current_status, ['DELIVERED', 'COMPLETED'], true));
-            if (! $shipment) {
+            $shipmentId = (int) ($lockedRequest->shipment_id ?? 0);
+            if ($shipmentId <= 0) {
+                $legacyCandidates = $lockedRequest->sellerOrder?->shipments
+                    ->filter(fn (Shipment $candidate): bool => in_array($candidate->current_status, ['DELIVERED', 'COMPLETED'], true))
+                    ->values() ?? collect();
+                if ($legacyCandidates->count() !== 1) {
+                    throw new RuntimeException('This older return request does not identify one parcel. Contact Support to link it safely before printing a return waybill.');
+                }
+                $shipmentId = (int) $legacyCandidates->first()->id;
+                $lockedRequest->update(['shipment_id' => $shipmentId]);
+                $lockedRequest->items()->whereNull('shipment_id')->update(['shipment_id' => $shipmentId]);
+            }
+
+            $shipment = Shipment::query()->whereKey($shipmentId)->with('riderAssignments')->lockForUpdate()->first();
+            if (! $shipment
+                || (int) $shipment->seller_order_id !== (int) $lockedRequest->seller_order_id
+                || ! in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true)) {
                 throw new RuntimeException('A delivered shipment with a verified route is required before a return waybill can be printed.');
+            }
+            if ($lockedRequest->items->contains(fn ($item): bool => $item->shipment_id !== null
+                && (int) $item->shipment_id !== (int) $shipment->id)) {
+                throw new RuntimeException('The requested return quantities do not all belong to the selected parcel.');
             }
             $deliveryAssignment = $shipment->riderAssignments
                 ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)

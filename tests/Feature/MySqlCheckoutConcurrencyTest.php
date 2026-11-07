@@ -133,13 +133,14 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $sellerUser = $seller->user;
         $this->actingAs($sellerUser)
             ->get(route('seller.orders.waybill.item', [$multiSellerOrders->first(), $itemA]))
-            ->assertOk()
-            ->assertSee('Checkout multi-line-a')
-            ->assertDontSee('Checkout multi-line-b');
+            ->assertRedirect(route('seller.orders.waybill', $multiSellerOrders->first()));
         $this->get(route('seller.orders.waybill.item', [$multiSellerOrders->first(), $itemB]))
+            ->assertRedirect(route('seller.orders.waybill', $multiSellerOrders->first()));
+        $this->get(route('seller.orders.waybill', $multiSellerOrders->first()))
             ->assertOk()
+            ->assertSee('Seller Order Waybill')
             ->assertSee('Checkout multi-line-b')
-            ->assertDontSee('Checkout multi-line-a');
+            ->assertSee('Checkout multi-line-a');
         $this->assertSame(1, $multiOrder->payments()->count());
         $this->assertSame(2, CodCollection::query()->where('order_id', $multiOrder->id)->count());
         $this->assertSame(3, (int) $multiVariantA->fresh()->stock);

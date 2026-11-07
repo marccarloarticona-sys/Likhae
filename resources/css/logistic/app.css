@@ -940,7 +940,7 @@ html:not(.dark) #logisticsSidebar .logi-badge {
 html.dark #logisticsSidebar {
     background: #130F0E !important;
     border-right-color: #30231F !important;
-    color: #F5EFE8 !important;
+    color: #FFFFFF !important;
     box-shadow: none !important;
 }
 
@@ -959,7 +959,7 @@ html.dark #logisticsSidebar .logi-side-toggle,
 html.dark #logisticsSidebar .logi-mobile-close {
     background: #1D1715 !important;
     border-color: #3B2E27 !important;
-    color: #D9CCC4 !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-profile,
@@ -977,7 +977,7 @@ html.dark #logisticsSidebar .logi-user-card {
         ) !important;
 
     border-color: #3B2E27 !important;
-    color: #F5EFE8 !important;
+    color: #FFFFFF !important;
     box-shadow: none !important;
 }
 
@@ -992,7 +992,7 @@ html.dark #logisticsSidebar .logi-user-check {
 html.dark #logisticsSidebar .lg-side-profile-copy strong,
 html.dark #logisticsSidebar .logi-user-copy strong,
 html.dark #logisticsSidebar .logi-brand-text strong {
-    color: #F5EFE8 !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-profile-copy small,
@@ -1001,21 +1001,21 @@ html.dark #logisticsSidebar .logi-user-copy span,
 html.dark #logisticsSidebar .lg-side-heading,
 html.dark #logisticsSidebar .logi-nav-title,
 html.dark #logisticsSidebar .logi-brand-text small {
-    color: #AFA19A !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-link,
 html.dark #logisticsSidebar .logi-nav-link,
 html.dark #logisticsSidebar .lg-side-theme,
 html.dark #logisticsSidebar .logi-theme-toggle {
-    color: #D0C4BD !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-icon,
 html.dark #logisticsSidebar .logi-nav-icon,
 html.dark #logisticsSidebar .lg-side-theme .lg-side-icon,
 html.dark #logisticsSidebar .logi-theme-toggle .logi-theme-icon {
-    color: #C9BCB5 !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-link:hover,
@@ -1023,13 +1023,13 @@ html.dark #logisticsSidebar .logi-nav-link:hover,
 html.dark #logisticsSidebar .lg-side-theme:hover,
 html.dark #logisticsSidebar .logi-theme-toggle:hover {
     background: #241817 !important;
-    color: #F2D6CB !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-link.is-active,
 html.dark #logisticsSidebar .logi-nav-link.is-active {
     background: #3A1111 !important;
-    color: #F3C6BA !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-link.is-active::before,
@@ -1039,7 +1039,7 @@ html.dark #logisticsSidebar .logi-nav-link.is-active::before {
 
 html.dark #logisticsSidebar .lg-side-link.is-active .lg-side-icon,
 html.dark #logisticsSidebar .logi-nav-link.is-active .logi-nav-icon {
-    color: #F3C6BA !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-badge,
@@ -1052,14 +1052,14 @@ html.dark #logisticsSidebar .lg-side-theme-copy strong,
 html.dark #logisticsSidebar .logi-theme-copy strong,
 html.dark #logisticsSidebar .lg-side-theme-title,
 html.dark #logisticsSidebar .logi-theme-title {
-    color: #D0C4BD !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-theme-copy small,
 html.dark #logisticsSidebar .logi-theme-copy small,
 html.dark #logisticsSidebar .lg-side-theme-subtitle,
 html.dark #logisticsSidebar .logi-theme-subtitle {
-    color: #A89C95 !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-theme-state,
@@ -1072,13 +1072,13 @@ html.dark #logisticsSidebar .lg-side-logout,
 html.dark #logisticsSidebar .logi-logout,
 html.dark #logisticsSidebar .lg-side-logout .lg-side-label,
 html.dark #logisticsSidebar .lg-side-logout .lg-side-icon {
-    color: #F2A49A !important;
+    color: #FFFFFF !important;
 }
 
 html.dark #logisticsSidebar .lg-side-logout:hover,
 html.dark #logisticsSidebar .logi-logout:hover {
     background: #351010 !important;
-    color: #F2A49A !important;
+    color: #FFFFFF !important;
 }
 
 /* Real LIKHAE logo switching */
