@@ -25,6 +25,8 @@
                     $editingPickupAddress = $pickupAddressToEdit;
                     $editingPickupAddressIsCompletion = $editingPickupAddress
                         && in_array((int) $editingPickupAddress->id, $pickupAddressCompletionIds, true);
+                    $editingPickupAddressIsPinCompletion = $editingPickupAddress
+                        && in_array((int) $editingPickupAddress->id, $pickupAddressPinCompletionIds, true);
                 @endphp
                 <section class="sl-card sl-form-section">
                     <header class="sl-card-head"><div><h2>Pickup Addresses</h2><p>Save up to 3 locations and choose which one Logistics should use for each pickup request.</p></div><span class="sl-status {{ $pickupAddresses->count() ? 'is-success' : 'is-warning' }}">{{ $pickupAddresses->count() }}/3 saved</span></header>
@@ -38,18 +40,26 @@
                     </p>
                     @if($editingPickupAddressIsCompletion)
                         <p class="sl-address-completion-notice" role="note">This address is used by existing orders. You can fill blank address details and add its first map pin. Existing saved values, contact details, and confirmed coordinates are protected to keep those routes unchanged.</p>
+                    @elseif($editingPickupAddressIsPinCompletion)
+                        <p class="sl-address-completion-notice" role="note">Add the missing pickup pin below. The saved address and contact details are read-only.</p>
                     @endif
                     @if(!$editingPickupAddress && $pickupAddresses->count() >= 3)
                         <p class="mx-5 mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">You have reached the 3-address limit. Remove an address that has not been used for an order or pickup before adding another.</p>
                     @else
                         <form class="sl-form-grid" method="POST" action="{{ $editingPickupAddress ? route('seller.account.pickup-addresses.update', $editingPickupAddress) : route('seller.account.pickup-addresses.store') }}">
                             @csrf @if($editingPickupAddress) @method('PUT') @endif
-                            <label class="sl-field"><span>Address label</span><input name="label" required maxlength="50" value="{{ old('label', $editingPickupAddress?->label ?? '') }}" placeholder="Main shop, warehouse, branch"></label>
-                            <label class="sl-field"><span>Contact person</span><input name="recipient_name" required maxlength="200" value="{{ old('recipient_name', $editingPickupAddress?->recipient_name ?? $seller->name) }}"></label>
-                            <label class="sl-field"><span>Mobile number</span><input name="contact_number" required maxlength="30" value="{{ old('contact_number', $editingPickupAddress?->contact_number ?? $seller->contact_number) }}" placeholder="+63 9XX XXX XXXX"></label>
-                            <div class="contents"><x-shared.philippine-address-fields :address="$editingPickupAddress" field-class="" label-class="sl-field" wrapper-class="contents" /></div>
-                            <x-shared.address-pin :address="$editingPickupAddress" :preserve-address-fields="$editingPickupAddressIsCompletion" class="sl-span-2" />
-                            <div class="sl-form-actions sl-span-2"><a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">{{ $editingPickupAddress ? 'Cancel edit' : 'Clear form' }}</a>@if($editingPickupAddressIsCompletion)<button type="submit" name="pin_only" value="1" formnovalidate class="sl-btn sl-btn-ghost">Save pin only</button>@endif<button type="submit" class="sl-btn sl-btn-primary">{{ $editingPickupAddress ? 'Save address changes' : 'Add pickup address' }}</button></div>
+                            @if($editingPickupAddressIsPinCompletion)
+                                <div class="sl-field sl-span-2"><span>Saved pickup address</span><input value="{{ $editingPickupAddress->formatted() }}" disabled></div>
+                                <div class="sl-field"><span>Address label</span><input value="{{ $editingPickupAddress->label }}" disabled></div>
+                                <div class="sl-field"><span>Contact person</span><input value="{{ $editingPickupAddress->recipient_name }} · {{ $editingPickupAddress->contact_number }}" disabled></div>
+                            @else
+                                <label class="sl-field"><span>Address label</span><input name="label" required maxlength="50" value="{{ old('label', $editingPickupAddress?->label ?? '') }}" placeholder="Main shop, warehouse, branch"></label>
+                                <label class="sl-field"><span>Contact person</span><input name="recipient_name" required maxlength="200" value="{{ old('recipient_name', $editingPickupAddress?->recipient_name ?? $seller->name) }}"></label>
+                                <label class="sl-field"><span>Mobile number</span><input name="contact_number" required maxlength="30" value="{{ old('contact_number', $editingPickupAddress?->contact_number ?? $seller->contact_number) }}" placeholder="+63 9XX XXX XXXX"></label>
+                                <div class="contents"><x-shared.philippine-address-fields :address="$editingPickupAddress" field-class="" label-class="sl-field" wrapper-class="contents" /></div>
+                            @endif
+                            <x-shared.address-pin :address="$editingPickupAddress" :preserve-address-fields="$editingPickupAddressIsCompletion || $editingPickupAddressIsPinCompletion" class="sl-span-2" />
+                            <div class="sl-form-actions sl-span-2"><a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">{{ $editingPickupAddress ? 'Cancel edit' : 'Clear form' }}</a>@if($editingPickupAddressIsCompletion || $editingPickupAddressIsPinCompletion)<button type="submit" name="pin_only" value="1" formnovalidate class="sl-btn sl-btn-ghost">Save pin only</button>@endif @unless($editingPickupAddressIsPinCompletion)<button type="submit" class="sl-btn sl-btn-primary">{{ $editingPickupAddress ? 'Save address changes' : 'Add pickup address' }}</button>@endunless</div>
                         </form>
                     @endif
                 </section>
@@ -68,14 +78,14 @@
                                     </div>
                                     <p class="mt-2 text-sm text-ink">{{ $address->formatted() }}</p>
                                     <p class="mt-1 text-sm text-muted">{{ $address->recipient_name }} · {{ $address->contact_number }}</p>
-                                    @if(is_numeric($address->latitude) && is_numeric($address->longitude))<p class="mt-1 text-xs text-muted">Pickup pin confirmed</p>@elseif(in_array((int)$address->id, $pickupAddressCompletionIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Complete this address to confirm its pin without changing saved route details.</p>@elseif(in_array((int)$address->id, $pickupAddressEditProtectedIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. This address is used by pickup history and stays locked; add another address with a confirmed map pin.</p>@else<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Edit this address and confirm its map pin.</p>@endif
+                                    @if(is_numeric($address->latitude) && is_numeric($address->longitude))<p class="mt-1 text-xs text-muted">Pickup pin confirmed</p>@elseif(in_array((int)$address->id, $pickupAddressPinCompletionIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Add its pin without changing saved address details.</p>@elseif(in_array((int)$address->id, $pickupAddressCompletionIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Complete this address to confirm its pin without changing saved route details.</p>@elseif(in_array((int)$address->id, $pickupAddressEditProtectedIds, true))<p class="mt-1 text-xs text-amber-800">Pickup pin missing. This address is used by pickup history and stays locked; add another address with a confirmed map pin.</p>@else<p class="mt-1 text-xs text-amber-800">Pickup pin missing. Edit this address and confirm its map pin.</p>@endif
                                 </div>
                                 <div class="flex flex-wrap items-center gap-2">
                                     @if(!$address->is_default)
                                         <form method="POST" action="{{ route('seller.account.pickup-addresses.default', $address) }}">@csrf<button class="sl-btn sl-btn-ghost">Set as default</button></form>
                                     @endif
-                                    @if(!in_array((int)$address->id, $pickupAddressEditProtectedIds, true) || in_array((int)$address->id, $pickupAddressCompletionIds, true))
-                                        <a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses','pickup_edit'=>$address->id]) }}">{{ in_array((int)$address->id, $pickupAddressCompletionIds, true) ? 'Complete address' : 'Edit' }}</a>
+                                    @if(!in_array((int)$address->id, $pickupAddressEditProtectedIds, true) || in_array((int)$address->id, $pickupAddressCompletionIds, true) || in_array((int)$address->id, $pickupAddressPinCompletionIds, true))
+                                        <a class="sl-btn sl-btn-ghost" href="{{ route('seller.account',['tab'=>'pickup-addresses','pickup_edit'=>$address->id]) }}">{{ in_array((int)$address->id, $pickupAddressPinCompletionIds, true) ? 'Add map pin' : (in_array((int)$address->id, $pickupAddressCompletionIds, true) ? 'Complete address' : 'Edit') }}</a>
                                     @else
                                         <span class="text-xs text-muted">Locked to preserve existing routes</span>
                                     @endif

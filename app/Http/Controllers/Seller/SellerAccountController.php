@@ -177,12 +177,27 @@ class SellerAccountController extends Controller
                 ->map(fn ($id): int => (int) $id)
                 ->all()
             : [];
+        $activePickupRequestAddressIds = Schema::hasTable('seller_pickup_requests')
+            ? \App\Models\Seller\SellerPickupRequest::query()
+                ->where('seller_profile_id', $shop->id)
+                ->whereIn('status', ['REQUESTED', 'ASSIGNED'])
+                ->pluck('pickup_address_id')
+                ->map(fn ($id): int => (int) $id)
+                ->all()
+            : [];
         $pickupAddressEditProtectedIds = $pickupRequestAddressIds;
         if ($businessAddress && $shop->sellerOrders()->exists()) {
             $pickupAddressEditProtectedIds[] = (int) $businessAddress->id;
         }
-        $pickupAddressCompletionIds = $businessAddress && $shop->sellerOrders()->exists()
+        $sellerOriginHasOrders = $businessAddress && $shop->sellerOrders()->exists();
+        $pickupAddressCompletionIds = $sellerOriginHasOrders
             && ! in_array((int) $businessAddress->id, $pickupRequestAddressIds, true)
+            ? [(int) $businessAddress->id]
+            : [];
+        $pickupAddressPinCompletionIds = $sellerOriginHasOrders
+            && in_array((int) $businessAddress->id, $pickupRequestAddressIds, true)
+            && (! is_numeric($businessAddress->latitude) || ! is_numeric($businessAddress->longitude))
+            && ! in_array((int) $businessAddress->id, $activePickupRequestAddressIds, true)
             ? [(int) $businessAddress->id]
             : [];
         $pickupAddressDeleteProtectedIds = array_values(array_unique([
@@ -197,7 +212,8 @@ class SellerAccountController extends Controller
             $pickupAddressToEdit = $pickupAddresses->firstWhere('id', (int) $request->input('pickup_edit'));
             abort_unless($pickupAddressToEdit, 404);
             abort_if(in_array((int) $pickupAddressToEdit->id, $pickupAddressEditProtectedIds, true)
-                && ! in_array((int) $pickupAddressToEdit->id, $pickupAddressCompletionIds, true),
+                && ! in_array((int) $pickupAddressToEdit->id, $pickupAddressCompletionIds, true)
+                && ! in_array((int) $pickupAddressToEdit->id, $pickupAddressPinCompletionIds, true),
                 409,
                 'This address is used by existing pickup routes. Add another address to preserve those routes.');
         }
@@ -222,6 +238,7 @@ class SellerAccountController extends Controller
             'pickupAddressToEdit' => $pickupAddressToEdit,
             'pickupAddressEditProtectedIds' => array_values(array_unique($pickupAddressEditProtectedIds)),
             'pickupAddressCompletionIds' => $pickupAddressCompletionIds,
+            'pickupAddressPinCompletionIds' => $pickupAddressPinCompletionIds,
             'pickupAddressDeleteProtectedIds' => $pickupAddressDeleteProtectedIds,
             'payoutProfile' => $shop,
             'payoutDestinationReady' => $payoutDestinationReady,

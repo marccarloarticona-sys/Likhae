@@ -186,6 +186,10 @@ class DispatchController extends Controller
         }
         $sellerPickupRequests = $schema->sellerPickupRequestsReady()
             ? SellerPickupRequest::query()
+                ->whereIn('status', [
+                    'REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING',
+                    'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS',
+                ])
                 ->whereHas('memberships.shipment')
                 ->where(function ($query) use ($center, $schema): void {
                     $query->whereHas('riderLocalTrip', fn ($trip) => $trip->where('logistics_center_id', $center->id))
@@ -235,6 +239,18 @@ class DispatchController extends Controller
                                                 });
                                         });
                                 });
+                        })
+                        ->orWhere(function ($sellerSelectedFallback) use ($center, $schema): void {
+                            if (! $schema->sellerPickupCenterSelectionReady()) {
+                                $sellerSelectedFallback->whereRaw('1 = 0');
+
+                                return;
+                            }
+
+                            $sellerSelectedFallback
+                                ->whereNull('rider_local_trip_id')
+                                ->whereIn('status', ['MATCHING', 'PENDING'])
+                                ->where('preferred_logistics_center_id', $center->id);
                         });
                 })
                 ->with($sellerPickupRelations)
@@ -245,8 +261,15 @@ class DispatchController extends Controller
         if ($sellerPickupRequests->isNotEmpty()) {
             $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
             $sellerPickupRequests = $sellerPickupRequests
-                ->reject(function (SellerPickupRequest $pickupRequest) use ($center, $areaEligibility): bool {
+                ->reject(function (SellerPickupRequest $pickupRequest) use ($center, $areaEligibility, $schema): bool {
                     if (! in_array($pickupRequest->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
+                        return false;
+                    }
+
+                    $isSellerSelectedFallback = $schema->sellerPickupCenterSelectionReady()
+                        && in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true)
+                        && (int) $pickupRequest->preferred_logistics_center_id === (int) $center->id;
+                    if ($isSellerSelectedFallback) {
                         return false;
                     }
 
@@ -260,6 +283,10 @@ class DispatchController extends Controller
         }
         $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema): void {
             $shipments = $pickupRequest->memberships->map(fn ($membership) => $membership->shipment)->filter();
+            $hasActiveCenterOffer = $schema->sellerPickupCenterOffersReady()
+                && $pickupRequest->centerOffers->contains(fn ($offer): bool => $offer->status === 'OFFERED'
+                    && $offer->expires_at?->isFuture());
+            $pickupRequest->setAttribute('has_active_center_offer', $hasActiveCenterOffer);
             $currentOffer = $schema->sellerPickupCenterOffersReady()
                 ? $pickupRequest->centerOffers->first(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
                     && $offer->status === 'OFFERED'
@@ -1019,7 +1046,7 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
 
-        $message = 'Seller pickup request #'.$assigned->id.' assigned to trip #'.$assigned->rider_local_trip_id.'.';
+        $message = 'Seller pickup request #'.$assigned->id.' assigned to pickup batch #P-'.$assigned->rider_local_trip_id.'.';
         if ((int) $assigned->skipped_count > 0) {
             $message .= ' '.$assigned->skipped_count.' parcel(s) were left in a new request because they exceed the rider\'s remaining approved capacity.';
         }

@@ -69,7 +69,7 @@
         </ol>
     </section>
 
-    <x-shared.mapbox :markers="$mapMarkers" :title="$pickup->status === 'EN_ROUTE_TO_HUB' ? 'Route to logistics center' : 'Route to seller pickup'" height="220px" :user-location-target="$navigationTargetKind" :rider-gps="true" :navigation="true" />
+    <x-shared.mapbox :markers="$mapMarkers" :title="$pickup->status === 'EN_ROUTE_TO_HUB' ? 'Route to logistics center' : 'Route to seller pickup'" height="220px" :user-location-target="$navigationTargetKind" :rider-gps="true" :navigation="true" class="rider-pickup-route-map" />
 
     <section class="grid gap-6 lg:grid-cols-2">
         <article class="rounded-3xl border border-line bg-surface p-8">

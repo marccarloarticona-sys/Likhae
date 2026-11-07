@@ -57,7 +57,7 @@ class SellerPickupRequestController extends Controller
 
         $message = $automaticMatching
             ? ($pickup->status === 'WAITING_FOR_RESPONSE'
-                ? 'Pickup request #'.$pickup->id.' was sent to your preferred center or the next eligible center and is waiting for acceptance.'
+                ? 'Pickup request #'.$pickup->id.' was sent to an eligible Logistics center and is waiting for acceptance.'
                 : 'Pickup request #'.$pickup->id.' is pending while LIKHAE searches for a center with pickup coverage, a complete route, and available capacity.')
             : 'Pickup request #'.$pickup->id.' created for '.$pickup->memberships->count().' parcel(s).';
 

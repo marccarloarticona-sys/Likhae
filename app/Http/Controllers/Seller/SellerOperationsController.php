@@ -241,12 +241,30 @@ class SellerOperationsController extends Controller
             ->orderByDesc('is_default')
             ->orderBy('id')
             ->get();
-        $pickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default)
-            ?? $pickupAddresses->firstWhere('id', (int) $seller->business_address_id)
+        $businessPickupAddress = $pickupAddresses->firstWhere('id', (int) $seller->business_address_id);
+        $pickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default
+                && is_numeric($address->latitude)
+                && is_numeric($address->longitude))
+            ?? ($businessPickupAddress
+                && is_numeric($businessPickupAddress->latitude)
+                && is_numeric($businessPickupAddress->longitude)
+                ? $businessPickupAddress
+                : null)
+            ?? $pickupAddresses->first(fn (Address $address): bool =>
+                is_numeric($address->latitude) && is_numeric($address->longitude))
+            ?? $businessPickupAddress
+            ?? $pickupAddresses->first(fn (Address $address): bool => $address->is_default)
             ?? $pickupAddresses->first();
+        $previousPickupAddress = $pickupAddresses->firstWhere('id', (int) $request->old('pickup_address_id'));
+        if ($previousPickupAddress
+            && is_numeric($previousPickupAddress->latitude)
+            && is_numeric($previousPickupAddress->longitude)) {
+            $pickupAddress = $previousPickupAddress;
+        }
         $pickupCenterOptions = collect();
+        $localCenterCandidates = collect();
         if ($pickupCenterSelectionReady && $pickupAddresses->isNotEmpty()) {
-            $pickupCenterOptions = LogisticsCenter::query()
+            $localCenterCandidates = LogisticsCenter::query()
                 ->approvedActive()
                 ->whereHas('owner', fn ($owner) => $owner
                     ->where('account_type', \App\Models\User::TYPE_LOGISTICS)
@@ -258,6 +276,7 @@ class SellerOperationsController extends Controller
                     && is_numeric($center->address->latitude)
                     && is_numeric($center->address->longitude))
                 ->values();
+            $pickupCenterOptions = $localCenterCandidates;
             if ($automaticPickupMatchingReady && $pickupAddress
                 && is_numeric($pickupAddress->latitude) && is_numeric($pickupAddress->longitude)) {
                 $pickupCenterOptions = $pickupCenterOptions->sortBy(function (LogisticsCenter $center) use ($pickupAddress): float {
@@ -305,7 +324,7 @@ class SellerOperationsController extends Controller
                 ->whereDoesntHave('riderAssignments', fn ($query) => $query
                     ->where('assignment_type', 'PICKUP')->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED']))
                 ->whereDoesntHave('sellerPickupMemberships', fn ($query) => $query->where('active_slot', true))
-                ->with(['sellerOrder', 'orderItem', 'serviceArea', 'waybills'])
+                ->with(['sellerOrder.order.address', 'orderItem', 'serviceArea', 'waybills'])
                 ->orderBy('seller_order_id')
                 ->orderBy('id')
                 ->get();
@@ -331,12 +350,75 @@ class SellerOperationsController extends Controller
             });
         }
 
+        $pickupCenterChoiceNeeded = ! $automaticPickupMatchingReady;
+        $pickupAddressLocalCenterIds = [];
+        $anyReadyBuyerNeedsCenterChoice = false;
+        if ($automaticPickupMatchingReady && $pickupAddress && $readyPickupParcels->isNotEmpty()) {
+            $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
+            $hasLocalCenter = function ($address) use ($localCenterCandidates, $areaEligibility): bool {
+                $provinceCode = trim((string) ($address->province_code ?? ''));
+                $municipalityCode = trim((string) ($address->municipality_code ?? ''));
+                if ($provinceCode === '' || $municipalityCode === '') {
+                    return false;
+                }
+
+                return $localCenterCandidates->contains(fn (LogisticsCenter $center): bool =>
+                    trim((string) $center->address?->province_code) === $provinceCode
+                    && trim((string) $center->address?->municipality_code) === $municipalityCode
+                    && $areaEligibility->centerAuthorizesAddress($center, $address));
+            };
+            $pickupAddressLocalCenterIds = $pickupAddresses
+                ->filter(fn (Address $address): bool => $hasLocalCenter($address))
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->values()
+                ->all();
+            $buyerAddresses = $readyPickupParcels
+                ->map(fn (Shipment $parcel) => $parcel->sellerOrder?->order?->address)
+                ->filter()
+                ->unique(fn ($address): string => implode('|', [
+                    (string) $address->province_code,
+                    (string) $address->municipality_code,
+                    (string) $address->barangay_code,
+                ]))
+                ->values();
+            $buyerLocalCenterByAddress = [];
+            foreach ($buyerAddresses as $buyerAddress) {
+                $addressKey = implode('|', [
+                    (string) $buyerAddress->province_code,
+                    (string) $buyerAddress->municipality_code,
+                    (string) $buyerAddress->barangay_code,
+                ]);
+                $buyerLocalCenterByAddress[$addressKey] = $hasLocalCenter($buyerAddress);
+            }
+            foreach ($readyPickupParcels as $parcel) {
+                $buyerAddress = $parcel->sellerOrder?->order?->address;
+                $addressKey = $buyerAddress ? implode('|', [
+                    (string) $buyerAddress->province_code,
+                    (string) $buyerAddress->municipality_code,
+                    (string) $buyerAddress->barangay_code,
+                ]) : '';
+                $hasLocalBuyerCenter = $buyerAddress && ($buyerLocalCenterByAddress[$addressKey] ?? false);
+                $parcel->setAttribute('buyer_has_local_logistics_center', (bool) $hasLocalBuyerCenter);
+            }
+            $hasLocalSellerCenter = in_array((int) $pickupAddress->id, $pickupAddressLocalCenterIds, true);
+            $hasLocalCenterForEveryReadyBuyer = $buyerAddresses->isNotEmpty()
+                && collect($buyerLocalCenterByAddress)->every(fn (bool $hasCenter): bool => $hasCenter);
+            $pickupCenterChoiceNeeded = ! $hasLocalSellerCenter || ! $hasLocalCenterForEveryReadyBuyer;
+            $anyReadyBuyerNeedsCenterChoice = $readyPickupParcels->contains(
+                fn (Shipment $parcel): bool => ! (bool) $parcel->buyer_has_local_logistics_center,
+            );
+        }
+
         return view('seller.logistics', [
             'seller' => $seller,
             'pickupAddress' => $pickupAddress,
             'pickupAddresses' => $pickupAddresses,
             'pickupCenterOptions' => $pickupCenterOptions,
             'pickupCenterSelectionReady' => $pickupCenterSelectionReady,
+            'pickupCenterChoiceNeeded' => $pickupCenterChoiceNeeded,
+            'pickupAddressLocalCenterIds' => $pickupAddressLocalCenterIds,
+            'anyReadyBuyerNeedsCenterChoice' => $anyReadyBuyerNeedsCenterChoice,
             'readyPickupParcels' => $readyPickupParcels,
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,

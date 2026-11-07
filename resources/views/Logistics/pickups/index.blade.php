@@ -21,7 +21,7 @@
     @endif
 
     <section class="space-y-4" data-seller-pickup-requests>
-        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Each request keeps its selected parcels together. Sellers provide one order waybill, and each parcel keeps its scan history.</p></div>
+        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Seller-submitted requests follow the same Rider pickup flow as the ready parcels below. After assignment, the request links to a Pickup Batch shown under Active Seller Pickups.</p></div>
         @forelse($sellerPickupRequests as $pickupRequest)
             @php
                 $requestParcels = $pickupRequest->memberships;
@@ -48,7 +48,11 @@
                         @elseif($pickupRequest->status === 'REQUESTED' && $pickupRequest->preferredLogisticsCenter)
                             <p class="mt-2 text-sm text-amber-800">Please accept or assign this request by {{ $pickupRequest->updated_at?->copy()->addMinutes(15)->timezone(config('app.timezone'))->format('M j, g:i A') }}. If it is still unaccepted, it returns to the Seller.</p>
                         @elseif(in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true))
-                            <p class="mt-2 text-sm text-amber-800">Pending follow-up: no complete authorized route or available Rider capacity is confirmed yet. Confirm it within 15 minutes or it will return to the Seller.</p>
+                            @if($automaticPickupMatchingReady && $pickupRequest->status === 'PENDING' && !$pickupRequest->has_active_center_offer)
+                                <p class="mt-2 text-sm text-amber-800">This parcel is ready for first-mile pickup. Logistics can assign an available local Rider; the Buyer delivery route can be confirmed after it reaches the center.</p>
+                            @else
+                                <p class="mt-2 text-sm text-amber-800">Pending follow-up: no complete authorized route or available Rider capacity is confirmed yet. Confirm it within 15 minutes or it will return to the Seller.</p>
+                            @endif
                         @endif
                     </div>
                     <span class="border border-line px-3 py-2 text-xs font-bold uppercase text-ink">{{ str($pickupRequest->status)->replace('_', ' ')->title() }}</span>
@@ -58,7 +62,9 @@
                         'REQUESTED' => ['Accept or assign this request within 15 minutes. If it remains unaccepted, it returns to the Seller.', 'Logistics'],
                         'MATCHING' => ['Check this request from the Seller; automatic matching checks route and Rider capacity at this center.', 'Logistics'],
                         'WAITING_FOR_RESPONSE' => ['Accept within 15 minutes to confirm the saved route and assign an eligible pickup Rider. Declining returns the parcels to the Seller for another center choice.', 'Logistics'],
-                        'PENDING' => ['Confirm route and Rider capacity within 15 minutes. Otherwise the request returns to the Seller.', 'Logistics'],
+                        'PENDING' => $automaticPickupMatchingReady
+                            ? ['Assign the nearest eligible local Rider for Seller pickup. Buyer delivery routing can continue after the parcel reaches the center.', 'Logistics']
+                            : ['Confirm route and Rider capacity within 15 minutes. Otherwise the request returns to the Seller.', 'Logistics'],
                         'ASSIGNED' => ['Collect the parcels and hand them to the authorized center.', 'Pickup rider'],
                         'COMPLETED' => ['Scan the collected parcels into center custody.', 'Logistics'],
                         'REJECTED' => ['Review the rejection reason; the Seller may submit a new request.', 'Seller'],
@@ -91,7 +97,9 @@
                             <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">Decline offer</button>
                         </form>
                     </div>
-                @elseif($pickupRequest->status === 'REQUESTED' && $pickupSchemaReady)
+                @elseif(in_array($pickupRequest->status, ['REQUESTED', 'PENDING'], true)
+                    && $pickupSchemaReady
+                    && ! $pickupRequest->has_active_center_offer)
                     <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf
@@ -111,7 +119,7 @@
                         </form>
                     </div>
                 @elseif($pickupRequest->rider_local_trip_id)
-                    <p class="border-t border-line pt-4 text-sm text-muted">Assigned Rider: <strong class="text-ink">{{ $pickupRequest->riderLocalTrip?->rider?->user?->name ?? 'Unavailable' }}</strong> · <a class="font-semibold text-primary underline" href="{{ route('logistics.local-trips.show', $pickupRequest->rider_local_trip_id) }}">Trip #{{ $pickupRequest->rider_local_trip_id }}</a></p>
+                    <p class="border-t border-line pt-4 text-sm text-muted">Assigned Rider: <strong class="text-ink">{{ $pickupRequest->riderLocalTrip?->rider?->user?->name ?? 'Unavailable' }}</strong> · <a class="font-semibold text-primary underline" href="{{ route('logistics.local-trips.show', $pickupRequest->rider_local_trip_id) }}">Pickup Batch #P-{{ $pickupRequest->rider_local_trip_id }}</a></p>
                 @endif
             </article>
         @empty
@@ -120,7 +128,7 @@
     </section>
 
     <section class="space-y-4">
-        <div><h2 class="text-lg font-bold text-ink">Waiting for Assignment</h2><p class="mt-1 text-sm text-muted">Ready parcels are grouped by the seller and that seller's registered pickup address.</p></div>
+        <div><h2 class="text-lg font-bold text-ink">Waiting for Assignment</h2><p class="mt-1 text-sm text-muted">Other ready-for-pickup parcels not attached to a Seller request. They follow the same Rider assignment and pickup flow, grouped by Seller and pickup address.</p></div>
         @forelse($sellerPickupQueue as $group)
             @php($seller = $group['seller'])
             @php($shipments = $group['shipments'])

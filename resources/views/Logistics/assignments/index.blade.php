@@ -2,7 +2,7 @@
 @section('title', 'Delivery Rider Assignment - LIKHAE Logistics')
 @section('content')
 <div class="space-y-6">
-    <header><p class="text-xs font-bold uppercase text-primary">Final-mile dispatch</p><h1 class="mt-2 text-2xl font-bold text-ink">Assign Sorted Parcels</h1><p class="mt-2 text-sm text-muted">Assign an area rider manually or auto-match the nearest available rider when the barangay team is unavailable.</p><p class="mt-1 text-xs text-muted">Each batch follows the rider’s approved parcel capacity, up to 10 parcels. Parcels routed to another hub belong in Hub Transfers and appear here after the destination hub receives and sorts them.</p></header>
+    <header><p class="text-xs font-bold uppercase text-primary">Final-mile dispatch</p><h1 class="mt-2 text-2xl font-bold text-ink">Assign Sorted Parcels</h1><p class="mt-2 text-sm text-muted">Assign an area rider manually or auto-match the nearest available rider when the barangay team is unavailable.</p><p class="mt-1 text-xs text-muted">Assign any batch size from 1 parcel up to the rider’s approved capacity (maximum 10); the batch does not need to be full. Parcels routed to another hub belong in Hub Transfers and appear here after the destination hub receives and sorts them.</p></header>
     <x-logistics.parcel-flow current="assign" />
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -32,7 +32,7 @@
                         @endforeach
                     </select>
                     <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->isEmpty())>Add parcel to batch</button>
-                    <p class="text-xs text-muted sm:col-span-3">Auto-group fills an open batch for this exact barangay, up to the rider’s approved capacity (maximum 10). A new batch starts when none has room.</p>
+                    <p class="text-xs text-muted sm:col-span-3">Auto-group fills an open batch for this exact barangay, up to the rider’s approved capacity (maximum 10). A new batch starts when none has room, and the Rider can accept it before it is full.</p>
                 </form>
                 <form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">
                     @csrf

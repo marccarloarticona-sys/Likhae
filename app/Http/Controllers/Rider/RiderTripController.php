@@ -113,6 +113,13 @@ class RiderTripController extends Controller
                 if ($activeItems->isEmpty()) {
                     throw new RuntimeException('This trip has no active parcels to accept.');
                 }
+                $capacity = LocalTripCapacityRules::effectiveCapacity(
+                    (int) $trip->approved_parcel_capacity,
+                    $request->user()->riderProfile?->approved_parcel_capacity,
+                );
+                if ($activeItems->count() > $capacity) {
+                    throw new RuntimeException("This batch has {$activeItems->count()} parcels, above your approved capacity of {$capacity}.");
+                }
                 foreach ($activeItems as $item) {
                     $assignment = $item->riderAssignment;
                     if (! $assignment || $assignment->assignment_type !== 'DELIVERY') {

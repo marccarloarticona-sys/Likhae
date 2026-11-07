@@ -12,6 +12,7 @@
 .lk-address-pin-shell { display: block; width: 100% !important; max-width: none !important; min-width: 0; box-sizing: border-box; }
 .sl-map-seller { width: 100%; max-width: none; margin-block: 0 12px; }
 .lk-map-shell.rider-delivery-route-map { display: block; width: 100% !important; max-width: none !important; min-width: 0; }
+.lk-map-shell.rider-pickup-route-map { display: block; width: 100% !important; max-width: none !important; min-width: 0; }
 .lk-map-lock-scroll { overflow: hidden; }
 
 .lk-map-shell.is-fullscreen {

@@ -421,7 +421,7 @@ class SellerOrderController extends Controller
         }
 
         return redirect()->route('seller.logistics')
-            ->with('status', 'Parcels are ready. Choose a nearby Logistics center or keep the nearest suggested center, then submit the pickup request here.');
+            ->with('status', 'Parcels are ready. Submit the pickup request from this page.');
     }
 
     private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady, array $successfulPickupScanKeys): array

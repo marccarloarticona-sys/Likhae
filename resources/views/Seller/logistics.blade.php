@@ -16,17 +16,15 @@
         <section class="sl-card sl-pickup-card" data-seller-pickup-request-form>
             <header class="sl-card-head"><div><span class="sl-eyebrow">Seller Pickup</span><h2>Request a pickup</h2><p>Request one pickup for 1–10 ready parcels. Each SellerOrder keeps one waybill, with separate parcel scan codes.</p></div></header>
             <div class="sl-pickup-card-body">
-            @if($automaticPickupMatchingReady)
-                <p class="sl-pickup-guidance">Nearby approved Logistics centers are listed nearest first. Keep the nearest suggestion or choose another in the dropdown. LIKHAE checks pickup coverage, Rider capacity, and the complete Buyer route; if your preferred center cannot take the request, it will try the next eligible center. With no complete route or capacity, the request stays pending and is not marked assigned.</p>
-            @else
+            @if(!$automaticPickupMatchingReady)
                 <p class="sl-pickup-guidance">Only an approved Logistics center with coverage for the selected pickup address can receive this request.</p>
             @endif
             @if($pickupAddresses->isEmpty())
                 <p class="sl-pickup-state-note is-warning">Add a pickup address before requesting a Rider. <a class="font-semibold underline" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">Manage pickup addresses</a>.</p>
             @elseif($readyPickupParcels->isEmpty())
-                <p class="sl-pickup-state-note">Mark packed parcels Ready for Pickup on the Orders page, then select them here and choose a nearby Logistics center. No other ready parcels are waiting for a request.</p>
+                <p class="sl-pickup-state-note">Mark packed parcels Ready for Pickup on the Orders page, then select them here. No other ready parcels are waiting for a request.</p>
             @elseif($pickupCenterOptions->isEmpty() && !$automaticPickupMatchingReady)
-                <p class="sl-pickup-state-note is-warning">Walang pickup request na naipadala dahil walang active at approved Logistics center na sumasakop sa mga naka-pin na pickup address. I-check ang map pin o makipag-ugnayan sa Logistics support; lalabas dito ang mga center kapag may sumakop na sa lugar.</p>
+                <p class="sl-pickup-state-note is-warning">No pickup request can be sent because no active, approved Logistics center covers these pinned pickup addresses. Confirm the map pin or contact Logistics support.</p>
             @else
                 <form method="POST" action="{{ route('seller.logistics.pickup-requests.store') }}" data-pickup-address-settings-url="{{ route('seller.account', ['tab' => 'pickup-addresses']) }}" class="sl-pickup-form">
                     @csrf
@@ -35,7 +33,7 @@
                         <select name="pickup_address_id" data-pickup-address required>
                             <option value="">Select a saved pickup address</option>
                             @foreach($pickupAddresses as $address)
-                                <option value="{{ $address->id }}" data-lat="{{ $address->latitude }}" data-lng="{{ $address->longitude }}" @disabled(!is_numeric($address->latitude) || !is_numeric($address->longitude)) @selected((string)old('pickup_address_id', $pickupAddress?->id) === (string)$address->id)>
+                                <option value="{{ $address->id }}" data-lat="{{ $address->latitude }}" data-lng="{{ $address->longitude }}" data-local-center="{{ in_array((int) $address->id, $pickupAddressLocalCenterIds, true) ? '1' : '0' }}" @disabled(!is_numeric($address->latitude) || !is_numeric($address->longitude)) @selected((string)$pickupAddress?->id === (string)$address->id)>
                                     {{ $address->label ?: 'Pickup address' }}{{ $address->is_default ? ' · Default' : '' }} — {{ $address->formatted() }}{{ !is_numeric($address->latitude) || !is_numeric($address->longitude) ? ' · Confirm map pin first' : '' }}
                                 </option>
                             @endforeach
@@ -44,27 +42,25 @@
                         <small data-pickup-pin-missing hidden class="sl-pickup-pin-notice">This saved pickup address has no confirmed map pin. <a data-pickup-pin-link class="font-semibold underline" href="{{ route('seller.account',['tab'=>'pickup-addresses']) }}">Open this pickup address</a> to confirm its pin or add another pinned address.</small>
                         @if(!$automaticPickupMatchingReady)
                             <small class="sl-pickup-field-help">Only centers with approved coverage for this exact pickup barangay are listed.</small>
-                            <small data-pickup-no-center hidden class="sl-pickup-pin-notice">Walang eligible Logistics center para sa address na ito. Pumili ng ibang pickup address o ipa-check ang map pin at coverage sa Logistics support.</small>
+                            <small data-pickup-no-center hidden class="sl-pickup-pin-notice">No eligible Logistics center covers this pickup address. Choose another saved address or contact Logistics support.</small>
                         @endif
                     </label>
-                    <label class="sl-pickup-field"><span class="sl-pickup-label">Preferred Logistics center <small>(nearest first)</small></span>
-                        <select name="preferred_logistics_center_id" data-pickup-center @required(!$automaticPickupMatchingReady || $pickupCenterOptions->isNotEmpty())>
+                    <label class="sl-pickup-field" data-pickup-center-field @if($automaticPickupMatchingReady && !$pickupCenterChoiceNeeded) hidden @endif>
+                        <span class="sl-pickup-label">{{ $automaticPickupMatchingReady ? 'Preferred Logistics center (nearest first)' : 'Logistics center' }}</span>
+                        <select name="preferred_logistics_center_id" data-pickup-center @required(!$automaticPickupMatchingReady || ($pickupCenterChoiceNeeded && $pickupCenterOptions->isNotEmpty())) @disabled($automaticPickupMatchingReady && !$pickupCenterChoiceNeeded)>
                             <option value="">{{ $pickupCenterOptions->isEmpty() ? 'No approved centers available right now' : 'Choose a nearby Logistics center' }}</option>
                             @foreach($pickupCenterOptions as $centerOption)
-                                <option value="{{ $centerOption->id }}" data-lat="{{ $centerOption->address?->latitude }}" data-lng="{{ $centerOption->address?->longitude }}" @if(!$automaticPickupMatchingReady) data-pickup-address-ids='@json($centerOption->authorized_pickup_address_ids)' @endif @selected((string)old('preferred_logistics_center_id') === (string)$centerOption->id)>
+                                <option value="{{ $centerOption->id }}" data-lat="{{ $centerOption->address?->latitude }}" data-lng="{{ $centerOption->address?->longitude }}" data-pickup-address-ids='@json($centerOption->authorized_pickup_address_ids ?? [])' @selected((string)old('preferred_logistics_center_id') === (string)$centerOption->id)>
                                     {{ $centerOption->business_name }} — {{ $centerOption->address?->formatted() ?: 'Location unavailable' }}
                                 </option>
                             @endforeach
                         </select>
-                        @if($automaticPickupMatchingReady && $pickupCenterOptions->isEmpty())
-                            <small class="sl-pickup-pin-notice">No active approved center with a confirmed map pin is available right now. You can still send the request without choosing; it will stay pending until LIKHAE finds an eligible center and complete route.</small>
-                        @endif
                     </label>
                     </div>
                     <div class="sl-table-wrap sl-pickup-table-wrap"><table class="sl-table sl-pickup-table"><thead><tr><th>Select</th><th>Parcel scan code / product</th><th>SellerOrder</th><th>Order waybill</th></tr></thead><tbody>
                         @foreach($readyPickupParcels as $parcel)
                             <tr>
-                                <td><input type="checkbox" name="shipment_ids[]" value="{{ $parcel->id }}" data-pickup-request-parcel data-current-logistics-center="{{ $parcel->logistics_center_id ?: $parcel->serviceArea?->logistics_center_id }}" aria-label="Select {{ $parcel->tracking_number }}"><input type="hidden" name="seller_order_ids[{{ $parcel->id }}]" value="{{ $parcel->seller_order_id }}"></td>
+                                <td><input type="checkbox" name="shipment_ids[]" value="{{ $parcel->id }}" data-pickup-request-parcel data-buyer-local-center="{{ $parcel->buyer_has_local_logistics_center ? '1' : '0' }}" data-current-logistics-center="{{ $parcel->logistics_center_id ?: $parcel->serviceArea?->logistics_center_id }}" aria-label="Select {{ $parcel->tracking_number }}"><input type="hidden" name="seller_order_ids[{{ $parcel->id }}]" value="{{ $parcel->seller_order_id }}"></td>
                                 <td><strong>{{ $parcel->tracking_number }}</strong><small class="block">{{ $parcel->orderItem?->product_name ?? 'Parcel' }}</small></td>
                                 <td>{{ $parcel->sellerOrder?->seller_order_number }}</td>
                                 <td>
@@ -98,9 +94,11 @@
                 const checks = [...form.querySelectorAll('[data-pickup-request-parcel]')];
                 const address = form.querySelector('[data-pickup-address]');
                 const center = form.querySelector('[data-pickup-center]');
+                const centerField = form.querySelector('[data-pickup-center-field]');
                 const missingPinNotice = form.querySelector('[data-pickup-pin-missing]');
                 const pickupPinLink = form.querySelector('[data-pickup-pin-link]');
                 const automaticMatchingReady = @json($automaticPickupMatchingReady);
+                const anyReadyBuyerNeedsCenterChoice = @json($anyReadyBuyerNeedsCenterChoice);
                 const count = form.querySelector('[data-pickup-request-count]');
                 const submit = form.querySelector('[data-pickup-request-submit]');
                 const update = () => {
@@ -109,65 +107,88 @@
                         checked[checked.length - 1].checked = false;
                         checked = checked.slice(0, 10);
                     }
-                    if (address && center && !automaticMatchingReady) {
+                    const total = checked.length;
+                    if (count) count.textContent = String(total);
+                    const selectedAddress = address?.selectedOptions[0];
+                    const addressHasPin = Boolean(selectedAddress?.dataset.lat && selectedAddress?.dataset.lng);
+                    if (address && center) {
                         const addressId = address.value;
                         const selectedParcelCenters = checked
                             .map((checkbox) => checkbox.dataset.currentLogisticsCenter)
                             .filter(Boolean);
                         [...center.options].forEach((option, index) => {
                             if (index === 0) return;
-                            const allowedAddressIds = JSON.parse(option.dataset.pickupAddressIds || '[]').map(String);
+                            let allowedAddressIds = [];
+                            try {
+                                allowedAddressIds = JSON.parse(option.dataset.pickupAddressIds || '[]').map(String);
+                            } catch (error) {
+                                allowedAddressIds = [];
+                            }
+                            const coversPickupAddress = automaticMatchingReady || allowedAddressIds.includes(addressId);
                             const matchesExistingRoute = automaticMatchingReady
                                 || selectedParcelCenters.length === 0
                                 || selectedParcelCenters.every((centerId) => centerId === option.value);
-                            option.hidden = !allowedAddressIds.includes(addressId) || !matchesExistingRoute;
+                            option.hidden = !coversPickupAddress || !matchesExistingRoute;
                             option.disabled = option.hidden;
                         });
+                        if (automaticMatchingReady) {
+                            const addressOption = address.selectedOptions[0];
+                            const hasPickupPin = Boolean(addressOption?.dataset.lat && addressOption?.dataset.lng);
+                            const fromLat = Number(addressOption?.dataset.lat);
+                            const fromLng = Number(addressOption?.dataset.lng);
+                            const options = [...center.options].slice(1).map((option) => {
+                                const toLat = Number(option.dataset.lat);
+                                const toLng = Number(option.dataset.lng);
+                                const radians = (value) => value * Math.PI / 180;
+                                const dLat = radians(toLat - fromLat);
+                                const dLng = radians(toLng - fromLng);
+                                const a = Math.sin(dLat / 2) ** 2
+                                    + Math.cos(radians(fromLat)) * Math.cos(radians(toLat)) * Math.sin(dLng / 2) ** 2;
+                                const distance = hasPickupPin && Number.isFinite(toLat) && Number.isFinite(toLng)
+                                    ? 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)))
+                                    : Number.NaN;
+                                option.dataset.distance = Number.isFinite(distance) ? String(distance) : '';
+                                option.dataset.centerName ||= option.textContent.trim();
+                                option.textContent = Number.isFinite(distance)
+                                    ? `${option.dataset.centerName} · ${distance.toFixed(1)} km approx.`
+                                    : option.dataset.centerName;
+                                return option;
+                            }).sort((left, right) => Number(left.dataset.distance || Number.MAX_SAFE_INTEGER)
+                                - Number(right.dataset.distance || Number.MAX_SAFE_INTEGER));
+                            options.forEach((option) => center.append(option));
+                        }
                         const selectedOption = center.selectedOptions[0];
                         if (selectedOption?.disabled) center.value = '';
-                        const noCenterMessage = form.querySelector('[data-pickup-no-center]');
-                        if (noCenterMessage) {
-                            noCenterMessage.hidden = [...center.options].slice(1).some((option) => !option.hidden) || !addressId;
-                        }
                     }
-                    const total = checked.length;
-                    count.textContent = String(total);
-                    if (automaticMatchingReady && address && center) {
-                        const addressOption = address.selectedOptions[0];
-                        const hasPickupPin = Boolean(addressOption?.dataset.lat && addressOption?.dataset.lng);
-                        const fromLat = Number(addressOption?.dataset.lat);
-                        const fromLng = Number(addressOption?.dataset.lng);
-                        const options = [...center.options].slice(1).map((option) => {
-                            const toLat = Number(option.dataset.lat);
-                            const toLng = Number(option.dataset.lng);
-                            const radians = (value) => value * Math.PI / 180;
-                            const dLat = radians(toLat - fromLat);
-                            const dLng = radians(toLng - fromLng);
-                            const a = Math.sin(dLat / 2) ** 2
-                                + Math.cos(radians(fromLat)) * Math.cos(radians(toLat)) * Math.sin(dLng / 2) ** 2;
-                            const distance = hasPickupPin && Number.isFinite(toLat) && Number.isFinite(toLng)
-                                ? 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)))
-                                : Number.NaN;
-                            option.dataset.distance = Number.isFinite(distance) ? String(distance) : '';
-                            option.dataset.centerName ||= option.textContent.trim();
-                            option.textContent = Number.isFinite(distance)
-                                ? `${option.dataset.centerName} · ${distance.toFixed(1)} km approx.`
-                                : option.dataset.centerName;
-                            return option;
-                        }).sort((left, right) => Number(left.dataset.distance || Number.MAX_SAFE_INTEGER)
-                            - Number(right.dataset.distance || Number.MAX_SAFE_INTEGER));
-                        options.forEach((option) => center.append(option));
-                        if (!center.value && options.length > 0) center.value = options[0].value;
+                    const buyerNeedsCenterChoice = checked.length > 0
+                        ? checked.some((checkbox) => checkbox.dataset.buyerLocalCenter !== '1')
+                        : anyReadyBuyerNeedsCenterChoice;
+                    const centerChoiceNeeded = !automaticMatchingReady
+                        || selectedAddress?.dataset.localCenter !== '1'
+                        || buyerNeedsCenterChoice;
+                    const hasCoveredCenterOption = Boolean(center && [...center.options].slice(1)
+                        .some((option) => !option.hidden && !option.disabled));
+                    const showCenterChoice = !automaticMatchingReady || (centerChoiceNeeded && hasCoveredCenterOption);
+                    if (centerField) centerField.hidden = !showCenterChoice;
+                    if (center) {
+                        center.disabled = !showCenterChoice;
+                        center.required = showCenterChoice;
                     }
-                    const selectedAddress = address?.selectedOptions[0];
-                    const addressHasPin = Boolean(selectedAddress?.dataset.lat && selectedAddress?.dataset.lng);
+                    if (automaticMatchingReady && centerChoiceNeeded && hasCoveredCenterOption && center && !center.value) {
+                        const nearest = [...center.options].slice(1).find((option) => !option.hidden && !option.disabled);
+                        if (nearest) center.value = nearest.value;
+                    }
                     if (missingPinNotice) missingPinNotice.hidden = !selectedAddress?.value || addressHasPin;
                     if (pickupPinLink && selectedAddress?.value) {
                         pickupPinLink.href = `${form.dataset.pickupAddressSettingsUrl}#pickup-address-${encodeURIComponent(selectedAddress.value)}`;
                     }
-                    submit.disabled = total < 1 || total > 10 || !address?.value || (!automaticMatchingReady && !center?.value);
+                    if (submit) {
+                        submit.disabled = total < 1 || total > 10 || !address?.value || !addressHasPin || (showCenterChoice && !center?.value);
+                    }
                 };
                 form.addEventListener('change', update);
+                form.addEventListener('input', update);
+                window.addEventListener('pageshow', update);
                 update();
             })();
         </script>

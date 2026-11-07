@@ -164,8 +164,16 @@ final class SellerPickupRequestService
                 ->with(['memberships.shipment', 'sellerProfile', 'pickupAddress'])
                 ->lockForUpdate()
                 ->firstOrFail();
-            if ($pickupRequest->status !== 'REQUESTED') {
-                throw new RuntimeException('Only a requested Seller pickup can be assigned.');
+            $isDirectPendingPickup = $automaticDispatch && $pickupRequest->status === 'PENDING';
+            if ($pickupRequest->status !== 'REQUESTED' && ! $isDirectPendingPickup) {
+                throw new RuntimeException('Only a requested or pending Seller pickup can be assigned.');
+            }
+            if ($isDirectPendingPickup && Schema::hasTable('seller_pickup_center_offers')
+                && $pickupRequest->centerOffers()
+                    ->where('status', 'OFFERED')
+                    ->where('expires_at', '>', now())
+                    ->exists()) {
+                throw new RuntimeException('A Logistics center is already reviewing this pickup offer. Wait for its response before assigning a Rider.');
             }
             if (Schema::hasColumn('seller_pickup_requests', 'preferred_logistics_center_id')
                 && $pickupRequest->preferred_logistics_center_id === null

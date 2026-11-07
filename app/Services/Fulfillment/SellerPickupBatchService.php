@@ -69,7 +69,8 @@ final class SellerPickupBatchService
                     ->with('pickupAddress')
                     ->lockForUpdate()
                     ->firstOrFail();
-            if ($linkedPickupRequest && $linkedPickupRequest->status !== 'REQUESTED') {
+            if ($linkedPickupRequest && $linkedPickupRequest->status !== 'REQUESTED'
+                && ! ($automaticDispatch && $linkedPickupRequest->status === 'PENDING')) {
                 throw new RuntimeException('Only a requested Seller pickup can be assigned.');
             }
             $rider = RiderProfile::query()

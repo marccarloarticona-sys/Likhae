@@ -786,8 +786,12 @@ class ShipmentWorkflowService
                 if (! $pickupCenter
                     || (int) $rider->logistics_center_id !== (int) $pickupCenter->id
                     || ! $sellerAddress
-                    || ! $this->localRiderEligibility->centerAuthorizesAddress($pickupCenter, $sellerAddress)) {
-                    throw new RuntimeException('The rider must belong to an active logistics center authorized for the exact seller pickup PSGC.');
+                    || ! $this->localRiderEligibility->centerCoversMunicipality(
+                        $pickupCenter,
+                        (string) $sellerAddress->province_code,
+                        (string) $sellerAddress->municipality_code,
+                    )) {
+                    throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
                 }
                 if ($pickupArea) {
                     $this->localRiderEligibility->assertRiderCanCoverArea($pickupCenter, $rider, $pickupArea);

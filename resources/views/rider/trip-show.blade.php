@@ -5,7 +5,7 @@
     <header>
         <h1 class="text-2xl font-bold text-ink">Delivery Batch #{{ $trip->id }}</h1>
         <p class="mt-2 font-mono text-sm text-muted">{{ $trip->province_code }} / {{ $trip->municipality_code }} / {{ $trip->barangay_code }} &middot; {{ str($trip->status)->headline() }}</p>
-        <p class="mt-2 text-sm text-muted">This batch holds up to {{ $trip->effective_capacity }} parcels based on your approved capacity (maximum 10). Accept and start its parcels together, then open each parcel below to record proof and complete that delivery.</p>
+        <p class="mt-2 text-sm text-muted">This batch can contain 1 to {{ $trip->effective_capacity }} parcels based on your approved capacity (maximum 10). You can accept it before it is full. Accept and start the assigned parcels together, then open each parcel below to record proof and complete that delivery.</p>
     </header>
 
     @if(session('status'))
@@ -27,9 +27,9 @@
             </form>
         @endif
         @if(in_array($trip->status, ['LOADING', 'READY', 'IN_PROGRESS'], true) && $activeTripItems->contains(fn ($item) => $item->riderAssignment?->status === 'ASSIGNED'))
-            <form method="POST" action="{{ route('rider.trips.accept', $trip->id) }}" data-confirm-title="Accept every delivery?" data-confirm-message="Accept all assigned parcels on this trip?" data-confirm-label="Accept all deliveries">
+            <form method="POST" action="{{ route('rider.trips.accept', $trip->id) }}" data-confirm-title="Accept {{ $activeTripItems->count() }} deliveries?" data-confirm-message="Accept all {{ $activeTripItems->count() }} assigned parcels on this trip?" data-confirm-label="Accept {{ $activeTripItems->count() }} deliveries">
                 @csrf
-                <button class="bg-primary px-4 py-2 font-semibold text-white">Accept all deliveries</button>
+                <button class="bg-primary px-4 py-2 font-semibold text-white">Accept {{ $activeTripItems->count() }} deliveries</button>
             </form>
         @endif
 

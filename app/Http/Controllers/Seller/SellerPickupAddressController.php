@@ -116,9 +116,9 @@ class SellerPickupAddressController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($this->hasPickupHistory($lockedSeller, $address)) {
+            if ($this->hasActivePickupRequest($lockedSeller, $address)) {
                 throw ValidationException::withMessages([
-                    'pickup_address' => 'This address is part of pickup history. Its pin cannot be changed; add another address to preserve those routes.',
+                    'pickup_address' => 'This address is being used by an active pickup request. Save its pin after that request is completed or cancelled.',
                 ]);
             }
 
@@ -129,9 +129,9 @@ class SellerPickupAddressController extends Controller
                 ]);
             }
 
-            if (filled($address->latitude) || filled($address->longitude)) {
+            if (is_numeric($address->latitude) && is_numeric($address->longitude)) {
                 throw ValidationException::withMessages([
-                    'latitude' => 'This address already has a saved pin. Use the regular address edit flow to replace it.',
+                    'latitude' => 'This address already has a confirmed pin. Pin-only completion can only add a missing pin.',
                 ]);
             }
 
@@ -320,6 +320,15 @@ class SellerPickupAddressController extends Controller
         return Schema::hasTable('seller_pickup_requests') && SellerPickupRequest::query()
             ->where('seller_profile_id', $seller->id)
             ->where('pickup_address_id', $address->id)
+            ->exists();
+    }
+
+    private function hasActivePickupRequest(SellerProfile $seller, Address $address): bool
+    {
+        return Schema::hasTable('seller_pickup_requests') && SellerPickupRequest::query()
+            ->where('seller_profile_id', $seller->id)
+            ->where('pickup_address_id', $address->id)
+            ->whereIn('status', ['REQUESTED', 'ASSIGNED'])
             ->exists();
     }
 
