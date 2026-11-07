@@ -103,8 +103,8 @@ class RiderShipmentController extends Controller
 
         $data = $request->validate([
             'action' => ['required', 'string', 'in:accept,start,pickup_complete,delivery_success,delivery_failed,reject'],
-            'scan_method' => ['nullable', 'string', 'in:QR,BARCODE,MANUAL'],
-            'scanned_code' => ['required_if:action,pickup_complete', 'nullable', 'string', 'max:150'],
+            'scan_method' => ['required_if:action,delivery_success', 'nullable', 'string', 'in:QR,BARCODE,MANUAL'],
+            'scanned_code' => ['required_if:action,pickup_complete', 'required_if:action,delivery_success', 'nullable', 'string', 'max:150'],
             'failure_reason' => ['required_if:action,delivery_failed', 'nullable', 'string', 'max:1000'],
             'attempt_status' => ['nullable', 'string', 'in:FAILED,RESCHEDULED'],
             'next_attempt_at' => ['required_if:attempt_status,RESCHEDULED', 'nullable', 'date', 'after:now'],
@@ -177,6 +177,10 @@ class RiderShipmentController extends Controller
             }
 
             return back()->with('status', 'Failed delivery recorded. Keep the parcel secure and follow the next handoff instructions from Logistics.');
+        }
+
+        if ($data['action'] === 'delivery_success') {
+            return back()->with('status', 'Delivery completed. The tracking code was verified and the proof-of-delivery photo was saved.');
         }
 
         return back()->with('status', 'Rider assignment updated.');

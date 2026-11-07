@@ -16,11 +16,13 @@ use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerPickupRequest;
+use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\User;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
+use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\SellerPickupAutoDispatchService;
@@ -89,6 +91,7 @@ class DispatchController extends Controller
         RiderAssignmentOfferExpiryService $offers,
         SellerPickupAutoDispatchService $autoDispatch,
         SellerPickupMatchingService $automaticMatching,
+        SellerPickupBatchService $pickupBatches,
     ): View
     {
         $center = $this->center($request);
@@ -97,6 +100,9 @@ class DispatchController extends Controller
         $offers->expireDuePickupOffers(logisticsCenterId: (int) $center->id);
         $autoDispatch->retryForCenter($request->user(), $center);
         $automaticMatching->expireDueOffers((int) $center->id);
+        if ($schema->sellerPickupBatchesReady()) {
+            $pickupBatches->reconcileFullyCollectedForCenter((int) $center->id);
+        }
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -114,7 +120,11 @@ class DispatchController extends Controller
             ->whereDoesntHave('shipment.riderAssignments', fn ($assignment) => $assignment
                 ->where('assignment_type', 'PICKUP')->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']));
         if ($schema->sellerPickupRequestsReady()) {
-            $pickupQuery->whereDoesntHave('shipment.sellerPickupMemberships');
+            // Historical memberships remain attached after a request is
+            // cancelled or returned to the Seller. Only an active membership
+            // should keep a READY_FOR_PICKUP parcel out of this legacy queue.
+            $pickupQuery->whereDoesntHave('shipment.sellerPickupMemberships', fn ($membership) =>
+                $membership->where('active_slot', true));
         }
         $pickups = $pickupQuery
             ->with(['shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.order.address', 'shipment.serviceArea', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address'])
@@ -190,6 +200,9 @@ class DispatchController extends Controller
         }
         if ($schema->sellerSelectedFallbackHubsReady()) {
             $sellerPickupRelations[] = 'memberships.preferredDestinationLogisticsCenter.address';
+        }
+        if ($schema->sellerPickupCenterOffersReady()) {
+            $sellerPickupRelations[] = 'centerOffers.logisticsCenter';
         }
         $sellerPickupRequests = $schema->sellerPickupRequestsReady()
             ? SellerPickupRequest::query()
@@ -277,10 +290,15 @@ class DispatchController extends Controller
                         return false;
                     }
 
-                    $isSellerSelectedFallback = $schema->sellerPickupCenterSelectionReady()
+                    $hasActiveOfferForCenter = $schema->sellerPickupCenterOffersReady()
+                        && $pickupRequest->centerOffers->contains(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                            && $offer->status === 'OFFERED'
+                            && $offer->expires_at?->isFuture());
+                    $isSelectedFallbackAwaitingReview = $schema->sellerSelectedFallbackHubsReady()
+                        && (bool) $pickupRequest->seller_selected_fallback
                         && in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true)
                         && (int) $pickupRequest->preferred_logistics_center_id === (int) $center->id;
-                    if ($isSellerSelectedFallback) {
+                    if ($hasActiveOfferForCenter || $isSelectedFallbackAwaitingReview) {
                         return false;
                     }
 
@@ -288,9 +306,6 @@ class DispatchController extends Controller
                         || ! $areaEligibility->centerAuthorizesAddress($center, $pickupRequest->pickupAddress);
                 })
                 ->values();
-        }
-        if ($schema->sellerPickupRequestsReady() && $schema->sellerPickupCenterOffersReady()) {
-            $sellerPickupRequests->load('centerOffers.logisticsCenter');
         }
         $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema): void {
             $shipments = $pickupRequest->memberships->map(fn ($membership) => $membership->shipment)->filter();
@@ -386,12 +401,15 @@ class DispatchController extends Controller
         ]);
     }
 
-    public function receive(Request $request): View
+    public function receive(Request $request, SellerPickupBatchService $pickupBatches): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
         $schema = app(LogisticsSchemaReadiness::class);
         $pickupBatchesReady = $schema->sellerPickupBatchesReady();
+        if ($pickupBatchesReady) {
+            $pickupBatches->reconcileFullyCollectedForCenter((int) $center->id);
+        }
         $tracking = trim((string) $request->query('tracking', ''));
 
         $shipments = Shipment::query()
@@ -1207,6 +1225,7 @@ class DispatchController extends Controller
         Request $request,
         ShipmentWorkflowService $workflow,
         LogisticsSchemaReadiness $schema,
+        LocalRiderTripService $localTrips,
         TransferManifestService $manifests,
     ): JsonResponse|RedirectResponse
     {
@@ -1228,7 +1247,7 @@ class DispatchController extends Controller
 
         $request->merge(['scanned_code' => $data['tracking']]);
 
-        return $this->confirmReceive($request, $shipment, $workflow, $schema, $manifests);
+        return $this->confirmReceive($request, $shipment, $workflow, $schema, $localTrips, $manifests);
     }
 
     public function confirmReceive(
@@ -1236,6 +1255,7 @@ class DispatchController extends Controller
         Shipment $shipment,
         ShipmentWorkflowService $workflow,
         LogisticsSchemaReadiness $schema,
+        LocalRiderTripService $localTrips,
         TransferManifestService $manifests,
     ): JsonResponse|RedirectResponse
     {
@@ -1296,7 +1316,9 @@ class DispatchController extends Controller
             }
         }
 
-        $this->ensureShipmentBelongsToCenter($shipment, $center);
+        if (! $localTrips->isIncomingSellerPickupForCenter($shipment, $center)) {
+            $this->ensureShipmentBelongsToCenter($shipment, $center);
+        }
 
         $pickupItem = $shipment->riderAssignments()
             ->where('assignment_type', 'PICKUP')
@@ -1430,11 +1452,36 @@ class DispatchController extends Controller
         abort_unless($center, 403);
         $shipment = Shipment::query()
             ->where('tracking_number', $tracking)
-            ->where('logistics_center_id', $center->id)
             ->with(['orderItem.productVariant', 'sellerOrder.items.productVariant', 'sellerOrder.sellerProfile.user', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'waybills'])
             ->firstOrFail();
 
+        if (! $this->activeSellerPickupRequestAllowsWaybill($shipment, $center)) {
+            if ($shipment->logistics_center_id !== null) {
+                abort_unless((int) $shipment->logistics_center_id === (int) $center->id, 404);
+            } else {
+                // Preserve coverage-based access for established/local routes.
+                $this->ensureShipmentBelongsToCenter($shipment, $center);
+            }
+        }
+
         return view('logistics.waybill', compact('shipment'));
+    }
+
+    private function activeSellerPickupRequestAllowsWaybill(Shipment $shipment, LogisticsCenter $center): bool
+    {
+        return SellerPickupRequestShipment::query()
+            ->where('shipment_id', $shipment->id)
+            ->where('active_slot', true)
+            ->whereHas('pickupRequest', fn ($request) => $request->where(function ($request) use ($center): void {
+                $request->where(function ($selectedFallback) use ($center): void {
+                    $selectedFallback
+                        ->where('seller_selected_fallback', true)
+                        ->where('preferred_logistics_center_id', $center->id);
+                })->orWhereHas('centerOffers', fn ($offer) => $offer
+                    ->where('logistics_center_id', $center->id)
+                    ->whereIn('status', ['OFFERED', 'ACCEPTED']));
+            }))
+            ->exists();
     }
 
     private function center(Request $request): mixed

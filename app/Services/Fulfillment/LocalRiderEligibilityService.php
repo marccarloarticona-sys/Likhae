@@ -145,6 +145,27 @@ class LocalRiderEligibilityService
             ->contains(fn (ServiceAreaLocation $location): bool => $this->centerAuthorizesExactLocation($center, $location));
     }
 
+    /** Whether any approved, active Logistics center is authorized for this exact PSGC address. */
+    public function hasApprovedCenterCoverageForAddress(?object $address): bool
+    {
+        // Incomplete PSGC data cannot be used to prove that a location is uncovered.
+        if (! $address
+            || blank($address->province_code ?? null)
+            || blank($address->municipality_code ?? null)
+            || blank($address->barangay_code ?? null)) {
+            return true;
+        }
+
+        return LogisticsCenter::query()
+            ->approvedActive()
+            ->whereHas('owner', fn (Builder $owner) => $owner
+                ->where('account_type', User::TYPE_LOGISTICS)
+                ->where('status', User::STATUS_ACTIVE))
+            ->with('address')
+            ->get()
+            ->contains(fn (LogisticsCenter $center): bool => $this->centerAuthorizesAddress($center, $address));
+    }
+
     private function centerCoversApprovedArea(LogisticsCenter $center): bool
     {
         $attributes = $center->getAttributes();

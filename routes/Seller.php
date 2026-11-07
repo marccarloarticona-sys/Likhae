@@ -12,6 +12,7 @@ use App\Http\Controllers\Seller\SellerOrderController;
 use App\Http\Controllers\Seller\SellerPickupRequestController;
 use App\Http\Controllers\Seller\SellerReturnRefundController;
 use App\Http\Controllers\Seller\SellerProductController;
+use App\Http\Controllers\Seller\SellerSubcategoryRequestController;
 use App\Http\Controllers\Seller\SellerPromotionController;
 use App\Http\Controllers\Communication\MessagingFaqController;
 use App\Http\Controllers\Communication\SmartMessagingController;
@@ -47,6 +48,8 @@ Route::prefix('seller')
         Route::patch('/settings/theme', [WorkspaceSettingsController::class, 'updateThemePreference'])->defaults('workspace', 'seller')->name('settings.theme.update');
 
         Route::get('/products', [SellerProductController::class, 'index'])->name('products');
+        Route::get('/products/subcategory-requests', [SellerSubcategoryRequestController::class, 'create'])->name('products.subcategory-requests.create');
+        Route::post('/products/subcategory-requests', [SellerSubcategoryRequestController::class, 'store'])->name('products.subcategory-requests.store');
         Route::get('/products/inventory/preview', [SellerProductController::class, 'inventoryPreview'])->name('products.inventory.preview');
         Route::get('/products/inventory/download', [SellerProductController::class, 'downloadInventoryPdf'])->name('products.inventory.download');
         Route::get('/products/trash', [SellerProductController::class, 'trash'])->name('products.trash');

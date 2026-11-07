@@ -8,7 +8,7 @@
 
     if ($riderUser?->isAccountType(User::TYPE_RIDER)
         && $riderUser->isActive()
-        && $riderProfile?->status === 'ACTIVE') {
+        && in_array($riderProfile?->status, ['ACTIVE', 'WARNED'], true)) {
         $riderLiveAssignments = RiderAssignment::query()
             ->where('rider_profile_id', $riderProfile->id)
             ->where(function ($query): void {

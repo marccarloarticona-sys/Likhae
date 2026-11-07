@@ -218,6 +218,10 @@ document.addEventListener('parcel-scanner:success', (event) => {
         document.querySelector('[data-pickup-finished-message]')?.classList.remove('hidden');
         document.querySelector('[data-finish-pickup-form]')?.classList.remove('hidden');
     }
+
+    if (result.batch_status === 'EN_ROUTE_TO_HUB') {
+        window.setTimeout(() => window.location.reload(), 500);
+    }
 });
 </script>
 @endsection

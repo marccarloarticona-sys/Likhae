@@ -53,7 +53,7 @@
                     : ['Start the delivery route when ready to depart.', 'You, the delivery rider']),
             'IN_PROGRESS' => ! $parcel['has_buyer_pin']
                 ? ['Wait for the Buyer to confirm the exact destination pin; contact them if needed.', 'Buyer']
-                : ['Collect the displayed COD amount if due, then upload proof of delivery or record the attempt.', 'You, the delivery rider'],
+                : ['Scan or enter this parcel’s tracking code, collect COD if due, then capture the proof-of-delivery photo and complete delivery details.', 'You, the delivery rider'],
             'COMPLETED' => ['Confirm receipt in My Orders, or wait for the automatic receipt deadline.', 'Buyer'],
             default => ['Dispatch will review this assignment and route it to an eligible rider.', 'Logistics'],
         };
@@ -112,16 +112,32 @@
                         <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                     @endif
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form>
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-expected-tracking="{{ $parcel['tracking'] }}">
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
+                        <section class="grid gap-3 rounded-2xl border border-line bg-page-secondary p-4" aria-labelledby="delivery-scan-heading">
+                            <div><span class="text-xs font-bold uppercase tracking-wider text-primary">Step 1</span><h3 id="delivery-scan-heading" class="mt-1 font-bold text-ink">Scan this parcel’s waybill</h3><p class="mt-1 text-sm text-muted">Scan the barcode with your camera or type the tracking number shown above. The code must match this assigned parcel.</p></div>
+                            <x-shared.parcel-scanner
+                                :action="route('rider.scan')"
+                                :scanner-only="true"
+                                :fill-target="'#delivery-scanned-code'"
+                                :method-target="'#delivery-scan-method'"
+                                title="Scan delivery barcode"
+                                description="Point the camera at the parcel’s QR code or barcode. The scan fills the tracking field for verification."
+                            />
+                            <label class="grid gap-2 text-sm font-semibold text-ink">Tracking number
+                                <input id="delivery-scanned-code" type="text" name="scanned_code" value="{{ old('scanned_code', '') }}" required maxlength="150" autocomplete="off" autocapitalize="characters" spellcheck="false" class="w-full rounded-xl border border-line bg-white px-4 py-3 font-mono text-sm" placeholder="Scan or enter the tracking number" data-delivery-tracking-input data-expected-tracking="{{ $parcel['tracking'] }}" aria-describedby="delivery-scan-verification">
+                            </label>
+                            <input id="delivery-scan-method" type="hidden" name="scan_method" value="{{ old('scan_method', 'MANUAL') }}" data-delivery-scan-method>
+                            <p id="delivery-scan-verification" class="text-sm font-semibold text-muted" aria-live="polite" data-delivery-scan-verification>Scan or enter the tracking number to verify this parcel.</p>
+                        </section>
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             Cash received from buyer
                             <input type="text" name="collected_amount" inputmode="decimal" autocomplete="off" placeholder="{{ number_format((float) $parcel['cod_expected'], 2) }}" value="{{ old('collected_amount') }}" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-cash-input>
                             <small class="font-normal text-muted">Enter the actual cash received. Thousands separators and two decimal places are formatted for you. The server compares the numeric amount with the COD due; do not deduct rider earnings.</small>
                         </label>
                         <label class="grid gap-2 text-sm font-semibold text-ink">
-                            Proof of delivery photo
+                            <span class="text-xs font-bold uppercase tracking-wider text-primary">Step 2 · Proof of delivery photo</span>
                             <input type="file" name="proof_file" accept="image/jpeg,image/png,image/webp" capture="environment" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-proof-input>
                             <small class="font-normal text-muted">Take a clear photo of the delivered parcel. LIKHAE uses this device's location, including a recent live GPS fix when available, and stamps the photo with the coordinates and reported accuracy.</small>
                             <span class="hidden rounded-lg border border-line bg-page-secondary px-3 py-2 text-xs font-medium text-muted" aria-live="polite" data-delivery-proof-status></span>
@@ -131,7 +147,7 @@
                             <img class="mx-auto max-h-64 max-w-full rounded-lg object-contain" alt="Delivery proof preview" data-delivery-proof-preview>
                             <button type="button" class="mt-3 rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink" data-delivery-proof-replace>Retake / Replace Photo</button>
                         </div>
-                        <button type="submit" class="w-full rounded-xl bg-green-700 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60" data-delivery-proof-submit disabled>Upload Proof &amp; Mark Delivered</button>
+                        <button type="submit" class="w-full rounded-xl bg-green-700 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60" data-delivery-proof-submit disabled>Step 3 · Upload POD &amp; Complete Delivery</button>
                     </form>
                     <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" class="grid gap-3" data-delivery-failed-form data-third-failure-return="{{ $thirdFailureWillStartReturn ? 'true' : 'false' }}" data-default-next-attempt="{{ $defaultRedeliveryAt->format('Y-m-d\TH:i') }}">
                         @csrf @method('PATCH')<input type="hidden" name="action" value="delivery_failed">
@@ -164,7 +180,7 @@
 <dialog class="w-[calc(100%-2rem)] max-w-lg rounded-2xl p-0 shadow-2xl backdrop:bg-black/50" data-delivery-confirm-dialog aria-labelledby="delivery-confirm-heading">
     <div class="grid gap-4 p-6">
         <div><h2 id="delivery-confirm-heading" class="text-xl font-bold text-ink">Confirm Successful Delivery</h2><p class="mt-1 text-sm text-muted">This will record the parcel as delivered and submit the proof photo.</p></div>
-        <dl class="grid gap-2 rounded-xl bg-page-secondary p-4 text-sm"><div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div><div><dt class="text-muted">COD expected</dt><dd class="font-semibold text-ink">₱{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div><div><dt class="text-muted">Cash received</dt><dd class="font-semibold text-ink" data-confirm-delivery-cash>Not entered</dd></div><div><dt class="text-muted">Proof photo</dt><dd class="font-semibold text-ink" data-confirm-delivery-proof>Not attached</dd></div></dl>
+        <dl class="grid gap-2 rounded-xl bg-page-secondary p-4 text-sm"><div><dt class="text-muted">Buyer</dt><dd class="font-semibold text-ink">{{ $parcel['buyer'] }}</dd></div><div><dt class="text-muted">Tracking verified</dt><dd class="font-mono font-semibold text-ink" data-confirm-delivery-tracking>Not verified</dd></div><div><dt class="text-muted">COD expected</dt><dd class="font-semibold text-ink">₱{{ number_format((float) $parcel['cod_expected'], 2) }}</dd></div><div><dt class="text-muted">Cash received</dt><dd class="font-semibold text-ink" data-confirm-delivery-cash>Not entered</dd></div><div><dt class="text-muted">Proof photo</dt><dd class="font-semibold text-ink" data-confirm-delivery-proof>Not attached</dd></div></dl>
         <div class="flex flex-wrap justify-end gap-2"><button type="button" class="rounded-xl border border-line px-4 py-3 text-sm font-semibold text-ink" data-delivery-confirm-cancel>Cancel</button><button type="button" class="rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white" data-delivery-confirm-submit>Confirm Delivery</button></div>
     </div>
 </dialog>
@@ -182,9 +198,13 @@
         const replace = form?.querySelector('[data-delivery-proof-replace]');
         const retryStamp = form?.querySelector('[data-delivery-location-retry]');
         const cashInput = form?.querySelector('[data-delivery-cash-input]');
+        const trackingInput = form?.querySelector('[data-delivery-tracking-input]');
+        const scanMethodInput = form?.querySelector('[data-delivery-scan-method]');
+        const trackingStatus = form?.querySelector('[data-delivery-scan-verification]');
         const confirmDialog = document.querySelector('[data-delivery-confirm-dialog]');
         const confirmedCash = confirmDialog?.querySelector('[data-confirm-delivery-cash]');
         const confirmedProof = confirmDialog?.querySelector('[data-confirm-delivery-proof]');
+        const confirmedTracking = confirmDialog?.querySelector('[data-confirm-delivery-tracking]');
         const confirmButton = confirmDialog?.querySelector('[data-delivery-confirm-submit]');
         const cancelConfirm = confirmDialog?.querySelector('[data-delivery-confirm-cancel]');
         const targetBytes = 1536 * 1024;
@@ -193,7 +213,38 @@
         let selectedPhoto = null;
         let photoCapturedAt = null;
         let confirmedDelivery = false;
+        let trackingVerified = false;
         let previewUrl = null;
+
+        if (!form || !input || !submit) return;
+
+        const normalizeTracking = (value) => String(value || '').replace(/\s+/g, '').toUpperCase();
+        const verifyTracking = () => {
+            if (!trackingInput) return false;
+            const scanned = normalizeTracking(trackingInput.value);
+            const expected = normalizeTracking(trackingInput.dataset.expectedTracking || form?.dataset.expectedTracking);
+            trackingVerified = scanned !== '' && scanned === expected;
+            trackingInput.setCustomValidity(scanned && !trackingVerified ? 'This tracking number does not match the assigned parcel.' : '');
+            if (trackingStatus) {
+                trackingStatus.textContent = !scanned
+                    ? 'Scan or enter the tracking number to verify this parcel.'
+                    : trackingVerified
+                        ? 'Parcel verified. Continue with the delivery photo and details.'
+                        : 'This code does not match the assigned parcel. Scan again or check the tracking number.';
+                trackingStatus.classList.toggle('text-green-700', trackingVerified);
+                trackingStatus.classList.toggle('text-red-700', Boolean(scanned) && !trackingVerified);
+                trackingStatus.classList.toggle('text-muted', !scanned);
+            }
+            if (submit) submit.disabled = !stampedProofReady || !trackingVerified;
+            return trackingVerified;
+        };
+
+        trackingInput?.addEventListener('input', () => {
+            const cameFromCameraScan = trackingInput.dataset.scannerCode === trackingInput.value;
+            if (scanMethodInput) scanMethodInput.value = cameFromCameraScan ? (trackingInput.dataset.scannerMethod || 'BARCODE') : 'MANUAL';
+            verifyTracking();
+        });
+        verifyTracking();
 
         const formatCashInput = (complete = false) => {
             if (!cashInput) return;
@@ -431,7 +482,7 @@
                 retryStamp?.classList.remove('hidden');
             } finally {
                 optimizing = false;
-                submit.disabled = !stampedProofReady;
+                submit.disabled = !stampedProofReady || !trackingVerified;
                 submit.classList.remove('cursor-wait', 'opacity-70');
             }
         };
@@ -451,6 +502,12 @@
             input.click();
         });
         form.addEventListener('submit', (event) => {
+            if (!verifyTracking()) {
+                event.preventDefault();
+                trackingStatus?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                trackingInput?.focus({ preventScroll: true });
+                return;
+            }
             if (optimizing) {
                 event.preventDefault();
                 setStatus('Please wait while the proof photo is stamped.');
@@ -475,6 +532,7 @@
                 const numericCash = Number((cashInput?.value || '').replaceAll(',', '') || 0);
                 confirmedCash.textContent = `₱${numericCash.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             }
+            if (confirmedTracking) confirmedTracking.textContent = trackingInput?.value || 'Not verified';
             if (confirmedProof) confirmedProof.textContent = input.files.length ? input.files[0].name : 'Not attached';
             confirmDialog.showModal();
         });

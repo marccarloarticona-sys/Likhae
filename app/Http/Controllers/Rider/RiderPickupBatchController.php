@@ -162,13 +162,17 @@ class RiderPickupBatchController extends Controller
             $batch = $batch->fresh()->load('items.riderAssignment.shipment');
             $collectedCount = $batches->collectedAssignmentIds($batch)->count();
             $scannedShipment = $result['assignment']->shipment()->first();
+            $batchEnRoute = $batch->status === RiderLocalTrip::EN_ROUTE_TO_HUB;
 
             return response()->json([
                 'success' => true,
-                'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
+                'message' => $batchEnRoute
+                    ? 'All parcels collected. Continue to the assigned logistics center.'
+                    : ($result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.'),
                 'tracking' => $scannedShipment?->tracking_number,
                 'shipment_status' => $scannedShipment?->current_status,
                 'center_received' => $scannedShipment?->hasReachedSortingCenter() ?? false,
+                'batch_status' => $batch->status,
                 'assignment_id' => $result['assignment']->id,
                 'already_verified' => $result['already_verified'],
                 'collected_count' => $collectedCount,
@@ -177,7 +181,12 @@ class RiderPickupBatchController extends Controller
             ]);
         }
 
-        return back()->with('status', $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.');
+        $batch = $batch->fresh();
+        $message = $batch->status === RiderLocalTrip::EN_ROUTE_TO_HUB
+            ? 'All parcels collected. Continue to the assigned logistics center.'
+            : ($result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.');
+
+        return back()->with('status', $message);
     }
 
     public function notCollected(Request $request, int $trip, SellerPickupBatchService $batches): RedirectResponse

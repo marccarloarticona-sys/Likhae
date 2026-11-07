@@ -194,7 +194,9 @@
         'ready-for-pickup' => match ($orderPickupStatus) {
             'Waiting for Intake' => ['Bring the selected parcels with the order waybill to your assigned center for intake scanning.', 'Seller / Logistics'],
             'Waiting for Logistics' => $order['has_selected_logistics_center']
-                ? ['Pickup request sent to '.$order['logistics_provider'].'. Wait for that center to assign a pickup rider.', 'Logistics']
+                ? (($order['pickup_fallback_acceptance_pending'] ?? false)
+                    ? ['Pickup request sent to '.$order['logistics_provider'].'. The origin center must accept the route before a pickup Rider is assigned.', 'Logistics']
+                    : ['Pickup request sent to '.$order['logistics_provider'].'. Wait for that center to assign a pickup rider.', 'Logistics'])
                 : ['Choose a Logistics center in Seller Pickup to submit the pickup request.', 'Seller'],
             'Pickup scheduled' => ['Keep parcels ready for the rider assigned by '.($order['logistics_provider'] ?: 'your Logistics center').'.', 'Pickup rider'],
             default => ['Assign a pickup rider to collect the ready parcels.', 'Logistics'],
@@ -218,7 +220,11 @@
                                 Take the selected parcels with the order waybill to your assigned center for intake scanning.
                             @elseif(($order['pickup_status'] ?? '') === 'Waiting for Logistics')
                                 @if($order['has_selected_logistics_center'])
-                                    Pickup request sent to {{ $order['logistics_provider'] }}. Waiting for that center to assign a rider.
+                                    @if($order['pickup_fallback_acceptance_pending'] ?? false)
+                                        Pickup request sent to {{ $order['logistics_provider'] }}. Waiting for the origin center to accept the route; Rider assignment follows acceptance.
+                                    @else
+                                        Pickup request sent to {{ $order['logistics_provider'] }}. Waiting for that center to assign a rider.
+                                    @endif
                                 @else
                                     Choose your Logistics center in Seller Pickup to submit a pickup request.
                                 @endif

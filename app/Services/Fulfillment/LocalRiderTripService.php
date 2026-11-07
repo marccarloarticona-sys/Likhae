@@ -503,6 +503,24 @@ final class LocalRiderTripService
         });
     }
 
+    public function isIncomingSellerPickupForCenter(Shipment $shipment, LogisticsCenter $center): bool
+    {
+        if (! $this->schema->sellerPickupBatchesReady() || $shipment->current_status !== 'PICKED_UP') {
+            return false;
+        }
+
+        return RiderLocalTrip::query()
+            ->where('logistics_center_id', $center->id)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->whereNotNull('seller_profile_id')
+            ->where('status', RiderLocalTrip::EN_ROUTE_TO_HUB)
+            ->whereHas('items', fn ($items) => $items->whereHas('riderAssignment', fn ($assignment) => $assignment
+                ->where('shipment_id', $shipment->id)
+                ->where('assignment_type', RiderAssignment::TYPE_PICKUP)
+                ->where('status', 'COMPLETED')))
+            ->exists();
+    }
+
     public function assertAssignmentMayStart(RiderAssignment $assignment): void
     {
         // Pickup assignments are route stops on the way to the seller. The parcel

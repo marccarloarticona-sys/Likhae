@@ -80,6 +80,9 @@ class SellerOrderController extends Controller
         if ($schema->sellerPickupCenterSelectionReady()) {
             $orderRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.preferredLogisticsCenter';
         }
+        if ($schema->sellerSelectedFallbackHubsReady() && $schema->sellerPickupCenterOffersReady()) {
+            $orderRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.centerOffers';
+        }
         $ownedOrders = SellerOrder::query()->where('seller_profile_id', $seller->id);
         $ordersQuery = (clone $ownedOrders)
             ->with($orderRelations)
@@ -135,7 +138,7 @@ class SellerOrderController extends Controller
             ->values();
         $successfulPickupScanKeys = $this->successfulPickupScanKeys($pickupAssignments);
         if ($selectedRecord) {
-            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady, $successfulPickupScanKeys);
+            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady, $successfulPickupScanKeys, $schema);
         }
 
         $refundSearch = $requestedStatus === 'returns' ? $search : '';
@@ -230,7 +233,7 @@ class SellerOrderController extends Controller
             'fromDate' => $fromDate,
             'toDate' => $toDate,
             'selectedOrderView' => $selectedOrderView,
-            'sellerOrders' => $ordersPage->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady, $successfulPickupScanKeys)),
+            'sellerOrders' => $ordersPage->map(fn (SellerOrder $order): array => $this->viewOrder($order, $pickupBatchSchemaReady, $successfulPickupScanKeys, $schema)),
             'refundRequests' => $refundRequests,
             'sellerReturnWorkflows' => $sellerReturnWorkflows,
             'returnWorkflowSchemaReady' => $returnWorkflowSchemaReady,
@@ -424,7 +427,12 @@ class SellerOrderController extends Controller
             ->with('status', 'Parcels are ready. Submit the pickup request from this page.');
     }
 
-    private function viewOrder(SellerOrder $order, bool $pickupBatchSchemaReady, array $successfulPickupScanKeys): array
+    private function viewOrder(
+        SellerOrder $order,
+        bool $pickupBatchSchemaReady,
+        array $successfulPickupScanKeys,
+        LogisticsSchemaReadiness $schema,
+    ): array
     {
         $address = $order->order?->address;
         $items = $order->items;
@@ -516,6 +524,18 @@ class SellerOrderController extends Controller
         $logisticsProvider = $logisticsProviderNames->isNotEmpty()
             ? $logisticsProviderNames->implode(', ')
             : ($pickupStatus === 'Waiting for Logistics' ? 'Not selected' : 'Not assigned');
+        $fallbackPickupRequests = $schema->sellerSelectedFallbackHubsReady() && $schema->sellerPickupCenterOffersReady()
+            ? $shipments->flatMap(fn ($shipment) => $shipment->sellerPickupMemberships
+                ->filter(fn ($membership): bool => $membership->active_slot === true)
+                ->map(fn ($membership) => $membership->pickupRequest))
+                ->filter(fn ($pickupRequest): bool => (bool) $pickupRequest?->seller_selected_fallback)
+                ->unique('id')
+            : collect();
+        $pickupFallbackAcceptancePending = $fallbackPickupRequests->contains(function ($pickupRequest): bool {
+            $latestOffer = $pickupRequest->centerOffers->sortByDesc('attempt_number')->first();
+
+            return ! $latestOffer || $latestOffer->status !== 'ACCEPTED';
+        });
 
         $itemSubtotalCents = FinancialRules::cents($order->item_subtotal);
         $voucherCents = FinancialRules::cents($order->voucher_discount);
@@ -605,6 +625,7 @@ class SellerOrderController extends Controller
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),
             'logistics_provider' => $logisticsProvider,
             'has_selected_logistics_center' => $selectedPickupCenterNames->isNotEmpty(),
+            'pickup_fallback_acceptance_pending' => $pickupFallbackAcceptancePending,
             'shipping' => $assignment?->riderProfile?->user?->name ?? $pickupAssignment?->riderProfile?->user?->name ?? 'Waiting for Logistics',
             'pickup_status' => $pickupStatus,
             'pickup_batch' => $pickupBatch ? 'P-'.$pickupBatch->id : null,

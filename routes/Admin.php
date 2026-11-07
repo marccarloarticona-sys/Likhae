@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\AdminFinanceController;
 use App\Http\Controllers\Admin\AdminMarketingController;
 use App\Http\Controllers\Admin\AdminOnboardingController;
 use App\Http\Controllers\Admin\AdminOperationsController;
+use App\Http\Controllers\Admin\AdminSubcategoryRequestController;
 use App\Http\Controllers\Admin\AdminProductModerationController;
 use App\Http\Controllers\Admin\AdminProtectionRuleController;
 use App\Http\Controllers\Admin\AdminShippingRateController;
@@ -171,6 +172,8 @@ Route::prefix('admin')
         Route::patch('/categories/{category}/archive', [AdminOperationsController::class, 'archiveCategory'])->name('categories.archive');
         Route::patch('/categories/{category}/restore', [AdminOperationsController::class, 'restoreCategory'])->name('categories.restore');
         Route::post('/subcategories', [AdminOperationsController::class, 'storeSubcategory'])->name('subcategories.store');
+        Route::post('/categories/subcategory-requests/{subcategoryRequest}/decision', [AdminSubcategoryRequestController::class, 'decide'])
+            ->whereNumber('subcategoryRequest')->name('categories.subcategory-requests.decision');
         Route::patch('/subcategories/{category}/status', [AdminOperationsController::class, 'updateSubcategoryStatus'])->name('subcategories.status');
         Route::patch('/subcategories/{category}/archive', [AdminOperationsController::class, 'archiveCategory'])->name('subcategories.archive');
         Route::patch('/subcategories/{category}/restore', [AdminOperationsController::class, 'restoreCategory'])->name('subcategories.restore');

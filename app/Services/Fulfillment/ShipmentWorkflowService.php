@@ -783,7 +783,7 @@ class ShipmentWorkflowService
                 $pickupCenter = $pickupArea?->logisticsCenter ?? $rider->logisticsCenter;
                 $sellerAddress = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
                 $uncoveredFallback = $allowUncoveredPickupRoute
-                    && $this->isSellerSelectedFallbackPickup($shipment, $pickupCenter);
+                    && $this->isSellerSelectedFallbackPickup($shipment, $pickupCenter, $sellerAddress);
                 if (! $pickupArea && ! $allowPickupAreaOverride && ! $uncoveredFallback) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
@@ -890,11 +890,14 @@ class ShipmentWorkflowService
                 ->with(['serviceArea', 'pickupRequests', 'sellerOrder'])
                 ->lockForUpdate()
                 ->firstOrFail();
-            if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
-                throw new RuntimeException('This parcel belongs to another logistics center.');
-            }
-            if (! $shipment->logistics_center_id && (int) $shipment->serviceArea?->logistics_center_id !== (int) $center->id) {
-                throw new RuntimeException('This parcel is not assigned to this logistics center.');
+            $authorizedIncomingPickup = $this->localTrips->isIncomingSellerPickupForCenter($shipment, $center);
+            if (! $authorizedIncomingPickup) {
+                if ($shipment->logistics_center_id && (int) $shipment->logistics_center_id !== (int) $center->id) {
+                    throw new RuntimeException('This parcel belongs to another logistics center.');
+                }
+                if (! $shipment->logistics_center_id && (int) $shipment->serviceArea?->logistics_center_id !== (int) $center->id) {
+                    throw new RuntimeException('This parcel is not assigned to this logistics center.');
+                }
             }
 
             $code = trim($code);
@@ -1311,18 +1314,30 @@ class ShipmentWorkflowService
             ->exists();
     }
 
-    private function isSellerSelectedFallbackPickup(Shipment $shipment, ?LogisticsCenter $center): bool
+    private function isSellerSelectedFallbackPickup(Shipment $shipment, ?LogisticsCenter $center, ?Address $pickupAddress = null): bool
     {
-        if (! $center || ! $this->schema->sellerSelectedFallbackHubsReady()
-            || (int) $shipment->logistics_center_id !== (int) $center->id) {
+        if (! $center || ! $this->schema->sellerSelectedFallbackHubsReady()) {
             return false;
         }
 
-        return SellerPickupRequestShipment::query()
+        $pickupRequest = SellerPickupRequestShipment::query()
             ->where('shipment_id', $shipment->id)
             ->where('active_slot', true)
-            ->whereHas('pickupRequest', fn ($request) => $request->where('seller_selected_fallback', true))
-            ->exists();
+            ->with('pickupRequest')
+            ->first()?->pickupRequest;
+        if (! $pickupRequest
+            || (int) $pickupRequest->preferred_logistics_center_id !== (int) $center->id
+            || ! in_array($pickupRequest->status, ['REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
+            return false;
+        }
+
+        if ((bool) $pickupRequest->seller_selected_fallback) {
+            return true;
+        }
+
+        return ! $this->localRiderEligibility->hasApprovedCenterCoverageForAddress(
+            $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress,
+        );
     }
 
     /** Match pickup coverage using the saved PSGC codes only. */
@@ -2024,10 +2039,27 @@ class ShipmentWorkflowService
         $this->requireAssignmentStatus($assignment, ['IN_PROGRESS'], 'complete delivery');
         $this->requireShipmentStatus($shipment, ['OUT_FOR_DELIVERY'], 'complete delivery');
 
-        $scannedCode = trim((string) ($payload['scanned_code'] ?? ''));
-        if ($scannedCode !== '' && ! hash_equals($shipment->tracking_number, $scannedCode)) {
+        $scannedCode = strtoupper((string) preg_replace('/\s+/u', '', trim((string) ($payload['scanned_code'] ?? ''))));
+        $expectedCode = strtoupper((string) preg_replace('/\s+/u', '', trim((string) $shipment->tracking_number)));
+        if ($scannedCode === '' || ! hash_equals($expectedCode, $scannedCode)) {
             throw ValidationException::withMessages(['scanned_code' => 'The scanned parcel code does not match the shipment tracking number.']);
         }
+
+        $scanMethod = strtoupper((string) ($payload['scan_method'] ?? 'MANUAL'));
+        if (! in_array($scanMethod, ['QR', 'BARCODE', 'MANUAL'], true)) {
+            $scanMethod = 'MANUAL';
+        }
+        $this->recordScan(
+            $shipment,
+            $actor,
+            'DELIVERY_CONFIRMED',
+            $scanMethod,
+            $scannedCode,
+            'SUCCESS',
+            null,
+            $assignment,
+            'Tracking code verified before proof of delivery submission.',
+        );
 
         $proofPath = trim((string) ($payload['proof_path'] ?? ''));
         if ($proofPath === '') {

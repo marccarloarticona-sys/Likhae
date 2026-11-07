@@ -140,7 +140,10 @@ class RiderApiController extends Controller
             'already_verified' => $result['already_verified'],
             'assignment_id' => $result['assignment']->id,
             'shipment_status' => $result['assignment']->shipment?->current_status,
-            'message' => $result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.',
+            'batch_status' => $result['batch_status'],
+            'message' => $result['batch_status'] === RiderLocalTrip::EN_ROUTE_TO_HUB
+                ? 'All parcels collected. Continue to the assigned logistics center.'
+                : ($result['already_verified'] ? 'Parcel already picked up.' : 'Parcel verified and collected.'),
         ]]);
     }
 
@@ -195,6 +198,7 @@ class RiderApiController extends Controller
             'verified' => true,
             'already_verified' => $result['already_verified'],
             'shipment_status' => $result['assignment']->shipment?->current_status,
+            'batch_status' => $result['batch_status'],
         ]]);
     }
 

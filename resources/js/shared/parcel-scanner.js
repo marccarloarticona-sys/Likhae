@@ -376,6 +376,29 @@ export function initializeParcelScanners() {
                 return;
             }
 
+            if (scanner.dataset.scannerFillTarget) {
+                const target = document.querySelector(scanner.dataset.scannerFillTarget);
+                if (!target) {
+                    message.textContent = 'The tracking field is unavailable. Refresh the page and try again.';
+                    scanner.dataset.scannerSubmitting = 'false';
+                    return;
+                }
+
+                target.value = code;
+                target.dataset.scannerCode = code;
+                target.dataset.scannerMethod = detectedMethod;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                if (scanner.dataset.scannerMethodTarget) {
+                    const methodTarget = document.querySelector(scanner.dataset.scannerMethodTarget);
+                    if (methodTarget) methodTarget.value = detectedMethod;
+                }
+                message.textContent = `Scanned ${code}. Verify the code, then continue with the proof photo.`;
+                stopCamera();
+                scanner.dataset.scannerSubmitting = 'false';
+                return;
+            }
+
             if (scanner.dataset.scannerAppendTarget) {
                 const target = document.querySelector(scanner.dataset.scannerAppendTarget);
                 if (!target) {

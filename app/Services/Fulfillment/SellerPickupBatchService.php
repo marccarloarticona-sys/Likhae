@@ -128,10 +128,20 @@ final class SellerPickupBatchService
                 throw new RuntimeException('The selected parcels do not belong to the Seller pickup request.');
             }
             $pickupAddress = $linkedPickupRequest?->pickupAddress ?? $seller->businessAddress;
-            $allowUncoveredPickupRoute = (bool) ($linkedPickupRequest?->seller_selected_fallback
-                && app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady());
             if (! $pickupAddress || (int) $pickupAddress->user_id !== (int) $seller->user_id) {
                 throw new RuntimeException('The Seller must have a valid pickup address saved to their account.');
+            }
+
+            $allowUncoveredPickupRoute = false;
+            if ($linkedPickupRequest && app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+                $selectedOriginMatches = (int) $linkedPickupRequest->preferred_logistics_center_id === (int) $center->id;
+                $allowUncoveredPickupRoute = $selectedOriginMatches
+                    && ((bool) $linkedPickupRequest->seller_selected_fallback
+                        || ($automaticDispatch && $this->isVerifiedUncoveredSelectedOrigin(
+                            $linkedPickupRequest,
+                            $center,
+                            $pickupAddress,
+                        )));
             }
 
             $pickupArea = null;
@@ -506,7 +516,7 @@ final class SellerPickupBatchService
         });
     }
 
-    /** @return array{already_verified: bool, assignment: RiderAssignment} */
+    /** @return array{already_verified: bool, assignment: RiderAssignment, batch_status: string} */
     public function scan(User $actor, RiderLocalTrip $trip, string $code, string $method): array
     {
         return DB::transaction(function () use ($actor, $trip, $code, $method): array {
@@ -525,7 +535,14 @@ final class SellerPickupBatchService
 
             $assignment = $item->riderAssignment;
             if ($assignment->status === 'COMPLETED') {
-                return ['already_verified' => true, 'assignment' => $assignment];
+                $trip->load(['items.riderAssignment.shipment']);
+                $finished = $this->finishIfEveryParcelWasCollected($trip);
+
+                return [
+                    'already_verified' => true,
+                    'assignment' => $assignment->fresh('shipment'),
+                    'batch_status' => $finished ? RiderLocalTrip::EN_ROUTE_TO_HUB : $trip->fresh()->status,
+                ];
             }
             if ($assignment->status !== 'IN_PROGRESS') {
                 throw new RuntimeException('This parcel is not awaiting a seller pickup scan.');
@@ -536,9 +553,66 @@ final class SellerPickupBatchService
                 'scan_method' => $method,
             ]);
             $this->trips->syncAssignment($assignment);
+            $trip->load(['items.riderAssignment.shipment']);
+            $finished = $this->finishIfEveryParcelWasCollected($trip);
 
-            return ['already_verified' => false, 'assignment' => $assignment];
+            return [
+                'already_verified' => false,
+                'assignment' => $assignment->fresh('shipment'),
+                'batch_status' => $finished ? RiderLocalTrip::EN_ROUTE_TO_HUB : $trip->fresh()->status,
+            ];
         });
+    }
+
+    /**
+     * Repair a batch left at the seller after every assigned parcel was scanned.
+     * Only batches with a valid successful scan for every parcel are advanced.
+     */
+    public function reconcileFullyCollectedForCenter(int $logisticsCenterId): void
+    {
+        RiderLocalTrip::query()
+            ->where('logistics_center_id', $logisticsCenterId)
+            ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+            ->whereNotNull('seller_profile_id')
+            ->where('status', RiderLocalTrip::IN_PROGRESS)
+            ->whereHas('items')
+            ->orderBy('id')
+            ->chunkById(100, function ($trips): void {
+                foreach ($trips as $trip) {
+                    $this->reconcileFullyCollectedBatch($trip);
+                }
+            });
+    }
+
+    private function reconcileFullyCollectedBatch(?RiderLocalTrip $trip): bool
+    {
+        if (! $trip) {
+            return false;
+        }
+
+        return DB::transaction(function () use ($trip): bool {
+            $trip = $this->lockedPickupTrip($trip);
+
+            return $this->finishIfEveryParcelWasCollected($trip);
+        });
+    }
+
+    private function finishIfEveryParcelWasCollected(RiderLocalTrip $trip): bool
+    {
+        if ($trip->status !== RiderLocalTrip::IN_PROGRESS || $trip->items->isEmpty()) {
+            return false;
+        }
+
+        $allAssignmentsCollected = $trip->items->every(fn (RiderLocalTripItem $item): bool =>
+            $item->riderAssignment?->status === 'COMPLETED');
+        if (! $allAssignmentsCollected
+            || $this->collectedAssignmentIds($trip)->count() !== $trip->items->count()) {
+            return false;
+        }
+
+        $this->completeSellerPickup($trip);
+
+        return true;
     }
 
     public function markNotCollected(User $actor, RiderLocalTrip $trip, int $assignmentId, string $reason): RiderAssignment
@@ -576,29 +650,34 @@ final class SellerPickupBatchService
                 throw new RuntimeException('Scan or explicitly resolve every assigned parcel before completing the seller pickup.');
             }
 
-            $collectedAssignmentIds = $this->collectedAssignmentIds($trip);
-            $collected = $collectedAssignmentIds->isNotEmpty();
-            if (! $collected) {
-                $trip->update([
-                    'status' => RiderLocalTrip::COMPLETED,
-                    'completed_at' => now(),
-                    'exception_notes' => 'No parcels were collected; every assigned parcel was resolved at the seller.',
-                ]);
-            } else {
-                $trip->update(['status' => RiderLocalTrip::EN_ROUTE_TO_HUB]);
-            }
-            $this->finishLinkedPickupRequest($trip);
-            $this->notifications->sellerPickupBatchFinished($trip);
-            $shipments = $trip->items
-                ->map(fn (RiderLocalTripItem $item) => $item->riderAssignment?->shipment)
-                ->filter()
-                ->unique('id')
-                ->values();
-            $shipments->loadMissing('riderAssignments');
-            $shipments->each(fn (Shipment $shipment) => event(ShipmentTrackingUpdated::fromShipment($shipment)));
-
-            return $trip->refresh();
+            return $this->completeSellerPickup($trip);
         });
+    }
+
+    private function completeSellerPickup(RiderLocalTrip $trip): RiderLocalTrip
+    {
+        $collected = $this->collectedAssignmentIds($trip)->isNotEmpty();
+        if (! $collected) {
+            $trip->update([
+                'status' => RiderLocalTrip::COMPLETED,
+                'completed_at' => now(),
+                'exception_notes' => 'No parcels were collected; every assigned parcel was resolved at the seller.',
+            ]);
+        } else {
+            $trip->update(['status' => RiderLocalTrip::EN_ROUTE_TO_HUB]);
+        }
+
+        $this->finishLinkedPickupRequest($trip);
+        $this->notifications->sellerPickupBatchFinished($trip);
+        $shipments = $trip->items
+            ->map(fn (RiderLocalTripItem $item) => $item->riderAssignment?->shipment)
+            ->filter()
+            ->unique('id')
+            ->values();
+        $shipments->loadMissing('riderAssignments');
+        $shipments->each(fn (Shipment $shipment) => event(ShipmentTrackingUpdated::fromShipment($shipment)));
+
+        return $trip->refresh();
     }
 
     private function lockedPickupTrip(RiderLocalTrip $trip): RiderLocalTrip
@@ -742,6 +821,21 @@ final class SellerPickupBatchService
             || $count > LocalTripCapacityRules::MAX_PARCELS_PER_TRIP) {
             throw new RuntimeException('The seller pickup batch must contain 1 to its approved capacity, up to 10 parcels.');
         }
+    }
+
+    private function isVerifiedUncoveredSelectedOrigin(
+        SellerPickupRequest $pickupRequest,
+        LogisticsCenter $center,
+        object $pickupAddress,
+    ): bool {
+        if ((int) $pickupRequest->preferred_logistics_center_id !== (int) $center->id
+            || blank($pickupAddress->province_code ?? null)
+            || blank($pickupAddress->municipality_code ?? null)
+            || blank($pickupAddress->barangay_code ?? null)) {
+            return false;
+        }
+
+        return ! app(LocalRiderEligibilityService::class)->hasApprovedCenterCoverageForAddress($pickupAddress);
     }
 
     private function assertTripRider(User $actor, RiderLocalTrip $trip): void

@@ -30,6 +30,7 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerOrder;
 use App\Models\Seller\SellerProfile;
+use App\Models\Seller\SellerSubcategoryRequest;
 use App\Models\Seller\Voucher;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\RefundPayout;
@@ -1342,6 +1343,24 @@ class AdminOperationsController extends Controller
             ['path' => $request->url(), 'query' => $request->query()],
         );
 
+        $subcategoryRequestSchemaReady = Schema::hasTable('seller_subcategory_requests');
+        $pendingSubcategoryRequestCount = $subcategoryRequestSchemaReady
+            ? SellerSubcategoryRequest::query()->where('status', SellerSubcategoryRequest::STATUS_PENDING)->count()
+            : 0;
+        $subcategoryRequests = $subcategoryRequestSchemaReady
+            ? SellerSubcategoryRequest::query()
+                ->with(['sellerProfile.user', 'parentCategory.children', 'resolvedCategory.parent', 'reviewedBy'])
+                ->where('status', SellerSubcategoryRequest::STATUS_PENDING)
+                ->oldest('id')
+                ->get()
+                ->concat(SellerSubcategoryRequest::query()
+                    ->with(['sellerProfile.user', 'parentCategory.children', 'resolvedCategory.parent', 'reviewedBy'])
+                    ->whereIn('status', [SellerSubcategoryRequest::STATUS_APPROVED, SellerSubcategoryRequest::STATUS_REJECTED])
+                    ->latest('id')
+                    ->limit(50)
+                    ->get())
+            : collect();
+
         return view('Admin.categories.index', [
             'categories' => $categories,
             'categoryStats' => $categoryStats,
@@ -1349,6 +1368,9 @@ class AdminOperationsController extends Controller
             'status' => $status,
             'search' => $search,
             'archiveSupported' => self::CATEGORY_ARCHIVE_SUPPORTED,
+            'subcategoryRequestSchemaReady' => $subcategoryRequestSchemaReady,
+            'subcategoryRequests' => $subcategoryRequests,
+            'pendingSubcategoryRequestCount' => $pendingSubcategoryRequestCount,
         ]);
     }
 

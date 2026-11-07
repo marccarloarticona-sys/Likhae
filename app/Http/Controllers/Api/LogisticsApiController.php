@@ -110,7 +110,7 @@ class LogisticsApiController extends Controller
         $shipment = Shipment::query()
             ->where('tracking_number', trim($data['scanned_code']))
             ->firstOrFail();
-        $this->assertCenterShipment($shipment, $center);
+        $this->assertCenterShipment($shipment, $center, $localTrips);
 
         try {
             $received = $workflow->receiveAtCenter(
@@ -150,8 +150,12 @@ class LogisticsApiController extends Controller
         return $center;
     }
 
-    private function assertCenterShipment(Shipment $shipment, LogisticsCenter $center): void
+    private function assertCenterShipment(Shipment $shipment, LogisticsCenter $center, LocalRiderTripService $localTrips): void
     {
+        if ($localTrips->isIncomingSellerPickupForCenter($shipment, $center)) {
+            return;
+        }
+
         $shipment->loadMissing('serviceArea');
         $isAssigned = (int) $shipment->logistics_center_id === (int) $center->id;
         $areaAssigned = ! $shipment->logistics_center_id

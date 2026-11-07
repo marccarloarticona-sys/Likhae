@@ -12,6 +12,9 @@
     $search = $search ?? '';
     $expanded = (bool) ($expanded ?? false);
     $archiveSupported = (bool) ($archiveSupported ?? false);
+    $subcategoryRequestSchemaReady = (bool) ($subcategoryRequestSchemaReady ?? false);
+    $subcategoryRequests = $subcategoryRequests ?? collect();
+    $pendingSubcategoryRequestCount = (int) ($pendingSubcategoryRequestCount ?? 0);
 @endphp
 
 @section('content')
@@ -44,6 +47,100 @@
         <x-admin.stat-card label="Subcategories" :value="number_format($categoryStats['subcategories'])" detail="Non-archived child categories" icon="orders" />
         <x-admin.stat-card label="Deactivated categories" :value="number_format($categoryStats['inactive'])" detail="Main categories and subcategories" icon="case" tone="warning" />
         <x-admin.stat-card label="Archived categories" :value="number_format($categoryStats['archived'])" detail="Reversibly archived records" icon="flag" tone="neutral" />
+    </section>
+
+    <section class="ad-card ad-subcategory-requests" aria-labelledby="seller-subcategory-requests-title">
+        <header class="ad-card-head">
+            <div>
+                <span class="ad-overline">Seller suggestions</span>
+                <h2 id="seller-subcategory-requests-title">Seller subcategory requests</h2>
+                <p>{{ $pendingSubcategoryRequestCount }} pending · Reviewing or linking a request never creates a category automatically.</p>
+            </div>
+            <span class="ad-status {{ $pendingSubcategoryRequestCount > 0 ? 'is-pending' : 'is-active' }}">{{ $pendingSubcategoryRequestCount }} pending</span>
+        </header>
+        @if(! $subcategoryRequestSchemaReady)
+            <div class="ad-card-body">
+                <div class="ad-note is-warning" role="status">The request workflow table is not installed yet. Apply the subcategory request migration to enable Seller submissions and Admin review.</div>
+            </div>
+        @elseif($subcategoryRequests->isEmpty())
+            <div class="ad-card-body"><p class="ad-muted">No Seller subcategory requests have been submitted.</p></div>
+        @else
+            <div class="ad-subcategory-request-list">
+                @foreach($subcategoryRequests as $subcategoryRequest)
+                    @php
+                        $requestParent = $subcategoryRequest->parentCategory;
+                        $requestChildren = $requestParent?->children
+                            ? $requestParent->children->filter(fn ($child) => $child->is_active && $child->archived_at === null)->sortBy('name')->values()
+                            : collect();
+                    @endphp
+                    <article class="ad-subcategory-request">
+                        <div class="ad-subcategory-request__head">
+                            <div>
+                                <span class="ad-overline">Request #{{ $subcategoryRequest->id }} · {{ $subcategoryRequest->created_at?->format('M j, Y g:i A') }}</span>
+                                <h3>{{ $subcategoryRequest->requested_name }}</h3>
+                                <p>{{ $subcategoryRequest->seller_business_name_snapshot }} · Parent: {{ $requestParent?->name ?? $subcategoryRequest->parent_category_name_snapshot }}</p>
+                            </div>
+                            <span class="ad-status {{ match ($subcategoryRequest->status) { 'APPROVED' => 'is-approved', 'REJECTED' => 'is-rejected', default => 'is-pending' } }}">{{ str($subcategoryRequest->status)->lower()->headline() }}</span>
+                        </div>
+                        <div class="ad-subcategory-request__reason"><strong>Seller’s reason</strong><p>{{ $subcategoryRequest->reason }}</p></div>
+
+                        @if($subcategoryRequest->status === 'PENDING')
+                            <details class="ad-subcategory-decision" @if($errors->any()) open @endif>
+                                <summary>Review request</summary>
+                                @if(! $requestParent)
+                                    <p class="ad-note is-warning">The original parent category is no longer available. You can reject this request with a resolution, but it cannot be approved until its parent is restored.</p>
+                                @endif
+                                <div class="ad-subcategory-decision__grid">
+                                    @if($requestParent && $requestParent->is_active && $requestParent->archived_at === null)
+                                        <div class="ad-subcategory-decision__option">
+                                            <h4>Manually add first</h4>
+                                            <p>Use the existing category control to check for duplicates and add “{{ $subcategoryRequest->requested_name }}” under {{ $requestParent->name }}. Then link it here to approve.</p>
+                                            <button type="button" class="ad-btn ad-btn-secondary" data-add-subcategory data-parent-id="{{ $requestParent->id }}" data-parent-name="{{ $requestParent->name }}" data-subcategory-name="{{ $subcategoryRequest->requested_name }}">Add under {{ $requestParent->name }}</button>
+                                        </div>
+
+                                        @if($requestChildren->isNotEmpty())
+                                            <form method="POST" action="{{ route('admin.categories.subcategory-requests.decision', $subcategoryRequest) }}" class="ad-subcategory-decision__option">
+                                                @csrf
+                                                <input type="hidden" name="action" value="link">
+                                                <h4>Link existing</h4>
+                                                <p>Approve this request using an existing active subcategory. No category is created by this action.</p>
+                                                <label class="ad-field"><span>Existing subcategory</span>
+                                                    <select name="existing_category_id" required>
+                                                        <option value="">Choose a subcategory</option>
+                                                        @foreach($requestChildren as $existingSubcategory)
+                                                            <option value="{{ $existingSubcategory->id }}">{{ $existingSubcategory->name }}</option>
+                                                        @endforeach
+                                                    </select>
+                                                </label>
+                                                <label class="ad-field"><span>Resolution for Seller</span><textarea name="resolution" rows="3" minlength="5" maxlength="3000" required placeholder="Example: Approved — linked to [subcategory] under [category]."></textarea></label>
+                                                <button class="ad-btn ad-btn-primary" type="submit">Link existing and approve</button>
+                                            </form>
+                                        @endif
+                                    @endif
+
+                                    <form method="POST" action="{{ route('admin.categories.subcategory-requests.decision', $subcategoryRequest) }}" class="ad-subcategory-decision__option is-reject">
+                                        @csrf
+                                        <input type="hidden" name="action" value="reject">
+                                        <h4>Reject request</h4>
+                                        <p>Record a clear reason that the Seller can review.</p>
+                                        <label class="ad-field"><span>Resolution for Seller</span><textarea name="resolution" rows="3" minlength="5" maxlength="3000" required placeholder="Explain why this request was not approved."></textarea></label>
+                                        <button class="ad-btn ad-btn-danger-soft" type="submit">Reject request</button>
+                                    </form>
+                                </div>
+                            </details>
+                        @else
+                            <div class="ad-subcategory-request__resolution">
+                                <strong>Admin resolution</strong>
+                                <p>{{ $subcategoryRequest->resolution }}</p>
+                                @if($subcategoryRequest->resolvedCategory)
+                                    <small>Linked subcategory: {{ $requestParent?->name ?? $subcategoryRequest->parent_category_name_snapshot }} / {{ $subcategoryRequest->resolvedCategory->name }}</small>
+                                @endif
+                            </div>
+                        @endif
+                    </article>
+                @endforeach
+            </div>
+        @endif
     </section>
 
     <nav class="ad-tabs ad-category-tabs" aria-label="Category views">
@@ -273,6 +370,7 @@
         const modal = document.getElementById('add-subcategory-modal');
         modal.querySelector('[data-parent-id-input]').value = button.dataset.parentId;
         modal.querySelector('[data-parent-label]').textContent = button.dataset.parentName;
+        modal.querySelector('input[name="name"]').value = button.dataset.subcategoryName || '';
         openModal('add-subcategory-modal');
     }));
 
