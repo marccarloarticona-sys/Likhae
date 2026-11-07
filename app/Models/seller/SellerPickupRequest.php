@@ -15,6 +15,7 @@ class SellerPickupRequest extends Model
         'seller_profile_id',
         'pickup_address_id',
         'preferred_logistics_center_id',
+        'seller_selected_fallback',
         'rider_local_trip_id',
         'status',
     ];
@@ -47,5 +48,10 @@ class SellerPickupRequest extends Model
     public function centerOffers(): HasMany
     {
         return $this->hasMany(SellerPickupCenterOffer::class, 'seller_pickup_request_id')->orderBy('attempt_number');
+    }
+
+    protected function casts(): array
+    {
+        return ['seller_selected_fallback' => 'boolean'];
     }
 }

@@ -429,6 +429,39 @@ class RiderApiController extends Controller
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
+    public function startDeliveryConversation(Request $request, int $assignment, ConversationService $service): JsonResponse
+    {
+        $rider = $this->localRider($request);
+        $delivery = RiderAssignment::query()
+            ->whereKey($assignment)
+            ->where('rider_profile_id', $rider->id)
+            ->delivery()
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED'])
+            ->with('shipment.sellerOrder.order')
+            ->firstOrFail();
+        $shipment = $delivery->shipment;
+        $sellerOrder = $shipment?->sellerOrder;
+        $order = $sellerOrder?->order;
+        $buyerId = (int) ($order?->buyer_user_id ?? 0);
+        abort_unless($buyerId > 0, 404, 'The buyer for this delivery could not be found.');
+
+        $conversation = $service->start($request->user(), $buyerId, [
+            'type' => 'SHIPMENT_DELIVERY',
+            'order_id' => $sellerOrder?->order_id,
+            'seller_order_id' => $sellerOrder?->id,
+            'shipment_id' => $shipment?->id,
+        ]);
+
+        return response()->json(['success' => true, 'data' => [
+            'id' => (string) $conversation->id,
+            'conversation_id' => (string) $conversation->id,
+            'buyer_id' => (string) $buyerId,
+            'buyer_name' => User::query()->whereKey($buyerId)->value('name') ?? 'Buyer',
+            'order_id' => $order?->order_number,
+            'tracking_code' => $shipment?->tracking_number,
+        ]]);
+    }
+
     public function conversationMessages(Request $request, int $conversation, ConversationService $service): JsonResponse
     {
         $this->rider($request);

@@ -16,6 +16,7 @@ class SellerPickupRequestShipment extends Model
         'seller_order_id',
         'shipment_id',
         'active_slot',
+        'preferred_destination_logistics_center_id',
     ];
 
     protected function casts(): array
@@ -41,5 +42,10 @@ class SellerPickupRequestShipment extends Model
     public function shipment(): BelongsTo
     {
         return $this->belongsTo(Shipment::class);
+    }
+
+    public function preferredDestinationLogisticsCenter(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Logistics\LogisticsCenter::class, 'preferred_destination_logistics_center_id');
     }
 }

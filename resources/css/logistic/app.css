@@ -17,6 +17,13 @@
 @import "./dashboard.css";
 @import "../shared/dark-utility-compat.css";
 
+.lk-map-shell.logistics-parcel-location-map {
+    display: block;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+}
+
 
 /* =========================================================
    TAILWIND SOURCE SCANNING

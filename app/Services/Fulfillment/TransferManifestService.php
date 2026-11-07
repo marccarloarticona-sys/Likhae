@@ -11,6 +11,7 @@ use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Support\ParcelWeightEstimator;
+use App\Support\RiderVehicleType;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -69,7 +70,14 @@ final class TransferManifestService
             ->whereIn('rider_profiles.status', ['ACTIVE', 'WARNED'])
             ->whereNotNull('rider_profiles.approved_by_user_id')
             ->whereNotNull('rider_profiles.approved_at')
-            ->whereIn('rider_profiles.vehicle_type', \App\Support\RiderVehicleType::interLogisticsValues())
+            ->whereIn('rider_profiles.vehicle_type', RiderVehicleType::interLogisticsValues())
+            ->when(
+                $this->schema->riderAvailabilityReady(),
+                fn ($query) => $query->where(fn ($query) => $query
+                    ->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN)
+                    ->orWhere('rider_profiles.is_online', true)),
+                fn ($query) => $query->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN),
+            )
             ->whereNotNull('rider_profiles.approved_parcel_capacity')
             ->where('rider_profiles.approved_parcel_capacity', '>', 0)
             ->whereNotNull('rider_profiles.approved_weight_capacity_kg')
@@ -627,6 +635,10 @@ final class TransferManifestService
         $driver = RiderProfile::query()->with('user')->lockForUpdate()->findOrFail($requestedDriver->id);
         $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
         $this->assertDriverAvailable($driver, (int) $manifest->id);
+        if (RiderVehicleType::isVan($driver->vehicle_type)
+            && (! $this->schema->riderAvailabilityReady() || ! $driver->is_online)) {
+            throw new RuntimeException('The van driver must be online before being assigned to a new transfer.');
+        }
 
         $manifest->load('items.transferLeg.shipment.orderItem.productVariant');
         $manifest->setRelation('assignedDriver', $driver);

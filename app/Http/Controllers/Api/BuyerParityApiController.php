@@ -16,12 +16,15 @@ use App\Models\Returns\CashRefundObligation;
 use App\Models\Buyer\SellerFollower;
 use App\Models\Admin\Notification;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ShipmentReturnWorkflow;
 use App\Models\Seller\Product;
 use App\Models\Seller\SellerProfile;
 use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\Voucher;
 use App\Models\User;
 use App\Services\Account\BuyerEmailChangeOtpService;
+use App\Services\Fulfillment\LogisticsSchemaReadiness;
+use App\Services\Fulfillment\ShipmentReturnWorkflowService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Marketplace\CartService;
@@ -695,6 +698,85 @@ class BuyerParityApiController extends Controller
                 ];
             })->values(),
         ]]);
+    }
+
+    public function returnWaybill(
+        Request $request,
+        SellerReturnRefundRequest $sellerRequest,
+        LogisticsSchemaReadiness $schema,
+    ): JsonResponse {
+        $this->authorizeBuyer($request);
+        abort_unless($this->buyerReturnWaybillSchemaReady($schema), 503, 'Buyer return waybills are unavailable until the return migrations are installed.');
+
+        $sellerRequest->loadMissing([
+            'request',
+            'buyerReturnWorkflow.shipment',
+            'buyerReturnWorkflow.logisticsCenter.address',
+            'buyerReturnWorkflow.buyerDropoffCenter.address',
+        ]);
+        abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->buyerReturnWaybillPayload($sellerRequest->buyerReturnWorkflow),
+        ])->header('Cache-Control', 'private, no-store');
+    }
+
+    public function createReturnWaybill(
+        Request $request,
+        SellerReturnRefundRequest $sellerRequest,
+        LogisticsSchemaReadiness $schema,
+        ShipmentReturnWorkflowService $returns,
+    ): JsonResponse {
+        $this->authorizeBuyer($request);
+        abort_unless($this->buyerReturnWaybillSchemaReady($schema), 503, 'Buyer return waybills are unavailable until the return migrations are installed.');
+        $sellerRequest->loadMissing('request');
+        abort_unless((int) $sellerRequest->request?->buyer_user_id === (int) $request->user()->id, 403);
+
+        try {
+            $workflow = $returns->issueBuyerReturnWaybill($sellerRequest, $request->user());
+        } catch (\RuntimeException $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        $workflow->load(['shipment', 'logisticsCenter.address', 'buyerDropoffCenter.address']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Buyer return waybill is ready.',
+            'data' => $this->buyerReturnWaybillPayload($workflow),
+        ])->header('Cache-Control', 'private, no-store');
+    }
+
+    private function buyerReturnWaybillSchemaReady(LogisticsSchemaReadiness $schema): bool
+    {
+        return $schema->buyerReturnWaybillsReady()
+            && $schema->shipmentReturnEnhancementsReady()
+            && Schema::hasTable('return_refund_request_items')
+            && Schema::hasColumn('seller_return_refund_requests', 'shipment_id')
+            && Schema::hasColumn('return_refund_request_items', 'shipment_id');
+    }
+
+    private function buyerReturnWaybillPayload(?ShipmentReturnWorkflow $workflow): ?array
+    {
+        if (! $workflow) {
+            return null;
+        }
+
+        $center = $workflow->buyerDropoffCenter ?? $workflow->logisticsCenter;
+
+        return [
+            'id' => (string) $workflow->id,
+            'tracking_number' => $workflow->return_tracking_number,
+            'shipment_tracking_number' => $workflow->shipment?->tracking_number,
+            'status' => $workflow->status,
+            'dropoff_center' => $center ? [
+                'id' => (int) $center->id,
+                'name' => $center->business_name,
+                'address' => $center->address?->formatted(),
+            ] : null,
+            'created_at' => $workflow->created_at?->toIso8601String(),
+        ];
     }
 
     public function refundDestinations(

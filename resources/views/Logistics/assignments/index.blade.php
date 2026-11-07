@@ -17,6 +17,7 @@
             @if($activeAssignment)<div class="grid gap-3"><div><strong>{{ $activeAssignment->riderProfile?->user?->name }}</strong><small class="block text-muted">{{ str($activeAssignment->status)->headline() }}</small></div>@if($assignedRiderUnavailable)<form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">@csrf<button class="border border-primary px-4 py-2 font-semibold text-primary">Auto-match replacement rider</button><p class="text-xs text-muted">Available before the assigned rider accepts, when they are offline or their location is stale.</p></form>@endif</div>
             @elseif($shipment->current_status === 'SORTED' && $localTripDispatchReady)
                 <div class="grid w-full gap-3">
+                @if(!$shipment->seller_selected_uncovered_delivery)
                 <form method="POST" action="{{ route('logistics.assignments.assign',$shipment) }}" class="grid gap-2 sm:grid-cols-3" data-final-mile-dispatch>
                     @csrf
                     <input type="hidden" name="assignment_type" value="DELIVERY">
@@ -39,6 +40,13 @@
                     <button class="border border-primary px-4 py-2 font-semibold text-primary">Auto-match nearest available rider</button>
                     <p class="text-xs text-muted">Uses a recent rider location and remaining capacity. If no available rider covers this barangay, it records a temporary coverage exception.</p>
                 </form>
+                @else
+                <form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">
+                    @csrf
+                    <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->isEmpty())>Assign nearest live-location Rider</button>
+                    <p class="text-xs text-muted">The Seller selected this destination hub for an uncovered Buyer location. Choose a Rider from this hub with a live location and available parcel capacity.</p>
+                </form>
+                @endif
                 </div>
             @elseif($shipment->current_status === 'SORTED')
                 <span class="text-sm text-amber-800">Final-mile dispatch is disabled until local trip support is installed.</span>

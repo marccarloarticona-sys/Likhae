@@ -146,6 +146,13 @@ final class LogisticsSchemaReadiness
             && $this->hasColumn('seller_pickup_requests', 'preferred_logistics_center_id');
     }
 
+    public function sellerSelectedFallbackHubsReady(): bool
+    {
+        return $this->sellerPickupCenterSelectionReady()
+            && $this->hasColumn('seller_pickup_requests', 'seller_selected_fallback')
+            && $this->hasColumn('seller_pickup_request_shipments', 'preferred_destination_logistics_center_id');
+    }
+
     public function automaticSellerPickupMatchingReady(): bool
     {
         return (bool) config('likhae.automatic_seller_pickup_matching', false)

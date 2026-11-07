@@ -25,6 +25,7 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderLocalTripItem;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Seller\ProductVariant;
 use App\Services\Finance\CodCollectionService;
 use App\Services\Finance\FinancialAllocationService;
@@ -659,9 +660,10 @@ class ShipmentWorkflowService
         ?string $deliveryAreaOverrideReason = null,
         bool $allowUnavailableDeliveryTakeover = false,
         ?Address $pickupAddress = null,
+        bool $allowUncoveredPickupRoute = false,
     ): RiderAssignment
     {
-        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason, $allowDeliveryAreaOverride, $deliveryAreaOverrideReason, $allowUnavailableDeliveryTakeover, $pickupAddress): RiderAssignment {
+        return DB::transaction(function () use ($shipment, $rider, $assignmentType, $assigner, $allowPickupAreaOverride, $pickupAreaOverrideReason, $allowDeliveryAreaOverride, $deliveryAreaOverrideReason, $allowUnavailableDeliveryTakeover, $pickupAddress, $allowUncoveredPickupRoute): RiderAssignment {
             $shipment = Shipment::query()
                 ->whereKey($shipment->id)
                 ->with(['serviceArea', 'sellerOrder.sellerProfile.businessAddress'])
@@ -783,14 +785,19 @@ class ShipmentWorkflowService
                 $rider->loadMissing('logisticsCenter.address');
                 $pickupCenter = $pickupArea?->logisticsCenter ?? $rider->logisticsCenter;
                 $sellerAddress = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
+                $uncoveredFallback = $allowUncoveredPickupRoute
+                    && $this->isSellerSelectedFallbackPickup($shipment, $pickupCenter);
+                if (! $pickupArea && ! $allowPickupAreaOverride && ! $uncoveredFallback) {
+                    throw new RuntimeException('The seller pickup address is not covered by an active service area.');
+                }
                 if (! $pickupCenter
                     || (int) $rider->logistics_center_id !== (int) $pickupCenter->id
                     || ! $sellerAddress
-                    || ! $this->localRiderEligibility->centerCoversMunicipality(
+                    || (! $this->localRiderEligibility->centerCoversMunicipality(
                         $pickupCenter,
                         (string) $sellerAddress->province_code,
                         (string) $sellerAddress->municipality_code,
-                    )) {
+                    ) && ! $uncoveredFallback)) {
                     throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
                 }
                 if ($pickupArea) {
@@ -1072,6 +1079,36 @@ class ShipmentWorkflowService
 
                 return $shipment->refresh();
             }
+
+            if ($this->sellerSelectedFallbackDestination($shipment, $center)) {
+                $buyerAddress = $shipment->sellerOrder()->with('order.address')->first()?->order?->address;
+                if (! $buyerAddress
+                    || trim((string) $buyerAddress->province_code) !== trim((string) $shipment->destination_province_code)
+                    || trim((string) $buyerAddress->municipality_code) !== trim((string) $shipment->destination_municipality_code)
+                    || trim((string) $buyerAddress->barangay_code) !== trim((string) $shipment->destination_barangay_code)) {
+                    throw new RuntimeException('The saved Buyer address differs from the Seller-selected destination route. Review the parcel route before delivery sorting.');
+                }
+                if ($destinationCenter && (int) $destinationCenter->id !== (int) $center->id) {
+                    throw new RuntimeException('The Seller-selected destination hub is already fixed for this uncovered-location route.');
+                }
+
+                $shipment->update([
+                    'logistics_center_id' => $center->id,
+                    'service_area_id' => null,
+                    'current_status' => 'SORTED',
+                ]);
+                $this->recordEvent(
+                    $shipment,
+                    'SORTED',
+                    $actor,
+                    'Parcel sorted at its Seller-selected destination hub. Logistics can assign an available Rider using live location for the Buyer address.',
+                    null,
+                    $center,
+                );
+
+                return $shipment->refresh();
+            }
+
             $area = $serviceArea ?: $this->findServiceAreaForAddress(
                 (string) $shipment->destination_province_code,
                 (string) $shipment->destination_municipality_code,
@@ -1260,6 +1297,34 @@ class ShipmentWorkflowService
         }
 
         return null;
+    }
+
+    public function sellerSelectedFallbackDestination(Shipment $shipment, ?LogisticsCenter $center = null): bool
+    {
+        if (! $this->schema->sellerSelectedFallbackHubsReady()) {
+            return false;
+        }
+
+        return SellerPickupRequestShipment::query()
+            ->where('shipment_id', $shipment->id)
+            ->whereNotNull('preferred_destination_logistics_center_id')
+            ->when($center !== null, fn ($query) => $query->where('preferred_destination_logistics_center_id', $center->id))
+            ->whereHas('pickupRequest', fn ($request) => $request->where('seller_selected_fallback', true))
+            ->exists();
+    }
+
+    private function isSellerSelectedFallbackPickup(Shipment $shipment, ?LogisticsCenter $center): bool
+    {
+        if (! $center || ! $this->schema->sellerSelectedFallbackHubsReady()
+            || (int) $shipment->logistics_center_id !== (int) $center->id) {
+            return false;
+        }
+
+        return SellerPickupRequestShipment::query()
+            ->where('shipment_id', $shipment->id)
+            ->where('active_slot', true)
+            ->whereHas('pickupRequest', fn ($request) => $request->where('seller_selected_fallback', true))
+            ->exists();
     }
 
     /** Match pickup coverage using the saved PSGC codes only. */

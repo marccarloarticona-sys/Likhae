@@ -23,6 +23,7 @@ final class SellerPickupRequestService
     /**
      * @param list<int> $shipmentIds
      * @param array<int|string, int|string> $sellerOrderIds keyed by shipment id
+     * @param array<int|string, int|string> $preferredDestinationCenterIds keyed by shipment id
      */
     public function create(
         User $actor,
@@ -30,6 +31,8 @@ final class SellerPickupRequestService
         array $shipmentIds,
         array $sellerOrderIds,
         ?int $preferredLogisticsCenterId = null,
+        array $preferredDestinationCenterIds = [],
+        bool $sellerSelectedFallback = false,
     ): SellerPickupRequest
     {
         $ids = array_map('intval', array_values($shipmentIds));
@@ -38,7 +41,7 @@ final class SellerPickupRequestService
             throw new RuntimeException('Select 1 to 10 different ready parcels for one pickup request.');
         }
 
-        return DB::transaction(function () use ($actor, $pickupAddressId, $ids, $sellerOrderIds, $preferredLogisticsCenterId): SellerPickupRequest {
+        return DB::transaction(function () use ($actor, $pickupAddressId, $ids, $sellerOrderIds, $preferredLogisticsCenterId, $preferredDestinationCenterIds, $sellerSelectedFallback): SellerPickupRequest {
             $seller = $this->sellerFor($actor);
             $address = Address::query()->whereKey($pickupAddressId)->lockForUpdate()->first();
             if (! $address
@@ -73,12 +76,111 @@ final class SellerPickupRequestService
             }
             $shipments = Shipment::query()
                 ->whereIn('id', $ids)
-                ->with(['sellerOrder', 'serviceArea', 'waybills', 'pickupRequests', 'riderAssignments'])
+                ->with(['sellerOrder.order.address', 'serviceArea', 'waybills', 'pickupRequests', 'riderAssignments'])
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
             if ($shipments->count() !== count($ids)) {
                 throw new RuntimeException('One or more selected parcels could not be found. Refresh the pickup list and try again.');
+            }
+
+            $destinationIds = collect($preferredDestinationCenterIds)
+                ->mapWithKeys(fn ($centerId, $shipmentId): array => [(int) $shipmentId => (int) $centerId])
+                ->all();
+            $fallbackDestinations = [];
+            $schema = app(LogisticsSchemaReadiness::class);
+            $automaticMatching = $schema->automaticSellerPickupMatchingReady();
+            $localCenters = $automaticMatching
+                ? LogisticsCenter::query()
+                    ->approvedActive()
+                    ->whereHas('owner', fn ($owner) => $owner
+                        ->where('account_type', User::TYPE_LOGISTICS)
+                        ->where('status', User::STATUS_ACTIVE))
+                    ->with('address')
+                    ->get()
+                    ->filter(fn (LogisticsCenter $center): bool => is_numeric($center->address?->latitude)
+                        && is_numeric($center->address?->longitude))
+                    ->values()
+                : collect();
+            $hasLocalCenter = function (object $destination) use ($localCenters): bool {
+                return $localCenters->contains(fn (LogisticsCenter $candidate): bool =>
+                    trim((string) $candidate->address?->province_code) === trim((string) $destination->province_code)
+                    && trim((string) $candidate->address?->municipality_code) === trim((string) $destination->municipality_code)
+                    && $this->areaEligibility->centerAuthorizesAddress($candidate, $destination));
+            };
+            $sellerHasLocalCenter = $automaticMatching ? $hasLocalCenter($address) : null;
+            $buyerHasLocalCenterByShipment = [];
+            $uncoveredBuyerCount = 0;
+            if ($automaticMatching) {
+                foreach ($shipments as $shipment) {
+                    $buyerAddress = $shipment->sellerOrder?->order?->address;
+                    if (! $buyerAddress) {
+                        throw new RuntimeException('A selected parcel is missing its saved Buyer delivery address.');
+                    }
+                    $buyerHasLocalCenterByShipment[(int) $shipment->id] = $hasLocalCenter($buyerAddress);
+                    $uncoveredBuyerCount += (int) ! $buyerHasLocalCenterByShipment[(int) $shipment->id];
+                }
+
+                $fallbackRequired = ! $sellerHasLocalCenter || $uncoveredBuyerCount > 0;
+                if ($fallbackRequired !== $sellerSelectedFallback) {
+                    throw new RuntimeException($fallbackRequired
+                        ? 'This pickup includes a location without local Logistics coverage. Refresh the page to choose the fallback hub route.'
+                        : 'This pickup has local Logistics coverage at both ends and must keep the existing automatic route.');
+                }
+                if ($sellerHasLocalCenter && $preferredCenter) {
+                    throw new RuntimeException('This Seller pickup location already has local Logistics coverage. Keep its origin route automatic.');
+                }
+            }
+
+            if ($sellerSelectedFallback) {
+                if (! $automaticMatching || ! $schema->sellerSelectedFallbackHubsReady()) {
+                    throw new RuntimeException('Seller-selected fallback hubs are not available until their additive pickup routing migration is installed.');
+                }
+                if (! $sellerHasLocalCenter && ! $preferredCenter) {
+                    throw new RuntimeException('Choose an approved origin Logistics center for this uncovered Seller pickup location.');
+                }
+                if ($sellerHasLocalCenter && $preferredCenter) {
+                    throw new RuntimeException('This Seller pickup location already has local Logistics coverage. Keep its origin route automatic.');
+                }
+
+                foreach ($shipments as $shipment) {
+                    $shipmentId = (int) $shipment->id;
+                    if ($buyerHasLocalCenterByShipment[$shipmentId] ?? false) {
+                        if (isset($destinationIds[$shipmentId])) {
+                            throw new RuntimeException('Buyer locations already covered by a local Logistics center must keep their automatic destination route.');
+                        }
+                        continue;
+                    }
+
+                    $destinationCenterId = $destinationIds[$shipmentId] ?? 0;
+                    $destinationCenter = $destinationCenterId > 0
+                        ? LogisticsCenter::query()
+                            ->approvedActive()
+                            ->whereKey($destinationCenterId)
+                            ->whereHas('owner', fn ($owner) => $owner
+                                ->where('account_type', User::TYPE_LOGISTICS)
+                                ->where('status', User::STATUS_ACTIVE))
+                            ->with('address')
+                            ->first()
+                        : null;
+                    if (! is_numeric($shipment->sellerOrder?->order?->address?->latitude)
+                        || ! is_numeric($shipment->sellerOrder?->order?->address?->longitude)) {
+                        throw new RuntimeException('The Buyer delivery address needs a confirmed map pin before a fallback destination hub can be selected.');
+                    }
+                    if (! $destinationCenter
+                        || ! is_numeric($destinationCenter->address?->latitude)
+                        || ! is_numeric($destinationCenter->address?->longitude)) {
+                        throw new RuntimeException('Choose an active approved destination Logistics center with a confirmed location for each uncovered Buyer address.');
+                    }
+
+                    $fallbackDestinations[$shipmentId] = (int) $destinationCenter->id;
+                }
+
+                if (array_diff(array_keys($destinationIds), array_keys($fallbackDestinations)) !== []) {
+                    throw new RuntimeException('Only uncovered Buyer parcels can have a Seller-selected destination hub.');
+                }
+            } elseif ($destinationIds !== []) {
+                throw new RuntimeException('Destination hub choices are only used for uncovered Buyer locations.');
             }
 
             foreach ($shipments as $shipment) {
@@ -127,21 +229,29 @@ final class SellerPickupRequestService
                 }
             }
 
-            $pickupRequest = SellerPickupRequest::query()->create([
+            $requestAttributes = [
                 'seller_profile_id' => $seller->id,
                 'pickup_address_id' => $address->id,
                 'preferred_logistics_center_id' => $preferredCenter?->id,
                 'status' => 'REQUESTED',
-            ]);
+            ];
+            if (app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+                $requestAttributes['seller_selected_fallback'] = $sellerSelectedFallback;
+            }
+            $pickupRequest = SellerPickupRequest::query()->create($requestAttributes);
 
             foreach ($shipments as $shipment) {
-                SellerPickupRequestShipment::query()->create([
+                $membershipAttributes = [
                     'seller_pickup_request_id' => $pickupRequest->id,
                     'seller_profile_id' => $seller->id,
                     'seller_order_id' => $shipment->seller_order_id,
                     'shipment_id' => $shipment->id,
                     'active_slot' => true,
-                ]);
+                ];
+                if (app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+                    $membershipAttributes['preferred_destination_logistics_center_id'] = $fallbackDestinations[$shipment->id] ?? null;
+                }
+                SellerPickupRequestShipment::query()->create($membershipAttributes);
             }
 
             return $pickupRequest->load(['memberships.shipment.waybills', 'pickupAddress']);
@@ -209,21 +319,29 @@ final class SellerPickupRequestService
 
             if ($result['skipped_ids'] !== []) {
                 $skippedMemberships = $memberships->whereIn('shipment_id', $result['skipped_ids'])->values();
-                $skippedRequest = SellerPickupRequest::query()->create([
+                $skippedRequestAttributes = [
                     'seller_profile_id' => $pickupRequest->seller_profile_id,
                     'pickup_address_id' => $pickupRequest->pickup_address_id,
                     'preferred_logistics_center_id' => $pickupRequest->preferred_logistics_center_id,
                     'status' => 'REQUESTED',
-                ]);
+                ];
+                if (app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+                    $skippedRequestAttributes['seller_selected_fallback'] = $pickupRequest->seller_selected_fallback;
+                }
+                $skippedRequest = SellerPickupRequest::query()->create($skippedRequestAttributes);
                 foreach ($skippedMemberships as $membership) {
                     $membership->update(['active_slot' => null]);
-                    SellerPickupRequestShipment::query()->create([
+                    $skippedMembershipAttributes = [
                         'seller_pickup_request_id' => $skippedRequest->id,
                         'seller_profile_id' => $membership->seller_profile_id,
                         'seller_order_id' => $membership->seller_order_id,
                         'shipment_id' => $membership->shipment_id,
                         'active_slot' => true,
-                    ]);
+                    ];
+                    if (app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+                        $skippedMembershipAttributes['preferred_destination_logistics_center_id'] = $membership->preferred_destination_logistics_center_id;
+                    }
+                    SellerPickupRequestShipment::query()->create($skippedMembershipAttributes);
                 }
             }
 
@@ -303,6 +421,10 @@ final class SellerPickupRequestService
         if ($hasSelectedCenterColumn) {
             $progressRelations[] = 'preferredLogisticsCenter';
         }
+        $schema = app(LogisticsSchemaReadiness::class);
+        if ($schema->sellerSelectedFallbackHubsReady()) {
+            $progressRelations[] = 'memberships.preferredDestinationLogisticsCenter.address';
+        }
         $pickupRequest->loadMissing($progressRelations);
 
         $trip = $pickupRequest->riderLocalTrip;
@@ -373,7 +495,20 @@ final class SellerPickupRequestService
             && $pickupRequest->preferred_logistics_center_id === null
             && ! app(LogisticsSchemaReadiness::class)->automaticSellerPickupMatchingReady()
             && in_array($pickupRequest->status, ['REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true);
-        $automaticMatching = app(LogisticsSchemaReadiness::class)->automaticSellerPickupMatchingReady();
+        $automaticMatching = $schema->automaticSellerPickupMatchingReady();
+        $sellerSelectedFallback = $schema->sellerSelectedFallbackHubsReady()
+            && (bool) $pickupRequest->seller_selected_fallback;
+        $destinationHubs = $sellerSelectedFallback
+            ? $pickupRequest->memberships
+                ->map(fn (SellerPickupRequestShipment $membership): ?array => $membership->preferredDestinationLogisticsCenter ? [
+                    'name' => (string) $membership->preferredDestinationLogisticsCenter->business_name,
+                    'address' => $membership->preferredDestinationLogisticsCenter->address?->formatted(),
+                ] : null)
+                ->filter()
+                ->unique(fn (array $hub): string => $hub['name'].'|'.($hub['address'] ?? ''))
+                ->values()
+                ->all()
+            : [];
 
         $selectedCenterName = $hasSelectedCenterColumn ? $pickupRequest->preferredLogisticsCenter?->business_name : null;
         $returnMessage = $pickupRequest->status === 'RETURNED_TO_SELLER'
@@ -388,6 +523,8 @@ final class SellerPickupRequestService
         return [
             'status' => (string) $pickupRequest->status,
             'automatic_matching' => $automaticMatching,
+            'seller_selected_fallback' => $sellerSelectedFallback,
+            'destination_hubs' => $destinationHubs,
             'selected_center' => $selectedCenterName,
             'requires_center_selection' => $requiresCenterSelection,
             'status_label' => $requiresCenterSelection ? 'Center choice required' : match ($pickupRequest->status) {

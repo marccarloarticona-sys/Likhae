@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\MobileWorkflowApiController as MobileWorkflow;
 use App\Http\Controllers\Buyer\BuyerOrderController;
 use App\Http\Controllers\Buyer\BuyerPromotionController;
 use App\Http\Controllers\Buyer\BuyerReturnRefundController;
+use App\Http\Controllers\Api\RiderApiController;
 use App\Http\Controllers\Rider\RiderFinanceController;
 use App\Http\Controllers\Finance\PayoutProofController;
 use App\Http\Controllers\Logistics\InterhubTimekeepingController;
@@ -39,6 +40,8 @@ Route::prefix('buyer')->name('api.v1.buyer.')->middleware(EnsureWorkspaceRole::c
     Route::post('orders/{order}/shipments/{shipment}/received', [BuyerOrderController::class, 'receivedShipment'])->name('orders.shipments.received');
     Route::get('returns', [BuyerParity::class, 'returnRequests'])->name('returns.index');
     Route::get('returns/{returnRequest}', [BuyerParity::class, 'returnRequest'])->whereNumber('returnRequest')->name('returns.show');
+    Route::get('returns/seller-cases/{sellerRequest}/waybill', [BuyerParity::class, 'returnWaybill'])->whereNumber('sellerRequest')->name('returns.waybill.show');
+    Route::post('returns/seller-cases/{sellerRequest}/waybill', [BuyerParity::class, 'createReturnWaybill'])->whereNumber('sellerRequest')->middleware('throttle:10,1')->name('returns.waybill.create');
     Route::post('returns/seller-cases/{sellerRequest}/confirm', [BuyerReturnRefundController::class, 'confirm'])->name('returns.confirm');
     Route::post('returns/seller-cases/{sellerRequest}/escalate', [BuyerReturnRefundController::class, 'escalate'])->name('returns.escalate');
     Route::post('returns/cash-refunds/{obligation}/confirm', [BuyerReturnRefundController::class, 'confirmCash'])->name('returns.cash-confirm');
@@ -52,6 +55,10 @@ Route::prefix('buyer')->name('api.v1.buyer.')->middleware(EnsureWorkspaceRole::c
 
 Route::prefix('rider')->name('api.v1.rider.')->middleware([EnsureWorkspaceRole::class.':rider', 'rider.active'])->group(function (): void {
     require __DIR__.'/rider_mobile_workflows.php';
+    Route::middleware('rider.operational:LOCAL_BARANGAY')->group(function (): void {
+        Route::post('assignments/{assignment}/conversation', [RiderApiController::class, 'startDeliveryConversation'])
+            ->whereNumber('assignment')->name('assignments.conversation');
+    });
     Route::get('settings', [MobileWorkflow::class, 'settings'])->name('settings');
     Route::put('settings', [WorkspaceSettingsController::class, 'update'])->defaults('workspace', 'rider')->name('settings.update');
     Route::post('ai/chat', [WorkspaceAiController::class, 'chat'])->defaults('workspace', 'rider')->middleware('throttle:20,1')->name('ai.chat');

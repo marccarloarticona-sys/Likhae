@@ -184,6 +184,9 @@ class DispatchController extends Controller
         if ($schema->sellerPickupCenterSelectionReady()) {
             $sellerPickupRelations[] = 'preferredLogisticsCenter';
         }
+        if ($schema->sellerSelectedFallbackHubsReady()) {
+            $sellerPickupRelations[] = 'memberships.preferredDestinationLogisticsCenter.address';
+        }
         $sellerPickupRequests = $schema->sellerPickupRequestsReady()
             ? SellerPickupRequest::query()
                 ->whereIn('status', [
@@ -557,12 +560,26 @@ class DispatchController extends Controller
             ->get();
 
         $eligibleRidersByShipment = $shipments->getCollection()
-            ->mapWithKeys(fn (Shipment $shipment): array => [
-                $shipment->id => $riders
-                    ->filter(fn (RiderProfile $rider): bool => LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) > 0
-                        && $workflow->riderCoversShipmentDestinationArea($shipment, $rider))
-                    ->values(),
-            ])
+            ->mapWithKeys(function (Shipment $shipment) use ($riders, $workflow, $center): array {
+                $uncoveredFallback = ! $shipment->serviceArea && $workflow->sellerSelectedFallbackDestination($shipment, $center);
+                $shipment->setAttribute('seller_selected_uncovered_delivery', $uncoveredFallback);
+
+                return [$shipment->id => $riders
+                    ->filter(function (RiderProfile $rider) use ($shipment, $workflow, $uncoveredFallback): bool {
+                        if (LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) < 1) {
+                            return false;
+                        }
+                        if ($uncoveredFallback) {
+                            return $rider->is_online
+                                && is_numeric($rider->availability_latitude)
+                                && is_numeric($rider->availability_longitude)
+                                && ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false);
+                        }
+
+                        return $workflow->riderCoversShipmentDestinationArea($shipment, $rider);
+                    })
+                    ->values()];
+            })
             ->all();
         $localTripsByRider = collect();
         if ($schema->localTripsReady()) {
@@ -864,6 +881,8 @@ class DispatchController extends Controller
             }
         }
 
+        $sellerSelectedFallback = ! $shipment->serviceArea
+            && $workflow->sellerSelectedFallbackDestination($shipment, $center);
         $candidates = RiderProfile::query()
             ->where('logistics_center_id', $center->id)
             ->where('status', 'ACTIVE')
@@ -877,19 +896,21 @@ class DispatchController extends Controller
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', User::TYPE_RIDER)
                 ->where('status', User::STATUS_ACTIVE))
-            ->whereHas('areaAssignments', fn ($query) => $query
-                ->where('is_active', true)
-                ->whereHas('serviceArea', fn ($area) => $area
+            ->when(! $sellerSelectedFallback, fn ($query) => $query
+                ->whereHas('areaAssignments', fn ($assignment) => $assignment
                     ->where('is_active', true)
-                    ->where('logistics_center_id', $center->id)))
+                    ->whereHas('serviceArea', fn ($area) => $area
+                        ->where('is_active', true)
+                        ->where('logistics_center_id', $center->id))))
             ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
                 ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
             ->with(['user', 'areaAssignments.serviceArea.locations'])
             ->get()
             ->filter(fn (RiderProfile $candidate): bool =>
                 LocalTripCapacityRules::remainingCapacity((int) $candidate->approved_parcel_capacity, (int) $candidate->active_assignments_count) > 0)
-            ->map(function (RiderProfile $candidate) use ($destination, $workflow, $shipment): RiderProfile {
-                $candidate->setAttribute('covers_destination', $workflow->riderCoversShipmentDestinationArea($shipment, $candidate));
+            ->map(function (RiderProfile $candidate) use ($destination, $workflow, $shipment, $sellerSelectedFallback): RiderProfile {
+                $candidate->setAttribute('covers_destination', ! $sellerSelectedFallback
+                    && $workflow->riderCoversShipmentDestinationArea($shipment, $candidate));
                 $candidate->setAttribute('destination_distance_km', $this->distanceKm(
                     (float) $destination->latitude,
                     (float) $destination->longitude,
@@ -914,7 +935,9 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => 'No active online rider in this hub has a recent location and available capacity.']);
         }
 
-        $reason = 'Temporary nearest-rider coverage exception: no online, capacity-ready rider assigned to this destination barangay.';
+        $reason = $sellerSelectedFallback
+            ? 'Seller-selected uncovered Buyer route: destination Logistics assigned the nearest online Rider using live location.'
+            : 'Temporary nearest-rider coverage exception: no online, capacity-ready rider assigned to this destination barangay.';
         try {
             $trip = $dispatch->dispatch(
                 $request->user(),
@@ -1094,7 +1117,9 @@ class DispatchController extends Controller
             ? 'Seller pickup request #'.$pickupRequest->id.' accepted, routed, and assigned to the nearest eligible local Rider at the Seller-selected center.'
             : ($pickupRequest->status === 'RETURNED_TO_SELLER'
                 ? 'This offer expired. The pickup request has been returned to the Seller for another Logistics center choice.'
-                : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.'));
+                : ((bool) $pickupRequest->seller_selected_fallback
+                    ? 'This center could not confirm the selected destination route or capacity. LIKHAE is trying the next eligible origin center.'
+                    : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.')));
     }
 
     public function declineSellerPickupCenterOffer(

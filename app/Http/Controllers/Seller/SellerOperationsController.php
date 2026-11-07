@@ -402,9 +402,9 @@ class SellerOperationsController extends Controller
                 $parcel->setAttribute('buyer_has_local_logistics_center', (bool) $hasLocalBuyerCenter);
             }
             $hasLocalSellerCenter = in_array((int) $pickupAddress->id, $pickupAddressLocalCenterIds, true);
-            $hasLocalCenterForEveryReadyBuyer = $buyerAddresses->isNotEmpty()
-                && collect($buyerLocalCenterByAddress)->every(fn (bool $hasCenter): bool => $hasCenter);
-            $pickupCenterChoiceNeeded = ! $hasLocalSellerCenter || ! $hasLocalCenterForEveryReadyBuyer;
+            // Buyer-side gaps need a destination choice; the origin dropdown
+            // appears only when the Seller pickup location lacks local coverage.
+            $pickupCenterChoiceNeeded = ! $hasLocalSellerCenter;
             $anyReadyBuyerNeedsCenterChoice = $readyPickupParcels->contains(
                 fn (Shipment $parcel): bool => ! (bool) $parcel->buyer_has_local_logistics_center,
             );
@@ -416,6 +416,7 @@ class SellerOperationsController extends Controller
             'pickupAddresses' => $pickupAddresses,
             'pickupCenterOptions' => $pickupCenterOptions,
             'pickupCenterSelectionReady' => $pickupCenterSelectionReady,
+            'sellerSelectedFallbackHubsReady' => $logisticsSchema->sellerSelectedFallbackHubsReady(),
             'pickupCenterChoiceNeeded' => $pickupCenterChoiceNeeded,
             'pickupAddressLocalCenterIds' => $pickupAddressLocalCenterIds,
             'anyReadyBuyerNeedsCenterChoice' => $anyReadyBuyerNeedsCenterChoice,

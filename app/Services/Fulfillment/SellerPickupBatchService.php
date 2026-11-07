@@ -128,6 +128,8 @@ final class SellerPickupBatchService
                 throw new RuntimeException('The selected parcels do not belong to the Seller pickup request.');
             }
             $pickupAddress = $linkedPickupRequest?->pickupAddress ?? $seller->businessAddress;
+            $allowUncoveredPickupRoute = (bool) ($linkedPickupRequest?->seller_selected_fallback
+                && app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady());
             if (! $pickupAddress || (int) $pickupAddress->user_id !== (int) $seller->user_id) {
                 throw new RuntimeException('The Seller must have a valid pickup address saved to their account.');
             }
@@ -234,6 +236,7 @@ final class SellerPickupBatchService
                 false,
                 $coverageOverride,
                 $linkedPickupRequest ? $pickupAddress : null,
+                $allowUncoveredPickupRoute,
             );
             foreach ($shipments as $shipment) {
                 $assignment = $this->workflow->assignRider(
@@ -247,8 +250,9 @@ final class SellerPickupBatchService
                     null,
                     false,
                     $linkedPickupRequest ? $pickupAddress : null,
+                    $allowUncoveredPickupRoute,
                 );
-                $this->trips->addAssignment($actor, $trip, $assignment, false, $coverageOverride, $linkedPickupRequest ? $pickupAddress : null);
+                $this->trips->addAssignment($actor, $trip, $assignment, false, $coverageOverride, $linkedPickupRequest ? $pickupAddress : null, $allowUncoveredPickupRoute);
 
                 $pickupRequest = $pickupRequestByShipment[$shipment->id];
                 if ($pickupRequest->status === 'PENDING') {

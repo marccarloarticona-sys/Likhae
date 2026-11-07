@@ -28,16 +28,16 @@ final class LocalRiderTripService
         private readonly LocalRiderEligibilityService $eligibility,
     ) {}
 
-    public function createTrip(User $actor, RiderProfile $rider, ?ServiceArea $area, string $tripType, ?SellerProfile $seller = null, bool $allowDeliveryAreaOverride = false, bool $allowPickupAreaOverride = false, ?Address $pickupAddress = null): RiderLocalTrip
+    public function createTrip(User $actor, RiderProfile $rider, ?ServiceArea $area, string $tripType, ?SellerProfile $seller = null, bool $allowDeliveryAreaOverride = false, bool $allowPickupAreaOverride = false, ?Address $pickupAddress = null, bool $allowUncoveredPickupRoute = false, ?object $deliveryAddress = null, bool $allowUncoveredDeliveryRoute = false): RiderLocalTrip
     {
         $tripType = strtoupper(trim($tripType));
         if (! in_array($tripType, [RiderLocalTrip::TYPE_PICKUP, RiderLocalTrip::TYPE_DELIVERY], true)) {
             throw new RuntimeException('A local trip must be a pickup or delivery trip.');
         }
-        if ($allowDeliveryAreaOverride && $tripType !== RiderLocalTrip::TYPE_DELIVERY) {
+        if (($allowDeliveryAreaOverride || $allowUncoveredDeliveryRoute) && $tripType !== RiderLocalTrip::TYPE_DELIVERY) {
             throw new RuntimeException('A delivery coverage exception cannot be used for a pickup trip.');
         }
-        if ($allowPickupAreaOverride && $tripType !== RiderLocalTrip::TYPE_PICKUP) {
+        if (($allowPickupAreaOverride || $allowUncoveredPickupRoute) && $tripType !== RiderLocalTrip::TYPE_PICKUP) {
             throw new RuntimeException('A pickup coverage exception cannot be used for a delivery trip.');
         }
         if ($tripType === RiderLocalTrip::TYPE_PICKUP) {
@@ -78,25 +78,35 @@ final class LocalRiderTripService
                     throw new RuntimeException('The rider is not actively assigned to this service area.');
                 }
                 $tripCodes = $this->codesFrom($location);
-            } elseif ($allowPickupAreaOverride) {
+            } elseif ($allowPickupAreaOverride || $allowUncoveredPickupRoute) {
                 $tripCodes = $this->codesFrom($address);
             } else {
                 throw new RuntimeException('The seller pickup address is not covered by an active service area.');
             }
         } else {
-            if (! $area) {
+            if (! $area && ! ($allowUncoveredDeliveryRoute && $deliveryAddress)) {
                 throw new RuntimeException('A delivery trip requires an active service area.');
             }
-            $location = $this->eligibility->assertRiderCanCoverArea($rider->logisticsCenter, $rider, $area);
-            if (! $allowDeliveryAreaOverride && ! $rider->areaAssignments->contains(
-                fn ($assignment) => $assignment->is_active && (int) $assignment->service_area_id === (int) $area->id,
-            )) {
-                throw new RuntimeException('The rider is not actively assigned to this service area.');
+            if ($area) {
+                $location = $this->eligibility->assertRiderCanCoverArea($rider->logisticsCenter, $rider, $area);
+                if (! $allowDeliveryAreaOverride && ! $rider->areaAssignments->contains(
+                    fn ($assignment) => $assignment->is_active && (int) $assignment->service_area_id === (int) $area->id,
+                )) {
+                    throw new RuntimeException('The rider is not actively assigned to this service area.');
+                }
+                $tripCodes = $this->codesFrom($location);
+            } else {
+                $tripCodes = $this->codesFrom($deliveryAddress);
             }
-            $tripCodes = $this->codesFrom($location);
         }
 
-        $this->assertCanonicalBarangay($rider->logisticsCenter, ...$tripCodes);
+        $this->assertCanonicalBarangay(
+            $rider->logisticsCenter,
+            $tripCodes[0],
+            $tripCodes[1],
+            $tripCodes[2],
+            $allowUncoveredPickupRoute || $allowUncoveredDeliveryRoute,
+        );
         $capacity = LocalTripCapacityRules::approvedCapacity($rider->approved_parcel_capacity);
 
         return RiderLocalTrip::query()->create([
@@ -113,12 +123,12 @@ final class LocalRiderTripService
         ]);
     }
 
-    public function addAssignment(User $actor, RiderLocalTrip $trip, RiderAssignment $assignment, bool $allowDeliveryAreaOverride = false, bool $allowPickupAreaOverride = false, ?Address $pickupAddress = null): RiderLocalTripItem
+    public function addAssignment(User $actor, RiderLocalTrip $trip, RiderAssignment $assignment, bool $allowDeliveryAreaOverride = false, bool $allowPickupAreaOverride = false, ?Address $pickupAddress = null, bool $allowUncoveredPickupRoute = false, bool $allowUncoveredDeliveryRoute = false): RiderLocalTripItem
     {
-        if ($allowDeliveryAreaOverride && $trip->trip_type !== RiderLocalTrip::TYPE_DELIVERY) {
+        if (($allowDeliveryAreaOverride || $allowUncoveredDeliveryRoute) && $trip->trip_type !== RiderLocalTrip::TYPE_DELIVERY) {
             throw new RuntimeException('A delivery coverage exception cannot be used for a pickup trip.');
         }
-        if ($allowPickupAreaOverride && $trip->trip_type !== RiderLocalTrip::TYPE_PICKUP) {
+        if (($allowPickupAreaOverride || $allowUncoveredPickupRoute) && $trip->trip_type !== RiderLocalTrip::TYPE_PICKUP) {
             throw new RuntimeException('A pickup coverage exception cannot be used for a delivery trip.');
         }
         if ($trip->trip_type === RiderLocalTrip::TYPE_PICKUP) {
@@ -127,7 +137,7 @@ final class LocalRiderTripService
             $this->assertReady();
         }
 
-        return DB::transaction(function () use ($actor, $trip, $assignment, $allowDeliveryAreaOverride, $allowPickupAreaOverride, $pickupAddress): RiderLocalTripItem {
+        return DB::transaction(function () use ($actor, $trip, $assignment, $allowDeliveryAreaOverride, $allowPickupAreaOverride, $pickupAddress, $allowUncoveredPickupRoute, $allowUncoveredDeliveryRoute): RiderLocalTripItem {
             $trip = RiderLocalTrip::query()->whereKey($trip->id)->lockForUpdate()->firstOrFail();
             $assignment = RiderAssignment::query()->whereKey($assignment->id)->with([
                 'riderProfile.user', 'riderProfile.logisticsCenter',
@@ -165,8 +175,12 @@ final class LocalRiderTripService
                 || $barangayCode !== trim((string) $trip->barangay_code)) {
                 throw new RuntimeException('The assignment PSGC barangay does not match the trip barangay.');
             }
-            $this->assertCanonicalBarangay($assignment->riderProfile->logisticsCenter, $provinceCode, $municipalityCode, $barangayCode);
-            if (! $allowDeliveryAreaOverride && ! $allowPickupAreaOverride && ! $this->riderHasExactArea($assignment->riderProfile, $provinceCode, $municipalityCode, $barangayCode)) {
+            $this->assertCanonicalBarangay($assignment->riderProfile->logisticsCenter, $provinceCode, $municipalityCode, $barangayCode, $allowUncoveredPickupRoute || $allowUncoveredDeliveryRoute);
+            if (! $allowDeliveryAreaOverride
+                && ! $allowPickupAreaOverride
+                && ! $allowUncoveredPickupRoute
+                && ! $allowUncoveredDeliveryRoute
+                && ! $this->riderHasExactArea($assignment->riderProfile, $provinceCode, $municipalityCode, $barangayCode)) {
                 throw new RuntimeException('The rider has no active service-area assignment for this exact barangay PSGC.');
             }
 
@@ -528,7 +542,7 @@ final class LocalRiderTripService
         ];
     }
 
-    private function assertCanonicalBarangay(LogisticsCenter $center, ?string $provinceCode, ?string $municipalityCode, ?string $barangayCode): void
+    private function assertCanonicalBarangay(LogisticsCenter $center, ?string $provinceCode, ?string $municipalityCode, ?string $barangayCode, bool $allowUncoveredRoute = false): void
     {
         if (blank($provinceCode) || blank($municipalityCode) || blank($barangayCode)) {
             throw new RuntimeException('The trip requires a valid PSGC province, municipality, and barangay.');
@@ -546,7 +560,7 @@ final class LocalRiderTripService
             ->with('serviceArea.logisticsCenter.address')
             ->get()
             ->contains(fn (ServiceAreaLocation $location): bool => $this->eligibility->centerAuthorizesExactLocation($center, $location));
-        if (! $valid || (! $centerOwnsMunicipality && ! $centerHasExactAuthorizedArea)) {
+        if (! $valid || (! $allowUncoveredRoute && ! $centerOwnsMunicipality && ! $centerHasExactAuthorizedArea)) {
             throw new RuntimeException('The selected barangay PSGC is not valid for the selected municipality.');
         }
     }

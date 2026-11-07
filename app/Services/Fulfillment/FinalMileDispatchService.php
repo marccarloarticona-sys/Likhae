@@ -54,6 +54,11 @@ final class FinalMileDispatchService
             if ((int) $shipment->logistics_center_id !== (int) $center->id || ! $validDispatchStatus) {
                 throw new RuntimeException('The parcel must be sorted into this center and in its custody before final-mile dispatch.');
             }
+            $sellerSelectedFallback = $this->workflow->sellerSelectedFallbackDestination($shipment, $center)
+                && ! $shipment->serviceArea;
+            if ($sellerSelectedFallback && (! $allowDeliveryAreaOverride || ! $requireFreshRiderLocation)) {
+                throw new RuntimeException('This Seller-selected uncovered route requires nearest-Rider dispatch using a live location at the destination hub.');
+            }
             if (filled($shipment->smart_coverage_route_id)) {
                 if (! $shipment->smart_coverage_service_date) {
                     throw new RuntimeException('This fallback parcel has no reserved service date. Dispatch is paused for authorized routing review.');
@@ -188,7 +193,7 @@ final class FinalMileDispatchService
                     LocalTripCapacityRules::effectiveCapacity((int) $trip->approved_parcel_capacity, $rider->approved_parcel_capacity),
                 );
             } else {
-                if (! $shipment->serviceArea) {
+                if (! $shipment->serviceArea && ! $sellerSelectedFallback) {
                     throw new RuntimeException('This parcel has no destination service area. Configure its exact PSGC coverage before dispatch.');
                 }
                 $trip = RiderLocalTrip::query()
@@ -215,7 +220,19 @@ final class FinalMileDispatchService
                     });
 
                 if (! $trip) {
-                    $trip = $this->trips->createTrip($actor, $rider, $shipment->serviceArea, RiderLocalTrip::TYPE_DELIVERY, null, $allowDeliveryAreaOverride);
+                    $trip = $this->trips->createTrip(
+                        $actor,
+                        $rider,
+                        $shipment->serviceArea,
+                        RiderLocalTrip::TYPE_DELIVERY,
+                        null,
+                        $allowDeliveryAreaOverride,
+                        false,
+                        null,
+                        false,
+                        $sellerSelectedFallback ? $shipment->sellerOrder?->order?->address : null,
+                        $sellerSelectedFallback,
+                    );
                 }
             }
 
@@ -230,7 +247,7 @@ final class FinalMileDispatchService
                 $deliveryAreaOverrideReason,
                 $allowUnavailableDeliveryTakeover,
             );
-            $this->trips->addAssignment($actor, $trip, $assignment, $allowDeliveryAreaOverride);
+            $this->trips->addAssignment($actor, $trip, $assignment, $allowDeliveryAreaOverride, false, null, false, $sellerSelectedFallback);
 
             return $trip->refresh();
         });

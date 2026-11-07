@@ -14,6 +14,9 @@
             @if($pickupRequest->preferredLogisticsCenter)
                 <p class="mt-1 text-sm text-muted">Preferred center (first choice): <strong data-progress-selected-center>{{ $pickupRequest->preferredLogisticsCenter->business_name }}</strong></p>
             @endif
+            @foreach($progress['destination_hubs'] ?? [] as $destinationHub)
+                <p class="mt-1 text-sm text-muted">Buyer destination Logistics center: <strong>{{ $destinationHub['name'] }}</strong>{{ filled($destinationHub['address']) ? ' — '.$destinationHub['address'] : '' }}</p>
+            @endforeach
         </div>
         <strong class="text-sm text-ink" data-progress-count aria-live="polite">{{ $progress['collected'] }} / {{ $progress['total'] }} collected</strong>
     </header>
@@ -25,7 +28,11 @@
             Offer {{ $progress['current_offer']['attempt'] }}: {{ $progress['current_offer']['center'] }} · response due {{ \Illuminate\Support\Carbon::parse($progress['current_offer']['expires_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}@if($progress['automatic_matching'] ?? false) · If it declines or times out, LIKHAE tries the next eligible center.@endif
         @elseif($pickupRequest->status === 'PENDING')
             @if($progress['automatic_matching'] ?? false)
-                No center currently has the full route and capacity. Your request stays pending while LIKHAE keeps checking eligible centers.
+                @if($progress['seller_selected_fallback'] ?? false)
+                    The selected destination hubs are saved. LIKHAE is checking for pickup Rider, inter-hub vehicle, and destination delivery capacity while it tries eligible origin centers.
+                @else
+                    No center currently has the full route and capacity. Your request stays pending while LIKHAE keeps checking eligible centers.
+                @endif
             @elseif($pickupRequest->preferredLogisticsCenter)
                 The selected Logistics center has not confirmed a route or Rider capacity yet. If it is still unresolved by {{ \Illuminate\Support\Carbon::parse($progress['response_due_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}, it will return to you automatically.
             @else
@@ -86,12 +93,15 @@
                         rider.textContent = payload.rider || 'Waiting for assignment';
                         if (selectedCenter && payload.selected_center) selectedCenter.textContent = payload.selected_center;
                         panel.querySelector('h3').textContent = payload.status_label || labels[payload.status] || payload.status;
+                        const destinationHubs = (payload.destination_hubs || []).map((hub) => hub.name).filter(Boolean).join(', ');
                         offer.textContent = payload.current_offer
                             ? `Offer ${payload.current_offer.attempt}: ${payload.current_offer.center} · response due ${new Date(payload.current_offer.expires_at).toLocaleString()}${payload.automatic_matching ? ' · If it declines or times out, LIKHAE tries the next eligible center.' : ''}`
                             : (payload.status === 'RETURNED_TO_SELLER'
                                 ? (payload.return_message || 'Your parcels are available again. Choose a covered Logistics center above to request pickup again.')
                                     : (payload.automatic_matching && payload.status === 'PENDING'
-                                        ? 'No center currently has the full route and capacity. Your request stays pending while LIKHAE keeps checking eligible centers.'
+                                        ? (payload.seller_selected_fallback
+                                            ? `The selected destination hub${destinationHubs ? ` (${destinationHubs})` : ''} is saved. LIKHAE is checking for pickup Rider, inter-hub vehicle, and destination delivery capacity while it tries eligible origin centers.`
+                                            : 'No center currently has the full route and capacity. Your request stays pending while LIKHAE keeps checking eligible centers.')
                                         : (payload.response_due_at && ['REQUESTED', 'PENDING'].includes(payload.status)
                                     ? (payload.status === 'REQUESTED'
                                         ? `Sent to ${payload.selected_center}. If it is not accepted by ${new Date(payload.response_due_at).toLocaleString()}, it will return to you automatically.`

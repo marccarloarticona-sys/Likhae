@@ -15,6 +15,7 @@ use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\User;
 use App\Services\AccountNotificationService;
+use App\Support\ParcelWeightEstimator;
 use App\Support\RiderVehicleType;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -78,8 +79,11 @@ final class SellerPickupMatchingService
         array $shipmentIds,
         array $sellerOrderIds,
         ?int $preferredLogisticsCenterId = null,
+        array $preferredDestinationCenterIds = [],
+        bool $sellerSelectedFallback = false,
     ): SellerPickupRequest {
         abort_unless($this->schema->automaticSellerPickupMatchingReady(), 503);
+        abort_unless(! $sellerSelectedFallback || $this->schema->sellerSelectedFallbackHubsReady(), 503);
 
         $request = $this->pickupRequests->create(
             $actor,
@@ -87,6 +91,8 @@ final class SellerPickupMatchingService
             $shipmentIds,
             $sellerOrderIds,
             $preferredLogisticsCenterId,
+            $preferredDestinationCenterIds,
+            $sellerSelectedFallback,
         );
         $request->update(['status' => 'MATCHING']);
         $this->startRequest((int) $request->id);
@@ -148,7 +154,7 @@ final class SellerPickupMatchingService
 
             $fresh = $this->loadRequest((int) $locked->id);
             $origin = LogisticsCenter::query()->approvedActive()->whereKey($candidate['center']->id)->first();
-            if (! $fresh || ! $origin || ! $this->centerStillAuthorized($origin, $fresh->pickupAddress)) {
+            if (! $fresh || ! $origin || ! $this->centerStillAuthorized($origin, $fresh->pickupAddress, $fresh)) {
                 $locked->update(['status' => 'PENDING']);
 
                 return null;
@@ -171,7 +177,8 @@ final class SellerPickupMatchingService
 
                 return null;
             }
-            if (! $this->routeHasDestinationCapacity($plan, (int) $fresh->id)) {
+            if (($plan['seller_selected_fallback'] ?? false) !== true
+                && ! $this->routeHasDestinationCapacity($plan, (int) $fresh->id)) {
                 $locked->update(['status' => 'PENDING']);
 
                 return null;
@@ -248,7 +255,7 @@ final class SellerPickupMatchingService
                 }
 
                 $fresh = $this->loadRequest((int) $request->id);
-                if (! $fresh || ! $this->centerStillAuthorized($center, $fresh->pickupAddress)) {
+                if (! $fresh || ! $this->centerStillAuthorized($center, $fresh->pickupAddress, $fresh)) {
                     throw new RuntimeException('This center is no longer authorized for the exact Seller pickup PSGC.');
                 }
 
@@ -265,7 +272,9 @@ final class SellerPickupMatchingService
                     throw new RuntimeException('Pickup Rider or complete route capacity changed after this offer was sent.');
                 }
                 if (! $this->lockRouteCenters($plan) || ! $this->routeHasDestinationCapacity($plan, (int) $fresh->id)) {
-                    throw new RuntimeException('Destination capacity changed after this offer was sent.');
+                    throw new RuntimeException(($plan['seller_selected_fallback'] ?? false) === true
+                        ? 'Inter-hub vehicle or destination delivery capacity changed after this offer was sent.'
+                        : 'Destination capacity changed after this offer was sent.');
                 }
 
                 $this->assertNoConflictingTransferLegs($fresh, $center, $plan);
@@ -460,7 +469,9 @@ final class SellerPickupMatchingService
             return [];
         }
 
-        $centers = $this->eligibleOriginCenters($address)
+        $centers = ($request->seller_selected_fallback && (int) $request->preferred_logistics_center_id > 0
+            ? $this->fallbackOriginCenters()
+            : $this->eligibleOriginCenters($address))
             ->reject(fn (LogisticsCenter $center): bool => $excludedCenterIds->contains((int) $center->id))
             ->values();
         $candidates = [];
@@ -535,6 +546,23 @@ final class SellerPickupMatchingService
             ->values();
     }
 
+    /** @return EloquentCollection<int, LogisticsCenter> */
+    private function fallbackOriginCenters(): EloquentCollection
+    {
+        return LogisticsCenter::query()
+            ->approvedActive()
+            ->whereHas('owner', fn ($owner) => $owner
+                ->where('account_type', User::TYPE_LOGISTICS)
+                ->where('status', User::STATUS_ACTIVE))
+            ->with('address', 'owner')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (LogisticsCenter $center): bool => $center->address
+                && is_numeric($center->address->latitude)
+                && is_numeric($center->address->longitude))
+            ->values();
+    }
+
     /** @return list<array<string,mixed>> */
     private function routePlansForRequest(SellerPickupRequest $request, LogisticsCenter $origin, bool $lock): array
     {
@@ -542,6 +570,10 @@ final class SellerPickupMatchingService
         $memberships = $request->memberships->sortBy('shipment_id')->values();
         if ($memberships->isEmpty()) {
             return [];
+        }
+
+        if ($request->seller_selected_fallback && $this->schema->sellerSelectedFallbackHubsReady()) {
+            return $this->routePlansForSellerSelectedFallback($request, $origin, $memberships, $lock);
         }
 
         $shipmentIds = $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
@@ -656,13 +688,288 @@ final class SellerPickupMatchingService
         ]];
     }
 
+    /**
+     * Resolve only the Seller-selected fallback flow. Normal, locally covered
+     * requests continue through the existing authorized PSGC route resolver.
+     *
+     * @param Collection<int, SellerPickupRequestShipment> $memberships
+     * @return list<array<string,mixed>>
+     */
+    private function routePlansForSellerSelectedFallback(
+        SellerPickupRequest $request,
+        LogisticsCenter $origin,
+        Collection $memberships,
+        bool $lock,
+    ): array {
+        $originAddress = $origin->address;
+        if (! $originAddress || ! is_numeric($originAddress->latitude) || ! is_numeric($originAddress->longitude)) {
+            return [];
+        }
+
+        $shipmentPlans = [];
+        $destinations = [];
+        $groups = $memberships->groupBy(function (SellerPickupRequestShipment $membership): string {
+            $address = $membership->shipment?->sellerOrder?->order?->address;
+
+            return implode('|', [
+                trim((string) $address?->province_code),
+                trim((string) $address?->municipality_code),
+                trim((string) $address?->barangay_code),
+                (string) ((int) $membership->preferred_destination_logistics_center_id),
+            ]);
+        });
+
+        foreach ($groups as $group) {
+            /** @var SellerPickupRequestShipment $first */
+            $first = $group->first();
+            $buyerAddress = $first->shipment?->sellerOrder?->order?->address;
+            if (! $buyerAddress) {
+                throw new RuntimeException('A Buyer delivery address is missing from this Seller pickup request.');
+            }
+            foreach ($group as $membership) {
+                $other = $membership->shipment?->sellerOrder?->order?->address;
+                if (! $other
+                    || trim((string) $other->province_code) !== trim((string) $buyerAddress->province_code)
+                    || trim((string) $other->municipality_code) !== trim((string) $buyerAddress->municipality_code)
+                    || trim((string) $other->barangay_code) !== trim((string) $buyerAddress->barangay_code)) {
+                    throw new RuntimeException('A pickup destination choice cannot combine different Buyer PSGC addresses.');
+                }
+            }
+
+            $selectedDestinationId = (int) $first->preferred_destination_logistics_center_id;
+            $destinationArea = null;
+            if ($selectedDestinationId > 0) {
+                $destination = LogisticsCenter::query()
+                    ->approvedActive()
+                    ->whereKey($selectedDestinationId)
+                    ->whereHas('owner', fn ($owner) => $owner
+                        ->where('account_type', User::TYPE_LOGISTICS)
+                        ->where('status', User::STATUS_ACTIVE))
+                    ->with('address')
+                    ->when($lock, fn ($query) => $query->lockForUpdate())
+                    ->first();
+                if (! $destination || ! is_numeric($destination->address?->latitude) || ! is_numeric($destination->address?->longitude)) {
+                    throw new RuntimeException('The Seller-selected destination Logistics center is no longer active or has no confirmed location.');
+                }
+            } else {
+                $destinationChoice = $this->localDestinationForAddress($buyerAddress);
+                $destination = $destinationChoice['center'] ?? null;
+                $destinationArea = $destinationChoice['location'] ?? null;
+                if (! $destination || ! $destinationArea) {
+                    throw new RuntimeException('A Buyer address with local Logistics coverage must keep its automatic destination route.');
+                }
+            }
+
+            if ((int) $origin->id !== (int) $destination->id && ! $this->schema->manifestReady()) {
+                throw new RuntimeException('Inter-hub transfers are unavailable until the transfer manifest schema is installed.');
+            }
+
+            $groupIds = $group->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
+            $routeEntry = [
+                'origin_logistics_center_id' => (int) $origin->id,
+                'destination_logistics_center_id' => (int) $destination->id,
+                'destination_service_area_location_id' => $destinationArea ? (int) $destinationArea->id : null,
+                'destination_service_area_id' => $destinationArea ? (int) $destinationArea->service_area_id : null,
+                'destination_center_name' => (string) $destination->business_name,
+                'destination_center_address' => $destination->address?->formatted(),
+                'coverage_type' => 'SELLER_SELECTED_FALLBACK',
+                'coverage_route_id' => null,
+                'service_date' => null,
+                'seller_selected_fallback' => true,
+                'shipment_ids' => $groupIds,
+                'pickup_psgc' => $this->psgc($request->pickupAddress),
+                'destination_psgc' => $this->psgc($buyerAddress),
+                'transfer_hops' => (int) ((int) $origin->id === (int) $destination->id ? 0 : 1),
+            ];
+            foreach ($groupIds as $shipmentId) {
+                $shipmentPlans[$shipmentId] = $routeEntry;
+            }
+            $destinations[(int) $destination->id] = $destination;
+        }
+
+        if ($shipmentPlans === []) {
+            return [];
+        }
+
+        $snapshot = [
+            'version' => 1,
+            'routing_mode' => 'SELLER_SELECTED_UNCOVERED_FALLBACK',
+            'origin_logistics_center_id' => (int) $origin->id,
+            'shipment_routes' => $shipmentPlans,
+        ];
+        $destinationIds = array_keys($destinations);
+        $uniqueAreaIds = collect($shipmentPlans)->pluck('destination_service_area_location_id')->filter()->unique()->values();
+
+        return [[
+            'origin_center_id' => (int) $origin->id,
+            'destination_center_id' => count($destinationIds) === 1 ? $destinationIds[0] : null,
+            'destination_area_id' => $uniqueAreaIds->count() === 1 ? (int) $uniqueAreaIds->first() : null,
+            'coverage_route_id' => null,
+            'service_date' => null,
+            'seller_selected_fallback' => true,
+            'snapshot' => $snapshot,
+            'routes' => $shipmentPlans,
+            'destination_center_ids' => $destinationIds,
+            'shipment_ids' => array_map('intval', array_keys($shipmentPlans)),
+        ]];
+    }
+
+    /** @return array{center:LogisticsCenter,location:ServiceAreaLocation}|null */
+    private function localDestinationForAddress(object $address): ?array
+    {
+        $locations = ServiceAreaLocation::query()
+            ->where('province_code', trim((string) $address->province_code))
+            ->where('municipality_code', trim((string) $address->municipality_code))
+            ->where('barangay_code', trim((string) $address->barangay_code))
+            ->when($this->schema->coverageTypeReady(), fn ($query) => $query->where('coverage_type', 'PRIMARY'))
+            ->whereHas('serviceArea', fn ($area) => $area->where('is_active', true)
+                ->whereHas('logisticsCenter', fn ($center) => $center->approvedActive()
+                    ->whereHas('owner', fn ($owner) => $owner
+                        ->where('account_type', User::TYPE_LOGISTICS)
+                        ->where('status', User::STATUS_ACTIVE))))
+            ->with('serviceArea.logisticsCenter.address', 'serviceArea.logisticsCenter.owner')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($locations as $location) {
+            $center = $location->serviceArea?->logisticsCenter;
+            if ($center
+                && is_numeric($center->address?->latitude)
+                && is_numeric($center->address?->longitude)
+                && trim((string) $center->address?->province_code) === trim((string) $address->province_code)
+                && trim((string) $center->address?->municipality_code) === trim((string) $address->municipality_code)
+                && $this->areaEligibility->centerAuthorizesExactLocation($center, $location)) {
+                return ['center' => $center, 'location' => $location];
+            }
+        }
+
+        return null;
+    }
+
+    private function fallbackRouteHasDestinationCapacity(array $plan, int $requestId): bool
+    {
+        foreach ($plan['destination_center_ids'] ?? [] as $destinationId) {
+            $required = collect($plan['routes'] ?? [])
+                ->filter(fn (array $route): bool => (int) $route['destination_logistics_center_id'] === (int) $destinationId)
+                ->count();
+            $center = LogisticsCenter::query()->approvedActive()->with('address')
+                ->when(DB::transactionLevel() > 0, fn ($query) => $query->lockForUpdate())
+                ->find($destinationId);
+            if (! $center || $required < 1) {
+                return false;
+            }
+            $available = $this->availableDestinationCapacity($center);
+
+            $reserved = 0;
+            foreach (SellerPickupCenterOffer::query()
+                ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                ->where('seller_pickup_request_id', '!=', $requestId)
+                ->whereNotNull('route_snapshot')
+                ->get(['route_snapshot']) as $offer) {
+                foreach ((array) data_get($offer->route_snapshot, 'shipment_routes', []) as $route) {
+                    if ((int) ($route['destination_logistics_center_id'] ?? 0) === (int) $destinationId) {
+                        $reserved++;
+                    }
+                }
+            }
+            if ($available - $reserved < $required) {
+                return false;
+            }
+        }
+
+        return ! empty($plan['destination_center_ids']) && $this->fallbackRouteHasInterhubCapacity($plan);
+    }
+
+    /**
+     * Confirm that the origin hub has an idle, approved inter-hub vehicle
+     * capable of carrying each selected transfer batch before Logistics accepts.
+     */
+    private function fallbackRouteHasInterhubCapacity(array $plan): bool
+    {
+        $originId = (int) ($plan['origin_center_id'] ?? 0);
+        if ($originId < 1) {
+            return false;
+        }
+
+        foreach ($plan['destination_center_ids'] ?? [] as $destinationId) {
+            if ((int) $destinationId === $originId) {
+                continue;
+            }
+
+            $shipmentIds = collect($plan['routes'] ?? [])
+                ->filter(fn (array $route): bool => (int) $route['destination_logistics_center_id'] === (int) $destinationId)
+                ->keys()
+                ->map(fn ($id): int => (int) $id)
+                ->values();
+            if ($shipmentIds->isEmpty()) {
+                return false;
+            }
+
+            $shipments = Shipment::query()
+                ->whereIn('id', $shipmentIds)
+                ->with('orderItem.productVariant')
+                ->get();
+            if ($shipments->count() !== $shipmentIds->count()) {
+                return false;
+            }
+            $parcelWeights = $shipments->map(fn (Shipment $shipment): array => [
+                'weight_kg' => ParcelWeightEstimator::recordedWeight($shipment)
+                    ?? ParcelWeightEstimator::productEstimate($shipment),
+            ])->values();
+
+            $drivers = app(TransferManifestService::class)->eligibleDriversForCenter($originId);
+            $hasTransferCapacity = $drivers->contains(function (RiderProfile $driver) use ($parcelWeights): bool {
+                try {
+                    app(TransferCapacityService::class)->assertCapacity($driver, $parcelWeights);
+
+                    return true;
+                } catch (RuntimeException) {
+                    return false;
+                }
+            });
+            if (! $hasTransferCapacity) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function availableDestinationCapacity(LogisticsCenter $center): int
+    {
+        return RiderProfile::query()
+            ->where('logistics_center_id', $center->id)
+            ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->whereIn('vehicle_type', RiderVehicleType::localValues())
+            ->whereNotNull('approved_parcel_capacity')
+            ->where('approved_parcel_capacity', '>', 0)
+            ->whereHas('user', fn ($user) => $user
+                ->where('account_type', User::TYPE_RIDER)
+                ->where('status', User::STATUS_ACTIVE))
+            ->withCount(['assignments as active_assignments_count' => fn ($assignments) => $assignments
+                ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
+            ->get()
+            ->sum(fn (RiderProfile $rider): int => max(
+                0,
+                (int) $rider->approved_parcel_capacity - (int) $rider->active_assignments_count,
+            ));
+    }
+
     private function routeHasDestinationCapacityForPlan(array $plan, int $requestId): bool
     {
+        if (($plan['seller_selected_fallback'] ?? false) === true) {
+            return $this->fallbackRouteHasDestinationCapacity($plan, $requestId);
+        }
+
         return $this->destinationCapacity($plan['destination'], $plan['destination_area'], $requestId) >= count($plan['shipment_ids'] ?? []);
     }
 
     private function routeHasDestinationCapacity(array $plan, int $requestId): bool
     {
+        if (($plan['seller_selected_fallback'] ?? false) === true) {
+            return $this->fallbackRouteHasDestinationCapacity($plan, $requestId);
+        }
+
         foreach ($plan['destination_center_ids'] as $destinationId) {
             $routes = collect($plan['routes'])->filter(fn (array $route): bool =>
                 (int) $route['destination_logistics_center_id'] === (int) $destinationId)
@@ -773,10 +1080,21 @@ final class SellerPickupMatchingService
             ->exists();
     }
 
-    private function centerStillAuthorized(LogisticsCenter $center, ?Address $address): bool
+    private function centerStillAuthorized(LogisticsCenter $center, ?Address $address, ?SellerPickupRequest $request = null): bool
     {
         if (! $address) {
             return false;
+        }
+
+        if ($request?->seller_selected_fallback && (int) $request->preferred_logistics_center_id > 0) {
+            $center->loadMissing('owner', 'address');
+
+            return (int) $center->owner?->id === (int) $center->owner_user_id
+                && $center->owner?->account_type === User::TYPE_LOGISTICS
+                && $center->owner?->status === User::STATUS_ACTIVE
+                && is_numeric($center->address?->latitude)
+                && is_numeric($center->address?->longitude)
+                && LogisticsCenter::query()->approvedActive()->whereKey($center->id)->exists();
         }
 
         return ServiceAreaLocation::query()
@@ -835,12 +1153,17 @@ final class SellerPickupMatchingService
                 ->whereKey($route['destination_logistics_center_id'])
                 ->with('address')
                 ->first();
-            $destinationLocation = ServiceAreaLocation::query()
-                ->whereKey($route['destination_service_area_location_id'])
-                ->with('serviceArea')
-                ->first();
-            if (! $destinationCenter || ! $destinationLocation
-                || (int) $destinationLocation->serviceArea?->logistics_center_id !== (int) $destinationCenter->id) {
+            $destinationLocation = filled($route['destination_service_area_location_id'] ?? null)
+                ? ServiceAreaLocation::query()
+                    ->whereKey($route['destination_service_area_location_id'])
+                    ->with('serviceArea')
+                    ->first()
+                : null;
+            $sellerSelectedFallback = $request->seller_selected_fallback
+                && ($route['seller_selected_fallback'] ?? false) === true;
+            if (! $destinationCenter
+                || (! $destinationLocation && ! $sellerSelectedFallback)
+                || ($destinationLocation && (int) $destinationLocation->serviceArea?->logistics_center_id !== (int) $destinationCenter->id)) {
                 throw new RuntimeException('The authorized destination hub changed before acceptance.');
             }
 
@@ -848,7 +1171,7 @@ final class SellerPickupMatchingService
                 'logistics_center_id' => $origin->id,
                 'origin_logistics_center_id' => $origin->id,
                 'destination_logistics_center_id' => $destinationCenter->id,
-                'service_area_id' => $destinationLocation->service_area_id,
+                'service_area_id' => $destinationLocation?->service_area_id,
                 'origin_province_code' => $originAddress->province_code,
                 'origin_province_name' => $originAddress->province_name,
                 'origin_municipality_code' => $originAddress->municipality_code,
@@ -861,8 +1184,8 @@ final class SellerPickupMatchingService
                 'destination_municipality_name' => $destinationAddress->municipality_name,
                 'destination_barangay_code' => $destinationAddress->barangay_code,
                 'destination_barangay_name' => $destinationAddress->barangay_name,
-                'smart_coverage_route_id' => $route['coverage_route_id'],
-                'smart_coverage_service_date' => $route['service_date'],
+                'smart_coverage_route_id' => $route['coverage_route_id'] ?? null,
+                'smart_coverage_service_date' => $route['service_date'] ?? null,
             ]);
 
             if ((int) $origin->id !== (int) $destinationCenter->id) {

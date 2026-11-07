@@ -36,7 +36,6 @@
         @endforeach
     </nav>
 
-    <x-shared.mapbox :markers="$mapMarkers" title="Center parcel map" height="220px" user-location-target="destination" />
     <div class="overflow-x-auto rounded-xl border border-line bg-surface shadow-sm">
         <table class="w-full min-w-[760px] text-left text-xs">
             <thead class="bg-page-secondary text-[10px] uppercase tracking-wide text-muted"><tr><th class="p-4">Tracking</th><th class="p-4">Order</th><th class="p-4">Seller</th><th class="p-4">Destination</th><th class="p-4">Area</th><th class="p-4">Status</th><th class="p-4"></th></tr></thead>
