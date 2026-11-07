@@ -90,7 +90,6 @@ export function initializeWorkspaceHeaderSearch() {
         'all riders': 'rider management drivers couriers',
         'delivery areas': 'service area coverage locations barangay',
         'all parcels': 'shipments tracking shipment orders',
-        'delivery monitoring': 'live tracking last mile deliveries',
         'pickup requests': 'pickups intake collection',
         'incoming parcels': 'receive intake shipments',
         'parcel sorting': 'sort scan parcels',

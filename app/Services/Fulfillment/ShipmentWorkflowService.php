@@ -777,9 +777,6 @@ class ShipmentWorkflowService
                 );
 
                 $pickupArea = $this->sellerPickupServiceArea($shipment, $rider->logisticsCenter, $pickupAddress);
-                if (! $pickupArea && ! $allowPickupAreaOverride) {
-                    throw new RuntimeException('The seller pickup address is not covered by an active service area.');
-                }
 
                 $pickupArea?->loadMissing('logisticsCenter');
                 $rider->loadMissing('logisticsCenter.address');
@@ -805,7 +802,8 @@ class ShipmentWorkflowService
                 }
 
                 if (! $this->riderCoversSellerPickupArea($shipment, $rider, $pickupAddress)
-                    && ! $allowPickupAreaOverride) {
+                    && ! $allowPickupAreaOverride
+                    && ! $uncoveredFallback) {
                     throw new RuntimeException('The selected rider is not assigned to the seller pickup area. Assign that area to the rider or choose another rider.');
                 }
             } else {

@@ -619,7 +619,7 @@ final class SellerPickupBatchService
     {
         SellerPickupRequest::query()
             ->where('rider_local_trip_id', $trip->id)
-            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->whereNotIn('status', ['COMPLETED', 'PARTIALLY_COLLECTED', 'NOT_COLLECTED', 'CANCELLED', 'RETURNED_TO_SELLER'])
             ->update(['status' => $status]);
     }
 
@@ -645,7 +645,7 @@ final class SellerPickupBatchService
     {
         $pickupRequest = SellerPickupRequest::query()
             ->where('rider_local_trip_id', $trip->id)
-            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->whereNotIn('status', ['COMPLETED', 'PARTIALLY_COLLECTED', 'NOT_COLLECTED', 'CANCELLED', 'RETURNED_TO_SELLER'])
             ->lockForUpdate()
             ->first();
         if (! $pickupRequest) {

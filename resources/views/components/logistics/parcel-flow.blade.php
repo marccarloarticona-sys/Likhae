@@ -5,7 +5,7 @@
         ['key' => 'receive', 'label' => '1. Receive & Scan', 'detail' => 'Verify the waybill', 'href' => route('logistics.parcels.receive')],
         ['key' => 'sort', 'label' => '2. Address & Area', 'detail' => 'Sort by destination', 'href' => route('logistics.sorting')],
         ['key' => 'assign', 'label' => '3. Area Rider', 'detail' => 'Assign eligible rider', 'href' => route('logistics.assignments')],
-        ['key' => 'monitor', 'label' => '4. Monitor', 'detail' => 'Track final delivery', 'href' => route('logistics.parcels.tracking')],
+        ['key' => 'monitor', 'label' => '4. Track parcels', 'detail' => 'Search tracking and open parcel details', 'href' => route('logistics.parcels')],
     ];
     $currentIndex = collect($steps)->search(fn ($step) => $step['key'] === $current);
 @endphp

@@ -1,10 +1,14 @@
 @extends('layouts.logistics.app')
 @section('title', 'Parcels - LIKHAE Logistics')
 @php
-    $dateQuery = array_filter(['from_date' => $filters['from_date'] ?? null, 'to_date' => $filters['to_date'] ?? null]);
+    $filterQuery = array_filter([
+        'from_date' => $filters['from_date'] ?? null,
+        'to_date' => $filters['to_date'] ?? null,
+        'tracking' => $filters['tracking'] ?? null,
+    ]);
     $statusOptions = [
         '' => 'All', 'pending' => 'Pending', 'in_transit' => 'In Transit',
-        'delivered' => 'Delivered', 'failed' => 'Failed',
+        'delivered' => 'Delivered', 'COMPLETED' => 'Completed', 'failed' => 'Failed',
         'LOST' => 'Lost', 'DAMAGED' => 'Damaged',
         'PICKED_UP' => 'Incoming', 'AT_SORTING_CENTER' => 'For Sorting',
         'SORTED' => 'Sorted', 'ASSIGNED_TO_RIDER' => 'Assigned',
@@ -15,12 +19,13 @@
 <div class="min-w-0 space-y-5">
     <header class="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 shadow-sm lg:flex-row lg:items-end lg:justify-between">
         <div><p class="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Parcel Management</p><h1 class="mt-2 text-2xl font-semibold text-ink">All Parcels</h1><p class="mt-1 text-xs text-muted">Authorized shipment records for {{ $center->business_name }}. {{ number_format($shipments->total()) }} matching parcels.</p></div>
-        <div class="flex flex-wrap gap-2"><a href="{{ route('logistics.parcels.receive') }}" class="inline-flex min-h-10 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-white">Receive Parcel</a><a href="{{ route('logistics.parcels.tracking') }}" class="inline-flex min-h-10 items-center rounded-lg border border-line px-4 text-xs font-semibold text-ink">Track Parcel</a></div>
+        <div class="flex flex-wrap gap-2"><a href="{{ route('logistics.parcels.receive') }}" class="inline-flex min-h-10 items-center rounded-lg bg-primary px-4 text-xs font-semibold text-white">Receive Parcel</a></div>
     </header>
 
     <section class="rounded-xl border border-line bg-surface p-4 shadow-sm">
-        <form method="GET" action="{{ route('logistics.parcels') }}" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] lg:items-end" aria-label="Shipment creation date filter">
+        <form method="GET" action="{{ route('logistics.parcels') }}" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto] lg:items-end" aria-label="Parcel filters">
             @if($status !== '')<input type="hidden" name="status" value="{{ $status }}">@endif
+            <label class="text-xs font-semibold text-ink">Tracking Number<input type="search" name="tracking" value="{{ $filters['tracking'] ?? '' }}" maxlength="100" autocomplete="off" placeholder="Search tracking number" class="mt-1 block min-h-10 w-full rounded-lg border border-line bg-page-secondary px-3 text-sm"></label>
             <label class="text-xs font-semibold text-ink">From Date<input type="date" name="from_date" value="{{ $filters['from_date'] ?? '' }}" class="mt-1 block min-h-10 w-full rounded-lg border border-line bg-page-secondary px-3 text-sm"></label>
             <label class="text-xs font-semibold text-ink">To Date<input type="date" name="to_date" value="{{ $filters['to_date'] ?? '' }}" class="mt-1 block min-h-10 w-full rounded-lg border border-line bg-page-secondary px-3 text-sm"></label>
             <button class="min-h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-white">Apply Filter</button>
@@ -32,7 +37,7 @@
 
     <nav class="flex flex-wrap gap-2" aria-label="Parcel status filters">
         @foreach($statusOptions as $key => $label)
-            <a href="{{ route('logistics.parcels', $key === '' ? $dateQuery : ['status' => $key, ...$dateQuery]) }}" class="rounded-lg border border-line px-3 py-2 text-xs font-semibold {{ $status === $key ? 'bg-primary text-white' : 'bg-surface text-ink hover:border-primary' }}" @if($status === $key) aria-current="page" @endif>{{ $label }}</a>
+            <a href="{{ route('logistics.parcels', $key === '' ? $filterQuery : ['status' => $key, ...$filterQuery]) }}" class="rounded-lg border border-line px-3 py-2 text-xs font-semibold {{ $status === $key ? 'bg-primary text-white' : 'bg-surface text-ink hover:border-primary' }}" @if($status === $key) aria-current="page" @endif>{{ $label }}</a>
         @endforeach
     </nav>
 

@@ -71,7 +71,18 @@
                                 <td><strong>{{ $parcel->tracking_number }}</strong><small class="block">{{ $parcel->orderItem?->product_name ?? 'Parcel' }}</small></td>
                                 <td>
                                     @if($parcel->buyer_has_local_logistics_center)
-                                        <span class="text-sm text-muted">Automatic local route</span>
+                                        <div class="sl-pickup-route-preview" aria-label="Automatic Buyer destination hub">
+                                            <span class="sl-pickup-route-preview-label">Automatic destination · view only</span>
+                                            @foreach($parcel->buyer_local_logistics_centers ?? [] as $destinationCenter)
+                                                <div class="sl-pickup-route-preview-hub">
+                                                    <strong>{{ $destinationCenter['name'] }}</strong>
+                                                    @if(filled($destinationCenter['address'] ?? null))
+                                                        <span>{{ $destinationCenter['address'] }}</span>
+                                                    @endif
+                                                </div>
+                                            @endforeach
+                                            <small>Buyer location is covered. LIKHAE routes automatically based on capacity.</small>
+                                        </div>
                                     @else
                                         <small data-buyer-pin-missing hidden class="sl-pickup-pin-notice">The Buyer delivery address needs a confirmed map pin before a fallback destination hub can be selected.</small>
                                         <label data-destination-hub-field hidden>

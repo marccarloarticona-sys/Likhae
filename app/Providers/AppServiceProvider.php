@@ -356,7 +356,6 @@ class AppServiceProvider extends ServiceProvider
                 'incoming' => 0,
                 'sorting' => 0,
                 'assignments' => 0,
-                'monitoring' => 0,
                 'rider_applications' => 0,
                 'pickup_requests' => 0,
                 'cart' => 0,
@@ -469,10 +468,6 @@ class AppServiceProvider extends ServiceProvider
                             ->where('assignment_type', 'DELIVERY')
                             ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS']))
                         ->count();
-                    $counts['monitoring'] = (clone $centerShipments)
-                        ->whereIn('current_status', ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'])
-                        ->count();
-
                     if (Schema::hasTable('pickup_requests')) {
                         $counts['pickup_requests'] = PickupRequest::query()
                             ->where('status', 'PENDING')

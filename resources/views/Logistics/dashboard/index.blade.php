@@ -220,7 +220,7 @@
                     ['Rider Management', 'logistics.riders'],
                     ['Pickup Management', 'logistics.pickups'],
                     ['Inter-hub Transfers', 'logistics.transfers'],
-                    ['Delivery Monitoring', 'logistics.parcels.tracking'],
+                    ['All Parcels', 'logistics.parcels'],
                     ['Reports', 'logistics.reports'],
                 ] as [$label, $route])
                     <a href="{{ route($route) }}" class="lk-dashboard-quicklink"><span>{{ $label }}</span><span aria-hidden="true">→</span></a>

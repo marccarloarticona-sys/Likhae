@@ -119,6 +119,7 @@ final class SellerPickupAutoDispatchService
     {
         $requests = SellerPickupRequest::query()
             ->where('status', 'REQUESTED')
+            ->whereNull('rider_local_trip_id')
             ->whereHas('memberships.shipment', fn ($shipment) => $shipment
                 ->where('current_status', 'READY_FOR_PICKUP')
                 ->where(fn ($centerQuery) => $centerQuery->where('logistics_center_id', $center->id)

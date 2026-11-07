@@ -12,16 +12,16 @@
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
 
-    <form method="GET" action="{{ route('logistics.pickups') }}" class="flex flex-col gap-2 border border-line bg-surface p-4 sm:flex-row">
-        <input name="tracking" value="{{ $tracking }}" class="h-10 min-w-0 flex-1 border border-line bg-white px-3 text-sm text-ink" placeholder="Filter by tracking number" aria-label="Filter pickup queue by tracking number">
-        <button class="bg-primary px-4 py-2 text-sm font-semibold text-white">Find Parcel</button>
+    <form method="GET" action="{{ route('logistics.pickups') }}" class="flex flex-col gap-2 rounded-xl border border-line bg-surface p-4 sm:flex-row">
+        <input name="tracking" value="{{ $tracking }}" class="h-11 min-w-0 flex-1 rounded-lg border border-line bg-page-secondary px-3 text-sm text-ink outline-none transition placeholder:text-muted focus:border-primary focus:ring-2 focus:ring-primary/20" placeholder="Filter by tracking number" aria-label="Filter pickup queue by tracking number">
+        <button class="min-h-11 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/30">Find Parcel</button>
     </form>
     @if(!$pickupSchemaReady)
         <section class="border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">Seller pickup batch assignment is unavailable until the additive local trip migrations are installed.</section>
     @endif
 
     <section class="space-y-4" data-seller-pickup-requests>
-        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Seller-submitted requests follow the same Rider pickup flow as the ready parcels below. After assignment, the request links to a Pickup Batch shown under Active Seller Pickups.</p></div>
+        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Seller-submitted requests follow the same Rider pickup flow as the ready parcels below. Fallback routes stay pending until Logistics accepts or rejects the origin request; accepted routes then wait for pickup Rider assignment.</p></div>
         @forelse($sellerPickupRequests as $pickupRequest)
             @php
                 $requestParcels = $pickupRequest->memberships;
@@ -34,11 +34,15 @@
                         <h3 class="mt-1 font-bold text-ink">{{ $pickupRequest->sellerProfile?->business_name ?? 'Seller unavailable' }}</h3>
                         <p class="mt-1 text-sm text-muted">{{ $pickupRequest->pickupAddress?->formatted() ?? 'Pickup address unavailable' }}</p>
                         @if($pickupRequest->preferredLogisticsCenter)
-                            <p class="mt-1 text-sm text-muted">Selected by Seller: <strong>{{ $pickupRequest->preferredLogisticsCenter->business_name }}</strong></p>
+                            <p class="mt-1 text-sm text-muted">Seller's first-choice origin: <strong>{{ $pickupRequest->preferredLogisticsCenter->business_name }}</strong></p>
+                        @endif
+                        @if($pickupRequest->accepted_center_offer?->logisticsCenter)
+                            <p class="mt-1 text-sm text-muted">Route accepted by origin: <strong>{{ $pickupRequest->accepted_center_offer->logisticsCenter->business_name }}</strong></p>
                         @endif
                         @if($pickupRequest->seller_selected_fallback)
                             @php
-                                $routeSnapshot = $pickupRequest->current_center_offer?->route_snapshot;
+                                $visibleCenterOffer = $pickupRequest->current_center_offer ?? $pickupRequest->accepted_center_offer;
+                                $routeSnapshot = $visibleCenterOffer?->route_snapshot;
                                 $shipmentRoutes = collect(data_get($routeSnapshot, 'shipment_routes', []));
                                 $requiresInterhubTransfer = $shipmentRoutes->contains(fn (array $route): bool => (int) ($route['transfer_hops'] ?? 0) > 0);
                                 $destinationHubs = $shipmentRoutes
@@ -63,7 +67,7 @@
                             @foreach($destinationHubs as $destinationHub)
                                 <p class="mt-1 text-sm text-muted">Buyer destination Logistics center: <strong>{{ $destinationHub['name'] }}</strong>{{ filled($destinationHub['address']) ? ' — '.$destinationHub['address'] : '' }}</p>
                             @endforeach
-                            @if($pickupRequest->current_center_offer)
+                            @if($visibleCenterOffer)
                                 <p class="mt-1 text-sm font-semibold text-ink">{{ $requiresInterhubTransfer ? 'Inter-hub transfer required' : 'No inter-hub transfer required' }}</p>
                             @endif
                             <p class="mt-1 text-xs text-muted">Seller-selected uncovered-location route. Review the destination hub and available transfer/delivery capacity before accepting.</p>
@@ -77,15 +81,15 @@
                             @if($currentOffer->estimated_travel_seconds)
                                 <p class="mt-1 text-xs text-muted">Estimated travel time: {{ max(1, (int) ceil($currentOffer->estimated_travel_seconds / 60)) }} min.</p>
                             @endif
+                        @elseif($pickupRequest->fallback_route_accepted)
+                            <p class="mt-2 text-sm font-semibold text-emerald-700">Route accepted by Logistics. Assign a pickup Rider below.</p>
                         @elseif($pickupRequest->status === 'REQUESTED' && $pickupRequest->preferredLogisticsCenter)
                             <p class="mt-2 text-sm text-amber-800">Please accept or assign this request by {{ $pickupRequest->updated_at?->copy()->addMinutes(15)->timezone(config('app.timezone'))->format('M j, g:i A') }}. If it is still unaccepted, it returns to the Seller.</p>
                         @elseif(in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true))
-                            @if($automaticPickupMatchingReady && $pickupRequest->status === 'PENDING' && !$pickupRequest->has_active_center_offer)
-                                @if($pickupRequest->seller_selected_fallback)
-                                    <p class="mt-2 text-sm text-amber-800">No pickup offer is ready yet. LIKHAE keeps checking for an eligible origin center and Rider capacity; the selected Buyer destination hub stays saved.</p>
-                                @else
-                                    <p class="mt-2 text-sm text-amber-800">This parcel is ready for first-mile pickup. Logistics can assign an available local Rider; the Buyer delivery route can be confirmed after it reaches the center.</p>
-                                @endif
+                            @if($automaticPickupMatchingReady && $pickupRequest->seller_selected_fallback && !$pickupRequest->has_active_center_offer)
+                                <p class="mt-2 text-sm text-amber-800">{{ $pickupRequest->fallback_review_available ? 'Pending your decision: review the selected Buyer destination and accept or reject this request.' : 'This center has already responded. LIKHAE is checking the next eligible origin hub; the selected Buyer destination stays saved.' }}</p>
+                            @elseif($automaticPickupMatchingReady && in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true) && !$pickupRequest->has_active_center_offer)
+                                <p class="mt-2 text-sm text-amber-800">This parcel is waiting for automatic Logistics route and pickup Rider capacity matching.</p>
                             @else
                                 <p class="mt-2 text-sm text-amber-800">Pending follow-up: no complete authorized route or available Rider capacity is confirmed yet. Confirm it within 15 minutes or it will return to the Seller.</p>
                             @endif
@@ -95,14 +99,20 @@
                 </header>
                 @php
                     [$pickupRequestNextStep, $pickupRequestNextActor] = match ($pickupRequest->status) {
-                        'REQUESTED' => ['Accept or assign this request within 15 minutes. If it remains unaccepted, it returns to the Seller.', 'Logistics'],
+                        'REQUESTED' => $pickupRequest->fallback_route_accepted
+                            ? ['Assign an available pickup Rider. The route has already been accepted by Logistics.', 'Logistics']
+                            : ['Accept or assign this request within 15 minutes. If it remains unaccepted, it returns to the Seller.', 'Logistics'],
                         'MATCHING' => ['Check this request from the Seller; automatic matching checks route and Rider capacity at this center.', 'Logistics'],
-                        'WAITING_FOR_RESPONSE' => $automaticPickupMatchingReady
-                            ? ['Accept within 15 minutes to confirm the route and assign an eligible pickup Rider. If declined or unanswered, LIKHAE tries the next eligible origin center.', 'Logistics']
-                            : ['Accept within 15 minutes to confirm the saved route and assign an eligible pickup Rider. Declining returns the parcels to the Seller for another center choice.', 'Logistics'],
+                        'WAITING_FOR_RESPONSE' => $pickupRequest->seller_selected_fallback
+                            ? ['Review the Buyer destination and inter-hub capacity, then accept or reject this request within 15 minutes. If rejected or unanswered, LIKHAE tries the next eligible origin center.', 'Logistics']
+                            : ($automaticPickupMatchingReady
+                                ? ['Accept within 15 minutes to confirm the route and assign an eligible pickup Rider. If declined or unanswered, LIKHAE tries the next eligible origin center.', 'Logistics']
+                                : ['Accept within 15 minutes to confirm the saved route and assign an eligible pickup Rider. Declining returns the parcels to the Seller for another center choice.', 'Logistics']),
                         'PENDING' => $automaticPickupMatchingReady
                             ? ($pickupRequest->seller_selected_fallback
-                                ? ['Wait for an available pickup Rider and verify the selected Buyer destination hub before accepting the route.', 'Logistics']
+                                ? ($pickupRequest->fallback_review_available
+                                    ? ['Review the selected Buyer destination, then accept or reject this request. After accepting, assign a pickup Rider.', 'Logistics']
+                                    : ['Wait while LIKHAE checks the next eligible origin hub. The selected Buyer destination stays saved.', 'Logistics'])
                                 : ['Assign the nearest eligible local Rider for Seller pickup. Buyer delivery routing can continue after the parcel reaches the center.', 'Logistics'])
                             : ['Confirm route and Rider capacity within 15 minutes. Otherwise the request returns to the Seller.', 'Logistics'],
                         'ASSIGNED' => ['Collect the parcels and hand them to the authorized center.', 'Pickup rider'],
@@ -128,36 +138,50 @@
                 </ol>
                 @if($pickupRequest->current_center_offer && $automaticPickupMatchingReady)
                     <div class="flex flex-wrap gap-3 border-t border-line pt-4">
-                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="Accept this Seller pickup offer?" data-confirm-message="LIKHAE rechecks pickup Rider capacity, destination delivery capacity, and any required inter-hub vehicle capacity, then assigns the nearest eligible pickup Rider in this center." data-confirm-label="Accept offer">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="{{ $pickupRequest->seller_selected_fallback ? 'Accept this Seller pickup request?' : 'Accept this Seller pickup offer?' }}" data-confirm-message="{{ $pickupRequest->seller_selected_fallback ? 'LIKHAE verifies the selected Buyer destination, inter-hub vehicle capacity, and delivery capacity. After accepting, Logistics assigns a pickup Rider.' : 'LIKHAE rechecks pickup Rider capacity, destination delivery capacity, and any required inter-hub vehicle capacity, then assigns the nearest eligible pickup Rider in this center.' }}" data-confirm-label="{{ $pickupRequest->seller_selected_fallback ? 'Accept request' : 'Accept offer' }}">
                             @csrf
-                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">Accept offer and assign Rider</button>
+                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">{{ $pickupRequest->seller_selected_fallback ? 'Accept request' : 'Accept offer and assign Rider' }}</button>
                         </form>
-                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="Decline this center offer?" data-confirm-message="{{ $automaticPickupMatchingReady ? 'LIKHAE will send the request to the next eligible origin center and keep the selected Buyer destination hub.' : 'This immediately returns the parcels to the Seller so they can choose another covered center.' }}" data-confirm-label="Decline offer">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="{{ $pickupRequest->seller_selected_fallback ? 'Reject this request for this hub?' : 'Decline this center offer?' }}" data-confirm-message="{{ $pickupRequest->seller_selected_fallback ? 'LIKHAE will try the next eligible origin hub and keep the selected Buyer destination hub.' : ($automaticPickupMatchingReady ? 'LIKHAE will send the request to the next eligible origin center and keep the selected Buyer destination hub.' : 'This immediately returns the parcels to the Seller so they can choose another covered center.') }}" data-confirm-label="{{ $pickupRequest->seller_selected_fallback ? 'Reject request' : 'Decline offer' }}">
                             @csrf
-                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">Decline offer</button>
+                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">{{ $pickupRequest->seller_selected_fallback ? 'Reject request' : 'Decline offer' }}</button>
+                        </form>
+                    </div>
+                @elseif($pickupRequest->fallback_review_available && $automaticPickupMatchingReady)
+                    <div class="flex flex-wrap gap-3 border-t border-line pt-4">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.fallback.accept', $pickupRequest) }}" data-confirm-title="Accept this Seller pickup request?" data-confirm-message="LIKHAE will recheck the selected Buyer destination, inter-hub capacity, and delivery capacity. If confirmed, assign a pickup Rider from this request." data-confirm-label="Accept request">
+                            @csrf
+                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">Accept request</button>
+                        </form>
+                        <form method="POST" action="{{ route('logistics.pickups.requests.fallback.reject', $pickupRequest) }}" data-confirm-title="Reject this request for this hub?" data-confirm-message="LIKHAE will try the next eligible origin hub and keep the selected Buyer destination hub." data-confirm-label="Reject request">
+                            @csrf
+                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">Reject request</button>
                         </form>
                     </div>
                 @elseif(in_array($pickupRequest->status, ['REQUESTED', 'PENDING'], true)
                     && $pickupSchemaReady
-                    && ! $pickupRequest->seller_selected_fallback
+                    && (! $pickupRequest->seller_selected_fallback || $pickupRequest->fallback_route_accepted)
                     && ! $pickupRequest->has_active_center_offer)
-                    <div class="grid gap-4 border-t border-line pt-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+                    <div class="grid gap-3 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                         <form method="POST" action="{{ route('logistics.pickups.requests.assign', $pickupRequest) }}" class="flex flex-col gap-3 sm:flex-row sm:items-end">
                             @csrf
-                            <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Online idle rider · nearest first; excess parcels stay in a new request
-                                <select name="rider_profile_id" required class="min-h-11 border border-line bg-white px-3 text-sm text-ink" @disabled($pickupRequest->eligible_riders->isEmpty())>
+                            <label class="grid min-w-0 flex-1 gap-1.5 text-xs font-semibold text-muted">Online idle rider · nearest first
+                                <select name="rider_profile_id" required class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60" @disabled($pickupRequest->eligible_riders->isEmpty())>
                                     <option value="">{{ $pickupRequest->eligible_riders->isEmpty() ? 'No idle online rider with a recent location' : 'Select an idle local Rider' }}</option>
                                     @foreach($pickupRequest->eligible_riders as $rider)
                                         <option value="{{ $rider->id }}">{{ $rider->user?->name }} · {{ number_format((float) $rider->seller_distance_km, 1) }} km · {{ str($rider->vehicle_type)->headline() }} · up to {{ min($requestParcels->count(), \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} of {{ $requestParcels->count() }} parcel(s)</option>
                                     @endforeach
                                 </select>
+                                <span class="text-[11px] font-normal">Excess parcels stay in a new request.</span>
                             </label>
-                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white disabled:opacity-50" @disabled($pickupRequest->eligible_riders->isEmpty())>Assign request to Rider</button>
+                            <button class="inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50" @disabled($pickupRequest->eligible_riders->isEmpty())>Assign request to Rider</button>
                         </form>
-                        <form method="POST" action="{{ route('logistics.pickups.requests.reject', $pickupRequest) }}" data-confirm-title="Reject this pickup request?" data-confirm-message="The parcel membership history will remain, and the parcels can be requested again." data-confirm-label="Reject request">
-                            @csrf
-                            <button class="min-h-11 border border-line px-4 py-3 text-sm font-semibold text-muted">Reject request</button>
-                        </form>
+                        @unless($pickupRequest->fallback_route_accepted)
+                            <form method="POST" action="{{ route('logistics.pickups.requests.reject', $pickupRequest) }}" class="sm:justify-self-end" data-confirm-title="Reject this pickup request?" data-confirm-message="The parcel membership history will remain, and the parcels can be requested again." data-confirm-label="Reject request">
+                                @csrf
+                                <button class="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-surface px-4 py-3 text-sm font-semibold text-ink transition hover:bg-page-secondary focus:outline-none focus:ring-2 focus:ring-primary/20">Reject request</button>
+                            </form>
+                        @endunless
                     </div>
                 @elseif($pickupRequest->rider_local_trip_id)
                     <p class="border-t border-line pt-4 text-sm text-muted">Assigned Rider: <strong class="text-ink">{{ $pickupRequest->riderLocalTrip?->rider?->user?->name ?? 'Unavailable' }}</strong> · <a class="font-semibold text-primary underline" href="{{ route('logistics.local-trips.show', $pickupRequest->rider_local_trip_id) }}">Pickup Batch #P-{{ $pickupRequest->rider_local_trip_id }}</a></p>
@@ -203,7 +227,7 @@
 
                         <div class="grid gap-3 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                             <label class="grid gap-1 text-xs font-semibold text-muted">Available idle local rider · nearest first
-                                <select name="rider_profile_id" required data-pickup-rider class="min-h-11 border border-line bg-white px-3 text-sm text-ink">
+                                <select name="rider_profile_id" required data-pickup-rider class="min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20">
                                     <option value="">{{ $eligibleRiders->isEmpty() ? 'No nearby online rider with a recent location and no active job' : 'Select an idle motorcycle or tricycle rider' }}</option>
                                     @foreach($eligibleRiders as $rider)
                                         <option value="{{ $rider->id }}" data-capacity="{{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }}">{{ $rider->user?->name }} · {{ number_format((float) $rider->seller_distance_km, 1) }} km · {{ str($rider->vehicle_type)->headline() }} · {{ min(10, \App\Support\LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count)) }} parcel(s) available</option>
@@ -250,7 +274,7 @@
                             @csrf
                             @method('PATCH')
                             <label class="grid flex-1 gap-1 text-xs font-semibold text-muted">Reassign to an idle online rider
-                                <select name="rider_profile_id" required class="min-h-10 border border-line bg-white px-3 text-sm text-ink">
+                                <select name="rider_profile_id" required class="min-h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20">
                                     <option value="">Select another rider</option>
                                     @foreach($batch->reassignable_riders as $candidate)
                                         <option value="{{ $candidate->id }}">{{ $candidate->user?->name }} · idle · capacity {{ $candidate->approved_parcel_capacity }} parcels</option>

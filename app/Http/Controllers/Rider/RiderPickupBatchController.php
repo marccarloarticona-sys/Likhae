@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
+use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
@@ -38,7 +39,25 @@ class RiderPickupBatchController extends Controller
             ->latest()
             ->paginate(15);
 
-        return view('rider.pickups.index', compact('rider', 'batches'));
+        $unlinkedActivePickups = RiderAssignment::query()
+            ->where('rider_profile_id', $rider->id)
+            ->pickup()
+            ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+            ->whereDoesntHave('localTripItems', fn ($item) => $item->whereHas('trip', fn ($trip) => $trip
+                ->where('rider_profile_id', $rider->id)
+                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                ->whereNotNull('seller_profile_id')
+                ->whereIn('status', [
+                    RiderLocalTrip::LOADING,
+                    RiderLocalTrip::READY,
+                    RiderLocalTrip::IN_PROGRESS,
+                    RiderLocalTrip::EN_ROUTE_TO_HUB,
+                ])))
+            ->with(['shipment.orderItem', 'shipment.sellerOrder.sellerProfile'])
+            ->latest('id')
+            ->get();
+
+        return view('rider.pickups.index', compact('rider', 'batches', 'unlinkedActivePickups'));
     }
 
     public function show(Request $request, int $trip, RiderAssignmentOfferExpiryService $offers): View|RedirectResponse
@@ -65,6 +84,12 @@ class RiderPickupBatchController extends Controller
         $collected = $collectedAssignmentIds->count();
         $resolved = $items->every(fn ($item): bool => in_array($item->riderAssignment?->status, ['COMPLETED', 'REJECTED', 'CANCELLED'], true));
         $pickupFinished = $pickup->status === RiderLocalTrip::IN_PROGRESS && $resolved;
+        $hasParcelAwaitingPickupScan = $items->contains(fn ($item): bool =>
+            $item->riderAssignment?->status === 'IN_PROGRESS'
+            && $item->riderAssignment?->shipment?->current_status === 'PICKUP_ASSIGNED');
+        if ($pickup->status === RiderLocalTrip::IN_PROGRESS && ! $pickupFinished && ! $hasParcelAwaitingPickupScan) {
+            return redirect()->route('rider.pickups')->with('status', 'This pickup batch does not match a parcel awaiting Rider pickup. Logistics must review it before you continue.');
+        }
         $address = $pickup->sellerPickupRequest?->pickupAddress ?? $pickup->seller?->businessAddress;
         $centerAddress = $pickup->logisticsCenter?->address;
         $routeItem = $pickup->status === RiderLocalTrip::EN_ROUTE_TO_HUB

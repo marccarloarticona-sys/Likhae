@@ -117,7 +117,8 @@ class BuyerOrderTabService
         }
 
         if (in_array($order->status, ['PLACED', 'PROCESSING'], true)
-            && $sellerOrders->contains(fn (SellerOrder $sellerOrder): bool => in_array($sellerOrder->status, self::TO_SHIP_SELLER_STATES, true))) {
+            && $sellerOrders->contains(fn (SellerOrder $sellerOrder): bool => in_array($sellerOrder->status, self::TO_SHIP_SELLER_STATES, true)
+                || $sellerOrder->shipments->contains(fn ($shipment): bool => in_array($shipment->current_status, self::TO_SHIP_SELLER_STATES, true)))) {
             return 'TO_SHIP';
         }
 
@@ -146,7 +147,8 @@ class BuyerOrderTabService
             return $this->awaitingOnlinePayment($order, $order->payments) ? 'TO_PAY' : 'TO_SHIP';
         }
 
-        if (in_array($sellerOrder->status, self::SELLER_ACCEPTED_STATES, true)) {
+        if (in_array($sellerOrder->status, self::SELLER_ACCEPTED_STATES, true)
+            || $sellerShipments->contains(fn ($shipment): bool => in_array($shipment->current_status, self::SELLER_ACCEPTED_STATES, true))) {
             return 'TO_SHIP';
         }
 

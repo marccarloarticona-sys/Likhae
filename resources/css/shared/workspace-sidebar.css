@@ -1827,6 +1827,10 @@ html.dark body.logistics-shell .sl-header-badge {
 }
 
 @media (max-width: 1023px) {
+    body.logistics-shell .sl-workspace-header {
+        display: none;
+    }
+
     body.logistics-shell .sl-mobile-header {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;

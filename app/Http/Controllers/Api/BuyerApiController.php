@@ -26,6 +26,7 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerOrderActionService;
+use App\Services\Marketplace\BuyerOrderTabService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Media\ImageOptimizationService;
@@ -1221,6 +1222,8 @@ class BuyerApiController extends Controller
             ];
         })->values();
         $primarySellerOrder = $sellerOrders->first();
+        $buyerFulfillmentStatus = app(BuyerOrderTabService::class)->forOrder($order, false);
+
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
@@ -1232,7 +1235,8 @@ class BuyerApiController extends Controller
             'status' => $order->status,
             'buyer_status' => $activeReturnRequest ? 'returns' : null,
             'buyer_status_label' => $activeReturnRequest ? 'Return / Refund Requested' : null,
-            'status_label' => str($order->status)->headline()->toString(),
+            'fulfillment_status' => $buyerFulfillmentStatus,
+            'status_label' => BuyerOrderTabService::LABELS[$buyerFulfillmentStatus] ?? str($order->status)->headline()->toString(),
             'payment_method' => $order->payments->first()?->method ?? 'Not specified',
             'payment_status' => $order->payment_status,
             'grand_total' => (float) $order->grand_total,
@@ -1256,7 +1260,11 @@ class BuyerApiController extends Controller
                 'current_status' => $parcel->current_status,
                 'rider' => $this->riderIdentityPayload($parcel),
                 'rider_location' => $this->riderLocationPayload($parcel),
-                'status_label' => str($parcel->current_status)->headline()->toString(),
+                'status_label' => match ($parcel->current_status) {
+                    'READY_FOR_PICKUP' => 'Waiting for a pickup rider to be assigned',
+                    'PICKUP_ASSIGNED' => 'Pickup rider assigned',
+                    default => str($parcel->current_status)->headline()->toString(),
+                },
                 'events' => $parcel->events->map(fn ($event): array => [
                     'status' => $event->status,
                     'label' => str($event->status)->headline()->toString(),

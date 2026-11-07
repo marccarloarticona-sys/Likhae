@@ -9,6 +9,7 @@ use App\Models\Logistics\LogisticsCoverageRoute;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
 use App\Models\Logistics\ShipmentTransferLeg;
+use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderProfile;
 use App\Models\Seller\SellerPickupCenterOffer;
 use App\Models\Seller\SellerPickupRequest;
@@ -100,7 +101,7 @@ final class SellerPickupMatchingService
         return $request->fresh(['pickupAddress', 'memberships.shipment.waybills']);
     }
 
-    /** Offer a request to its Seller-selected center when a route and capacity are available. */
+    /** Offer the route to Logistics; fallback pickup Rider assignment follows route acceptance. */
     public function startRequest(int $requestId): void
     {
         if (! $this->schema->automaticSellerPickupMatchingReady()) {
@@ -108,7 +109,9 @@ final class SellerPickupMatchingService
         }
 
         $request = $this->loadRequest($requestId);
-        if (! $request || in_array($request->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)) {
+        if (! $request
+            || $request->rider_local_trip_id !== null
+            || in_array($request->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)) {
             return;
         }
         if ($request->status === 'REQUESTED') {
@@ -120,7 +123,11 @@ final class SellerPickupMatchingService
             ->where('expires_at', '>', now())
             ->first();
         if ($active) {
-            $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+            SellerPickupRequest::query()
+                ->whereKey($request->id)
+                ->whereNull('rider_local_trip_id')
+                ->whereIn('status', ['REQUESTED', 'MATCHING', 'PENDING', 'WAITING_FOR_RESPONSE'])
+                ->update(['status' => 'WAITING_FOR_RESPONSE']);
 
             return;
         }
@@ -139,7 +146,9 @@ final class SellerPickupMatchingService
         try {
             $offer = DB::transaction(function () use ($requestId, $candidate): ?SellerPickupCenterOffer {
             $locked = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->first();
-            if (! $locked || in_array($locked->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED'], true)) {
+            if (! $locked
+                || $locked->rider_local_trip_id !== null
+                || in_array($locked->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED'], true)) {
                 return null;
             }
             $active = $locked->centerOffers()
@@ -167,7 +176,9 @@ final class SellerPickupMatchingService
 
                 return null;
             }
-            if (! $this->originPickupCapacity($origin, $fresh->pickupAddress, $fresh->memberships->count())) {
+            $sellerSelectedFallback = (bool) ($plan['seller_selected_fallback'] ?? false);
+            if (! $sellerSelectedFallback
+                && ! $this->originPickupCapacity($origin, $fresh->pickupAddress, $fresh->memberships->count())) {
                 $locked->update(['status' => 'PENDING']);
 
                 return null;
@@ -268,7 +279,8 @@ final class SellerPickupMatchingService
 
                 $plans = $this->routePlansForRequest($fresh, $center, true);
                 $plan = collect($plans)->first(fn (array $current): bool => $this->sameRoutePlan($offer->route_snapshot ?? [], $current));
-                if (! $plan || ! $this->originPickupCapacity($center, $fresh->pickupAddress, $count)) {
+                $sellerSelectedFallback = (bool) ($plan['seller_selected_fallback'] ?? false);
+                if (! $plan || (! $sellerSelectedFallback && ! $this->originPickupCapacity($center, $fresh->pickupAddress, $count))) {
                     throw new RuntimeException('Pickup Rider or complete route capacity changed after this offer was sent.');
                 }
                 if (! $this->lockRouteCenters($plan) || ! $this->routeHasDestinationCapacity($plan, (int) $fresh->id)) {
@@ -284,7 +296,9 @@ final class SellerPickupMatchingService
                 // this state transition is inside the same locked transaction.
                 $request->update(['status' => 'REQUESTED']);
                 $request->refresh();
-                $trip = $autoDispatch->assignRequestToNearest($actor, $center, $request);
+                $trip = $sellerSelectedFallback
+                    ? null
+                    : $autoDispatch->assignRequestToNearest($actor, $center, $request);
                 $offer->update([
                     'status' => SellerPickupCenterOffer::STATUS_ACCEPTED,
                     'responded_at' => now(),
@@ -296,7 +310,7 @@ final class SellerPickupMatchingService
                     'route_snapshot' => $plan['snapshot'],
                 ]);
 
-                return $trip !== null;
+                return $sellerSelectedFallback || $trip !== null;
             });
         } catch (HttpExceptionInterface|ModelNotFoundException $exception) {
             throw $exception;
@@ -339,6 +353,150 @@ final class SellerPickupMatchingService
         });
 
         return $declined;
+    }
+
+    /** Accept a Seller-selected fallback request even when matching has not produced an offer row yet. */
+    public function acceptFallbackRequest(
+        User $actor,
+        LogisticsCenter $center,
+        int $requestId,
+        SellerPickupAutoDispatchService $autoDispatch,
+    ): bool {
+        abort_unless($this->schema->automaticSellerPickupMatchingReady()
+            && $this->schema->sellerSelectedFallbackHubsReady(), 503);
+
+        $offerId = DB::transaction(function () use ($actor, $center, $requestId): int {
+            $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->firstOrFail();
+            $this->assertFallbackReviewActor($actor, $center, $request);
+
+            $activeOffer = $request->centerOffers()
+                ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('expires_at', '>', now())
+                ->lockForUpdate()
+                ->first();
+            if ($activeOffer) {
+                if ((int) $activeOffer->logistics_center_id !== (int) $center->id) {
+                    throw new RuntimeException('Another Logistics center is currently reviewing this request.');
+                }
+
+                if ($request->status !== 'WAITING_FOR_RESPONSE') {
+                    $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+                }
+
+                return (int) $activeOffer->id;
+            }
+
+            if (! in_array($request->status, ['MATCHING', 'PENDING'], true)) {
+                throw new RuntimeException('This fallback request is no longer waiting for a Logistics decision.');
+            }
+            if ($this->fallbackCenterWasAlreadyTried($request, (int) $center->id)) {
+                throw new RuntimeException('This center already responded. LIKHAE is checking the next eligible origin center.');
+            }
+
+            $fresh = $this->loadRequest((int) $request->id);
+            if (! $fresh || ! $this->centerStillAuthorized($center, $fresh->pickupAddress, $fresh)) {
+                throw new RuntimeException('The selected origin Logistics center is no longer available for this request.');
+            }
+
+            $shipmentIds = $fresh->memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
+            if ($shipmentIds === [] || count($shipmentIds) > 10 || $fresh->memberships->contains(fn ($membership): bool =>
+                $membership->active_slot !== true || $membership->shipment?->current_status !== 'READY_FOR_PICKUP')) {
+                throw new RuntimeException('The request no longer contains 1 to 10 active Ready for Pickup parcels.');
+            }
+
+            $plan = collect($this->routePlansForRequest($fresh, $center, true))
+                ->first(fn (array $candidate): bool => ($candidate['seller_selected_fallback'] ?? false) === true);
+            if (! $plan || ! $this->lockRouteCenters($plan)) {
+                throw new RuntimeException('The selected Buyer destination route is not available for review yet.');
+            }
+
+            $estimate = $fresh->pickupAddress
+                && is_numeric($fresh->pickupAddress->latitude)
+                && is_numeric($fresh->pickupAddress->longitude)
+                && is_numeric($center->address?->latitude)
+                && is_numeric($center->address?->longitude)
+                ? $this->distance->between(
+                    (float) $fresh->pickupAddress->latitude,
+                    (float) $fresh->pickupAddress->longitude,
+                    (float) $center->address->latitude,
+                    (float) $center->address->longitude,
+                )
+                : ['distance_meters' => null, 'travel_seconds' => null, 'method' => null];
+            $now = now();
+            $offer = SellerPickupCenterOffer::query()->create([
+                'seller_pickup_request_id' => $request->id,
+                'logistics_center_id' => $center->id,
+                'attempt_number' => (int) $request->centerOffers()->max('attempt_number') + 1,
+                'status' => SellerPickupCenterOffer::STATUS_OFFERED,
+                'offered_at' => $now,
+                'expires_at' => $now->copy()->addMinutes(self::OFFER_MINUTES),
+                'estimated_distance_meters' => $estimate['distance_meters'],
+                'estimated_travel_seconds' => $estimate['travel_seconds'],
+                'estimate_method' => $estimate['method'],
+                'destination_logistics_center_id' => $plan['destination_center_id'],
+                'destination_service_area_location_id' => $plan['destination_area_id'],
+                'coverage_route_id' => $plan['coverage_route_id'],
+                'service_date' => $plan['service_date'],
+                'reserved_parcel_count' => 0,
+                'route_snapshot' => $plan['snapshot'],
+            ]);
+            $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+
+            return (int) $offer->id;
+        });
+
+        return $this->accept($actor, $center, $requestId, $offerId, $autoDispatch);
+    }
+
+    /** Record a direct rejection for a pending selected-center request, then try the next origin. */
+    public function declineFallbackRequest(User $actor, LogisticsCenter $center, int $requestId): bool
+    {
+        abort_unless($this->schema->automaticSellerPickupMatchingReady()
+            && $this->schema->sellerSelectedFallbackHubsReady(), 503);
+
+        $activeOffer = SellerPickupCenterOffer::query()
+            ->where('seller_pickup_request_id', $requestId)
+            ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+            ->where('expires_at', '>', now())
+            ->first();
+        if ($activeOffer) {
+            return $this->decline($actor, $center, $requestId, (int) $activeOffer->id);
+        }
+
+        DB::transaction(function () use ($actor, $center, $requestId): void {
+            $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->firstOrFail();
+            $this->assertFallbackReviewActor($actor, $center, $request);
+            if (! in_array($request->status, ['MATCHING', 'PENDING'], true)) {
+                throw new RuntimeException('This fallback request is no longer waiting for a Logistics decision.');
+            }
+
+            $anotherActiveOffer = $request->centerOffers()
+                ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('expires_at', '>', now())
+                ->exists();
+            if ($anotherActiveOffer) {
+                throw new RuntimeException('Another Logistics center is currently reviewing this request.');
+            }
+            if ($this->fallbackCenterWasAlreadyTried($request, (int) $center->id)) {
+                throw new RuntimeException('This center already responded. LIKHAE is checking the next eligible origin center.');
+            }
+
+            $now = now();
+            SellerPickupCenterOffer::query()->create([
+                'seller_pickup_request_id' => $request->id,
+                'logistics_center_id' => $center->id,
+                'attempt_number' => (int) $request->centerOffers()->max('attempt_number') + 1,
+                'status' => SellerPickupCenterOffer::STATUS_DECLINED,
+                'offered_at' => $now,
+                'expires_at' => $now,
+                'responded_at' => $now,
+                'reserved_parcel_count' => 0,
+            ]);
+            $request->update(['status' => 'MATCHING']);
+            DB::afterCommit(fn () => $this->startRequest((int) $request->id));
+        });
+
+        return true;
     }
 
     /** Expire due offers and return unanswered Seller-selected center requests. */
@@ -480,7 +638,7 @@ final class SellerPickupMatchingService
                 continue;
             }
             $count = $request->memberships->count();
-            if (! $this->originPickupCapacity($center, $address, $count)) {
+            if (! $request->seller_selected_fallback && ! $this->originPickupCapacity($center, $address, $count)) {
                 continue;
             }
 
@@ -860,14 +1018,40 @@ final class SellerPickupMatchingService
             }
             $available = $this->availableDestinationCapacity($center);
 
-            $reserved = 0;
-            foreach (SellerPickupCenterOffer::query()
+            $acceptedOffers = SellerPickupCenterOffer::query()
                 ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
                 ->where('seller_pickup_request_id', '!=', $requestId)
+                ->whereHas('pickupRequest', fn ($request) => $request->whereNotIn('status', [
+                    'CANCELLED', 'REJECTED', 'RETURNED_TO_SELLER',
+                ]))
                 ->whereNotNull('route_snapshot')
-                ->get(['route_snapshot']) as $offer) {
-                foreach ((array) data_get($offer->route_snapshot, 'shipment_routes', []) as $route) {
-                    if ((int) ($route['destination_logistics_center_id'] ?? 0) === (int) $destinationId) {
+                ->get(['route_snapshot']);
+            $shipmentIds = $acceptedOffers
+                ->flatMap(fn (SellerPickupCenterOffer $offer): array => array_map(
+                    'intval',
+                    array_keys((array) data_get($offer->route_snapshot, 'shipment_routes', [])),
+                ))
+                ->unique()
+                ->values();
+            $activeShipmentIds = $shipmentIds->isEmpty()
+                ? collect()
+                : Shipment::query()->whereIn('id', $shipmentIds)
+                    ->whereNotIn('current_status', ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'])
+                    ->pluck('id')->map(fn ($id): int => (int) $id);
+            $assignedDeliveryShipmentIds = $activeShipmentIds->isEmpty()
+                ? collect()
+                : RiderAssignment::query()
+                    ->whereIn('shipment_id', $activeShipmentIds)
+                    ->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
+                    ->pluck('shipment_id')->map(fn ($id): int => (int) $id)->unique();
+
+            $reserved = 0;
+            foreach ($acceptedOffers as $offer) {
+                foreach ((array) data_get($offer->route_snapshot, 'shipment_routes', []) as $shipmentId => $route) {
+                    if ($activeShipmentIds->contains((int) $shipmentId)
+                        && ! $assignedDeliveryShipmentIds->contains((int) $shipmentId)
+                        && (int) ($route['destination_logistics_center_id'] ?? 0) === (int) $destinationId) {
                         $reserved++;
                     }
                 }
@@ -1263,20 +1447,52 @@ final class SellerPickupMatchingService
             && LogisticsCenter::query()->approvedActive()->whereKey($center->id)->exists(), 403);
     }
 
+    private function assertFallbackReviewActor(User $actor, LogisticsCenter $center, SellerPickupRequest $request): void
+    {
+        $actor->loadMissing('logisticsCenter');
+        abort_unless($actor->account_type === User::TYPE_LOGISTICS
+            && $actor->status === User::STATUS_ACTIVE
+            && (int) $actor->logisticsCenter?->id === (int) $center->id
+            && (int) $center->owner_user_id === (int) $actor->id
+            && LogisticsCenter::query()->approvedActive()->whereKey($center->id)->exists()
+            && $request->seller_selected_fallback
+            && (int) $request->preferred_logistics_center_id === (int) $center->id
+            && $request->rider_local_trip_id === null, 403);
+    }
+
+    private function fallbackCenterWasAlreadyTried(SellerPickupRequest $request, int $centerId): bool
+    {
+        return $request->centerOffers()
+            ->where('logistics_center_id', $centerId)
+            ->where(function ($query): void {
+                $query->whereIn('status', [
+                    SellerPickupCenterOffer::STATUS_ACCEPTED,
+                    SellerPickupCenterOffer::STATUS_DECLINED,
+                    SellerPickupCenterOffer::STATUS_EXPIRED,
+                    SellerPickupCenterOffer::STATUS_SUPERSEDED,
+                ])->orWhere(fn ($noCapacity) => $noCapacity
+                    ->where('status', SellerPickupCenterOffer::STATUS_NO_CAPACITY)
+                    ->where('responded_at', '>=', now()->subMinutes(self::NO_CAPACITY_RETRY_MINUTES)));
+            })
+            ->exists();
+    }
+
     private function markOfferUnavailable(int $requestId, int $offerId): void
     {
         DB::transaction(function () use ($requestId, $offerId): void {
             $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->first();
             $offer = SellerPickupCenterOffer::query()->whereKey($offerId)->lockForUpdate()->first();
             if (! $request || ! $offer || $offer->status !== SellerPickupCenterOffer::STATUS_OFFERED
-                || in_array($request->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)) {
+                || $request->rider_local_trip_id !== null
+                || in_array($request->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)) {
                 return;
             }
             $offer->update([
                 'status' => SellerPickupCenterOffer::STATUS_NO_CAPACITY,
                 'responded_at' => now(),
             ]);
-            if (! in_array($request->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED'], true)) {
+            if ($request->rider_local_trip_id === null
+                && ! in_array($request->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED'], true)) {
                 $request->update(['status' => 'MATCHING']);
                 DB::afterCommit(fn () => $this->startRequest((int) $request->id));
             }
@@ -1287,7 +1503,8 @@ final class SellerPickupMatchingService
     {
         $result = DB::transaction(function () use ($requestId): ?array {
             $locked = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->first();
-            if (! $locked || in_array($locked->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)
+            if (! $locked || $locked->rider_local_trip_id !== null
+                || in_array($locked->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)
                 || $locked->centerOffers()->where('status', SellerPickupCenterOffer::STATUS_OFFERED)->where('expires_at', '>', now())->exists()) {
                 return null;
             }

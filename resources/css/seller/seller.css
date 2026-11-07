@@ -4464,6 +4464,13 @@ html.dark .sl-legacy-parcel-note { background: #30271B; border-color: #594321; }
 .sl-pickup-table td strong,
 .sl-pickup-table td small { display: block; }
 .sl-pickup-table td small { margin-top: 3px; color: var(--sl-muted); }
+.sl-pickup-route-preview { display: grid; min-width: 190px; gap: 5px; padding: 9px 10px; color: var(--sl-text); background: var(--sl-bg-soft); border: 1px solid var(--sl-border); border-radius: 9px; }
+.sl-pickup-route-preview-label { color: var(--sl-muted); font-size: 9px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.sl-pickup-route-preview-hub { display: grid; gap: 1px; }
+.sl-pickup-route-preview-hub strong { font-size: 12px; }
+.sl-pickup-route-preview-hub span,
+.sl-pickup-route-preview small { color: var(--sl-muted); font-size: 10px; line-height: 1.4; }
+.sl-pickup-route-preview small { margin-top: 1px; }
 .sl-pickup-table input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--sl-maroon); }
 .sl-pickup-submit-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 18px; padding-top: 2px; }
 .sl-pickup-submit-row p { margin: 0; color: var(--sl-muted); font-size: 12px; }

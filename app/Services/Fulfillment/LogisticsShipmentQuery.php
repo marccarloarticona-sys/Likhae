@@ -32,6 +32,7 @@ final class LogisticsShipmentQuery
         $rules = [
             'from_date' => ['nullable', 'date_format:Y-m-d'],
             'to_date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from_date'],
+            'tracking' => ['nullable', 'string', 'max:100'],
         ];
         if ($withStatus) {
             $rules['status'] = ['nullable', 'string', Rule::in(array_merge(

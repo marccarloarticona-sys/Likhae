@@ -37,6 +37,58 @@ function loadMapLibre() {
 
 export { loadMapLibre };
 
+const MAP_MARKER_ICONS = {
+    buyer: {
+        label: 'Buyer',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-7h6v7"/></svg>',
+    },
+    seller: {
+        label: 'Seller',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10h18l-1.5-6h-15L3 10ZM5 10v10h14V10M9 20v-6h6v6M3 10a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/></svg>',
+    },
+    rider: {
+        label: 'Rider',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="m6 17 4-7 4 7H6Zm4-7h4l2 3h2M9 7h3"/></svg>',
+    },
+    'interhub-rider': {
+        label: 'Interhub rider',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h11v12H3zM14 10h4l3 4v4h-7z"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/><path d="M6 10h5M8.5 8.5 11 10l-2.5 1.5"/></svg>',
+    },
+    logistics: {
+        label: 'Logistics center',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-6 9 6v12H3zM3 10l9 5 9-5M8 12v3m8-3v3M9 21v-4h6v4"/></svg>',
+    },
+    current: {
+        label: 'Current location',
+        svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>',
+    },
+};
+
+function mapMarkerRole(markerData = {}) {
+    if (markerData.kind === 'rider') {
+        return String(markerData.assignment_type || '').toUpperCase() === 'INTER_LOGISTICS'
+            ? 'interhub-rider'
+            : 'rider';
+    }
+    if (markerData.kind === 'seller') return 'seller';
+    if (markerData.kind === 'center') return 'logistics';
+    if (markerData.target_kind === 'buyer' || markerData.kind === 'destination') return 'buyer';
+    return 'current';
+}
+
+function setMapMarkerRole(element, markerData = {}) {
+    const role = mapMarkerRole(markerData);
+    const icon = MAP_MARKER_ICONS[role];
+    if (!icon) return;
+
+    if (element.dataset.role !== role) {
+        element.dataset.role = role;
+        element.innerHTML = icon.svg;
+    }
+    element.setAttribute('aria-label', `${icon.label} map location`);
+    element.title = icon.label;
+}
+
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;',
@@ -883,6 +935,7 @@ function addUserLocation(shell, map, maplibregl, markers) {
                 className: 'lk-map-marker',
             }) }).setLngLat([lng, lat]).addTo(map);
             marker.getElement().dataset.kind = shell.dataset.mapRiderGps === 'true' ? 'rider' : 'user';
+            setMapMarkerRole(marker.getElement(), { kind: marker.getElement().dataset.kind });
             marker.getElement().dataset.mapUserMarker = 'true';
             shell._likhaeUserMarker = marker;
             map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), essential: true });
@@ -943,7 +996,7 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
             const element = document.createElement('div');
             element.className = 'lk-map-marker';
             element.dataset.kind = 'rider';
-            element.setAttribute('aria-label', 'Driver live location');
+            setMapMarkerRole(element, { kind: 'rider', assignment_type: 'INTER_LOGISTICS' });
             shell._likhaeUserMarker = new maplibregl.Marker({ element, anchor: 'bottom' })
                 .setPopup(new maplibregl.Popup({ offset: 16 }).setHTML('<div class="lk-map-popup"><strong>Driver live location</strong><span>Updated from this device GPS</span></div>'))
                 .setLngLat(from)
@@ -1086,6 +1139,7 @@ function renderMarkers(shell, map, maplibregl, markers, fit = false) {
 
         marker.getElement().dataset.kind = markerData.kind || 'destination';
         marker.getElement().dataset.activeRider = markerData.active_rider ? 'true' : 'false';
+        setMapMarkerRole(marker.getElement(), markerData);
         marker.setPopup(new maplibregl.Popup({ offset: 16 }).setHTML(
             `<div class="lk-map-popup"><strong>${escapeHtml(markerData.title || markerData.label || 'Location')}</strong><span>${escapeHtml(markerData.popup || '')}</span></div>`,
         ));
@@ -1505,7 +1559,7 @@ function initMap(shell, maplibregl) {
                 const markerElement = document.createElement('div');
                 markerElement.className = 'lk-map-marker';
                 markerElement.dataset.kind = 'destination';
-                markerElement.setAttribute('aria-label', 'Selected delivery pin');
+                setMapMarkerRole(markerElement, { kind: 'destination', target_kind: 'buyer' });
                 shell._likhaeSelectedPinMarker = new maplibregl.Marker({ element: markerElement, anchor: 'bottom' })
                     .setLngLat([lng, lat])
                     .addTo(map);

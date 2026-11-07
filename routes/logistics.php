@@ -82,7 +82,12 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
         Route::get('/parcels/receive', [DispatchController::class, 'receive'])->name('parcels.receive');
         Route::post('/parcels/receive/scan', [DispatchController::class, 'receiveScanned'])->name('parcels.receive.scan');
         Route::post('/parcels/receive/{shipment}/confirm', [DispatchController::class, 'confirmReceive'])->name('parcels.receive.confirm');
-        Route::get('/parcels/tracking', [DispatchController::class, 'tracking'])->name('parcels.tracking');
+        Route::get('/parcels/tracking', function (\Illuminate\Http\Request $request) {
+            $queryTracking = $request->query('tracking');
+            $tracking = is_scalar($queryTracking) ? trim((string) $queryTracking) : '';
+
+            return redirect()->route('logistics.parcels', $tracking !== '' ? ['tracking' => $tracking] : []);
+        })->name('parcels.tracking');
         Route::post('/parcels/{shipment}/status-override', [DispatchController::class, 'overrideShipmentStatus'])->name('parcels.status-override');
         Route::post('/parcels/{shipment}/exceptions', [DispatchController::class, 'reportShipmentException'])->name('parcels.exceptions.store');
         Route::get('/parcels/{shipment}', [DispatchController::class, 'show'])->name('parcels.show');
@@ -102,6 +107,10 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
             ->whereNumber('pickupRequest')->name('pickups.requests.assign');
         Route::post('/pickups/requests/{pickupRequest}/reject', [DispatchController::class, 'rejectSellerPickupRequest'])
             ->whereNumber('pickupRequest')->name('pickups.requests.reject');
+        Route::post('/pickups/requests/{pickupRequest}/fallback/accept', [DispatchController::class, 'acceptFallbackSellerPickupRequest'])
+            ->whereNumber('pickupRequest')->name('pickups.requests.fallback.accept');
+        Route::post('/pickups/requests/{pickupRequest}/fallback/reject', [DispatchController::class, 'rejectFallbackSellerPickupRequest'])
+            ->whereNumber('pickupRequest')->name('pickups.requests.fallback.reject');
         Route::post('/pickups/requests/{pickupRequest}/offers/{offer}/accept', [DispatchController::class, 'acceptSellerPickupCenterOffer'])
             ->whereNumber('pickupRequest')->whereNumber('offer')->name('pickups.requests.offers.accept');
         Route::post('/pickups/requests/{pickupRequest}/offers/{offer}/decline', [DispatchController::class, 'declineSellerPickupCenterOffer'])

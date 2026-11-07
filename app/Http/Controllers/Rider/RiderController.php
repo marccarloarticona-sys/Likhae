@@ -128,11 +128,26 @@ class RiderController extends Controller
                 ->whereIn('status', [RiderLocalTrip::LOADING, RiderLocalTrip::READY, RiderLocalTrip::IN_PROGRESS])
                 ->count()
             : (clone $assignments)->pickup()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])->count();
+        $inProgressAssignments = (clone $assignments)->where('status', 'IN_PROGRESS');
+        if ($schema->sellerPickupBatchesReady()) {
+            $inProgressAssignments->where(function ($query): void {
+                $query->where('assignment_type', RiderAssignment::TYPE_DELIVERY)
+                    ->orWhere(function ($pickupQuery): void {
+                        $pickupQuery->where('assignment_type', RiderAssignment::TYPE_PICKUP)
+                            ->whereHas('localTripItems.trip', fn ($tripQuery) => $tripQuery
+                                ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
+                                ->whereNotNull('seller_profile_id')
+                                ->whereIn('status', [RiderLocalTrip::IN_PROGRESS, RiderLocalTrip::EN_ROUTE_TO_HUB]))
+                            ->whereHas('shipment', fn ($shipmentQuery) => $shipmentQuery
+                                ->whereIn('current_status', ['PICKUP_ASSIGNED', 'PICKED_UP']));
+                    });
+            });
+        }
         $riderStats = [
             ['label' => 'Pending pickups', 'value' => $pendingPickupCount],
             ['label' => 'Pending deliveries', 'value' => (clone $assignments)->delivery()->whereIn('status', ['ASSIGNED', 'ACCEPTED'])
                 ->count()],
-            ['label' => 'In progress', 'value' => (clone $assignments)->where('status', 'IN_PROGRESS')->count()],
+            ['label' => 'In progress', 'value' => $inProgressAssignments->count()],
             ['label' => 'COD unremitted', 'value' => 'PHP '.number_format($finance['unremitted_cash'], 2)],
         ];
         $recentAssignments = (clone $assignments)

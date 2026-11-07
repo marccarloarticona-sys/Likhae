@@ -59,6 +59,11 @@ class DispatchController extends Controller
         $status = $filters['status'] ?? '';
 
         $query = $shipmentQuery->dated($shipmentQuery->operationalFor($center), $filters);
+        $tracking = trim((string) ($filters['tracking'] ?? ''));
+        if ($tracking !== '') {
+            $query->where('tracking_number', 'like', '%'.$tracking.'%');
+        }
+
         if (isset(LogisticsShipmentQuery::CATEGORIES[$status])) {
             $shipmentQuery->category($query, $status);
         } elseif ($status !== '') {
@@ -75,8 +80,7 @@ class DispatchController extends Controller
             ->paginate(15)
             ->withQueryString();
 
-        $mapMarkers = app(MapDataService::class)->forShipments($shipments->getCollection(), true);
-        return view('logistics.parcels.index', compact('shipments', 'status', 'center', 'mapMarkers', 'filters'));
+        return view('logistics.parcels.index', compact('shipments', 'status', 'center', 'filters'));
     }
 
     public function pickups(
@@ -220,7 +224,8 @@ class DispatchController extends Controller
 
                                 return;
                             }
-                            $automatic->whereIn('status', ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'])
+                            $automatic->whereNull('rider_local_trip_id')
+                                ->whereIn('status', ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'])
                                 ->where(function ($visibility) use ($center, $schema): void {
                                     $visibility->whereHas('centerOffers', fn ($offer) => $offer
                                         ->where('logistics_center_id', $center->id)
@@ -253,7 +258,10 @@ class DispatchController extends Controller
                             $sellerSelectedFallback
                                 ->whereNull('rider_local_trip_id')
                                 ->whereIn('status', ['MATCHING', 'PENDING'])
-                                ->where('preferred_logistics_center_id', $center->id);
+                                ->where('preferred_logistics_center_id', $center->id)
+                                ->whereDoesntHave('centerOffers', fn ($offer) => $offer
+                                    ->where('status', 'OFFERED')
+                                    ->where('expires_at', '>', now()));
                         });
                 })
                 ->with($sellerPickupRelations)
@@ -295,7 +303,24 @@ class DispatchController extends Controller
                     && $offer->status === 'OFFERED'
                     && $offer->expires_at?->isFuture())
                 : null;
+            $acceptedCenterOffer = $schema->sellerPickupCenterOffersReady()
+                ? $pickupRequest->centerOffers->first(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && $offer->status === 'ACCEPTED')
+                : null;
             $pickupRequest->setAttribute('current_center_offer', $currentOffer);
+            $pickupRequest->setAttribute('accepted_center_offer', $acceptedCenterOffer);
+            $pickupRequest->setAttribute('fallback_route_accepted', (bool) $pickupRequest->seller_selected_fallback
+                && $pickupRequest->status === 'REQUESTED'
+                && $acceptedCenterOffer !== null);
+            $fallbackCenterHasResponded = $schema->sellerPickupCenterOffersReady()
+                && $pickupRequest->centerOffers->contains(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && (in_array($offer->status, ['ACCEPTED', 'DECLINED', 'EXPIRED', 'SUPERSEDED'], true)
+                        || ($offer->status === 'NO_CAPACITY' && $offer->responded_at?->gte(now()->subMinutes(15)))));
+            $pickupRequest->setAttribute('fallback_review_available', (bool) $pickupRequest->seller_selected_fallback
+                && in_array($pickupRequest->status, ['MATCHING', 'PENDING'], true)
+                && (int) $pickupRequest->preferred_logistics_center_id === (int) $center->id
+                && ! $hasActiveCenterOffer
+                && ! $fallbackCenterHasResponded);
             $count = $shipments->count();
             $address = $pickupRequest->pickupAddress;
             $eligibleRiders = $count > 0 && $address && is_numeric($address->latitude) && is_numeric($address->longitude)
@@ -594,45 +619,6 @@ class DispatchController extends Controller
 
         $localTripDispatchReady = $schema->localTripsReady();
         return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady'));
-    }
-
-    public function tracking(Request $request, LogisticsShipmentQuery $shipmentQuery): View
-    {
-        $shipment = null;
-        $trackingResults = collect();
-        $tracking = trim((string) $request->query('tracking'));
-
-        if ($tracking !== '') {
-            $center = $this->center($request);
-            abort_unless($center, 403);
-            $trackingResults = $shipmentQuery->operationalFor($center)
-                ->where(function ($query) use ($tracking): void {
-                    $query->where('shipments.tracking_number', $tracking)
-                        ->orWhereHas('sellerOrder', fn ($sellerOrder) => $sellerOrder
-                            ->where('seller_order_number', $tracking)
-                            ->orWhereHas('order', fn ($order) => $order
-                                ->where('order_number', $tracking)
-                                ->orWhere('id', ctype_digit($tracking) ? (int) $tracking : 0)))
-                        ->orWhereHas('sellerOrder.order.buyer', fn ($buyer) => $buyer
-                            ->where('first_name', 'like', '%'.$tracking.'%')
-                            ->orWhere('last_name', 'like', '%'.$tracking.'%')
-                            ->orWhereRaw("CONCAT_WS(' ', first_name, last_name) LIKE ?", ['%'.$tracking.'%']));
-                })
-                ->with([
-                    'sellerOrder.items', 'sellerOrder.sellerProfile.businessAddress', 'sellerOrder.order.address', 'sellerOrder.order.buyer',
-                    'events.actor', 'scans', 'deliveryAttempts',
-                    'riderAssignments' => fn ($assignments) => $assignments->whereHas('riderProfile', fn ($rider) => $rider->where('logistics_center_id', $center->id)),
-                    'riderAssignments.liveLocation', 'logisticsCenter.address',
-                ])
-                ->orderByRaw('CASE WHEN shipments.tracking_number = ? THEN 0 ELSE 1 END', [$tracking])
-                ->limit(50)
-                ->get();
-            $shipment = $trackingResults->firstWhere('tracking_number', $tracking)
-                ?? ($trackingResults->count() === 1 ? $trackingResults->first() : null);
-        }
-
-        $mapMarkers = app(MapDataService::class)->forShipments($trackingResults, true);
-        return view('logistics.tracking.index', compact('shipment', 'tracking', 'trackingResults', 'mapMarkers'));
     }
 
     public function overrideShipmentStatus(Request $request, Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): RedirectResponse
@@ -1114,12 +1100,53 @@ class DispatchController extends Controller
         $pickupRequest->refresh();
 
         return back()->with('status', $accepted
-            ? 'Seller pickup request #'.$pickupRequest->id.' accepted, routed, and assigned to the nearest eligible local Rider at the Seller-selected center.'
+            ? ((bool) $pickupRequest->seller_selected_fallback
+                ? 'Seller pickup request #'.$pickupRequest->id.' route accepted. Assign an available pickup Rider from this request.'
+                : 'Seller pickup request #'.$pickupRequest->id.' accepted, routed, and assigned to the nearest eligible local Rider at the Seller-selected center.')
             : ($pickupRequest->status === 'RETURNED_TO_SELLER'
                 ? 'This offer expired. The pickup request has been returned to the Seller for another Logistics center choice.'
                 : ((bool) $pickupRequest->seller_selected_fallback
                     ? 'This center could not confirm the selected destination route or capacity. LIKHAE is trying the next eligible origin center.'
                     : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.')));
+    }
+
+    public function acceptFallbackSellerPickupRequest(
+        Request $request,
+        SellerPickupRequest $pickupRequest,
+        SellerPickupMatchingService $matching,
+        SellerPickupAutoDispatchService $autoDispatch,
+    ): RedirectResponse {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+
+        try {
+            $accepted = $matching->acceptFallbackRequest($request->user(), $center, (int) $pickupRequest->id, $autoDispatch);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['pickup_request' => $exception->getMessage()]);
+        }
+
+        $pickupRequest->refresh();
+
+        return $accepted
+            ? back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' accepted. The route was confirmed; assign an available pickup Rider from this request.')
+            : back()->withErrors(['pickup_request' => 'The selected route or capacity could not be confirmed. LIKHAE is checking the next eligible origin Logistics center.']);
+    }
+
+    public function rejectFallbackSellerPickupRequest(
+        Request $request,
+        SellerPickupRequest $pickupRequest,
+        SellerPickupMatchingService $matching,
+    ): RedirectResponse {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+
+        try {
+            $matching->declineFallbackRequest($request->user(), $center, (int) $pickupRequest->id);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['pickup_request' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' rejected by this center. LIKHAE will try the next eligible origin center and keep the selected Buyer destination.');
     }
 
     public function declineSellerPickupCenterOffer(

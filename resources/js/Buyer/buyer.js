@@ -2002,7 +2002,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (['AT_SORTING_CENTER', 'SORTED'].includes(shipment.status)) return `Parcel has arrived at ${centerLabel}`;
                     if (['OUT_FOR_DELIVERY', 'ASSIGNED_TO_RIDER'].includes(shipment.status)) return 'Parcel is out for delivery';
                     if (shipment.status === 'PICKED_UP') return 'Parcel has been picked up from seller';
-                    if (shipment.status === 'READY_FOR_PICKUP') return 'Ready to ship';
+                    if (shipment.status === 'READY_FOR_PICKUP') return 'Waiting for a pickup rider to be assigned';
                     if (shipment.status === 'PICKUP_ASSIGNED') return 'Pickup rider assigned';
                     if (shipment.status === 'DELIVERY_FAILED') return 'Delivery attempt was unsuccessful';
                     if (shipment.status === 'PLACED') return 'Waiting for seller to accept your order';

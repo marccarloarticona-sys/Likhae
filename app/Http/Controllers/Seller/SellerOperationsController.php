@@ -355,20 +355,27 @@ class SellerOperationsController extends Controller
         $anyReadyBuyerNeedsCenterChoice = false;
         if ($automaticPickupMatchingReady && $pickupAddress && $readyPickupParcels->isNotEmpty()) {
             $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
-            $hasLocalCenter = function ($address) use ($localCenterCandidates, $areaEligibility): bool {
+            $localCentersForAddress = function ($address) use ($localCenterCandidates, $areaEligibility): array {
                 $provinceCode = trim((string) ($address->province_code ?? ''));
                 $municipalityCode = trim((string) ($address->municipality_code ?? ''));
                 if ($provinceCode === '' || $municipalityCode === '') {
-                    return false;
+                    return [];
                 }
 
-                return $localCenterCandidates->contains(fn (LogisticsCenter $center): bool =>
+                return $localCenterCandidates
+                    ->filter(fn (LogisticsCenter $center): bool =>
                     trim((string) $center->address?->province_code) === $provinceCode
                     && trim((string) $center->address?->municipality_code) === $municipalityCode
-                    && $areaEligibility->centerAuthorizesAddress($center, $address));
+                    && $areaEligibility->centerAuthorizesAddress($center, $address))
+                    ->map(fn (LogisticsCenter $center): array => [
+                        'name' => (string) $center->business_name,
+                        'address' => $center->address?->formatted(),
+                    ])
+                    ->values()
+                    ->all();
             };
             $pickupAddressLocalCenterIds = $pickupAddresses
-                ->filter(fn (Address $address): bool => $hasLocalCenter($address))
+                ->filter(fn (Address $address): bool => $localCentersForAddress($address) !== [])
                 ->pluck('id')
                 ->map(fn ($id): int => (int) $id)
                 ->values()
@@ -382,14 +389,14 @@ class SellerOperationsController extends Controller
                     (string) $address->barangay_code,
                 ]))
                 ->values();
-            $buyerLocalCenterByAddress = [];
+            $buyerLocalCentersByAddress = [];
             foreach ($buyerAddresses as $buyerAddress) {
                 $addressKey = implode('|', [
                     (string) $buyerAddress->province_code,
                     (string) $buyerAddress->municipality_code,
                     (string) $buyerAddress->barangay_code,
                 ]);
-                $buyerLocalCenterByAddress[$addressKey] = $hasLocalCenter($buyerAddress);
+                $buyerLocalCentersByAddress[$addressKey] = $localCentersForAddress($buyerAddress);
             }
             foreach ($readyPickupParcels as $parcel) {
                 $buyerAddress = $parcel->sellerOrder?->order?->address;
@@ -398,10 +405,11 @@ class SellerOperationsController extends Controller
                     (string) $buyerAddress->municipality_code,
                     (string) $buyerAddress->barangay_code,
                 ]) : '';
-                $hasLocalBuyerCenter = $buyerAddress && ($buyerLocalCenterByAddress[$addressKey] ?? false);
-                $parcel->setAttribute('buyer_has_local_logistics_center', (bool) $hasLocalBuyerCenter);
+                $buyerLocalCenters = $buyerAddress ? ($buyerLocalCentersByAddress[$addressKey] ?? []) : [];
+                $parcel->setAttribute('buyer_local_logistics_centers', $buyerLocalCenters);
+                $parcel->setAttribute('buyer_has_local_logistics_center', $buyerLocalCenters !== []);
             }
-            $hasLocalSellerCenter = in_array((int) $pickupAddress->id, $pickupAddressLocalCenterIds, true);
+            $hasLocalSellerCenter = $localCentersForAddress($pickupAddress) !== [];
             // Buyer-side gaps need a destination choice; the origin dropdown
             // appears only when the Seller pickup location lacks local coverage.
             $pickupCenterChoiceNeeded = ! $hasLocalSellerCenter;

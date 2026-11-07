@@ -13,7 +13,6 @@
         'transfers' => ['logistics.transfers', 'logistics.transfers.*'],
         'local-trips' => ['logistics.local-trips', 'logistics.local-trips.*'],
         'assignments' => ['logistics.assignments', 'logistics.assignments.*'],
-        'monitoring' => ['logistics.parcels.tracking'],
         'returns' => ['logistics.returns', 'logistics.returns.*'],
         'reports' => ['logistics.reports', 'logistics.reports.*'],
         'remittances' => ['logistics.remittances'],
@@ -35,7 +34,6 @@
         'dashboard' => '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
         'parcels'   => '<svg viewBox="0 0 24 24"><path d="M6 3h12l2 4v14H4V7zM4 7h16M9 11h6"/></svg>',
         'shipping'  => '<svg viewBox="0 0 24 24"><path d="M3 6h11v11H3zM14 10h4l3 3v4h-7z"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/></svg>',
-        'monitor'   => '<svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
         'rider'     => '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
         'apply'     => '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h4"/></svg>',
         'reports'   => '<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
@@ -100,13 +98,6 @@
                data-title="{{ __('navigation.items.all_parcels') }}">
                 <span class="sl-nav-icon">{!! $icon('parcels') !!}</span>
                 <span class="sl-nav-text">{{ __('navigation.items.all_parcels') }}</span>
-            </a>
-            <a href="{{ route('logistics.parcels.tracking') }}"
-               class="sl-nav-link {{ $active === 'monitoring' ? 'is-active' : '' }}"
-               data-title="{{ __('navigation.items.delivery_monitoring') }}">
-                <span class="sl-nav-icon">{!! $icon('monitor') !!}</span>
-                <span class="sl-nav-text">{{ __('navigation.items.delivery_monitoring') }}</span>
-                @if(($sidebarCounts['monitoring'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['monitoring'] }}</span>@endif
             </a>
         </div>
 

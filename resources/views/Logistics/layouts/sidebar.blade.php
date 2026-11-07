@@ -27,10 +27,6 @@
             <path d="M13 13h8"/>
             <path d="m18 9 4 4-4 4"/>
         ',
-        'tracking' => '
-            <circle cx="12" cy="12" r="8"/>
-            <circle cx="12" cy="12" r="3"/>
-        ',
         'riders' => '
             <circle cx="9" cy="7" r="3"/>
             <path d="M3 20c0-4 2.5-6 6-6s6 2 6 6"/>
@@ -116,12 +112,6 @@
                     'href' => route('logistics.assignments'),
                     'active' => ['logistics.assignments'],
                     'icon' => 'assignment',
-                ],
-                [
-                    'label' => 'Parcel Tracking',
-                    'href' => route('logistics.parcels.tracking'),
-                    'active' => ['logistics.parcels.tracking'],
-                    'icon' => 'tracking',
                 ],
             ],
         ],
