@@ -125,6 +125,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const accountMenu = one('[data-account-menu]');
     const accountMenuToggle = one('[data-account-menu-toggle]', accountMenu || document);
     const accountMenuPanel = one('[data-account-menu-panel]', accountMenu || document);
+    const buyerHeaderSearch = one('[data-buyer-header-search]');
+    const buyerHeaderSearchToggle = one('[data-buyer-search-toggle]', buyerHeaderSearch || document);
+    const buyerHeaderSearchForm = one('[data-buyer-search-form]', buyerHeaderSearch || document);
+    const buyerHeaderSearchInput = one('input[name="q"]', buyerHeaderSearchForm || document);
+
+    const setBuyerHeaderSearchOpen = (open, focusInput = false) => {
+        if (!buyerHeaderSearch || !buyerHeaderSearchToggle || !buyerHeaderSearchForm) return;
+        buyerHeaderSearch.classList.toggle('is-expanded', open);
+        buyerHeaderSearchToggle.hidden = open;
+        buyerHeaderSearchToggle.setAttribute('aria-expanded', String(open));
+        buyerHeaderSearchForm.hidden = !open;
+        if (open && focusInput) buyerHeaderSearchInput?.focus();
+    };
+
+    buyerHeaderSearchToggle?.addEventListener('click', () => setBuyerHeaderSearchOpen(true, true));
+    document.addEventListener('click', (event) => {
+        if (buyerHeaderSearch?.classList.contains('is-expanded') && !buyerHeaderSearch.contains(event.target)) {
+            setBuyerHeaderSearchOpen(false);
+        }
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !buyerHeaderSearch?.classList.contains('is-expanded')) return;
+        setBuyerHeaderSearchOpen(false);
+        buyerHeaderSearchToggle?.focus();
+    });
 
     all('[data-review-comment]').forEach((textarea) => {
         const form = textarea.closest('form');

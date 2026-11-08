@@ -205,7 +205,6 @@
                         @else
                             <a class="lk-btn lk-btn-red" href="{{ route('buyer.products') }}">Shop with voucher</a>
                         @endif
-                        <a class="lk-home-offer-card__link" href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}">Explore vouchers <span aria-hidden="true">&rarr;</span></a>
                     </div>
                 </div>
             </article>

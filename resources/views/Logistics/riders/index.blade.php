@@ -26,7 +26,7 @@
                 <span class="rider-directory__overline text-[9px] font-bold uppercase tracking-[0.2em] text-primary">Rider management</span>
                 <h1 class="rider-directory__title mt-2 font-display text-[34px] font-semibold tracking-[-0.045em] text-ink sm:text-[42px]">Riders</h1>
                 <p class="rider-directory__subtitle mt-2 max-w-2xl text-[11px] leading-5 text-muted sm:text-xs">
-                    Manage Local and Interhub Rider accounts assigned to {{ $center->business_name }}.
+                    Manage Local and Interhub personnel assigned to {{ $center->business_name }} ({{ $center->code }}).
                 </p>
             </div>
             <a href="{{ route('logistics.riders.applications') }}" class="rider-directory__applications inline-flex h-10 w-fit shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-[10px] font-semibold text-white shadow-sm transition hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/30">
@@ -155,6 +155,7 @@
                                         <span class="min-w-0">
                                             <strong class="block max-w-[220px] truncate text-[10px] font-semibold text-ink">{{ $riderName }}</strong>
                                             <span class="mt-0.5 block max-w-[240px] truncate text-[8px] text-muted">{{ $rider->user?->email ?? 'No email recorded' }}</span>
+                                            <span class="mt-0.5 block text-[8px] text-muted">Contact: {{ $rider->user?->contact_number ?? 'Not recorded' }}</span>
                                             <span class="mt-0.5 block text-[8px] font-medium tracking-wide text-muted-light">RID-{{ str_pad((string) $rider->id, 4, '0', STR_PAD_LEFT) }}</span>
                                             @if(($rider->pending_profile_update_count ?? 0) > 0)
                                                 <span class="mt-1 inline-flex rounded-full border border-warning/25 bg-warning-soft px-2 py-0.5 text-[7px] font-semibold text-warning">{{ $rider->pending_profile_update_count }} profile update{{ $rider->pending_profile_update_count === 1 ? '' : 's' }} awaiting review</span>
@@ -165,6 +166,8 @@
                                 <td class="px-3 py-4">
                                     <span class="inline-flex rounded-full border border-line bg-surface px-2.5 py-1 text-[8px] font-semibold text-ink">{{ $classification }}</span>
                                     <span class="mt-1 block text-[8px] text-muted">{{ str($rider->vehicle_type)->replace('_', ' ')->headline() }}</span>
+                                    <span class="mt-1 block text-[8px] text-muted">Plate: {{ $rider->plate_number ?: 'Not recorded' }}</span>
+                                    <span class="mt-0.5 block break-all text-[8px] text-muted">Driver's license: {{ $rider->drivers_license_number ?: 'Not recorded' }}</span>
                                 </td>
                                 <td class="px-3 py-4">
                                     <strong class="block max-w-[190px] truncate text-[9px] font-semibold text-ink">{{ $activeArea }}</strong>
@@ -187,7 +190,12 @@
                                         <span class="text-[8px] text-muted">No active sessions detected</span>
                                     @endif
                                 </td>
-                                <td class="px-3 py-4"><span class="rider-directory__status inline-flex rounded-full border px-2.5 py-1 text-[8px] font-semibold {{ $statusClass }}">{{ str($rider->status)->replace('_', ' ')->headline() }}</span></td>
+                                <td class="px-3 py-4">
+                                    <span class="rider-directory__status inline-flex rounded-full border px-2.5 py-1 text-[8px] font-semibold {{ $statusClass }}">{{ str($rider->status)->replace('_', ' ')->headline() }}</span>
+                                    <span class="mt-1 block text-[8px] text-muted">Account: {{ $rider->user?->status ?? 'Not recorded' }}</span>
+                                    <span class="mt-0.5 block text-[8px] text-muted">Approval: {{ $rider->approvedRegistrationApplication?->status ?? 'Not recorded' }}</span>
+                                    <span class="mt-0.5 block text-[8px] text-muted">Center: {{ $center->code }}</span>
+                                </td>
                                 <td class="px-4 py-4">
                                     <div class="flex items-center justify-end gap-2">
                                         <a href="{{ route('logistics.riders.show', $rider) }}" class="rider-directory__view inline-flex h-8 items-center justify-center rounded-lg border border-line bg-surface px-3 text-[8px] font-semibold text-ink transition hover:bg-page-secondary">View</a>

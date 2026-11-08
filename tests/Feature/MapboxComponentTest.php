@@ -102,6 +102,42 @@ class MapboxComponentTest extends TestCase
         $this->assertStringNotContainsString('Private Customer', json_encode($markers));
     }
 
+    public function test_buyer_route_includes_saved_sorting_centers_before_transfer_legs_exist(): void
+    {
+        $makeCenter = static function (int $id, string $name, float $latitude, float $longitude): LogisticsCenter {
+            $address = new Address([
+                'barangay_name' => 'Barangay Test',
+                'municipality_name' => 'Test City',
+                'province_name' => 'Test Province',
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+            ]);
+            $center = new LogisticsCenter(['business_name' => $name]);
+            $center->id = $id;
+            $center->setRelation('address', $address);
+
+            return $center;
+        };
+
+        $shipment = new Shipment(['current_status' => 'PICKED_UP']);
+        $shipment->id = 1901;
+        $shipment->setRelation('sellerOrder', null);
+        $shipment->setRelation('riderAssignments', collect());
+        $shipment->setRelation('transferLegs', collect());
+        $shipment->setRelation('logisticsCenter', null);
+        $shipment->setRelation('serviceArea', null);
+        $shipment->setRelation('originLogisticsCenter', $makeCenter(1902, 'Origin Hub', 14.58, 120.98));
+        $shipment->setRelation('destinationLogisticsCenter', $makeCenter(1903, 'Destination Hub', 14.60, 121.00));
+
+        $markers = app(MapDataService::class)->forShipment($shipment, false, false);
+        $hubs = collect($markers)->where('kind', 'center')->values();
+
+        $this->assertCount(2, $hubs);
+        $this->assertSame(['origin', 'destination'], $hubs->pluck('center_role')->all());
+        $this->assertSame([14.58, 14.60], $hubs->pluck('latitude')->all());
+        $this->assertSame([120.98, 121.00], $hubs->pluck('longitude')->all());
+    }
+
     public function test_rider_map_exposes_location_update_endpoint_before_first_gps_coordinate(): void
     {
         $riderUser = new User(['account_type' => User::TYPE_RIDER]);

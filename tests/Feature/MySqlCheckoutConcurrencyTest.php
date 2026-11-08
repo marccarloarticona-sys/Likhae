@@ -149,6 +149,37 @@ class MySqlCheckoutConcurrencyTest extends TestCase
         $this->assertNotNull($center->fresh());
     }
 
+    public function test_mysql_concurrent_checkouts_can_draw_one_shared_reserve_unit_without_overselling(): void
+    {
+        $this->assertDisposableMySql();
+
+        [$seller, $category] = $this->sellerRoutingFixture('reserve-stock-race');
+        $variant = $this->variant($seller, $category, 'reserve-stock-race', 1);
+        $variant->update(['reserve_stock' => 1]);
+        [$buyerA, $addressA, $itemA] = $this->buyerCart($variant, 'reserve-stock-race-a');
+        [$buyerB, $addressB, $itemB] = $this->buyerCart($variant, 'reserve-stock-race-b');
+
+        $results = $this->runWorkers([
+            ['buyer' => $buyerA, 'address' => $addressA, 'item' => $itemA, 'key' => (string) str()->uuid()],
+            ['buyer' => $buyerB, 'address' => $addressB, 'item' => $itemB, 'key' => (string) str()->uuid()],
+        ]);
+
+        $buyerIds = [$buyerA->id, $buyerB->id];
+        $orders = Order::query()->whereIn('buyer_user_id', $buyerIds)->get();
+        $this->assertSame(2, collect($results)->where('status', 'success')->count(), json_encode($results));
+        $this->assertCount(2, collect($results)->pluck('order_id')->unique());
+        $this->assertCount(2, $orders);
+        $this->assertSame(2, $orders->pluck('buyer_user_id')->unique()->count());
+        $this->assertSame(2, SellerOrder::query()->whereIn('order_id', $orders->pluck('id'))->count());
+        $this->assertSame(2, OrderItem::query()
+            ->whereHas('sellerOrder', fn ($query) => $query->whereIn('order_id', $orders->pluck('id')))
+            ->where('product_variant_id', $variant->id)
+            ->count());
+        $this->assertSame(2, (int) OrderItem::query()->where('product_variant_id', $variant->id)->sum('quantity'));
+        $this->assertSame(0, (int) $variant->fresh()->stock);
+        $this->assertSame(0, (int) $variant->fresh()->reserve_stock);
+    }
+
     public function test_mysql_concurrent_checkouts_never_sell_more_than_flash_allocation_at_flash_price(): void
     {
         $this->assertDisposableMySql();

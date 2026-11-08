@@ -8,7 +8,7 @@
     $pageTitle = match ($currentMode) { 'add' => 'Add Product', 'edit' => 'Edit Product', 'inventory' => 'Inventory', default => 'Products' };
     $variationRows = collect(old('variants', data_get($product, 'variation_rows', [])));
     if ($variationRows->isEmpty()) {
-        $variationRows = collect([['id' => null, 'values' => '', 'sku' => '', 'price' => '', 'stock' => '']]);
+        $variationRows = collect([['id' => null, 'values' => '', 'sku' => '', 'price' => '', 'stock' => '', 'reserve_stock' => 0]]);
     }
     $optionRows = collect(old('options', data_get($product, 'option_rows', [])))->take(3);
     if ($optionRows->isEmpty()) {
@@ -105,7 +105,7 @@
             @endif
         </div>
 
-        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}" data-saved-variant-prices='@json($savedVariantPrices)' data-product-dimensions-ready="{{ $productDimensionsReady ? 'true' : 'false' }}">
+        <form class="sl-editor-layout" method="POST" enctype="multipart/form-data" action="{{ $editing ? route('seller.products.update', data_get($product, 'db_id')) : route('seller.products.store') }}" data-saved-variant-prices='@json($savedVariantPrices)' data-product-dimensions-ready="{{ $productDimensionsReady ? 'true' : 'false' }}" data-reserve-stock-ready="{{ $reserveStockReady ? 'true' : 'false' }}">
             @csrf
             @if($editing) @method('PUT') @endif
             @unless($editing)<input type="hidden" name="idempotency_key" value="{{ old('idempotency_key', $submissionToken) }}">@endunless
@@ -159,23 +159,6 @@
 
                 <section class="sl-card sl-form-section">
                     <header class="sl-form-section-head"><span>2</span><div><h3>Pricing &amp; Variations</h3><p>Set one price or add options such as size and color.</p></div></header>
-                    @php
-                        $currentProductId = data_get($product, 'db_id') ?? data_get($product, 'id');
-                        $currentProductConflicts = $editing ? ($promotionConflicts['products'][$currentProductId] ?? []) : [];
-                    @endphp
-                    @if(!empty($currentProductConflicts))
-                        <div class="sl-compliance-feedback is-warning sl-promotion-conflict" role="status">
-                            <strong>Existing offers affect this product</strong>
-                            <ul>
-                                @foreach($currentProductConflicts as $conflict)
-                                    <li>{{ $conflict['label'] }} · {{ $conflict['status'] }}</li>
-                                @endforeach
-                            </ul>
-                            <p>Discounts, flash sales, vouchers, and bundle deals are managed in Marketing. Base price changes can affect active promotions, so review them before changing a saved price.</p>
-                        </div>
-                    @else
-                        <div class="sl-compliance-feedback is-warning sl-promotion-conflict" role="note">Manage Seller discounts and schedules in Marketing. Product pricing here is the regular catalog price.</div>
-                    @endif
                     <div class="sl-compliance-feedback is-warning sl-promotion-conflict" data-price-reduction-warning role="status" hidden><strong>Price reduction detected</strong><p data-price-reduction-message></p><p>The amount below the saved catalog price is Seller-funded.</p></div>
                     @if($editing)
                         @php
@@ -200,6 +183,7 @@
                     <div class="sl-form-grid sl-form-grid-4">
                         <label class="sl-field"><span>Price <b>* for publishing</b></span><div class="sl-input-prefix"><i>₱</i><input name="price" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($singleVariant, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($singleVariant, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($singleVariant, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($singleVariant, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($singleVariant, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($singleVariant, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($singleVariant, 'flash_sale_remaining', 0) }}" value="{{ old('price', data_get($product, 'base_price')) }}"></div>@error('price')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Stock <b>* for publishing</b></span><input name="stock" type="number" min="0" value="{{ old('stock', data_get($product, 'stock')) }}">@error('stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
+                        <label class="sl-field"><span>Reserve stock</span><input name="reserve_stock" type="number" min="0" max="999999" value="{{ old('reserve_stock', data_get($singleVariant, 'reserve_stock', 0)) }}" @disabled(!$reserveStockReady)>@if($reserveStockReady)<small>Checkout fallback only. Buyers see regular stock.</small>@else<small role="status">Available after its inventory migration is installed.</small>@endif @error('reserve_stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Weight (kg)</span><input name="weight_kg" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ old('weight_kg', data_get($singleVariant, 'weight_kg')) }}" placeholder="e.g. 0.500"><small>Weight of one item, before packing.</small></label>
                         @if($productDimensionsReady)
                             <label class="sl-field"><span>Length (cm)</span><input name="length_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('length_cm', data_get($singleVariant, 'length_cm')) }}" placeholder="e.g. 20.00">@error('length_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
@@ -219,6 +203,7 @@
                     <div class="sl-variation-head">
                         <div><strong>Variation Details</strong><small>Each row maps directly to product_variants. Remove a combination to intentionally make it unavailable.</small></div>
                     </div>
+                    @unless($reserveStockReady)<p class="sl-sidebar-help" role="status">Reserve stock controls are disabled until its inventory migration is installed.</p>@endunless
                     <div class="sl-variation-bulk" data-variation-bulk>
                         <label><span>Apply to</span><select data-bulk-scope><option value="all">All variations</option><option value="selected">Selected variations</option></select></label>
                         <label><span>Image</span><button type="button" class="sl-bulk-image-button" data-bulk-image-trigger><span class="sl-variant-image-thumb" data-bulk-image-thumb></span><span data-bulk-image-label>Choose image</span></button><input type="hidden" data-bulk-image-ref></label>
@@ -227,7 +212,7 @@
                         <button type="button" class="sl-btn sl-btn-soft sl-btn-sm" data-apply-bulk>Apply</button>
                     </div>
                     <div class="sl-variation-table" data-variation-list>
-                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Weight (kg)</span>@if($productDimensionsReady)<span>Dimensions (cm)</span>@endif<span>Payment</span><span>Availability</span><span></span></div>
+                        <div class="sl-variation-row sl-variation-labels" aria-hidden="true"><span>Select</span><span>Option values</span><span>Image</span><span>SKU</span><span>Price</span><span>Stock</span><span>Reserve</span><span>Weight (kg)</span>@if($productDimensionsReady)<span>Dimensions (cm)</span>@endif<span>Payment</span><span>Availability</span><span></span></div>
                         @foreach($variationRows as $index => $row)
                             <div class="sl-variation-row">
                                 <label class="sl-variation-check"><input type="checkbox" data-variant-select aria-label="Select variation"></label>
@@ -238,6 +223,7 @@
                                 <input name="variants[{{ $index }}][sku]" value="{{ data_get($row, 'sku') }}" placeholder="Auto-generated SKU" aria-label="Variant SKU">
                                 <input name="variants[{{ $index }}][price]" type="number" min="0" step="0.01" data-saved-price="{{ $savedVariantPrices[data_get($row, 'id')] ?? '' }}" data-marketing-discount-type="{{ data_get($row, 'discount_type', 'none') }}" data-marketing-discount-value="{{ data_get($row, 'discount_value', 0) }}" data-marketing-discount-active="{{ data_get($row, 'discount_active', false) ? 'true' : 'false' }}" data-marketing-flash-price="{{ data_get($row, 'flash_sale_price', '') }}" data-marketing-flash-active="{{ data_get($row, 'flash_sale_active', false) ? 'true' : 'false' }}" data-marketing-flash-remaining="{{ data_get($row, 'flash_sale_remaining', 0) }}" value="{{ data_get($row, 'price') }}" placeholder="Price" aria-label="Variant price">
                                 <input name="variants[{{ $index }}][stock]" type="number" min="0" value="{{ data_get($row, 'stock') }}" aria-label="Variant stock">
+                                <input name="variants[{{ $index }}][reserve_stock]" type="number" min="0" max="999999" value="{{ data_get($row, 'reserve_stock', 0) }}" aria-label="Reserve stock for {{ data_get($row, 'values', 'variation') }}" @disabled(!$reserveStockReady)>
                                 <input name="variants[{{ $index }}][weight_kg]" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ data_get($row, 'weight_kg') }}" placeholder="kg" aria-label="Weight per item in kilograms">
                                 @if($productDimensionsReady)
                                     <div class="sl-variant-dimensions" role="group" aria-label="Product dimensions in centimeters">
@@ -252,6 +238,7 @@
                             </div>
                         @endforeach
                     </div>
+                    @if($reserveStockReady)<p class="sl-variation-assignment-help">Reserve stock is a private checkout fallback. It is not included in buyer stock counts and is used only if regular stock is taken before an existing cart reaches checkout.</p>@endif
                     <div class="sl-variation-images" data-variation-image-editor>
                         <div class="sl-variation-head"><div><strong>Variant image assignment</strong><small>Assign images already uploaded above. One image can be reused by many variants; no files are uploaded here.</small></div></div>
                         <div class="sl-variation-assignment-help">Choose an image in a row, or use the Image control below to apply the same existing image to all or selected variants.</div>

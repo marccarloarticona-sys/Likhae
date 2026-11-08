@@ -1169,6 +1169,68 @@
 
                         </div>
 
+                        <div class="register-grid" aria-label="Optional Logistics business identifiers">
+
+                            <div class="register-field" data-logistics-business-field hidden>
+                                <label for="business_registration_number">Business Registration Number <span>*</span></label>
+                                <input
+                                    id="business_registration_number"
+                                    name="business_registration_number"
+                                    type="text"
+                                    value="{{ old('business_registration_number') }}"
+                                    maxlength="100"
+                                    pattern="[A-Za-z]{2}[0-9]{9}"
+                                    placeholder="e.g. AB123456789"
+                                    autocomplete="off"
+                                    disabled
+                                    aria-describedby="business-registration-number-hint"
+                                >
+                                <small id="business-registration-number-hint">If provided, enter 2 letters followed by 9 digits.</small>
+                                @error('business_registration_number')
+                                    <small role="alert">{{ $message }}</small>
+                                @enderror
+                            </div>
+
+                            <div class="register-field" data-logistics-business-field hidden>
+                                <label for="dti_registration_number">DTI Registration Number <span>*</span></label>
+                                <input
+                                    id="dti_registration_number"
+                                    name="dti_registration_number"
+                                    type="text"
+                                    value="{{ old('dti_registration_number') }}"
+                                    maxlength="100"
+                                    placeholder="Enter DTI registration number"
+                                    autocomplete="off"
+                                    disabled
+                                >
+                                @error('dti_registration_number')
+                                    <small role="alert">{{ $message }}</small>
+                                @enderror
+                            </div>
+
+                            <div class="register-field" data-logistics-business-field hidden>
+                                <label for="tin">Tax Identification Number (TIN) <span>*</span></label>
+                                <input
+                                    id="tin"
+                                    name="tin"
+                                    type="text"
+                                    value="{{ old('tin') }}"
+                                    maxlength="15"
+                                    inputmode="numeric"
+                                    pattern="[0-9]{3}-[0-9]{3}-[0-9]{3}-[0-9]{3}"
+                                    placeholder="000-000-000-000"
+                                    autocomplete="off"
+                                    disabled
+                                    aria-describedby="tin-hint"
+                                >
+                                <small id="tin-hint">If provided, use the format 000-000-000-000.</small>
+                                @error('tin')
+                                    <small role="alert">{{ $message }}</small>
+                                @enderror
+                            </div>
+
+                        </div>
+
                         <div class="upload-grid registration-business-uploads" data-registration-business-uploads aria-label="Business registration documents"></div>
 
                     </div>

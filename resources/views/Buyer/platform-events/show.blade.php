@@ -65,7 +65,7 @@
         <p class="lk-event-detail__note">Add items to your cart and enter this code. Cart and Checkout will confirm which items qualify and calculate the final discount.</p>
         <div class="lk-event-detail__actions">
             <a class="lk-event-detail__button" href="{{ route('buyer.products') }}">Browse Products</a>
-            <a class="lk-event-detail__button is-secondary" href="{{ route('buyer.rewards') }}">View Offers</a>
+            <a class="lk-event-detail__button is-secondary" href="{{ route('buyer.home').'#home-offers' }}">View Offers</a>
         </div>
     </article>
 </main>

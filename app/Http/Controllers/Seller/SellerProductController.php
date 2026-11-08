@@ -39,6 +39,8 @@ class SellerProductController extends Controller
     {
         $seller = $this->seller($request);
         $seller->loadMissing('primaryCategory.children');
+        $reserveStockReady = Schema::hasTable('product_variants')
+            && Schema::hasColumn('product_variants', 'reserve_stock');
         $mode = (string) $request->query('mode', 'list');
         $inventoryMode = $mode === 'inventory';
         $inventoryPage = null;
@@ -96,7 +98,7 @@ class SellerProductController extends Controller
                 ->whereKey($request->integer('product'))
                 ->firstOrFail();
             $products = collect([$selectedProductModel]);
-            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product, true));
+            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product, true, $reserveStockReady));
             $inventoryProducts = collect();
         } elseif ($mode === 'add') {
             $products = collect();
@@ -133,7 +135,7 @@ class SellerProductController extends Controller
 
             $productsPage = $productsQuery->paginate(20)->withQueryString();
             $products = $productsPage->getCollection();
-            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product));
+            $sellerProducts = $products->map(fn (Product $product) => $this->viewData($product, false, $reserveStockReady));
             $inventoryProducts = collect();
             $productStats = $this->productStats($seller);
         }
@@ -187,6 +189,7 @@ class SellerProductController extends Controller
                 && Schema::hasColumns('product_variants', ['length_cm', 'width_cm', 'height_cm'])
                 && Schema::hasTable('order_items')
                 && Schema::hasColumns('order_items', ['product_length_cm', 'product_width_cm', 'product_height_cm']),
+            'reserveStockReady' => $reserveStockReady,
             'savedVariantPrices' => $selectedProductModel
                 ? $selectedProductModel->variants->mapWithKeys(fn (ProductVariant $variant) => [(int) $variant->id => (float) $variant->price])->all()
                 : [],
@@ -701,7 +704,7 @@ class SellerProductController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function viewData(Product $product, bool $includeDescriptionImageLibrary = false): array
+    private function viewData(Product $product, bool $includeDescriptionImageLibrary = false, bool $reserveStockReady = false): array
     {
         $product->loadMissing(['category', 'images.optionValue.option', 'options.values.images', 'variants.optionValues.option']);
         $allVariants = $product->variants->sortBy('id')->values();
@@ -794,7 +797,7 @@ class SellerProductController extends Controller
                     'value' => $value->value,
                 ])->all(),
             ])->all(),
-            'variation_rows' => $allVariants->map(function (ProductVariant $variant) use ($priceResolver): array {
+            'variation_rows' => $allVariants->map(function (ProductVariant $variant) use ($priceResolver, $reserveStockReady): array {
                 $basePrice = round((float) $variant->price, 2);
 
                 return [
@@ -810,6 +813,7 @@ class SellerProductController extends Controller
                     'flash_sale_allocation' => $variant->flash_sale_allocation,
                     'payment_method' => $variant->payment_method ?: 'cod_online',
                     'stock' => $variant->stock,
+                    'reserve_stock' => $reserveStockReady ? (int) $variant->reserve_stock : 0,
                     'weight_kg' => $variant->weight_kg,
                     'length_cm' => $variant->length_cm,
                     'width_cm' => $variant->width_cm,

@@ -35,11 +35,16 @@ class SellerAccountController extends Controller
     public function store(Request $request): View
     {
         $shop = $this->shop($request);
+        $tab = $request->input('tab', 'profile');
+        if (! in_array($tab, ['profile', 'settings', 'community'], true)) {
+            $tab = 'profile';
+        }
+
         $followersAvailable = false;
         $followerCount = 0;
         $followers = collect();
 
-        if ($request->input('tab', 'profile') !== 'settings' && Schema::hasTable('seller_followers')) {
+        if ($tab === 'community' && Schema::hasTable('seller_followers')) {
             $followersAvailable = true;
             $followers = SellerFollower::query()
                 ->where('seller_profile_id', $shop->getKey())
@@ -47,12 +52,12 @@ class SellerAccountController extends Controller
                 ->latest('created_at')
                 ->orderByDesc('id')
                 ->paginate(10, ['*'], 'follower_page')
-                ->appends(['tab' => 'profile']);
+                ->appends(['tab' => 'community']);
             $followerCount = $followers->total();
         }
 
         return view('seller.store', [
-            'tab' => $request->input('tab', 'profile'),
+            'tab' => $tab,
             'seller' => $shop->user,
             'storeProfile' => $this->profile($shop),
             'followersAvailable' => $followersAvailable,

@@ -340,7 +340,7 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('buyer.discounts', [
+        return view('Buyer.discounts', [
             'products' => $products,
             'dealProducts' => $discountProducts,
         ]);
@@ -469,6 +469,7 @@ class BuyerController extends Controller
                     $variants->where(function (Builder $notActiveFlashSale) use ($now): void {
                         $notActiveFlashSale->whereNull('flash_sale_price')
                             ->orWhere('flash_sale_price', '<=', 0)
+                            ->orWhereColumn('flash_sale_price', '>=', 'product_variants.price')
                             ->orWhereColumn('flash_sale_allocation', '<=', 'flash_sale_sold')
                             ->orWhereHas('product', function (Builder $product) use ($now): void {
                                 $product->where(function (Builder $inactive) use ($now): void {
@@ -2404,21 +2405,22 @@ class BuyerController extends Controller
         return back()->with('buyer_notice', 'Wishlist cleared.');
     }
 
-    public function rewards(Request $request): View
+    public function rewards(Request $request): View|RedirectResponse
     {
+        if ($request->query('tab') === 'points') {
+            return redirect()->route('buyer.account', ['tab' => 'rewards']);
+        }
+
         $buyer = $request->user();
         $orders = $buyer->orders()
-            ->with(['sellerOrders.voucher', 'items.review'])
+            ->with('sellerOrders.voucher')
             ->latest('placed_at')
             ->get();
 
         $claimService = app(BuyerVoucherClaimService::class);
         $claimableSellerVouchers = $claimService->claimableSellerVouchers($buyer);
         $collectedSellerClaims = $claimService->collectedSellerClaims($buyer);
-        $collectedSellerVouchers = $collectedSellerClaims
-            ->pluck('voucher')
-            ->filter()
-            ->values();
+        $collectedSellerVouchers = $collectedSellerClaims->pluck('voucher')->filter()->values();
         $collectedGlobalUses = VoucherRedemptionCounter::countsFor($collectedSellerVouchers);
         $collectedBuyerUses = VoucherRedemptionCounter::countsFor($collectedSellerVouchers, (int) $buyer->id);
 
@@ -2429,8 +2431,8 @@ class BuyerController extends Controller
                 'status' => $voucher->sellerProfile?->business_name ?? 'Seller',
                 'value' => $voucher->requiresReview() ? 'Voucher under review'
                     : ($voucher->discount_type === 'PERCENT'
-                    ? number_format((float) $voucher->discount_value, 0).'% off'
-                    : '₱'.number_format((float) $voucher->discount_value, 2).' off'),
+                        ? number_format((float) $voucher->discount_value, 0).'% off'
+                        : '₱'.number_format((float) $voucher->discount_value, 2).' off'),
                 'condition' => (float) $voucher->minimum_order_amount > 0
                     ? 'Minimum spend ₱'.number_format((float) $voucher->minimum_order_amount, 2)
                     : 'No minimum spend',
@@ -2438,10 +2440,7 @@ class BuyerController extends Controller
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
                 'collected' => $collected,
                 'unavailable_reason' => $unavailableReason,
-                'use_url' => route('buyer.shop', [
-                    'seller' => $voucher->seller_profile_id,
-                    'voucher' => $voucher->id,
-                ]),
+                'use_url' => route('buyer.shop', ['seller' => $voucher->seller_profile_id, 'voucher' => $voucher->id]),
             ];
         };
 
@@ -2457,7 +2456,6 @@ class BuyerController extends Controller
 
                 return $sellerVoucherCard($voucher, true, $reason);
             });
-
         $claimableSellerCards = $claimableSellerVouchers
             ->map(fn (Voucher $voucher): array => $sellerVoucherCard($voucher, false));
 
@@ -2470,16 +2468,17 @@ class BuyerController extends Controller
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
             ->get();
         $campaignEligibility = app(\App\Services\Marketplace\PlatformCampaignEligibility::class);
-        $platformClaimIds = BuyerVoucherClaim::query()->where('buyer_user_id', $buyer->id)
+        $platformClaimIds = BuyerVoucherClaim::query()
+            ->where('buyer_user_id', $buyer->id)
             ->whereIn('voucher_id', $platformVouchers->pluck('id'))
-            ->pluck('voucher_id')->map(fn ($id): int => (int) $id)->all();
+            ->pluck('voucher_id')
+            ->map(fn ($id): int => (int) $id)
+            ->all();
         $redemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers);
         $buyerRedemptionCounts = VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id);
         $platformVoucherCards = $platformVouchers
-            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null
-                    || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
-                && ($voucher->per_user_limit === null
-                    || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
+            ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
+                && ($voucher->per_user_limit === null || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
                 && ! $voucher->requiresReview()
                 && $campaignEligibility->status($voucher) === 'ACTIVE'
                 && $campaignEligibility->audienceEligible($voucher, $buyer)
@@ -2514,6 +2513,20 @@ class BuyerController extends Controller
                 'status' => str($order->status)->headline()->toString(),
             ]))->values();
 
+        return view('Buyer.vouchers', [
+            'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
+            'platformVoucherCards' => $platformVoucherCards,
+            'voucherHistory' => $voucherHistory,
+        ]);
+    }
+
+    private function rewardsPageData(User $buyer): array
+    {
+        $orders = $buyer->orders()
+            ->with(['sellerOrders', 'items.review'])
+            ->latest('placed_at')
+            ->get();
+
         $completedOrders = $orders->where('status', 'COMPLETED');
         $reviews = $orders->flatMap->items->pluck('review')->filter();
         $pointActivities = $completedOrders->map(fn ($order): array => [
@@ -2545,13 +2558,10 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('buyer.rewards', [
-            'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
-            'platformVoucherCards' => $platformVoucherCards,
-            'voucherHistory' => $voucherHistory,
+        return [
             'pointsBalance' => app(RewardPointsService::class)->balance($buyer),
             'pointActivities' => $pointActivities->concat($redeemedPointActivities)->values(),
-        ]);
+        ];
     }
 
     public function notifications(Request $request): View
@@ -2729,11 +2739,17 @@ class BuyerController extends Controller
             }
         }
 
+        $tabData = match ($request->query('tab')) {
+            'rewards' => $this->rewardsPageData($buyer),
+            'settings' => ['preferences' => $this->buyerPreferences($buyer)],
+            default => [],
+        };
+
         $walletDestinationReady = $request->query('tab') === 'wallet'
             && $walletReadiness->supportsMultipleFor('users');
         $walletDestinations = $walletDestinationReady ? $walletManager->accounts($buyer) : [];
 
-        return view('buyer.account', [
+        return view('buyer.account', array_merge([
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
             'addressCount' => $addresses->count(),
@@ -2751,7 +2767,7 @@ class BuyerController extends Controller
                 ->latest()
                 ->paginate(10)
                 ->withQueryString(),
-        ]);
+        ], $tabData));
     }
 
     public function updateWalletPaymentDestination(
@@ -2793,11 +2809,9 @@ class BuyerController extends Controller
         return back()->with('status', 'Refund destination saved securely.');
     }
 
-    public function settings(Request $request): View
+    public function settings(Request $request): RedirectResponse
     {
-        return view('buyer.settings', [
-            'preferences' => $this->buyerPreferences($request->user()),
-        ]);
+        return redirect()->route('buyer.account', ['tab' => 'settings']);
     }
 
     public function updateSettings(Request $request, UserPreferenceService $userPreferences): RedirectResponse

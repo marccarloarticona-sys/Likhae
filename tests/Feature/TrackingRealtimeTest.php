@@ -76,6 +76,53 @@ class TrackingRealtimeTest extends TestCase
         $this->assertArrayNotHasKey('navigation_destination', collect($markers)->firstWhere('kind', 'rider'));
     }
 
+    public function test_buyer_can_see_assigned_delivery_rider_location_before_out_for_delivery(): void
+    {
+        $buyer = new User(['account_type' => User::TYPE_BUYER]);
+        $buyer->id = 2201;
+        $rider = new RiderProfile(['user_id' => 2202, 'status' => 'ACTIVE']);
+        $rider->id = 2203;
+        $assignment = new RiderAssignment([
+            'shipment_id' => 2205,
+            'rider_profile_id' => $rider->id,
+            'assignment_type' => RiderAssignment::TYPE_DELIVERY,
+            'status' => 'ACCEPTED',
+        ]);
+        $assignment->id = 2204;
+        $assignment->setRelation('riderProfile', $rider);
+        $assignment->setRelation('liveLocation', new RiderAssignmentLocation([
+            'latitude' => 14.58,
+            'longitude' => 120.98,
+            'recorded_at' => now(),
+        ]));
+
+        $order = new Order(['buyer_user_id' => $buyer->id]);
+        $order->setRelation('address', null);
+        $sellerOrder = new SellerOrder();
+        $sellerOrder->setRelation('order', $order);
+        $sellerOrder->setRelation('sellerProfile', null);
+        $shipment = new Shipment([
+            'tracking_number' => 'TRACK-ASSIGNED-2205',
+            'current_status' => 'ASSIGNED_TO_RIDER',
+        ]);
+        $shipment->id = 2205;
+        $shipment->setRelation('sellerOrder', $sellerOrder);
+        $shipment->setRelation('riderAssignments', collect([$assignment]));
+        $shipment->setRelation('transferLegs', collect());
+        $shipment->setRelation('logisticsCenter', null);
+        $shipment->setRelation('serviceArea', null);
+        $shipment->setRelation('originLogisticsCenter', null);
+        $shipment->setRelation('destinationLogisticsCenter', null);
+
+        $markers = app(MapDataService::class)->forShipment($shipment, false, false, $buyer);
+        $riderMarker = collect($markers)->firstWhere('kind', 'rider');
+
+        $this->assertNotNull($riderMarker);
+        $this->assertSame(14.58, $riderMarker['latitude']);
+        $this->assertSame(120.98, $riderMarker['longitude']);
+        $this->assertTrue($riderMarker['active_rider']);
+    }
+
     public function test_rider_location_event_contains_current_assignment_coordinates(): void
     {
         $shipment = new Shipment(['current_status' => 'OUT_FOR_DELIVERY']);

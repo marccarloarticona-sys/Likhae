@@ -550,6 +550,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         );
 
+        document.querySelectorAll('[data-logistics-business-field]').forEach((container) => {
+            container.hidden = !logistics;
+            container.querySelectorAll('input').forEach((field) => {
+                field.disabled = !logistics;
+                field.required = logistics;
+            });
+        });
+
         /*
         |--------------------------------------------------------------
         | Rider specific

@@ -18,6 +18,7 @@ class BuyerProductAvailabilityService
         ?SellerProfile $seller,
         ?User $sellerUser,
         int $requestedQuantity = 1,
+        bool $allowReserveStock = false,
     ): array {
         if (! $product || $product->trashed()
             || in_array($product->status, ['DRAFT', 'ARCHIVED'], true)
@@ -62,11 +63,17 @@ class BuyerProductAvailabilityService
             return $this->unavailable('VARIANT_UNAVAILABLE', 'This variation is currently unavailable.', restricted: false);
         }
 
-        if ((int) $variant->stock < 1) {
+        $reserveStock = array_key_exists('reserve_stock', $variant->getAttributes())
+            ? max(0, (int) $variant->getAttribute('reserve_stock'))
+            : 0;
+        $availableStock = (int) $variant->stock
+            + ($allowReserveStock ? $reserveStock : 0);
+
+        if ($availableStock < 1) {
             return $this->unavailable('OUT_OF_STOCK', 'This variation is out of stock.', restricted: false);
         }
 
-        if ((int) $variant->stock < max(1, $requestedQuantity)) {
+        if ($availableStock < max(1, $requestedQuantity)) {
             return $this->unavailable('INSUFFICIENT_STOCK', 'Requested quantity exceeds available stock.', restricted: false);
         }
 

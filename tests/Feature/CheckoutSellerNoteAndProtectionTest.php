@@ -21,9 +21,10 @@ use App\Models\Seller\SellerProfile;
 use App\Models\Seller\SellerPromotion;
 use App\Models\Seller\Voucher;
 use App\Models\User;
+use App\Services\Marketplace\BuyerProductAvailabilityService;
+use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
-use App\Services\Marketplace\BuyerVoucherClaimService;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Support\OrderItemParcelAmount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -2345,6 +2346,120 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(250, $afterCancel['spent_cents']);
         $this->assertSame(500, $afterCancel['available_cents']);
         $this->assertSame(1, \App\Models\Finance\FinancialLedgerEntry::query()->where('seller_order_id', $secondSellerOrder->id)->where('entry_type', 'SELLER_VOUCHER_DISCOUNT_RELEASED')->count());
+    }
+
+    public function test_buyer_availability_does_not_include_private_reserve_stock(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $variant->update(['stock' => 2, 'reserve_stock' => 5]);
+        $variant->load('product.sellerProfile.user');
+
+        $availability = app(BuyerProductAvailabilityService::class);
+        $regularOnly = $availability->inspect(
+            $variant,
+            $variant->product,
+            $variant->product->sellerProfile,
+            $variant->product->sellerProfile->user,
+            requestedQuantity: 3,
+        );
+        $withReserve = $availability->inspect(
+            $variant,
+            $variant->product,
+            $variant->product->sellerProfile,
+            $variant->product->sellerProfile->user,
+            requestedQuantity: 3,
+            allowReserveStock: true,
+        );
+
+        $this->assertFalse($regularOnly['available']);
+        $this->assertSame('INSUFFICIENT_STOCK', $regularOnly['code']);
+        $this->assertTrue($withReserve['available']);
+        $this->assertSame('AVAILABLE', $withReserve['code']);
+    }
+
+    public function test_checkout_consumes_regular_stock_before_depleting_reserve_and_rejects_after_depletion(): void
+    {
+        $fixture = $this->checkoutFixture();
+        $variant = ProductVariant::query()->findOrFail($fixture['itemA']->product_variant_id);
+        $variant->update(['stock' => 3, 'reserve_stock' => 2]);
+        $fixture['itemA']->update(['quantity' => 3]);
+        app(CheckoutService::class)->preview(collect([$fixture['itemA']]), [], $fixture['buyer']);
+
+        // Simulate another checkout taking one regular unit after this Buyer reviewed the cart.
+        $variant->update(['stock' => 2]);
+
+        $order = app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$fixture['itemA']->id],
+            'COD',
+            [],
+            null,
+            [],
+            [],
+            (string) str()->uuid(),
+        );
+
+        $orderItem = $order->sellerOrders()->with('items')->sole()->items->sole();
+        $this->assertSame(3, (int) $orderItem->quantity);
+        $this->assertSame(0, (int) $variant->fresh()->stock);
+        $this->assertSame(1, (int) $variant->fresh()->reserve_stock);
+
+        $nextCart = Cart::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'status' => Cart::STATUS_ACTIVE,
+        ]);
+        $nextItem = CartItem::query()->create([
+            'cart_id' => $nextCart->id,
+            'product_variant_id' => $variant->id,
+            'quantity' => 1,
+        ]);
+        app(CheckoutService::class)->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$nextItem->id],
+            'COD',
+            [],
+            null,
+            [],
+            [],
+            (string) str()->uuid(),
+        );
+        $this->assertSame(0, (int) $variant->fresh()->stock);
+        $this->assertSame(0, (int) $variant->fresh()->reserve_stock);
+
+        $lastCart = Cart::query()->create([
+            'buyer_user_id' => $fixture['buyer']->id,
+            'status' => Cart::STATUS_ACTIVE,
+        ]);
+        $lastItem = CartItem::query()->create([
+            'cart_id' => $lastCart->id,
+            'product_variant_id' => $variant->id,
+            'quantity' => 1,
+        ]);
+
+        try {
+            app(CheckoutService::class)->placeOrder(
+                $fixture['buyer'],
+                $fixture['address'],
+                [$lastItem->id],
+                'COD',
+                [],
+                null,
+                [],
+                [],
+                (string) str()->uuid(),
+            );
+            $this->fail('Checkout must reject another order after regular and reserve stock are depleted.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('cart', $exception->errors());
+        }
+
+        $this->assertDatabaseCount('orders', 2);
+        $this->assertSame(0, (int) $variant->fresh()->stock);
+        $this->assertSame(0, (int) $variant->fresh()->reserve_stock);
+        $this->assertDatabaseHas('cart_items', ['id' => $lastItem->id]);
     }
 
     /** @param array<string, mixed> $overrides */

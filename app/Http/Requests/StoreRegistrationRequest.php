@@ -71,7 +71,7 @@ class StoreRegistrationRequest extends FormRequest
         $logisticsCenterId = $rejectedApplicant?->logisticsCenter?->getKey();
         $riderProfileId = $rejectedApplicant?->riderProfile?->getKey();
 
-        $businessRegistrationRules = ['nullable', 'string', 'max:100'];
+        $businessRegistrationRules = [Rule::requiredIf($isLogistics), 'nullable', 'string', 'max:100'];
         if ($isSeller) {
             $businessRegistrationRule = Rule::unique('seller_profiles', 'business_registration_number');
             $businessRegistrationRules[] = $sellerProfileId ? $businessRegistrationRule->ignore($sellerProfileId) : $businessRegistrationRule;
@@ -92,7 +92,7 @@ class StoreRegistrationRequest extends FormRequest
             $businessNameRules[] = $logisticsCenterId ? $businessNameRule->ignore($logisticsCenterId) : $businessNameRule;
         }
 
-        $tinRules = ['nullable', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{3}$/'];
+        $tinRules = [Rule::requiredIf($isLogistics), 'nullable', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{3}$/'];
         if ($isSeller || $isLogistics) {
             $sellerTinRule = Rule::unique('seller_profiles', 'tin');
             $logisticsTinRule = Rule::unique('logistics_centers', 'tin');
@@ -150,6 +150,7 @@ class StoreRegistrationRequest extends FormRequest
             'tin' => $tinRules,
             'business_registration_number' => $businessRegistrationRules,
             'dti_registration_number' => [
+                Rule::requiredIf($isLogistics),
                 'nullable', 'string', 'max:100',
                 $logisticsCenterId
                     ? Rule::unique('logistics_centers', 'dti_registration_number')->ignore($logisticsCenterId)
@@ -219,6 +220,9 @@ class StoreRegistrationRequest extends FormRequest
             'barangay.required' => 'Select your barangay.',
             'street.required' => 'Enter your street or purok.',
             'business_name.required' => 'Enter your business name.',
+            'business_registration_number.required' => 'Enter your business registration number.',
+            'dti_registration_number.required' => 'Enter your DTI registration number.',
+            'tin.required' => 'Enter your tax identification number.',
             'line_of_business.required' => 'Select your line of business.',
             'vehicle_type.required' => 'Select your rider vehicle type.',
             'plate_number.required' => 'Enter your vehicle plate number.',
@@ -243,6 +247,9 @@ class StoreRegistrationRequest extends FormRequest
             'municipality_code' => 'municipality or city selection',
             'barangay_code' => 'barangay selection',
             'line_of_business' => 'line of business',
+            'business_registration_number' => 'business registration number',
+            'dti_registration_number' => 'DTI registration number',
+            'tin' => 'tax identification number',
             'target_logistics_center_id' => 'logistics center',
             'drivers_license_number' => 'driver’s license number',
             'valid_id' => 'ID',

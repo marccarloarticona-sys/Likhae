@@ -2,6 +2,8 @@
 
 @php
     $availableOffers = collect($promotions)->filter(fn ($offer) => data_get($offer, 'state') === 'ACTIVE')->values();
+    $primaryActionClasses = 'inline-flex items-center justify-center rounded-xl bg-[#7b2c23] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#5b201a] hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7b2c23]';
+    $secondaryActionClasses = 'inline-flex items-center justify-center rounded-xl border border-[#7b2c23] bg-transparent px-4 py-2.5 text-sm font-semibold text-[#7b2c23] transition hover:bg-[#f4e6df] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7b2c23] dark:border-[#905147] dark:text-[#f5efe8] dark:hover:bg-[#3b2722]';
 @endphp
 
 @if($availableOffers->isNotEmpty())
@@ -56,8 +58,8 @@
                     </div>
                     @if($guest)
                         <div class="mt-4 flex flex-wrap gap-3">
-                            <a class="inline-flex rounded-xl bg-[#561c17] px-4 py-2.5 text-sm font-semibold text-white" href="{{ route('login') }}">Sign in to add this bundle</a>
-                            <a class="inline-flex rounded-xl bg-[#7b2c23] px-4 py-2.5 text-sm font-semibold text-white" href="{{ route('login') }}">Sign in to buy now</a>
+                            <a class="{{ $secondaryActionClasses }}" href="{{ route('login') }}">Sign in to add this bundle</a>
+                            <a class="{{ $primaryActionClasses }}" href="{{ route('login') }}">Sign in to buy now</a>
                         </div>
                     @else
                         <form method="POST" action="{{ route('buyer.cart.bundle-add', ['promotion' => $offer->id]) }}" class="mt-4 flex flex-wrap items-end gap-3">@csrf
@@ -79,8 +81,8 @@
                                 @endif
                             @endforeach
                             <label class="text-xs font-semibold text-stone-700">Bundle sets <input class="mt-1 block w-24 rounded-lg border border-stone-300 px-3 py-2" type="number" name="sets" min="1" max="{{ $maximumOfferSets }}" value="1"></label>
-                            <button class="rounded-xl bg-[#561c17] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#3e130f]" type="submit">Add Bundle to Cart</button>
-                            <button class="rounded-xl bg-[#7b2c23] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5b201a]" type="submit" name="buy_now" value="1">Buy Now</button>
+                            <button class="{{ $secondaryActionClasses }}" type="submit">Add Bundle to Cart</button>
+                            <button class="{{ $primaryActionClasses }}" type="submit" name="buy_now" value="1">Buy Now</button>
                         </form>
                     @endif
                 @else
@@ -109,7 +111,10 @@
                         @if($offer->max_redemptions !== null)<span class="rounded-full bg-[#f4e6df] px-3 py-1 text-xs font-semibold text-[#561c17]">{{ max(0, (int) $offer->max_redemptions - (int) $offer->redemptions_used) }} redemption(s) left</span>@endif
                     </div>
                     @if($guest)
-                        <a class="mt-4 inline-flex rounded-xl bg-[#561c17] px-4 py-2 text-sm font-semibold text-white" href="{{ route('login') }}">Sign in to claim this offer</a>
+                        <div class="mt-4 flex flex-wrap gap-3">
+                            <a class="{{ $secondaryActionClasses }}" href="{{ route('login') }}">Sign in to claim this offer</a>
+                            <a class="{{ $primaryActionClasses }}" href="{{ route('login') }}">Sign in to buy now</a>
+                        </div>
                     @else
                         <form method="POST" action="{{ route('buyer.cart.offer-claim', ['promotion' => $offer->id]) }}" class="mt-4 flex flex-wrap items-end gap-3">@csrf
                             @if($offer->reward_variant_id)
@@ -125,7 +130,8 @@
                                 </label>
                             @endif
                             <label class="text-xs font-semibold text-stone-700">Offer sets <input class="mt-1 block w-24 rounded-lg border border-stone-300 px-3 py-2" type="number" name="sets" min="1" max="{{ $maximumOfferSets }}" value="1"></label>
-                            <button class="rounded-xl bg-[#561c17] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#3e130f]" type="submit">Add Items &amp; Claim</button>
+                            <button class="{{ $secondaryActionClasses }}" type="submit">Add Items &amp; Claim</button>
+                            <button class="{{ $primaryActionClasses }}" type="submit" name="buy_now" value="1">Buy Now</button>
                         </form>
                     @endif
                 @endif

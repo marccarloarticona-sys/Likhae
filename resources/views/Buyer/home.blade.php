@@ -1318,7 +1318,7 @@
     .lk-home-page .lk-home-hero-track { display: grid; }
     .lk-home-page .lk-home-hero-slide {
         grid-area: 1 / 1;
-        min-height: clamp(360px, 44vh, 520px);
+        min-height: clamp(400px, 48vh, 560px);
         opacity: 0;
         pointer-events: none;
         transition: opacity .55s ease;
@@ -1433,7 +1433,7 @@
     }
 
     .lk-home-page .lk-home-category-section {
-        margin-top: 16px !important;
+        margin-top: 0 !important;
     }
 
     .lk-home-page .lk-home-category-heading {
@@ -1853,14 +1853,14 @@
     }
 
     /* Keep the home page in normal document flow so the full page can scroll. */
-    body.lk-buyer-home-sidebar-hover {
+    body.lk-buyer-home-page-flow {
         min-height: 100vh;
         height: auto;
         overflow-x: hidden;
         overflow-y: auto !important;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-shell {
+    body.lk-buyer-home-page-flow .lk-shell {
         display: flex;
         min-height: 100vh;
         height: auto;
@@ -1868,16 +1868,16 @@
         overflow: visible;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-buyer-app {
+    body.lk-buyer-home-page-flow .lk-buyer-app {
         min-height: 100vh;
         overflow: visible;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-header {
+    body.lk-buyer-home-page-flow .lk-header {
         flex: 0 0 auto;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-main {
+    body.lk-buyer-home-page-flow .lk-main {
         display: block;
         flex: 1 0 auto;
         min-height: auto;
@@ -1885,13 +1885,13 @@
         padding: 12px clamp(12px, 1.7vw, 24px) !important;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-footer {
+    body.lk-buyer-home-page-flow .lk-footer {
         flex: 0 0 auto;
         min-height: 38px;
         margin-top: 0;
     }
 
-    body.lk-buyer-home-sidebar-hover .lk-footer:not(:has(.lk-footer-inner)) {
+    body.lk-buyer-home-page-flow .lk-footer:not(:has(.lk-footer-inner)) {
         min-height: 38px;
         padding: 6px clamp(12px, 1.7vw, 24px);
     }
@@ -1902,13 +1902,13 @@
         height: auto !important;
         min-height: 0 !important;
         flex-direction: column;
-        gap: clamp(22px, 3vw, 36px);
+        gap: clamp(14px, 1.7vw, 24px);
         overflow: visible !important;
         padding: 0 0 36px !important;
     }
 
     .lk-home-page .lk-home-editorial-hero {
-        min-height: clamp(360px, 44vh, 520px) !important;
+        min-height: clamp(400px, 48vh, 560px) !important;
         height: auto !important;
         padding: clamp(16px, 2.5vw, 30px) !important;
         border-radius: 16px;
@@ -2247,15 +2247,15 @@
     }
 
     @media (max-width: 680px) {
-        body.lk-buyer-home-sidebar-hover .lk-main {
+        body.lk-buyer-home-page-flow .lk-main {
             padding: 8px 10px !important;
         }
 
-        body.lk-buyer-home-sidebar-hover .lk-footer span {
+        body.lk-buyer-home-page-flow .lk-footer span {
             display: none;
         }
 
-        body.lk-buyer-home-sidebar-hover .lk-footer nav {
+        body.lk-buyer-home-page-flow .lk-footer nav {
             width: 100%;
             justify-content: center;
             gap: 14px;
@@ -2449,7 +2449,7 @@
     }
 
     @media (max-height: 620px) {
-        body.lk-buyer-home-sidebar-hover .lk-main {
+        body.lk-buyer-home-page-flow .lk-main {
             padding-block: 6px !important;
         }
 
@@ -2472,7 +2472,7 @@
             font-size: 9px;
         }
 
-        body.lk-buyer-home-sidebar-hover .lk-footer:not(:has(.lk-footer-inner)) {
+        body.lk-buyer-home-page-flow .lk-footer:not(:has(.lk-footer-inner)) {
             min-height: 32px;
             padding-block: 3px;
         }
@@ -2855,6 +2855,7 @@
     </section>
 
     <div
+        id="home-offers"
         class="lk-home-deferred-slot"
         data-home-deferred-slot
         data-deferred-url="{{ route('buyer.home.marketing') }}"
@@ -3345,6 +3346,15 @@
                 observer.observe(sentinel);
             } else {
                 retryButton.hidden = false;
+            }
+
+            const prefetchRecommendations = () => {
+                if (!document.hidden) loadMore();
+            };
+            if ('requestIdleCallback' in window) {
+                window.requestIdleCallback(prefetchRecommendations, { timeout: 1200 });
+            } else {
+                window.setTimeout(prefetchRecommendations, 350);
             }
         });
 

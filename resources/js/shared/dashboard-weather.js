@@ -26,6 +26,7 @@ function renderForecast(widget, forecast) {
 
     if (!Array.isArray(forecast) || forecast.length === 0) {
         section.hidden = true;
+        widget.classList.remove('lk-dashboard-weather--has-forecast');
         return;
     }
 
@@ -51,6 +52,7 @@ function renderForecast(widget, forecast) {
     });
 
     section.hidden = false;
+    widget.classList.add('lk-dashboard-weather--has-forecast');
 }
 
 function initializeWeather(widget) {

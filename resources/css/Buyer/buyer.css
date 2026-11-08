@@ -884,7 +884,7 @@ body.lk-sidebar-is-collapsed .lk-nav-toggle {
 
 .lk-profile-chevron { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: var(--lk-muted); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; transition: transform 160ms ease; }
 .lk-profile-container[aria-expanded="true"] .lk-profile-chevron { transform: rotate(180deg); }
-.lk-account-dropdown { position: absolute; z-index: 220; top: calc(100% + 10px); right: 0; width: min(330px, calc(100vw - 24px)); overflow: hidden; border: 1px solid var(--lk-border); border-radius: 14px; background: var(--lk-surface); background: color-mix(in srgb, var(--lk-surface) 92%, transparent); box-shadow: 0 18px 42px rgba(65, 35, 25, .18); backdrop-filter: blur(16px); }
+.lk-account-dropdown { position: absolute; z-index: 220; top: calc(100% + 10px); right: 0; width: min(330px, calc(100vw - 24px)); max-height: min(560px, calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--lk-border); border-radius: 14px; background: var(--lk-card); box-shadow: 0 18px 42px rgba(65, 35, 25, .18); }
 .lk-account-dropdown[hidden] { display: none; }
 .lk-account-dropdown__current, .lk-account-dropdown__account { display: flex; width: 100%; align-items: center; gap: 10px; border: 0; padding: 12px 13px; background: transparent; color: var(--lk-text); font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
 .lk-account-dropdown__current:hover, .lk-account-dropdown__account:hover { background: var(--lk-bg-soft); }
@@ -898,6 +898,11 @@ body.lk-sidebar-is-collapsed .lk-nav-toggle {
 .lk-account-dropdown__switch { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; padding: 12px 13px; background: transparent; color: var(--lk-maroon); font: inherit; font-size: 12px; font-weight: 700; text-align: left; cursor: pointer; }
 .lk-account-dropdown__switch:hover { background: var(--lk-bg-soft); }
 .lk-account-dropdown__switch svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.lk-account-dropdown__logout-form { margin: 0; padding: 8px 12px 12px; }
+.lk-account-dropdown__logout { display: flex; width: 100%; align-items: center; gap: 8px; border: 1px solid #8f2821; border-radius: 10px; padding: 10px 12px; background: #a4382e; color: #fff; font: inherit; font-size: 12px; font-weight: 700; text-align: left; cursor: pointer; transition: background 150ms ease, border-color 150ms ease; }
+.lk-account-dropdown__logout:hover { border-color: #761d18; background: #85241e; }
+.lk-account-dropdown__logout:focus-visible { outline: 3px solid rgba(164, 56, 46, .26); outline-offset: 2px; }
+.lk-account-dropdown__logout svg { width: 17px; height: 17px; flex: 0 0 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 
 .lk-profile-container:hover {
     background: var(--lk-bg-soft);
@@ -9369,5 +9374,777 @@ html.dark .lk-message-file > svg {
 
 html.dark .lk-detail-share-icon {
     color: var(--lk-icon-accent);
+}
+
+/* Buyer workspace navigation now lives in the header instead of a sidebar. */
+body.lk-buyer-body .lk-shell {
+    width: 100%;
+    margin-left: 0;
+    transition: none;
+}
+
+.lk-header.is-buyer {
+    display: grid;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+    grid-template-rows: minmax(56px, auto) minmax(38px, auto);
+    gap: 0;
+    align-items: stretch;
+    padding: 0 clamp(14px, 2.2vw, 34px);
+    background: color-mix(in srgb, var(--lk-card) 94%, transparent);
+    border-bottom: 1px solid var(--lk-border);
+    box-shadow: 0 5px 18px rgba(61, 33, 24, .045);
+}
+
+.lk-header.is-buyer .lk-header-primary,
+.lk-buyer-nav {
+    width: 100%;
+    max-width: 1680px;
+    margin-inline: auto;
+}
+
+.lk-header.is-buyer .lk-header-primary {
+    grid-column: 2;
+    grid-row: 1;
+    display: grid;
+    min-height: 56px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: clamp(10px, 1.5vw, 22px);
+    align-items: center;
+    padding-block: 5px;
+}
+
+.lk-buyer-header-brand {
+    display: flex;
+    min-width: 0;
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 16px 8px 0;
+    border-right: 1px solid var(--lk-border);
+    color: inherit;
+    text-decoration: none;
+}
+
+.likhae-logo--buyer-header img,
+.likhae-logo--buyer-header .likhae-logo__image {
+    width: auto;
+    height: 29px;
+    max-width: 136px;
+}
+
+.lk-buyer-header-tagline {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--lk-muted);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lk-header.is-buyer .lk-search {
+    width: 100%;
+    max-width: 680px;
+    min-width: 0;
+    justify-self: center;
+    margin: 0;
+    padding: 8px 12px;
+    border-radius: 12px;
+}
+
+.lk-header.is-buyer .lk-header-actions {
+    gap: 8px;
+    margin-left: 0;
+}
+
+.lk-header.is-buyer .lk-icon-btn {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 11px;
+}
+
+.lk-buyer-theme-toggle .lk-theme-toggle-icon--light,
+.lk-buyer-theme-toggle .lk-theme-toggle-icon--dark {
+    display: none;
+}
+
+html:not(.dark) .lk-buyer-theme-toggle .lk-theme-toggle-icon--dark,
+html.dark .lk-buyer-theme-toggle .lk-theme-toggle-icon--light {
+    display: block;
+}
+
+.lk-header.is-buyer .lk-profile-container {
+    min-height: 36px;
+    gap: 7px;
+    padding: 2px 6px;
+    border-radius: 11px;
+}
+
+.lk-header.is-buyer .lk-profile-avatar {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+}
+
+.lk-header.is-buyer .lk-profile-info strong {
+    max-width: 150px;
+    overflow: hidden;
+    color: var(--lk-text);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lk-header.is-buyer .lk-profile-info small {
+    color: var(--lk-muted);
+    font-size: 9px;
+}
+
+.lk-buyer-nav {
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    min-height: 38px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    overflow-x: auto;
+    padding: 4px 0 6px;
+    border-top: 1px solid color-mix(in srgb, var(--lk-border) 74%, transparent);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.lk-buyer-nav::-webkit-scrollbar {
+    display: none;
+}
+
+.lk-buyer-nav-link {
+    position: relative;
+    display: inline-flex;
+    min-height: 28px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 11px;
+    color: var(--lk-brown);
+    border: 1px solid transparent;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.lk-buyer-nav-link > svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.7;
+}
+
+.lk-buyer-nav-link:hover {
+    color: var(--lk-maroon);
+    background: var(--lk-bg-soft);
+    border-color: var(--lk-border);
+}
+
+.lk-buyer-nav-link:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--lk-maroon) 30%, transparent);
+    outline-offset: 2px;
+}
+
+.lk-buyer-nav-link.is-active {
+    color: #fff;
+    background: var(--lk-maroon);
+    border-color: var(--lk-maroon);
+    box-shadow: 0 5px 12px rgba(86, 28, 23, .15);
+}
+
+.lk-buyer-nav-count {
+    display: inline-flex;
+    min-width: 18px;
+    height: 18px;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 5px;
+    color: #fff;
+    background: var(--lk-maroon-2);
+    border: 1px solid color-mix(in srgb, #fff 24%, transparent);
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.lk-buyer-nav-link.is-active .lk-buyer-nav-count {
+    color: var(--lk-maroon);
+    background: #fff;
+    border-color: transparent;
+}
+
+html.dark .lk-header.is-buyer {
+    background: color-mix(in srgb, var(--lk-card) 94%, transparent);
+    box-shadow: 0 5px 18px rgba(0, 0, 0, .16);
+}
+
+html.dark .lk-buyer-nav-link {
+    color: #d8c4b9;
+}
+
+html.dark .lk-buyer-nav-link:hover {
+    color: #fff0e8;
+    background: #382a25;
+    border-color: #503a32;
+}
+
+html.dark .lk-buyer-nav-link.is-active {
+    color: #fff;
+    background: var(--lk-maroon-2);
+    border-color: var(--lk-maroon-2);
+}
+
+@media (min-width: 1200px) {
+    .lk-buyer-nav {
+        grid-column: 1 / -1;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 900px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+        padding-inline: clamp(12px, 2vw, 18px);
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        grid-column: 1;
+        grid-row: 2;
+        min-height: 0;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px 10px;
+        padding-block: 5px;
+    }
+
+    .lk-buyer-header-brand {
+        grid-column: 1;
+        grid-row: 1;
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 9px;
+        padding: 7px 0 5px;
+        border-right: 0;
+    }
+
+    .lk-header.is-buyer .lk-search {
+        grid-column: 1;
+        grid-row: 1;
+        max-width: none;
+        padding-block: 7px;
+    }
+
+    .lk-header.is-buyer .lk-header-actions {
+        grid-column: 2;
+        grid-row: 1;
+    }
+
+    .lk-buyer-nav {
+        grid-column: 1;
+        grid-row: 3;
+        min-height: 36px;
+        gap: 4px;
+        padding: 3px 0 5px;
+    }
+
+    .lk-buyer-nav-link {
+        min-height: 28px;
+        padding-inline: 10px;
+    }
+}
+
+@media (max-width: 560px) {
+    .lk-buyer-header-brand {
+        gap: 7px;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        height: 22px;
+        max-width: 102px;
+    }
+
+    .lk-buyer-header-tagline {
+        font-size: 8px;
+    }
+
+    .lk-header.is-buyer .lk-header-actions {
+        gap: 4px;
+    }
+
+    .lk-header.is-buyer .lk-icon-btn {
+        width: 34px;
+        height: 34px;
+        flex-basis: 34px;
+    }
+
+    .lk-header.is-buyer .lk-profile-container {
+        min-height: 34px;
+        gap: 3px;
+        padding: 1px;
+    }
+
+    .lk-header.is-buyer .lk-profile-avatar {
+        width: 31px;
+        height: 31px;
+        flex-basis: 31px;
+    }
+
+    .lk-header.is-buyer .lk-profile-info,
+    .lk-header.is-buyer .lk-profile-chevron {
+        display: none;
+    }
+
+    .lk-buyer-nav {
+        width: calc(100% + 12px);
+        margin-right: -12px;
+        padding-right: 12px;
+    }
+
+    .lk-buyer-nav-link {
+        min-height: 27px;
+        gap: 5px;
+        padding-inline: 8px;
+        font-size: 10px;
+    }
+
+    .lk-buyer-nav-link > svg {
+        width: 15px;
+        height: 15px;
+        flex-basis: 15px;
+    }
+}
+
+/* Buyer header: one desktop row with tools after the text navigation. */
+.lk-header.is-buyer {
+    grid-template-columns: minmax(116px, 132px) minmax(0, 1fr) auto;
+    grid-template-rows: minmax(58px, auto);
+    min-height: 58px;
+    align-items: center;
+    gap: clamp(8px, 1vw, 16px);
+    padding-block: 6px;
+}
+
+.lk-buyer-header-brand {
+    grid-column: 1;
+    grid-row: 1;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 0;
+    padding: 0;
+    border: 0;
+}
+
+.likhae-logo--buyer-header img,
+.likhae-logo--buyer-header .likhae-logo__image {
+    height: 27px;
+    max-width: 128px;
+}
+
+.lk-buyer-header-tagline {
+    display: none;
+}
+
+.lk-buyer-nav {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    max-width: none;
+    margin: 0;
+    justify-content: center;
+    gap: 2px;
+    overflow-x: auto;
+    padding: 0;
+    border-top: 0;
+}
+
+.lk-buyer-nav-link {
+    min-height: 32px;
+    gap: 5px;
+    padding-inline: 8px;
+    font-size: 10px;
+}
+
+.lk-buyer-nav-count {
+    min-width: 18px;
+    height: 18px;
+}
+
+.lk-header.is-buyer .lk-header-primary {
+    grid-column: 3;
+    grid-row: 1;
+    display: flex;
+    width: auto;
+    max-width: none;
+    min-height: 0;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+}
+
+.lk-buyer-header-search {
+    position: relative;
+    width: 168px;
+    flex: 0 0 168px;
+}
+
+.lk-header.is-buyer .lk-buyer-header-search-form {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    gap: 6px;
+    margin: 0;
+    padding: 7px 9px;
+    border-radius: 10px;
+}
+
+.lk-buyer-header-search-form > svg {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+}
+
+.lk-header.is-buyer .lk-buyer-header-search-form input {
+    font-size: 10px;
+}
+
+.lk-header.is-buyer .lk-buyer-header-search-form button svg {
+    width: 14px;
+    height: 14px;
+}
+
+.lk-buyer-notification-toggle[aria-expanded="true"] {
+    color: var(--lk-maroon);
+    background: var(--lk-bg-soft);
+}
+
+@media (max-width: 1279px) and (min-width: 901px) {
+    .lk-buyer-nav {
+        justify-content: flex-start;
+    }
+
+    .lk-buyer-nav-link {
+        gap: 3px;
+        padding-inline: 6px;
+        font-size: 9px;
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        gap: 5px;
+    }
+
+    .lk-buyer-header-search {
+        width: 136px;
+        flex-basis: 136px;
+    }
+}
+
+@media (max-width: 900px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(92px, 122px) minmax(0, 1fr) auto;
+        grid-template-rows: minmax(40px, auto);
+        gap: 5px;
+        padding: 5px clamp(10px, 1.5vw, 14px);
+    }
+
+    .lk-buyer-header-brand {
+        grid-column: 1;
+        grid-row: 1;
+        overflow: hidden;
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        grid-column: 3;
+        grid-row: 1;
+        gap: 4px;
+    }
+
+    .lk-buyer-nav {
+        grid-column: 2;
+        grid-row: 1;
+        min-height: 32px;
+        justify-content: flex-start;
+        padding: 0;
+        border-top: 0;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (max-width: 560px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(76px, 90px) minmax(0, 1fr) auto;
+        gap: 4px;
+        padding-inline: 8px;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        height: 20px;
+        max-width: 86px;
+    }
+
+    .lk-header.is-buyer .lk-header-actions {
+        gap: 3px;
+    }
+
+    .lk-header.is-buyer .lk-profile-info,
+    .lk-header.is-buyer .lk-profile-chevron {
+        display: none;
+    }
+
+    .lk-header.is-buyer .lk-profile-container {
+        min-height: 34px;
+        gap: 0;
+        padding: 1px;
+    }
+
+    .lk-header.is-buyer .lk-profile-avatar {
+        width: 31px;
+        height: 31px;
+        flex-basis: 31px;
+    }
+
+    .lk-header.is-buyer .lk-icon-btn {
+        width: 34px;
+        height: 34px;
+        flex-basis: 34px;
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        gap: 3px;
+    }
+
+    .lk-buyer-nav {
+        width: 100%;
+        margin: 0;
+        padding-right: 0;
+        gap: 1px;
+        justify-content: flex-start;
+    }
+
+    .lk-buyer-nav-link { padding-inline: 5px; font-size: 9px; }
+}
+
+@media (max-width: 640px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(64px, 76px) minmax(0, 1fr) auto;
+        gap: 3px;
+        padding-inline: 8px;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        height: 18px;
+        max-width: 72px;
+    }
+
+    .lk-buyer-header-search {
+        width: clamp(84px, 24vw, 120px);
+        flex-basis: clamp(84px, 24vw, 120px);
+    }
+
+    .lk-header.is-buyer .lk-header-actions {
+        gap: 2px;
+    }
+
+    .lk-header.is-buyer .lk-icon-btn {
+        width: 30px;
+        height: 30px;
+        flex-basis: 30px;
+    }
+
+    .lk-header.is-buyer .lk-profile-container {
+        min-height: 30px;
+    }
+
+    .lk-header.is-buyer .lk-profile-avatar {
+        width: 27px;
+        height: 27px;
+        flex-basis: 27px;
+    }
+}
+
+/* Keep the buyer navigation active state as a maroon underline, not a filled pill. */
+.lk-buyer-nav-link {
+    border-color: transparent;
+    transition: color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.lk-buyer-nav-link::after {
+    position: absolute;
+    right: 11px;
+    bottom: 0;
+    left: 11px;
+    height: 2px;
+    background: var(--lk-maroon);
+    border-radius: 999px;
+    content: "";
+    transform: scaleX(0);
+    transition: transform 150ms ease;
+}
+
+.lk-buyer-nav-link:hover {
+    background: transparent;
+    border-color: transparent;
+}
+
+.lk-buyer-nav-link:hover::after,
+.lk-buyer-nav-link.is-active::after {
+    transform: scaleX(1);
+}
+
+.lk-buyer-nav-link.is-active {
+    color: var(--lk-maroon);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.lk-buyer-nav-link > .lk-buyer-nav-count {
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    font-size: .82em;
+    font-weight: 700;
+    line-height: inherit;
+}
+
+.lk-buyer-nav-link.is-active .lk-buyer-nav-count {
+    color: inherit;
+    background: transparent;
+    border-color: transparent;
+}
+
+html.dark .lk-buyer-nav-link::after {
+    background: #eba99d;
+}
+
+html.dark .lk-buyer-nav-link.is-active {
+    color: #eba99d;
+    background: transparent;
+    border-color: transparent;
+}
+
+html.dark .lk-buyer-nav-link.is-active .lk-buyer-nav-count {
+    color: inherit;
+    background: transparent;
+    border-color: transparent;
+}
+
+.lk-buyer-notification-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    display: flex;
+    min-width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    color: #111;
+    background: #c18479;
+    border: 1px solid var(--lk-card);
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+html.dark .lk-buyer-notification-count {
+    color: #111;
+    background: #c18479;
+}
+
+.lk-buyer-header-search {
+    width: 36px;
+    flex: 0 0 36px;
+    transition: width 180ms ease, flex-basis 180ms ease;
+}
+
+.lk-buyer-header-search.is-expanded {
+    width: 168px;
+    flex-basis: 168px;
+}
+
+.lk-buyer-header-search-form[hidden] {
+    display: none !important;
+}
+
+.lk-buyer-search-toggle[hidden] {
+    display: none !important;
+}
+
+.lk-buyer-search-toggle svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+}
+
+@media (max-width: 1279px) and (min-width: 901px) {
+    .lk-buyer-header-search.is-expanded {
+        width: 136px;
+        flex-basis: 136px;
+    }
+}
+
+@media (max-width: 640px) {
+    .lk-buyer-header-search {
+        width: 30px;
+        flex-basis: 30px;
+    }
+
+    .lk-buyer-header-search.is-expanded {
+        width: clamp(84px, 24vw, 120px);
+        flex-basis: clamp(84px, 24vw, 120px);
+    }
+}
+
+.lk-header.is-buyer .lk-buyer-theme-toggle > svg {
+    width: 18px;
+    height: 18px;
+    fill: none !important;
+    stroke: currentColor !important;
+    visibility: visible;
+    opacity: 1;
+}
+
+html.dark .lk-header.is-buyer .lk-buyer-theme-toggle {
+    color: #fff8f2 !important;
+    background: #352923 !important;
+    border-color: #715144 !important;
 }
 

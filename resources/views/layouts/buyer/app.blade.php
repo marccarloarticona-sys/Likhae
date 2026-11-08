@@ -53,13 +53,11 @@
 </head>
 <body @class([
     'lk-buyer-body',
-    'lk-buyer-home-sidebar-hover' => request()->routeIs('buyer.home'),
-    'lk-buyer-sidebar-auto-collapse' => request()->routeIs('buyer.home', 'buyer.products'),
+    'lk-buyer-home-page-flow' => request()->routeIs('buyer.home'),
 ])>
     <div class="lk-buyer-app" data-lk-buyer-app data-buyer-user-id="{{ auth()->id() }}">
-        <x-buyer.sidebar :active="$activePage" />
-        <div class="lk-shell" data-sidebar-content>
-            <x-buyer.header :title="$pageTitle" />
+        <div class="lk-shell">
+            <x-buyer.header :title="$pageTitle" :active="$activePage" />
             <main class="lk-main" id="main-content">@yield('content')</main>
             <x-buyer.footer />
         </div>

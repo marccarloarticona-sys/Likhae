@@ -121,9 +121,15 @@ class BuyerPromotionController extends Controller
 
         $message = 'The qualifying item and reward were added to your cart. Your offer will be applied at checkout.';
 
-        return $request->expectsJson()
-            ? response()->json(['success' => true, 'message' => $message])
-            : back()->with('buyer_notice', $message);
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'message' => $message]);
+        }
+
+        if ($request->boolean('buy_now')) {
+            return redirect()->route('buyer.checkout');
+        }
+
+        return back()->with('buyer_notice', $message);
     }
 
     private function currentPromotion(int $id, string $type): SellerPromotion

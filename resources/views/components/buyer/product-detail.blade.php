@@ -1473,8 +1473,8 @@
                     <span class="block" data-flash-sale-upcoming-stock>{{ number_format($flashSaleRemaining) }} promotional units allocated</span>
                     <time class="block" data-flash-sale-start-countdown datetime="{{ $flashSaleStartsAt }}">Starts {{ \Illuminate\Support\Carbon::parse($flashSaleStartsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>
                 </div>
-                @if(!$guest && \Illuminate\Support\Facades\Route::has('buyer.rewards'))
-                    <a class="lk-detail-price-note" href="{{ route('buyer.rewards') }}">View voucher codes in Rewards</a>
+                @if(!$guest && \Illuminate\Support\Facades\Route::has('buyer.home'))
+                    <a class="lk-detail-price-note" href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}">Browse all vouchers</a>
                 @endif
                 @if(!$guest && $productVouchers->isNotEmpty())
                     <section class="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4" aria-label="Vouchers for this product">

@@ -177,7 +177,6 @@
                             <label class="ad-field"><span>Maximum discount</span><input id="campaign-maximum" name="maximum_discount_amount" type="number" min="0.01" step="0.01" value="{{ old('maximum_discount_amount') }}"></label>
                         </div></section>
                         @if($campaignControlsReady)<label class="ad-field"><span>Campaign status</span><select id="campaign-status" name="campaign_status"><option value="DRAFT" @selected(old('campaign_status') === 'DRAFT')>Draft</option><option value="ACTIVE" @selected(old('campaign_status', 'ACTIVE') === 'ACTIVE')>Active / scheduled</option><option value="PAUSED" @selected(old('campaign_status') === 'PAUSED')>Paused</option><option value="ENDED" @selected(old('campaign_status') === 'ENDED')>Ended</option></select></label>@endif
-                        </div></section>
                         @if($campaignControlsReady)
                             <section class="ad-marketing-media-fields" aria-labelledby="campaign-distribution-heading">
                                 <div class="ad-marketing-media-intro"><strong id="campaign-distribution-heading">3. Distribution and Eligibility</strong><span>Claiming does not reserve funding or count as redemption. Checkout rechecks each rule.</span></div>
@@ -217,7 +216,8 @@
                         <section class="ad-marketing-media-fields"><div class="ad-marketing-media-intro"><strong>6. Scheduling and Status</strong><span>All times use Asia/Manila. Existing orders keep their campaign reservations after pause or end.</span></div><div class="ad-form-grid">
                             <label class="ad-field"><span>Starts at</span><input id="campaign-starts-at" name="starts_at" type="datetime-local" value="{{ old('starts_at') }}"></label>
                             <label class="ad-field"><span>Ends at</span><input id="campaign-ends-at" name="ends_at" type="datetime-local" value="{{ old('ends_at') }}"></label>
-                            @if($marketingMediaReady)
+                        </div></section>
+                        @if($marketingMediaReady)
                             <div class="ad-marketing-media-fields">
                                 <div class="ad-marketing-media-intro"><strong>7. Campaign artwork and carousel</strong><span>Optional presentation only. It does not change discounts, redemption limits, or checkout totals.</span></div>
                                 <label class="ad-field"><span>Promotional image</span><input id="campaign-image" name="campaign_image" type="file" accept="image/jpeg,image/png,image/webp"></label>

@@ -34,6 +34,8 @@ class MapDataService
             'riderAssignments.riderProfile',
             'riderAssignments.liveLocation',
             'logisticsCenter.address',
+            'originLogisticsCenter.address',
+            'destinationLogisticsCenter.address',
             'serviceArea.logisticsCenter.address',
         ];
         if (Schema::hasTable('shipment_transfer_legs')) {
@@ -144,6 +146,37 @@ class MapDataService
                 }
                 $markers[] = $marker;
             }
+        }
+
+        // The route endpoints are saved before transfer legs exist. Include
+        // them so buyers can still see the sorting centers while a parcel is
+        // waiting for its first hub transfer to be created.
+        $plannedRouteSequence = (int) ($transferLegs->max('sequence_no') ?? 0);
+        foreach ([
+            ['center' => $shipment->originLogisticsCenter, 'role' => 'origin', 'sequence' => 0],
+            ['center' => $shipment->destinationLogisticsCenter, 'role' => 'destination', 'sequence' => $plannedRouteSequence + 1],
+        ] as $routeStop) {
+            $center = $routeStop['center'];
+            $centerId = (int) ($center?->id ?? 0);
+            if (! $center || $centerId === 0 || isset($transferCenterMarkerIndexes[$centerId])) {
+                continue;
+            }
+
+            $marker = $this->centerMarker($center);
+            if (! $marker) {
+                continue;
+            }
+
+            $marker['id'] = 'logistics-center-'.$centerId.'-shipment-'.$shipment->id.'-planned-'.$routeStop['role'];
+            $marker['shipment_id'] = $shipment->id;
+            $marker['target_kind'] = 'logistics';
+            $marker['center_role'] = $routeStop['role'];
+            $marker['sequence_no'] = $routeStop['sequence'];
+            $marker['transfer_status'] = 'PLANNED';
+            $marker['label'] = $routeStop['role'] === 'origin' ? 'Origin sorting center' : 'Destination sorting center';
+            $marker['title'] = $marker['label'];
+            $transferCenterMarkerIndexes[$centerId] = count($markers);
+            $markers[] = $marker;
         }
 
         $center = $shipment->logisticsCenter ?: $shipment->serviceArea?->logisticsCenter;
@@ -696,7 +729,12 @@ class MapDataService
         }
 
         if ($viewer->isAccountType('BUYER')) {
-            return $shipment->current_status === 'OUT_FOR_DELIVERY'
+            return in_array($shipment->current_status, [
+                'PICKUP_ASSIGNED',
+                'PICKED_UP',
+                'ASSIGNED_TO_RIDER',
+                'OUT_FOR_DELIVERY',
+            ], true)
                 && (int) $shipment->sellerOrder?->order?->buyer_user_id === (int) $viewer->id;
         }
 
@@ -741,7 +779,7 @@ class MapDataService
     private function canSeePendingDeliveryLocation(Shipment $shipment, RiderAssignment $assignment, array $tracking, ?User $viewer): bool
     {
         return $viewer?->isAccountType(User::TYPE_BUYER) === true
-            && $shipment->current_status === 'OUT_FOR_DELIVERY'
+            && in_array($shipment->current_status, ['ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY'], true)
             && $assignment->assignment_type === RiderAssignment::TYPE_DELIVERY
             && (int) ($tracking['active_assignment_id'] ?? 0) === (int) $assignment->id
             && (int) $shipment->sellerOrder?->order?->buyer_user_id === (int) $viewer->id;

@@ -324,7 +324,7 @@ class LogisticsPortalController extends Controller
         }
 
         $riders = $filteredRiderQuery
-            ->with(['user', 'areaAssignments.serviceArea'])
+            ->with(['user', 'approvedRegistrationApplication', 'areaAssignments.serviceArea'])
             ->withCount([
                 'assignments as active_pickup_assignments_count' => fn ($query) => $query
                     ->where('assignment_type', 'PICKUP')
@@ -444,7 +444,7 @@ class LogisticsPortalController extends Controller
 
         $rider->load('user');
         $rider->user?->isSuspended();
-        $rider->refresh()->load(['user', 'areaAssignments.serviceArea', 'assignments', 'earnings', 'moderationLogs.actor']);
+        $rider->refresh()->load(['user', 'approvedRegistrationApplication', 'areaAssignments.serviceArea', 'assignments', 'earnings', 'moderationLogs.actor']);
         $warningLogs = $rider->moderationLogs->where('event', 'rider.warned')->values();
         $warningCount = $warningLogs->count();
         $accountEnforcementReady = User::accountEnforcementSchemaReady();

@@ -1,6 +1,6 @@
 @extends('layouts.buyer.app')
 
-@section('title', 'Account')
+@section('title', request('tab') === 'settings' ? 'Settings' : 'Account')
 @section('active', 'account')
 
 @section('content')
@@ -36,6 +36,8 @@
         'following',
         'recently_viewed',
         'reviews',
+        'rewards',
+        'settings',
         'password',
         'danger',
     ];
@@ -70,6 +72,14 @@
         'reviews' => [
             'label' => 'Reviews',
             'description' => 'Your product feedback',
+        ],
+        'rewards' => [
+            'label' => 'Reward Points',
+            'description' => 'Points balance and activity',
+        ],
+        'settings' => [
+            'label' => 'Settings',
+            'description' => 'Preferences and notifications',
         ],
         'password' => [
             'label' => 'Change Password',
@@ -126,6 +136,18 @@
                 </svg>
             ',
 
+            'rewards' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 12v9H4v-9M2 7h20v5H2z"/>
+                    <path d="M12 7v14M12 7H7.5a2.5 2.5 0 1 1 2.2-3.7L12 7Zm0 0h4.5a2.5 2.5 0 1 0-2.2-3.7L12 7Z"/>
+                </svg>
+            ',
+            'settings' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.7 1.7-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.4v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L8 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H6.7v-2.4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L8 8.6l1.7-1.7.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.4v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.7 1.7-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/>
+                </svg>
+            ',
             'password' => '
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="4" y="10" width="16" height="11" rx="2"/>
@@ -186,14 +208,45 @@
             </h1>
 
             <p class="mt-1 text-sm text-stone-500">
-                Manage your profile, addresses, security, and account preferences.
+                Manage your profile, addresses, security, rewards, and account preferences.
             </p>
         </div>
 
-        <span class="inline-flex w-fit items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
-            <span class="h-2 w-2 rounded-full bg-red-500"></span>
-            Account active
-        </span>
+        <div class="flex w-fit items-center gap-3">
+            <span class="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
+                <span class="h-2 w-2 rounded-full bg-red-500"></span>
+                Account active
+            </span>
+
+            @if (Route::has('logout'))
+                <form
+                    method="POST"
+                    action="{{ route('logout') }}"
+                    data-confirm-title="{{ __('common.confirmation.logout_title') }}"
+                    data-confirm-message="{{ __('common.confirmation.logout_message') }}"
+                    data-confirm-label="{{ __('common.confirmation.logout_label') }}"
+                >
+                    @csrf
+                    <button
+                        type="submit"
+                        class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-800 bg-red-800 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:border-red-900 hover:bg-red-900 focus:outline-none focus:ring-4 focus:ring-red-200"
+                    >
+                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path d="M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        {{ __('navigation.items.logout') }}
+                    </button>
+                </form>
+            @else
+                <a
+                    href="{{ Route::has('login') ? route('login') : url('/login') }}"
+                    class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-800 bg-red-800 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:border-red-900 hover:bg-red-900 focus:outline-none focus:ring-4 focus:ring-red-200"
+                >
+                    {{ __('navigation.items.logout') }}
+                </a>
+            @endif
+        </div>
     </header>
 
     <div class="grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
@@ -247,6 +300,16 @@
 
         {{-- Account content --}}
         <main class="min-w-0 rounded-2xl border border-stone-200 bg-white shadow-sm">
+            @if ($activeTab === 'settings')
+                <div class="p-4 sm:p-6">
+                    @include('buyer.partials.settings-content')
+                </div>
+            @endif
+            @if ($activeTab === 'rewards')
+                <div class="p-4 sm:p-6">
+                    @include('buyer.partials.rewards-content')
+                </div>
+            @endif
             @if ($activeTab === 'profile')
                 <section aria-labelledby="profile-heading">
                     <div class="border-b border-stone-100 px-5 py-4 sm:px-6">

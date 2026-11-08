@@ -99,6 +99,85 @@ class RegistrationMediaWorkflowTest extends TestCase
             ->assertOk();
     }
 
+    public function test_logistics_application_can_be_approved_with_the_documents_listed_in_registration_spec(): void
+    {
+        $email = 'logistics.spec-approval@example.com';
+        $this->withSession(['registration_email_verified' => $email])
+            ->post(route('register.store'), $this->registrationPayload('logistics', $email, '+639171230004', [
+                'business_name' => 'Pila Parcel Hub',
+                'valid_id' => UploadedFile::fake()->image('identity.jpg', 1200, 1200),
+                'business_permit' => UploadedFile::fake()->create('business-permit.pdf', 20, 'application/pdf'),
+            ]))
+            ->assertRedirect(route('logistics.login'))
+            ->assertSessionHasNoErrors();
+
+        $application = RegistrationApplication::query()
+            ->whereHas('user', fn ($query) => $query->where('email', $email))
+            ->sole();
+        $documents = $application->documents()->get()->keyBy('document_type');
+        $this->assertEqualsCanonicalizing(['VALID_ID', 'BUSINESS_PERMIT'], $documents->keys()->all());
+
+        $admin = User::factory()->create([
+            'account_type' => User::TYPE_ADMIN,
+            'status' => User::STATUS_ACTIVE,
+        ]);
+        $this->actingAs($admin);
+        foreach ($documents as $document) {
+            $this->post(route('admin.registrations.documents.verify', [$application, $document]))
+                ->assertRedirect();
+        }
+
+        $this->post(route('admin.registrations.approve', $application))
+            ->assertRedirect(route('admin.registrations.show', $application))
+            ->assertSessionHas('success', 'Registration approved. The account is now active.');
+
+        $this->assertSame(RegistrationApplication::STATUS_APPROVED, $application->fresh()->status);
+        $this->assertSame(User::STATUS_ACTIVE, $application->user->fresh()->status);
+        $this->assertSame('ACTIVE', $application->user->logisticsCenter->fresh()->status);
+    }
+
+    public function test_seller_application_still_requires_its_entity_documents_for_approval(): void
+    {
+        $category = Category::query()->create(['name' => 'Crafts', 'slug' => 'crafts', 'is_active' => true]);
+        $email = 'seller.required-documents@example.com';
+        $this->withSession(['registration_email_verified' => $email])
+            ->post(route('register.store'), $this->registrationPayload('seller', $email, '+639171230005', [
+                'business_name' => 'Pila Handmade',
+                'line_of_business' => $category->id,
+                'seller_type' => 'sole_proprietorship',
+                'valid_id' => UploadedFile::fake()->image('identity.jpg', 1200, 1200),
+                'business_permit' => UploadedFile::fake()->create('business-permit.pdf', 20, 'application/pdf'),
+            ]))
+            ->assertRedirect(route('login'))
+            ->assertSessionHasNoErrors();
+
+        $application = RegistrationApplication::query()
+            ->whereHas('user', fn ($query) => $query->where('email', $email))
+            ->sole();
+        $admin = User::factory()->create([
+            'account_type' => User::TYPE_ADMIN,
+            'status' => User::STATUS_ACTIVE,
+        ]);
+        $this->actingAs($admin);
+        foreach ($application->documents as $document) {
+            $this->post(route('admin.registrations.documents.verify', [$application, $document]))
+                ->assertRedirect();
+        }
+
+        $this->actingAs($admin)
+            ->from(route('admin.registrations.show', $application))
+            ->post(route('admin.registrations.approve', $application))
+            ->assertRedirect(route('admin.registrations.show', $application))
+            ->assertSessionHasErrors('documents');
+
+        $documentError = session('errors')->getBag('default')->first('documents');
+        $this->assertStringContainsString('Dti Certificate', $documentError);
+        $this->assertStringContainsString('Bir Form 2303', $documentError);
+
+        $this->assertSame(RegistrationApplication::STATUS_UNDER_REVIEW, $application->fresh()->status);
+        $this->assertSame(User::STATUS_PENDING, $application->user->fresh()->status);
+    }
+
     public function test_seller_registration_stores_private_documents_and_public_shop_photos(): void
     {
         $category = Category::query()->create(['name' => 'Crafts', 'slug' => 'crafts', 'is_active' => true]);

@@ -14,7 +14,7 @@
 @section('content')
 <div class="sl-page">
     <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Store Management</span><h2>Your Shop</h2><p>Manage the shop details and images customers see.</p></div><a href="{{ route('seller.products') }}" class="sl-btn sl-btn-ghost">Preview Catalog</a></div>
-    <nav class="sl-tabs"><a href="{{ route('seller.store',['tab'=>'profile']) }}" class="{{ $currentTab==='profile'?'is-active':'' }}">Shop Profile</a><a href="{{ route('seller.store',['tab'=>'settings']) }}" class="{{ $currentTab==='settings'?'is-active':'' }}">Store Settings</a></nav>
+    <nav class="sl-tabs" aria-label="Store sections"><a href="{{ route('seller.store',['tab'=>'profile']) }}" class="{{ $currentTab==='profile'?'is-active':'' }}" @if($currentTab==='profile') aria-current="page" @endif>Shop Profile</a><a href="{{ route('seller.store',['tab'=>'community']) }}" class="{{ $currentTab==='community'?'is-active':'' }}" @if($currentTab==='community') aria-current="page" @endif>Community</a><a href="{{ route('seller.store',['tab'=>'settings']) }}" class="{{ $currentTab==='settings'?'is-active':'' }}" @if($currentTab==='settings') aria-current="page" @endif>Store Settings</a></nav>
 
     @if($currentTab === 'settings')
         <form class="sl-settings-layout" method="POST" action="{{ route('seller.store.update') }}">@csrf @method('PUT')
@@ -28,6 +28,7 @@
             </div>
         </form>
     @else
+        @if ($currentTab !== 'community')
         <form class="sl-store-layout" method="POST" enctype="multipart/form-data" action="{{ route('seller.store.update') }}">@csrf @method('PUT')
             <aside class="sl-card sl-store-preview" aria-label="Buyer-facing shop preview">
                 <div class="sl-store-preview-banner">
@@ -58,6 +59,8 @@
                 <div class="sl-sticky-actions"><a href="{{ route('seller.store') }}" class="sl-btn sl-btn-ghost">Cancel</a><button type="submit" class="sl-btn sl-btn-primary">Save Shop Profile</button></div>
             </div>
         </form>
+        @endif
+        @if ($currentTab === 'community')
         <section class="sl-card sl-follower-section" aria-labelledby="store-followers-title">
             <header class="sl-card-head">
                 <div>
@@ -116,6 +119,7 @@
                 @endif
             @endif
         </section>
+        @endif
     @endif
 </div>
 @endsection

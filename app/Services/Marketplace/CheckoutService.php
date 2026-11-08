@@ -297,6 +297,7 @@ class CheckoutService
         array $protectionItemIds = [],
         bool $lockVoucherUsage = false,
         int $rewardPointsToRedeem = 0,
+        bool $allowReserveStock = false,
     ): array
     {
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
@@ -338,6 +339,7 @@ class CheckoutService
                 $seller,
                 $seller?->user,
                 (int) $item->quantity,
+                $allowReserveStock,
             );
             if (! $availability['available']) {
                 throw ValidationException::withMessages([
@@ -866,6 +868,7 @@ class CheckoutService
                     $seller,
                     $sellerUser,
                     (int) $item->quantity,
+                    allowReserveStock: true,
                 );
                 if (! $availability['available']) {
                     throw ValidationException::withMessages([
@@ -940,6 +943,7 @@ class CheckoutService
                 $protectionItemIds,
                 lockVoucherUsage: true,
                 rewardPointsToRedeem: $rewardPointsToRedeem,
+                allowReserveStock: true,
             );
             if ($expectedShippingQuoteToken !== null) {
                 $this->assertShippingQuoteToken($expectedShippingQuoteToken, $lockedBuyer, $address, $items, $preview);
@@ -1120,7 +1124,6 @@ class CheckoutService
                         ]);
                     }
 
-                    $variant->decrement('stock', (int) $item->quantity);
                     if ($flashSaleUnits > 0) {
                         $variant->increment('flash_sale_sold', $flashSaleUnits);
                     }
@@ -1136,6 +1139,40 @@ class CheckoutService
                     }
                 }
 
+            }
+
+            // Consume regular stock first, then draw only the checkout shortfall
+            // from the private reserve pool. The variants remain locked until
+            // this transaction commits, so simultaneous orders cannot spend the
+            // same reserve units.
+            foreach ($items->groupBy('product_variant_id') as $variantId => $variantItems) {
+                $variant = $lockedVariants->get((int) $variantId);
+                if (! $variant) {
+                    continue;
+                }
+
+                $requestedQuantity = (int) $variantItems->sum('quantity');
+                $regularStock = max(0, (int) $variant->stock);
+                $stockUsed = min($regularStock, $requestedQuantity);
+                $reserveUsed = $requestedQuantity - $stockUsed;
+                $attributes = ['stock' => $regularStock - $stockUsed];
+
+                if ($reserveUsed > 0) {
+                    $reserveStockReady = array_key_exists('reserve_stock', $variant->getAttributes())
+                        && Schema::hasColumn('product_variants', 'reserve_stock');
+                    $reserveStock = $reserveStockReady
+                        ? max(0, (int) $variant->getAttribute('reserve_stock'))
+                        : 0;
+                    if (! $reserveStockReady || $reserveUsed > $reserveStock) {
+                        throw ValidationException::withMessages([
+                            'cart' => 'Inventory changed while placing your order. Refresh your cart and try again.',
+                        ]);
+                    }
+
+                    $attributes['reserve_stock'] = $reserveStock - $reserveUsed;
+                }
+
+                $variant->update($attributes);
             }
 
             $deletedCount = CartItem::query()->whereIn('id', $cartItemIds)->delete();
@@ -2182,4 +2219,3 @@ class CheckoutService
         return $value;
     }
 }
-Displaying BuyerApiController.php.

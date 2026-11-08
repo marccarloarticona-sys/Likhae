@@ -530,6 +530,7 @@ class SellerCatalogService
                     'sku' => $request->input('sku'),
                     'price' => $request->input('price'),
                     'stock' => $request->input('stock'),
+                    'reserve_stock' => $request->input('reserve_stock'),
                     'values' => '',
                     'is_active' => $request->input('is_active', true),
                 ] : null)
@@ -753,6 +754,8 @@ class SellerCatalogService
     {
         $dimensionFields = ['length_cm', 'width_cm', 'height_cm'];
         $dimensionSnapshotFields = ['product_length_cm', 'product_width_cm', 'product_height_cm'];
+        $reserveStockReady = Schema::hasTable('product_variants')
+            && Schema::hasColumn('product_variants', 'reserve_stock');
         $dimensionsReady = Schema::hasTable('product_variants')
             && Schema::hasColumns('product_variants', $dimensionFields)
             && Schema::hasTable('order_items')
@@ -789,6 +792,7 @@ class SellerCatalogService
                 'sku' => $request->input('sku') ?: 'LK-'.$product->id.'-DEFAULT',
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
+                'reserve_stock' => $request->input('reserve_stock'),
                 'weight_kg' => $request->input('weight_kg'),
                 'length_cm' => $request->input('length_cm'),
                 'width_cm' => $request->input('width_cm'),
@@ -860,6 +864,10 @@ class SellerCatalogService
             $price = $price !== null && $price !== '' ? $price : $request->input('price');
             $stock = Arr::get($row, 'stock');
             $stock = $stock !== null && $stock !== '' ? $stock : $request->input('stock', 0);
+            $reserveStockValue = Arr::get($row, 'reserve_stock');
+            $reserveStockValue = $reserveStockValue !== null && $reserveStockValue !== ''
+                ? $reserveStockValue
+                : $request->input('reserve_stock');
             if ($price === null || $price === '') {
                 throw ValidationException::withMessages([
                     'variants' => 'Every variation needs a price.',
@@ -871,6 +879,9 @@ class SellerCatalogService
                 ]);
             }
             $wasExistingVariant = $variant?->exists === true;
+            $reserveStock = $reserveStockValue !== null && $reserveStockValue !== ''
+                ? (int) $reserveStockValue
+                : ($reserveStockReady ? (int) ($variant?->reserve_stock ?? 0) : 0);
             $oldPrice = $wasExistingVariant ? round((float) $variant->price, 2) : null;
             $oldDiscountType = $wasExistingVariant ? (string) ($variant->getAttribute('discount_type') ?? 'none') : 'none';
             $resolvedOldDiscountType = $wasExistingVariant ? $variant->resolved_discount_type : 'none';
@@ -944,6 +955,9 @@ class SellerCatalogService
                 'is_default' => $index === 0,
                 'is_active' => filter_var(Arr::get($row, 'is_active', $request->input('is_active', true)), FILTER_VALIDATE_BOOLEAN),
             ];
+            if ($reserveStockReady) {
+                $variantAttributes['reserve_stock'] = $reserveStock;
+            }
             if ($dimensionsReady) {
                 $variantAttributes += [
                     'length_cm' => Arr::get($row, 'length_cm', $request->input('length_cm')),
@@ -1037,6 +1051,7 @@ class SellerCatalogService
                 'sku' => ($request->input('sku') ?: 'LK-'.$product->id).'-'.Str::upper($suffix ?: Str::random(5)),
                 'price' => $request->input('price'),
                 'stock' => $request->input('stock'),
+                'reserve_stock' => $request->input('reserve_stock'),
                 'weight_kg' => $request->input('weight_kg'),
                 'length_cm' => $request->input('length_cm'),
                 'width_cm' => $request->input('width_cm'),

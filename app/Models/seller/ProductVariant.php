@@ -16,6 +16,8 @@ class ProductVariant extends Model
 {
     use HasFactory;
 
+    protected $hidden = ['reserve_stock'];
+
     protected $fillable = [
         'product_id',
         'product_image_id',
@@ -28,6 +30,7 @@ class ProductVariant extends Model
         'flash_sale_sold',
         'payment_method',
         'stock',
+        'reserve_stock',
         'weight_kg',
         'length_cm',
         'width_cm',
@@ -45,6 +48,7 @@ class ProductVariant extends Model
             'flash_sale_allocation' => 'integer',
             'flash_sale_sold' => 'integer',
             'stock' => 'integer',
+            'reserve_stock' => 'integer',
             'weight_kg' => 'decimal:3',
             'length_cm' => 'decimal:2',
             'width_cm' => 'decimal:2',

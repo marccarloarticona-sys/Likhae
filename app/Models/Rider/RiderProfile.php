@@ -6,12 +6,14 @@ use App\Models\Admin\AuditLog;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Finance\CodCollection;
 use App\Models\Finance\RiderRemittance;
+use App\Models\Auth\RegistrationApplication;
 use App\Models\User;
 use App\Support\RiderVehicleType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class RiderProfile extends Model
 {
@@ -60,6 +62,13 @@ class RiderProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function approvedRegistrationApplication(): HasOne
+    {
+        return $this->hasOne(RegistrationApplication::class, 'user_id', 'user_id')
+            ->where('status', RegistrationApplication::STATUS_APPROVED)
+            ->latestOfMany('id');
     }
 
     public function logisticsCenter(): BelongsTo

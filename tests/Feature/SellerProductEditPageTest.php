@@ -26,12 +26,17 @@ class SellerProductEditPageTest extends TestCase
         $seller = User::query()->where('email', 'seller@likhae.com')->sole();
         $product = Product::query()->whereBelongsTo($seller->sellerProfile)->sole();
 
-        $this->actingAs($seller)
+        $response = $this->actingAs($seller)
             ->get(route('seller.products', ['mode' => 'edit', 'product' => $product->id]))
             ->assertOk()
             ->assertSee(route('seller.products.update', $product), escape: false)
             ->assertSee('data-listing-status-field', escape: false)
-            ->assertSee("this.form.elements.listing_status.value='active'", escape: false);
+            ->assertSee("this.form.elements.listing_status.value='active'", escape: false)
+            ->assertSee('Reserve stock', escape: true)
+            ->assertSee('name="reserve_stock"', escape: false)
+            ->assertDontSee('Existing offers affect this product');
+
+        $this->assertMatchesRegularExpression('/name="variants\[\d+\]\[reserve_stock\]"/', $response->getContent());
     }
 
     public function test_seller_cannot_edit_a_missing_product(): void

@@ -827,7 +827,7 @@ class RegistrationWorkflowService
         }
 
         if ($expectedType === User::TYPE_LOGISTICS) {
-            $required = array_merge($required, ['BUSINESS_PERMIT', 'SEC_CERTIFICATE', 'BIR_FORM_2303']);
+            $required[] = 'BUSINESS_PERMIT';
         }
 
         if ($expectedType === User::TYPE_RIDER) {

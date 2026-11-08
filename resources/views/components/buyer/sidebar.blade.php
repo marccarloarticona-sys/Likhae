@@ -6,11 +6,10 @@
     $messageCount = $messageCount ?? (int) data_get($buyerUiCounts ?? [], 'messages', 0);
     $notificationCount = $notificationCount ?? (int) data_get($buyerUiCounts ?? [], 'notifications', 0);
 
-    if (request()->routeIs('notifications.index', 'buyer.notifications')) {
-        $active = 'notifications';
-    } elseif (request()->routeIs('buyer.settings', 'buyer.settings.*')) {
-        $active = 'settings';
-    }
+    $active = request()->routeIs('notifications.index', 'buyer.notifications')
+        ? 'notifications'
+        : $active;
+
 
     /*
      * Seller-sidebar inspired icon language:
@@ -682,21 +681,6 @@
             </span>
 
             <a
-                href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}"
-                class="lk-nav-link {{ $active === 'rewards' ? 'is-active' : '' }}"
-                @if($active === 'rewards') aria-current="page" @endif
-            >
-                <span class="lk-nav-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        {!! $icons['rewards'] !!}
-                    </svg>
-                </span>
-
-                <span class="lk-nav-text">
-                    {{ __('navigation.items.rewards') }}
-                </span>
-            </a>
-            <a
                 href="{{ route('buyer.account', ['tab' => 'profile']) }}"
                 class="lk-nav-link {{ $active === 'account' ? 'is-active' : '' }}"
                 @if($active === 'account') aria-current="page" @endif
@@ -710,94 +694,8 @@
                     {{ __('navigation.items.my_account') }}
                 </span>
             </a>
-
-            <a
-                href="{{ route('buyer.settings') }}"
-                class="lk-nav-link {{ $active === 'settings' ? 'is-active' : '' }}"
-                @if($active === 'settings') aria-current="page" @endif
-            >
-                <span class="lk-nav-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        {!! $icons['settings'] !!}
-                    </svg>
-                </span>
-                <span class="lk-nav-text">
-                    {{ __('navigation.items.system_settings') }}
-                </span>
-            </a>
         </div>
 
     </nav>
 
-    <div class="lk-sidebar-foot">
-
-        <button
-            id="themeToggle"
-            type="button"
-            class="lk-nav-link"
-            data-title="{{ __('navigation.items.appearance') }}"
-        >
-            <span class="lk-theme-left">
-                <span class="lk-nav-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"></path>
-                    </svg>
-                </span>
-
-                <span class="lk-theme-copy">
-                    <strong>{{ __('navigation.items.appearance') }}</strong>
-                    <span>{{ __('navigation.items.light_dark_mode') }}</span>
-                </span>
-            </span>
-
-            <span id="themeToggleBadge" data-label-on="{{ __('common.labels.on') }}" data-label-off="{{ __('common.labels.off') }}">
-                {{ __('common.labels.off') }}
-            </span>
-        </button>
-
-        @if(Route::has('logout'))
-            <form
-                method="POST"
-            action="{{ route('logout') }}"
-            data-confirm-title="{{ __('common.confirmation.logout_title') }}"
-            data-confirm-message="{{ __('common.confirmation.logout_message') }}"
-            data-confirm-label="{{ __('common.confirmation.logout_label') }}"
-            >
-                @csrf
-
-                <button
-                    type="submit"
-                    class="lk-nav-link lk-logout"
-                    data-title="{{ __('navigation.items.logout') }}"
-                >
-                    <span class="lk-nav-icon">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            {!! $icons['logout'] !!}
-                        </svg>
-                    </span>
-
-                    <span class="lk-nav-text">
-                        {{ __('navigation.items.logout') }}
-                    </span>
-                </button>
-            </form>
-        @else
-            <a
-                href="{{ Route::has('login') ? route('login') : url('/login') }}"
-                class="lk-nav-link lk-logout"
-                data-title="{{ __('navigation.items.logout') }}"
-            >
-                <span class="lk-nav-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        {!! $icons['logout'] !!}
-                    </svg>
-                </span>
-
-                <span class="lk-nav-text">
-                    {{ __('navigation.items.logout') }}
-                </span>
-            </a>
-        @endif
-
-    </div>
 </aside>
