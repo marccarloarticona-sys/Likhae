@@ -379,22 +379,180 @@
         display: flex;
         min-width: 0;
         flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
-        padding: 15px;
+        align-items: stretch;
+        gap: 0;
+        padding: 0;
+        overflow: hidden;
         border: 1px solid var(--lk-home-line, #eadfd4);
         border-radius: 19px;
         background: var(--lk-home-paper, #fffdf9);
         color: var(--lk-home-ink, #171311);
         box-shadow: 0 8px 22px rgba(86, 28, 23, .045);
     }
-    .lk-home-page .lk-home-offer-card__top { width: 100%; align-items: center; }
+    .lk-home-page .lk-home-offer-visual {
+        position: relative;
+        isolation: isolate;
+        width: 100%;
+        height: 244px;
+        flex: 0 0 244px;
+        overflow: hidden;
+        background: linear-gradient(140deg, #f4e5d8, #ead5c5 54%, #f8efe7);
+    }
+    .lk-home-page .lk-home-offer-visual__images {
+        display: grid;
+        width: 100%;
+        height: 100%;
+        grid-template-columns: repeat(var(--offer-image-count, 2), minmax(0, 1fr));
+        gap: 3px;
+        background: #f1e5db;
+    }
+    .lk-home-page .lk-home-offer-visual__image {
+        position: relative;
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+        place-items: center;
+        background: linear-gradient(145deg, #fffaf4, #ead9c9);
+    }
+    .lk-home-page .lk-home-offer-visual__image img,
+    .lk-home-page .lk-home-offer-visual__background-image {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 320ms cubic-bezier(.2, .7, .2, 1);
+    }
+    .lk-home-page .lk-home-offer-visual__placeholder-art {
+        display: grid;
+        width: 100%;
+        height: 100%;
+        place-items: center;
+        color: #8d4a3a;
+        background:
+            radial-gradient(circle at 50% 35%, rgba(255, 255, 255, .95), transparent 34%),
+            linear-gradient(145deg, #f7e7db, #e6cbb8);
+    }
+    .lk-home-page .lk-home-offer-visual__placeholder-art svg { width: 78px; height: 78px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .lk-home-page .lk-home-offer-visual__placeholder-art--gift { color: #7e3228; background: radial-gradient(circle at 50% 34%, #fff8ee, transparent 36%), linear-gradient(145deg, #f7e2d4, #e8c5b2); }
+    .lk-home-page .lk-home-offer-visual__placeholder-art--gift svg { width: 90px; height: 90px; }
+    @media (hover: hover) {
+        .lk-home-page .lk-home-offer-card:hover .lk-home-offer-visual__image img,
+        .lk-home-page .lk-home-offer-card:hover .lk-home-offer-visual__background-image { transform: scale(1.045); }
+    }
+    .lk-home-page .lk-home-offer-visual__top {
+        position: absolute;
+        z-index: 2;
+        inset: 11px 11px auto;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    .lk-home-page .lk-home-offer-visual__top .lk-home-offers__type {
+        min-height: 24px;
+        border: 1px solid rgba(255, 255, 255, .68);
+        background: rgba(255, 253, 249, .93);
+        box-shadow: 0 3px 12px rgba(35, 22, 17, .08);
+        backdrop-filter: blur(8px);
+    }
+    .lk-home-page .lk-home-offer-visual__top .lk-home-offer-card__stock {
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, .16);
+        border-radius: 999px;
+        background: rgba(55, 31, 25, .78);
+        color: #fffaf5;
+        font-size: 8px;
+        line-height: 1.2;
+        text-align: center;
+        backdrop-filter: blur(8px);
+    }
+    .lk-home-page .lk-home-offer-visual__image-label {
+        position: absolute;
+        right: 9px;
+        bottom: 9px;
+        padding: 5px 8px;
+        border: 1px solid rgba(255, 255, 255, .55);
+        border-radius: 999px;
+        background: rgba(55, 31, 25, .78);
+        color: #fffaf5;
+        font-size: 8px;
+        font-weight: 800;
+        line-height: 1;
+        backdrop-filter: blur(8px);
+    }
+    .lk-home-page .lk-home-offer-visual__plus {
+        position: absolute;
+        z-index: 1;
+        top: 50%;
+        left: 50%;
+        display: grid;
+        width: 30px;
+        height: 30px;
+        transform: translate(-50%, -50%);
+        place-items: center;
+        border: 2px solid rgba(255, 255, 255, .92);
+        border-radius: 50%;
+        background: var(--lk-home-copy-maroon, #561c17);
+        color: white;
+        font-size: 20px;
+        font-weight: 500;
+        box-shadow: 0 5px 15px rgba(49, 26, 20, .22);
+    }
+    .lk-home-page .lk-home-offer-visual--voucher {
+        background:
+            radial-gradient(circle at 88% 15%, rgba(239, 193, 138, .5), transparent 27%),
+            linear-gradient(135deg, #3a1512 0%, var(--voucher-accent, #742b21) 58%, #a85637 100%);
+    }
+    .lk-home-page .lk-home-offer-visual__voucher-art {
+        position: relative;
+        display: flex;
+        width: 100%;
+        height: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 3px;
+        padding: 24px;
+        overflow: hidden;
+        color: #fffaf5;
+        background:
+            radial-gradient(circle at 85% 18%, rgba(241, 197, 149, .28), transparent 28%),
+            linear-gradient(125deg, #3a1512, var(--voucher-accent, #742b21) 72%, #b66c48);
+    }
+    .lk-home-page .lk-home-offer-visual__voucher-art::after {
+        position: absolute;
+        inset: 14px;
+        border: 1px dashed rgba(255, 246, 231, .43);
+        border-radius: 15px;
+        content: "";
+        pointer-events: none;
+    }
+    .lk-home-page .lk-home-offer-visual__voucher-art > span,
+    .lk-home-page .lk-home-offer-visual__voucher-art > small { z-index: 1; color: #f4d7c0; font-size: 8px; font-weight: 850; letter-spacing: .16em; }
+    .lk-home-page .lk-home-offer-visual__voucher-art > .lk-home-offer-visual__voucher-brand { max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lk-home-page .lk-home-offer-visual__voucher-art > strong { z-index: 1; color: #fffaf5; font-size: clamp(27px, 3vw, 39px); font-weight: 900; line-height: 1.05; letter-spacing: -.04em; }
+    .lk-home-page .lk-home-offer-visual__voucher-art svg { position: absolute; top: 50%; right: 24px; width: 68px; height: 68px; transform: translateY(-50%); color: rgba(255, 242, 224, .66); }
+    .lk-home-page .lk-home-offer-card__body {
+        display: flex;
+        min-width: 0;
+        min-height: 208px;
+        flex: 1 1 auto;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 16px;
+    }
+    .lk-home-page .lk-home-offer-card__body > div:first-child { width: 100%; }
     .lk-home-page .lk-home-offer-card h3 { margin: 0; color: var(--lk-home-ink, #171311); font-size: 15px; font-weight: 850; line-height: 1.35; }
     .lk-home-page .lk-home-offer-card p { margin: 0; color: var(--lk-home-muted, #6b625c); font-size: 11px; line-height: 1.55; }
     .lk-home-page .lk-home-offer-card p strong { color: var(--lk-home-copy-maroon, #561c17); }
     .lk-home-page .lk-home-offer-card .lk-home-offer-card__saving { color: var(--lk-home-muted, #6b625c); }
     .lk-home-page .lk-home-offer-card__seller { margin-top: auto !important; font-weight: 700; }
     .lk-home-page .lk-home-offer-card__stock { color: var(--lk-home-muted, #6b625c); font-size: 9px; font-weight: 750; text-align: right; }
+    .lk-home-page .lk-home-offer-card__actions { display: grid; width: 100%; gap: 9px; margin-top: auto; }
+    .lk-home-page .lk-home-offer-card__actions form { margin: 0; }
+    .lk-home-page .lk-home-offer-card__actions .lk-btn { width: 100%; justify-content: center; margin-top: 0 !important; }
     .lk-home-page .lk-home-offer-card__link {
         display: inline-flex;
         align-items: center;
@@ -407,9 +565,8 @@
     }
     .lk-home-page .lk-home-offer-card__link:hover { color: var(--lk-home-terracotta, #bd3e2b); }
     .lk-home-page .lk-home-offers .lk-home-voucher-card { justify-content: flex-start; }
-    .lk-home-page .lk-home-offers .lk-home-voucher-card > div { width: 100%; }
     .lk-home-page .lk-home-offers .lk-home-voucher-card button,
-    .lk-home-page .lk-home-offers .lk-home-voucher-card a.lk-btn { margin-top: auto; }
+    .lk-home-page .lk-home-offers .lk-home-voucher-card a.lk-btn { margin-top: 0; }
     .lk-home-page .lk-home-offers__empty {
         grid-column: 1 / -1;
         padding: 26px 18px;
@@ -425,6 +582,7 @@
         .lk-home-page .lk-home-offers__header { align-items: stretch; flex-direction: column; }
         .lk-home-page .lk-home-offers__refresh { width: 100%; }
         .lk-home-page .lk-home-offers__grid { grid-template-columns: 1fr; }
+        .lk-home-page .lk-home-offer-visual { height: 218px; flex-basis: 218px; }
     }
     @media (prefers-reduced-motion: reduce) {
         .lk-home-page [data-home-offers][aria-busy="true"] .lk-home-offers__refresh svg { animation: none; }
@@ -1574,6 +1732,22 @@
         background: #4a2923;
         color: #f0c8bc;
     }
+
+    html.dark .lk-home-page .lk-home-offer-card {
+        border-color: #49342b;
+        background: #241a17;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, .2);
+    }
+
+    html.dark .lk-home-page .lk-home-offer-card__body h3 { color: #f7eee8; }
+    html.dark .lk-home-page .lk-home-offer-card__body p { color: #cbb8ac; }
+    html.dark .lk-home-page .lk-home-offer-card__body p strong { color: #f0c0b6; }
+    html.dark .lk-home-page .lk-home-offer-visual:not(.lk-home-offer-visual--voucher) { background: #2e211b; }
+    html.dark .lk-home-page .lk-home-offer-visual__image { background: linear-gradient(145deg, #362720, #261c18); }
+    html.dark .lk-home-page .lk-home-offer-visual__images { background: #241a17; }
+    html.dark .lk-home-page .lk-home-offer-visual__placeholder-art { color: #e3ae96; background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, .08), transparent 36%), linear-gradient(145deg, #3b2a23, #2a1f1b); }
+    html.dark .lk-home-page .lk-home-offer-visual__placeholder-art--gift { color: #f0b9a2; }
+    html.dark .lk-home-page .lk-home-offer-visual__top .lk-home-offers__type { background: rgba(36, 26, 23, .92); color: #f0c8bc; border-color: rgba(255, 255, 255, .14); }
 
     html.dark .lk-home-page .lk-home-category-visual {
         background: #351815;
@@ -2787,7 +2961,7 @@
                 </h2>
 
                 <p>
-                    Products based on popular buyer choices.
+                    Based on stores you follow and products you view, save, or add to your cart. Popular picks fill in when your activity is limited.
                 </p>
             </div>
 

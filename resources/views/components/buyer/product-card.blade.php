@@ -55,7 +55,7 @@
 
     $rating = min(
         5,
-        max(0, (float) data_get($product, 'rating', 4.8))
+        max(0, (float) data_get($product, 'rating', 0))
     );
 
     $reviews = max(
@@ -742,6 +742,13 @@
         color: #FFF8F2 !important;
     }
 
+    html.dark .lk-product-card--palette .lk-product-palette-tag--pick {
+        border-color: #8A5145 !important;
+        background: rgba(86, 28, 23, 0.96) !important;
+        color: #FFF8F2 !important;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3) !important;
+    }
+
     html.dark .lk-product-card--palette .lk-product-media {
         background: linear-gradient(135deg, #2A1E1A, #382820) !important;
     }
@@ -817,8 +824,8 @@
                 </span>
                 @if($flashSaleEndsAt)<time data-flash-sale-countdown datetime="{{ $flashSaleEndsAt }}">Ends {{ \Illuminate\Support\Carbon::parse($flashSaleEndsAt)->timezone('Asia/Manila')->format('M j, g:i A') }}</time>@endif
             </div>
-        @else
-            <span class="lk-product-palette-tag">
+        @elseif($rating >= 4.5 && $rating <= 5)
+            <span class="lk-product-palette-tag lk-product-palette-tag--pick" role="status" aria-label="LIKHAE Pick. Rated {{ number_format($rating, 1) }} out of 5">
                 LIKHAE Pick
             </span>
         @endif

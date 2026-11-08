@@ -59,9 +59,15 @@ class BuyerPromotionController extends Controller
 
         $message = 'Bundle items were added to your cart. The bundle price is confirmed at checkout.';
 
-        return $request->expectsJson()
-            ? response()->json(['success' => true, 'message' => $message])
-            : back()->with('buyer_notice', $message);
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'message' => $message]);
+        }
+
+        if ($request->boolean('buy_now')) {
+            return redirect()->route('buyer.checkout');
+        }
+
+        return back()->with('buyer_notice', $message);
     }
 
     public function claimBuyXGetY(Request $request, int $promotion, CartService $cart): RedirectResponse|JsonResponse

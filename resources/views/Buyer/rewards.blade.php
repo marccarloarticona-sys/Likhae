@@ -768,7 +768,6 @@
                     @foreach([
                         ['Complete an order', '+50'],
                         ['Review a product', '+20'],
-                        ['Database tracked', 'Live'],
                     ] as [$label, $value])
                         <div class="lk-earn-item">
                             <strong>

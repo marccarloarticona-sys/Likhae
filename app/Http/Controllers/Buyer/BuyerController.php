@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Buyer;
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\Address;
 use App\Models\Buyer\BuyerVoucherClaim;
+use App\Models\Buyer\Cart;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Review;
 use App\Models\Buyer\SellerFollower;
@@ -173,7 +174,12 @@ class BuyerController extends Controller
             ->values()
             ->all();
         $pageNumber = max(1, (int) $request->query('recommendation_page', 1));
-        $recommendationPage = $this->homepageRecommendationPage($excludedProductIds, $pageNumber);
+        $recommendationPage = $this->homepageRecommendationPage(
+            $excludedProductIds,
+            $pageNumber,
+            $request->user(),
+            $request->session()->get('buyer_recently_viewed_product_ids', []),
+        );
         $recommendedProducts = $recommendationPage['products']
             ->map(fn (Product $product): array => $this->catalog->recommendationCardPayload($product));
 
@@ -184,8 +190,87 @@ class BuyerController extends Controller
     }
 
     /** @return array{products: Collection<int, Product>, has_more: bool} */
-    private function homepageRecommendationPage(array $excludedProductIds, int $page): array
+    private function homepageRecommendationPage(array $excludedProductIds, int $page, User $buyer, array $recentlyViewedProductIds): array
     {
+        $cartProductIds = [];
+        if (Schema::hasTable('cart_items') && Schema::hasTable('carts') && Schema::hasTable('product_variants')) {
+            $cartProductIds = CartItem::query()
+                ->whereHas('cart', fn (Builder $cart) => $cart
+                    ->where('buyer_user_id', $buyer->id)
+                    ->where('status', Cart::STATUS_ACTIVE))
+                ->with('productVariant:id,product_id')
+                ->latest('created_at')
+                ->limit(30)
+                ->get()
+                ->map(fn (CartItem $item): int => (int) ($item->productVariant?->product_id ?? 0))
+                ->filter(fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        $wishlistProductIds = Schema::hasTable('wishlist_items')
+            ? $buyer->wishlistItems()->latest('created_at')->limit(30)->pluck('product_id')->map(fn ($id): int => (int) $id)->all()
+            : [];
+        $followedSellerIds = Schema::hasTable('seller_followers')
+            ? SellerFollower::query()
+                ->where('buyer_user_id', $buyer->id)
+                ->latest('created_at')
+                ->limit(100)
+                ->pluck('seller_profile_id')
+                ->map(fn ($id): int => (int) $id)
+                ->unique()
+                ->values()
+                ->all()
+            : [];
+        $recentlyViewedProductIds = collect($recentlyViewedProductIds)
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->take(30)
+            ->values()
+            ->all();
+
+        $productSignalWeights = [];
+        foreach ($cartProductIds as $productId) {
+            $productSignalWeights[$productId] = ($productSignalWeights[$productId] ?? 0) + 12;
+        }
+        foreach ($wishlistProductIds as $productId) {
+            $productSignalWeights[$productId] = ($productSignalWeights[$productId] ?? 0) + 9;
+        }
+        foreach ($recentlyViewedProductIds as $position => $productId) {
+            $productSignalWeights[$productId] = ($productSignalWeights[$productId] ?? 0) + max(2, 7 - ($position * 0.2));
+        }
+
+        $categoryWeights = [];
+        $sellerWeights = [];
+        if ($productSignalWeights !== []) {
+            $signalProducts = Product::query()
+                ->whereIn('id', array_keys($productSignalWeights))
+                ->get(['id', 'category_id', 'seller_profile_id']);
+
+            foreach ($signalProducts as $signalProduct) {
+                $weight = (float) $productSignalWeights[(int) $signalProduct->id];
+                $categoryId = (int) ($signalProduct->category_id ?? 0);
+                $sellerId = (int) ($signalProduct->seller_profile_id ?? 0);
+
+                if ($categoryId > 0) {
+                    $categoryWeights[$categoryId] = min(36, ($categoryWeights[$categoryId] ?? 0) + $weight);
+                }
+                if ($sellerId > 0) {
+                    $sellerWeights[$sellerId] = min(22, ($sellerWeights[$sellerId] ?? 0) + ($weight * 0.55));
+                }
+            }
+        }
+
+        $excludedProductIds = collect($excludedProductIds)
+            ->merge(array_keys($productSignalWeights))
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
         $query = Product::query()
             ->visible()
             ->with([
@@ -202,6 +287,35 @@ class BuyerController extends Controller
 
         if ($excludedProductIds !== []) {
             $query->whereNotIn('products.id', $excludedProductIds);
+        }
+
+        $scoreParts = [];
+        $scoreBindings = [];
+        if ($followedSellerIds !== []) {
+            $placeholders = implode(', ', array_fill(0, count($followedSellerIds), '?'));
+            $scoreParts[] = "CASE WHEN products.seller_profile_id IN ({$placeholders}) THEN 45 ELSE 0 END";
+            array_push($scoreBindings, ...$followedSellerIds);
+        }
+        if ($categoryWeights !== []) {
+            $cases = ['CASE products.category_id'];
+            foreach ($categoryWeights as $categoryId => $weight) {
+                $cases[] = 'WHEN ? THEN ?';
+                $scoreBindings[] = (int) $categoryId;
+                $scoreBindings[] = round($weight, 2);
+            }
+            $scoreParts[] = implode(' ', $cases).' ELSE 0 END';
+        }
+        if ($sellerWeights !== []) {
+            $cases = ['CASE products.seller_profile_id'];
+            foreach ($sellerWeights as $sellerId => $weight) {
+                $cases[] = 'WHEN ? THEN ?';
+                $scoreBindings[] = (int) $sellerId;
+                $scoreBindings[] = round($weight, 2);
+            }
+            $scoreParts[] = implode(' ', $cases).' ELSE 0 END';
+        }
+        if ($scoreParts !== []) {
+            $query->orderByRaw('('.implode(' + ', $scoreParts).') DESC', $scoreBindings);
         }
 
         $rows = $this->catalog->applySort($query, 'best-selling')
@@ -544,6 +658,13 @@ class BuyerController extends Controller
                 'kind' => 'seller',
                 'name' => $voucher->name,
                 'source' => $voucher->sellerProfile?->business_name ?? 'Seller',
+                'image' => filled($voucher->image_path) && Storage::disk('public')->exists($voucher->image_path)
+                    ? Storage::disk('public')->url($voucher->image_path)
+                    : null,
+                'image_alt' => $voucher->image_alt ?: $voucher->name,
+                'theme_color' => preg_match('/\A#[0-9A-Fa-f]{6}\z/', (string) $voucher->theme_color) === 1
+                    ? $voucher->theme_color
+                    : null,
                 'value' => $voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
                     : '₱'.number_format((float) $voucher->discount_value, 2).' off',
@@ -580,6 +701,13 @@ class BuyerController extends Controller
                 'kind' => 'platform',
                 'name' => $voucher->name,
                 'source' => 'LIKHAE',
+                'image' => filled($voucher->image_path) && Storage::disk('public')->exists($voucher->image_path)
+                    ? Storage::disk('public')->url($voucher->image_path)
+                    : null,
+                'image_alt' => $voucher->image_alt ?: $voucher->name,
+                'theme_color' => preg_match('/\A#[0-9A-Fa-f]{6}\z/', (string) $voucher->theme_color) === 1
+                    ? $voucher->theme_color
+                    : null,
                 'value' => $voucher->discount_type === 'PERCENT'
                     ? number_format((float) $voucher->discount_value, 0).'% off'
                     : '₱'.number_format((float) $voucher->discount_value, 2).' off',
@@ -1083,6 +1211,7 @@ class BuyerController extends Controller
     public function product(Request $request, string $slug): View
     {
         $product = $this->catalog->findVisibleBySlug($slug);
+        $this->rememberRecentProductView($request, $product);
         $productPayload = $this->catalog->productPayload($product, true);
         if ($request->user()) {
             $productPayload['purchase_limit_per_buyer_remaining'] = $this->purchaseLimits
@@ -1148,6 +1277,21 @@ class BuyerController extends Controller
                 ->get()
                 ->map(fn (Product $item) => $this->catalog->productPayload($item)),
         ]);
+    }
+
+    private function rememberRecentProductView(Request $request, Product $product): void
+    {
+        $recentProductIds = collect($request->session()->get('buyer_recently_viewed_product_ids', []))
+            ->filter(fn ($id): bool => is_numeric($id) && (int) $id > 0)
+            ->map(fn ($id): int => (int) $id)
+            ->reject(fn (int $id): bool => $id === (int) $product->id)
+            ->prepend((int) $product->id)
+            ->unique()
+            ->take(30)
+            ->values()
+            ->all();
+
+        $request->session()->put('buyer_recently_viewed_product_ids', $recentProductIds);
     }
 
     public function shop(string $seller, Request $request): View
@@ -2550,6 +2694,41 @@ class BuyerController extends Controller
                 ->withQueryString();
         }
 
+        $recentlyViewedProducts = collect();
+        if ($request->query('tab') === 'recently_viewed') {
+            $recentlyViewedIds = collect($request->session()->get('buyer_recently_viewed_product_ids', []))
+                ->filter(fn ($id): bool => is_numeric($id) && (int) $id > 0)
+                ->map(fn ($id): int => (int) $id)
+                ->unique()
+                ->take(30)
+                ->values();
+
+            if ($recentlyViewedIds->isNotEmpty()) {
+                $productsById = Product::query()
+                    ->visible()
+                    ->whereIn('products.id', $recentlyViewedIds)
+                    ->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false))
+                    ->whereHas('variants', fn (Builder $variant) => $variant->where('is_active', true)->where('stock', '>', 0))
+                    ->with([
+                        'category',
+                        'sellerProfile',
+                        'images',
+                        'variants' => fn ($variants) => $variants->where('is_active', true),
+                    ])
+                    ->withAvg('reviews', 'rating')
+                    ->withCount('reviews')
+                    ->withSum('orderItems', 'quantity')
+                    ->get()
+                    ->keyBy(fn (Product $product): int => (int) $product->id);
+
+                $recentlyViewedProducts = $recentlyViewedIds
+                    ->map(fn (int $id) => $productsById->get($id))
+                    ->filter()
+                    ->map(fn (Product $product): array => $this->catalog->recommendationCardPayload($product))
+                    ->values();
+            }
+        }
+
         $walletDestinationReady = $request->query('tab') === 'wallet'
             && $walletReadiness->supportsMultipleFor('users');
         $walletDestinations = $walletDestinationReady ? $walletManager->accounts($buyer) : [];
@@ -2561,6 +2740,7 @@ class BuyerController extends Controller
             'addressLimit' => 5,
             'followingStoresReady' => $followingStoresReady,
             'followingStores' => $followingStores,
+            'recentlyViewedProducts' => $recentlyViewedProducts,
             'pendingEmail' => $emailChanges->pendingEmail($buyer),
             'pendingPhone' => $mobileChanges->pendingPhone($buyer),
             'walletDestinationReady' => $walletDestinationReady,

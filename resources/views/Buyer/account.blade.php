@@ -34,6 +34,7 @@
         'addresses',
         'wallet',
         'following',
+        'recently_viewed',
         'reviews',
         'password',
         'danger',
@@ -61,6 +62,10 @@
         'following' => [
             'label' => 'Following Stores',
             'description' => 'Stores you follow',
+        ],
+        'recently_viewed' => [
+            'label' => 'Recently Viewed',
+            'description' => 'Products you viewed',
         ],
         'reviews' => [
             'label' => 'Reviews',
@@ -105,6 +110,13 @@
                     <path d="M3 10h18v10H3z"/>
                     <path d="m2 10 2-6h16l2 6M8 20v-6h8v6"/>
                     <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/>
+                </svg>
+            ',
+
+            'recently_viewed' => '
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/>
+                    <circle cx="12" cy="12" r="2.5"/>
                 </svg>
             ',
 
@@ -608,6 +620,36 @@
                                 <h3 class="text-sm font-semibold text-stone-800">You are not following any stores yet</h3>
                                 <p class="mt-1 text-xs text-stone-500">Follow stores you like to find them here.</p>
                                 <a href="{{ route('buyer.home') }}" class="mt-4 inline-flex rounded-xl bg-red-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-red-950 focus:outline-none focus:ring-4 focus:ring-red-100">Explore stores</a>
+                            </div>
+                        @endif
+                    </div>
+                </section>
+            @endif
+
+            @if ($activeTab === 'recently_viewed')
+                <section aria-labelledby="recently-viewed-heading">
+                    <div class="flex flex-wrap items-start justify-between gap-3 border-b border-stone-100 px-5 py-4 sm:px-6">
+                        <div>
+                            <h2 id="recently-viewed-heading" class="text-base font-semibold text-stone-900">Recently Viewed</h2>
+                            <p class="mt-1 text-xs text-stone-500">Products you viewed most recently appear first.</p>
+                        </div>
+                        <span class="rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold text-stone-600">
+                            {{ $recentlyViewedProducts->count() }} {{ $recentlyViewedProducts->count() === 1 ? 'product' : 'products' }}
+                        </span>
+                    </div>
+
+                    <div class="p-5 sm:p-6">
+                        @if($recentlyViewedProducts->isNotEmpty())
+                            <div class="lk-product-grid" aria-label="Recently viewed products">
+                                @foreach($recentlyViewedProducts as $product)
+                                    <x-buyer.product-card :product="$product" home />
+                                @endforeach
+                            </div>
+                        @else
+                            <div class="rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center">
+                                <h3 class="text-sm font-semibold text-stone-800">No recently viewed products</h3>
+                                <p class="mt-1 text-xs text-stone-500">Products you open will appear here for this session.</p>
+                                <a href="{{ route('buyer.products') }}" class="mt-4 inline-flex rounded-xl bg-red-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-red-950">Browse products</a>
                             </div>
                         @endif
                     </div>
