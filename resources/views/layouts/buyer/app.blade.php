@@ -21,7 +21,7 @@
     <title>{{ $pageTitle }} &middot; LIKHAE Buyer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
     @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/status-guidance.css', 'resources/css/shared/modal-refresh.css', 'resources/css/shared/announcement-popup.css', 'resources/css/Buyer/likhae-buyer-ai.css', 'resources/css/shared/workspace-sidebar.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/realtime.js'])
     @if(request()->routeIs('buyer.orders.show', 'tracking.show') || (request()->routeIs('buyer.account') && request()->query('tab') === 'addresses'))
         @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js'])

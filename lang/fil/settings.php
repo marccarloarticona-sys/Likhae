@@ -33,6 +33,11 @@ return [
     'sounds_description' => 'Pamahalaan ang mga tunog ng interface.',
     'notification_sounds' => 'Mga Tunog ng Abiso',
     'notification_sounds_description' => 'Magpatugtog ng tunog para sa mga sinusuportahang abiso sa operasyon.',
+    'sound_type_previews' => 'I-preview ang mga uri ng tunog',
+    'admin_sound_previews' => [
+        'messages' => 'Mga Mensahe', 'orders' => 'Mga Order', 'delivery' => 'Paghahatid', 'promotions' => 'Mga Promo',
+        'payments' => 'Mga Bayad', 'alerts' => 'Mga Alerto at seguridad', 'returns' => 'Mga Return at refund', 'general' => 'Pangkalahatan',
+    ],
     'appearance' => 'Hitsura',
     'appearance_description' => 'Ilapat ang gusto mong tema sa LIKHAE.',
     'language' => 'Wika',

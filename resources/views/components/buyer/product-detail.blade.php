@@ -324,7 +324,7 @@
 
         color: rgba(86, 28, 23, 0.22);
 
-        font-family: "Caveat", cursive;
+        font-family: Georgia, "Instrument Serif", serif;
         font-size: clamp(26px, 3vw, 42px);
         line-height: 0.95;
         white-space: pre-line;
@@ -464,7 +464,7 @@
 
         color: var(--lk-text);
 
-        font-family: "Instrument Serif", Georgia, serif;
+        font-family: Georgia, "Instrument Serif", serif;
         font-size: clamp(38px, 4vw, 58px);
         font-weight: 400;
         line-height: 0.94;
@@ -1182,7 +1182,7 @@
 
     .lk-detail-related .lk-section-head h2 {
         color: var(--lk-text) !important;
-        font-family: "Instrument Serif", Georgia, serif !important;
+        font-family: Georgia, "Instrument Serif", serif !important;
         font-size: clamp(32px, 3vw, 46px) !important;
         font-weight: 400 !important;
         letter-spacing: -0.04em !important;

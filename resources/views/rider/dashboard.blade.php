@@ -1,17 +1,20 @@
 @extends('layouts.rider.app')
 
-@section('title', 'Rider Dashboard - LIKHAE')
+@section('title', 'Rider Operations - LIKHAE')
 
 @section('content')
 <div class="flex flex-col gap-8">
     @if(session('status'))
         <div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>
     @endif
-    <section class="flex flex-col gap-3">
-        <span class="text-xs font-bold uppercase tracking-[0.2em] text-primary">Rider Operations</span>
-        <h1 class="text-2xl font-bold tracking-tight text-ink">Dashboard</h1>
-        <p class="text-sm text-muted">Real pickup and delivery work assigned to your active rider account.</p>
-    </section>
+    <header class="rider-dashboard-heading">
+        <div class="rider-dashboard-heading__copy">
+            <span class="lk-dashboard-overline">Rider workspace</span>
+            <h1>Rider Operations</h1>
+            <p>Real pickup and delivery work assigned to your active rider account.</p>
+        </div>
+        <x-shared.dashboard-weather />
+    </header>
 
     <section class="grid gap-5 md:grid-cols-4">
         @foreach($riderStats as $stat)

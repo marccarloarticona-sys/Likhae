@@ -67,4 +67,9 @@ return [
         'model' => env('GEMINI_MODEL', 'gemini-flash-lite-latest'),
     ],
 
+    /* Server-only weather API credentials. Never expose through Vite. */
+    'openweathermap' => [
+        'key' => env('OPENWEATHERMAP_API_KEY'),
+    ],
+
 ];

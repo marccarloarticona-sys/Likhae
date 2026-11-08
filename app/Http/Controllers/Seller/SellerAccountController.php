@@ -5,8 +5,9 @@ namespace App\Http\Controllers\Seller;
 use App\Http\Controllers\Controller;
 use App\Models\Admin\AuditLog;
 use App\Models\Auth\ApplicationDocument;
-use App\Models\Buyer\Address;
 use App\Models\Auth\RegistrationApplication;
+use App\Models\Buyer\Address;
+use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Account\BuyerEmailChangeOtpService;
@@ -34,11 +35,29 @@ class SellerAccountController extends Controller
     public function store(Request $request): View
     {
         $shop = $this->shop($request);
+        $followersAvailable = false;
+        $followerCount = 0;
+        $followers = collect();
+
+        if ($request->input('tab', 'profile') !== 'settings' && Schema::hasTable('seller_followers')) {
+            $followersAvailable = true;
+            $followers = SellerFollower::query()
+                ->where('seller_profile_id', $shop->getKey())
+                ->with(['buyer:id,first_name,middle_initial,last_name,profile_photo_path'])
+                ->latest('created_at')
+                ->orderByDesc('id')
+                ->paginate(10, ['*'], 'follower_page')
+                ->appends(['tab' => 'profile']);
+            $followerCount = $followers->total();
+        }
 
         return view('seller.store', [
             'tab' => $request->input('tab', 'profile'),
             'seller' => $shop->user,
             'storeProfile' => $this->profile($shop),
+            'followersAvailable' => $followersAvailable,
+            'followerCount' => $followerCount,
+            'followers' => $followers,
         ]);
     }
 

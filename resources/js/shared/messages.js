@@ -736,20 +736,25 @@ const subscribeToUserMessages = () => {
             if (document.body.dataset.messageRedirecting === 'true') return;
             const activeThread = document.querySelector('.lk-chat-stream[data-message-thread]');
             const hasSellerHeaderPreview = Boolean(document.querySelector('[data-message-header-popover]'));
-            const publishSellerHeaderPreview = () => {
-                if (!hasSellerHeaderPreview) return;
-                document.dispatchEvent(new CustomEvent('likhae:seller-message-received', { detail: payload }));
+            const hasAdminHeaderPreview = Boolean(document.querySelector('[data-admin-message-popover]'));
+            const publishHeaderPreview = () => {
+                if (hasSellerHeaderPreview) {
+                    document.dispatchEvent(new CustomEvent('likhae:seller-message-received', { detail: payload }));
+                }
+                if (hasAdminHeaderPreview) {
+                    document.dispatchEvent(new CustomEvent('likhae:admin-message-received', { detail: payload }));
+                }
             };
             if (activeThread && String(activeThread.dataset.conversationId) === String(payload.conversation_id)) {
                 appendRealtimeMessage(activeThread, payload);
                 acknowledgeIncomingMessage(activeThread, payload);
-                publishSellerHeaderPreview();
+                publishHeaderPreview();
                 window.likhaePlayNotificationSound?.('MESSAGE');
                 return;
             }
 
-            if (hasSellerHeaderPreview) {
-                publishSellerHeaderPreview();
+            if (hasSellerHeaderPreview || hasAdminHeaderPreview) {
+                publishHeaderPreview();
                 window.likhaePlayNotificationSound?.('MESSAGE');
                 return;
             }

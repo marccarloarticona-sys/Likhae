@@ -240,6 +240,21 @@ class AppServiceProvider extends ServiceProvider
             ]);
         });
 
+        View::composer('components.admin.header', function ($view) use ($hasTable): void {
+            /** @var User|null $admin */
+            $admin = auth()->user();
+            $messagePreview = ['items' => [], 'unread_count' => 0];
+
+            if ($admin?->isAccountType(User::TYPE_ADMIN)
+                && $hasTable('messages')
+                && $hasTable('conversation_participants')
+                && $hasTable('conversations')) {
+                $messagePreview = app(ConversationService::class)->headerPreviewFor($admin);
+            }
+
+            $view->with('adminMessagePreview', $messagePreview);
+        });
+
         View::composer(['components.seller.sidebar', 'components.seller.header'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {
             /** @var User|null $sellerUser */
             $sellerUser = auth()->user();

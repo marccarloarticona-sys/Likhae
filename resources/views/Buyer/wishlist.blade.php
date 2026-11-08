@@ -174,7 +174,7 @@
 
         color: var(--lk-text);
 
-        font-family: "Instrument Serif", Georgia, serif;
+        font-family: Georgia, "Instrument Serif", serif;
         font-size: clamp(42px, 5vw, 70px);
         font-weight: 400;
         line-height: 0.92;

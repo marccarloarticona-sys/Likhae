@@ -6,7 +6,14 @@
 <div class="flex flex-col gap-6">
     @if(session('status'))<div class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800" role="alert">{{ $errors->first() }}</div>@endif
-    <header><span class="text-xs font-bold uppercase tracking-[.18em] text-primary">Logistics employee</span><h1 class="mt-2 text-2xl font-bold text-ink">Interhub Driver Dashboard</h1><p class="mt-1 text-sm text-muted">Timekeeping and pay are based on recorded shift hours. They are separate from parcel payouts.</p></header>
+    <header class="rider-dashboard-heading">
+        <div class="rider-dashboard-heading__copy">
+            <span class="text-xs font-bold uppercase tracking-[.18em] text-primary">Logistics employee</span>
+            <h1 class="mt-2 text-2xl font-bold text-ink">Interhub Driver Dashboard</h1>
+            <p class="mt-1 text-sm text-muted">Timekeeping and pay are based on recorded shift hours. They are separate from parcel payouts.</p>
+        </div>
+        <x-shared.dashboard-weather />
+    </header>
 
     @if(! $timekeepingReady)
         <section class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">Interhub timekeeping is not active yet. Apply the additive timekeeping/payroll migration to enable QR clock-in and shift history.</section>

@@ -104,25 +104,42 @@ class BuyerController extends Controller
 
     public function homeMarketing(Request $request): JsonResponse
     {
-        $dealProducts = $this->productDiscountsQuery()
-            ->limit(6)
-            ->get()
+        $rotation = $request->query->has('rotation')
+            ? max(0, min(100000, $request->integer('rotation')))
+            : random_int(0, 100000);
+        $dealProducts = $this->rotateHomepagePreviews(
+            $this->productDiscountsQuery()->limit(24)->get(),
+            $rotation,
+        )
             ->map(fn (Product $product) => $this->dealProductPayload($product, 'product_discount'))
             ->filter()
+            ->take(1)
             ->values();
-        $flashDealProducts = $this->activeFlashSaleProductsQuery()
-            ->limit(6)
-            ->get()
+        $flashDealProducts = $this->rotateHomepagePreviews(
+            $this->activeFlashSaleProductsQuery()->limit(24)->get(),
+            $rotation,
+        )
             ->map(fn (Product $product) => $this->dealProductPayload($product, 'flash_sale'))
             ->filter()
+            ->take(1)
             ->values();
-        $marketplacePromotions = $this->sellerPromotions->forMarketplace($request->user(), 8);
-        $bundleOffers = $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUNDLE)->take(3)->values();
-        $freeGiftOffers = $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y)->take(3)->values();
-        $homeVoucherPreviews = $this->homepageVoucherPreviews($request->user());
+        $marketplacePromotions = $this->sellerPromotions->forMarketplace($request->user(), 24);
+        $bundleOffers = $this->rotateHomepagePreviews(
+            $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUNDLE)->values(),
+            $rotation,
+        )->take(1)->values();
+        $freeGiftOffers = $this->rotateHomepagePreviews(
+            $marketplacePromotions->where('promotion_type', SellerPromotion::TYPE_BUY_X_GET_Y)->values(),
+            $rotation,
+        )->take(1)->values();
+        $homeVoucherPreviews = $this->rotateHomepagePreviews(
+            $this->homepageVoucherPreviews($request->user()),
+            $rotation,
+        )->take(1)->values();
 
         return response()->json([
             'html' => view('buyer.partials.home-marketing', compact(
+                'rotation',
                 'dealProducts',
                 'flashDealProducts',
                 'bundleOffers',
@@ -130,6 +147,20 @@ class BuyerController extends Controller
                 'homeVoucherPreviews',
             ))->render(),
         ]);
+    }
+
+    private function rotateHomepagePreviews(Collection $items, int $rotation): Collection
+    {
+        $items = $items->values();
+        if ($items->isEmpty()) {
+            return $items;
+        }
+
+        $offset = $rotation % $items->count();
+
+        return $items->slice($offset)
+            ->concat($items->take($offset))
+            ->values();
     }
 
     public function homeRecommendations(Request $request): JsonResponse
@@ -507,7 +538,7 @@ class BuyerController extends Controller
     {
         $sellerVouchers = app(BuyerVoucherClaimService::class)->claimableSellerVouchers($buyer)
             ->reject(fn (Voucher $voucher): bool => (bool) ($voucher->sellerProfile?->vacation_mode ?? false))
-            ->take(3)
+            ->take(24)
             ->map(fn (Voucher $voucher): array => [
                 'id' => (int) $voucher->id,
                 'kind' => 'seller',
@@ -532,7 +563,7 @@ class BuyerController extends Controller
             ->where(fn (Builder $query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn (Builder $query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
             ->orderBy('ends_at')
-            ->limit(24)
+            ->limit(48)
             ->get();
         $globalUses = VoucherRedemptionCounter::countsFor($platformVouchers);
         $buyerUses = VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id);
@@ -543,7 +574,7 @@ class BuyerController extends Controller
                 && ($voucher->usage_limit === null || $globalUses->get($voucher->id, 0) < $voucher->usage_limit)
                 && ($voucher->per_user_limit === null || $buyerUses->get($voucher->id, 0) < $voucher->per_user_limit)
                 && $selectable->selectable($voucher))
-            ->take(3)
+            ->take(24)
             ->map(fn (Voucher $voucher): array => [
                 'id' => (int) $voucher->id,
                 'kind' => 'platform',
@@ -557,7 +588,7 @@ class BuyerController extends Controller
                 'expires' => $voucher->ends_at?->format('M j, Y') ?? 'No expiry',
             ]);
 
-        return $sellerVouchers->concat($platformCards)->take(4)->values();
+        return $sellerVouchers->concat($platformCards)->take(48)->values();
     }
 
     public function products(Request $request): View

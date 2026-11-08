@@ -65,9 +65,11 @@
     --lk-header: 62px;
     --lk-content: 1440px;
 
-    --lk-sans: "DM Sans", Poppins, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --lk-serif: "Instrument Serif", "Playfair Display", Georgia, "Times New Roman", serif;
-    --lk-script: "Caveat", "Dancing Script", "Brush Script MT", "Segoe Print", cursive;
+    --font-sans: Poppins, ui-sans-serif, system-ui, sans-serif;
+    --font-serif: Georgia, "Instrument Serif", serif;
+    --lk-sans: Poppins, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --lk-serif: Georgia, "Instrument Serif", "Times New Roman", serif;
+    --lk-script: Georgia, "Instrument Serif", "Times New Roman", serif;
 
     /* Backward-compatible aliases from the old buyer.css */
     --lk-red: var(--lk-maroon);
@@ -8269,7 +8271,7 @@ html.dark .lk-landing-body .lk-carousel__slide::before {
 .lk-order-page .lk-order-progress-heading h2 {
     margin: 3px 0 0;
     color: #321d17;
-    font-family: "Instrument Serif", Georgia, serif;
+    font-family: Georgia, "Instrument Serif", serif;
     font-size: 23px;
     font-weight: 400;
     line-height: 1.1;
@@ -8342,7 +8344,7 @@ html.dark .lk-landing-body .lk-carousel__slide::before {
 .lk-order-page .lk-order-map-panel__header h2 {
     margin: 5px 0 0;
     color: #321d17;
-    font-family: "Instrument Serif", Georgia, serif;
+    font-family: Georgia, "Instrument Serif", serif;
     font-size: 29px;
     font-weight: 400;
     line-height: 1.05;
@@ -9368,3 +9370,4 @@ html.dark .lk-message-file > svg {
 html.dark .lk-detail-share-icon {
     color: var(--lk-icon-accent);
 }
+

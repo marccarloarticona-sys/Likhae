@@ -99,7 +99,7 @@
             background: var(--notification-surface); color: var(--notification-text);
             box-shadow: 0 22px 56px rgba(86, 28, 23, .18);
             backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            font-family: inherit;
         }
         html.dark .lk-notification-popover {
             --notification-surface: rgba(31, 24, 21, .9);

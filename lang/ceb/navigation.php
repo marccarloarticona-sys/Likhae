@@ -30,7 +30,7 @@ return [
         'hub_transfers' => 'Mga Pagbalhin sa Hub', 'rider_assignment' => 'Pagtudlo og Rider',
         'delivery_trip_overview' => 'Kinatibuk-ang Tan-aw sa Biyahe sa Paghatod', 'return_to_seller' => 'Ibalik sa Seller',
         'finance' => 'Panalapi', 'shipping_rate' => 'Bayad sa Pagpadala', 'pickups' => 'Mga Pickup',
-        'pickup_assignments' => 'Mga Gitudlong Pickup', 'deliveries' => 'Mga Paghatod', 'delivery_batches' => 'Mga Batch sa Paghatod',
+        'pickup_assignments' => 'Pickup', 'deliveries' => 'Mga Paghatod', 'delivery_batches' => 'Paghatod',
         'return_parcels' => 'Mga Ibalik nga Parsela', 'history' => 'Kasaysayan', 'delivery_history' => 'Kasaysayan sa Paghatod',
         'transfers' => 'Mga Pagbalhin', 'inter_hub_transfers' => 'Mga Pagbalhin Tali sa mga Hub', 'wallet' => 'Pitaka',
         'wallet_payroll' => 'Pitaka ug Suhol', 'cod_remittances' => 'Mga Remittance sa COD', 'registrations' => 'Mga Pagparehistro',

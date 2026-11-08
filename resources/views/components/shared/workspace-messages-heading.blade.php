@@ -3,7 +3,7 @@
     .lk-workspace-messages-page { display: grid; min-width: 0; min-height: 0; gap: 18px; }
     .lk-workspace-messages-heading { display: grid; justify-items: start; }
     .lk-workspace-messages-heading .lk-workspace-messages-kicker { display: inline-flex; align-items: center; margin-bottom: 7px; padding: 5px 9px; border-radius: 999px; background: #F3E4DE; color: #561C17; font: 900 10px/1.2 Poppins,system-ui,sans-serif; letter-spacing: .16em; text-transform: uppercase; }
-    .lk-workspace-messages-heading h1 { margin: 0; color: #3B211B; font-family: "Instrument Serif","Playfair Display",Georgia,"Times New Roman",serif; font-size: clamp(32px,3vw,46px); font-weight: 400; letter-spacing: -.04em; line-height: .98; }
+    .lk-workspace-messages-heading h1 { margin: 0; color: #3B211B; font-family: Georgia,"Instrument Serif","Times New Roman",serif; font-size: clamp(32px,3vw,46px); font-weight: 400; letter-spacing: -.04em; line-height: .98; }
     .lk-workspace-messages-heading p { max-width: 650px; margin: 8px 0 0; color: #987865; font: 400 12px/1.7 Poppins,system-ui,sans-serif; }
     @media (min-width: 768px) {
         .lk-workspace-messages-page .lk-unified-messages .lk-messages-shell { height: max(280px,min(720px,calc(100dvh - 260px))); }

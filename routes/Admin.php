@@ -51,6 +51,7 @@ Route::prefix('admin')
         Route::get('/sellers/approvals', [AdminOnboardingController::class, 'sellers'])->name('sellers.approvals');
 
         Route::get('/users', [AdminUserController::class, 'index'])->name('users');
+        Route::post('/users/admins', [AdminUserController::class, 'storeAdministrator'])->name('users.admins.store');
         Route::post('/users/sessions/revoke', [AdminUserController::class, 'revokeSessions'])->name('users.sessions.revoke');
         Route::get('/users/{user}', [AdminUserController::class, 'show'])->name('users.show');
         Route::post('/users/{user}/verification-documents/{document}/review', [AdminUserController::class, 'reviewVerificationDocument'])
@@ -112,6 +113,8 @@ Route::prefix('admin')
         Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
+        Route::get('/messages/preview', [AdminOperationsController::class, 'messagePreview'])
+            ->middleware('throttle:120,1')->name('messages.preview');
         Route::get('/support-faqs', [MessagingFaqController::class, 'adminIndex'])->name('support-faqs');
         Route::post('/support-faqs', [MessagingFaqController::class, 'storeAdmin'])->middleware('throttle:30,1')->name('support-faqs.store');
         Route::post('/support-faqs/settings', [MessagingFaqController::class, 'saveAdminSettings'])->middleware('throttle:20,1')->name('support-faqs.settings');

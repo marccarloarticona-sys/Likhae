@@ -31,7 +31,7 @@
     .lk-buyer-hero__copy { position: relative; z-index: 2; padding-right: clamp(18px, 3vw, 48px); }
     .lk-buyer-hero__kicker { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; color: #a92f20; font-size: 11px; font-weight: 900; letter-spacing: .22em; text-transform: uppercase; }
     .lk-buyer-hero__kicker::before { width: 34px; height: 1px; background: #d84937; content: ""; }
-    .lk-buyer-hero h1 { margin: 0 !important; color: #0f0d0c !important; font-family: "Instrument Serif", Georgia, serif !important; font-size: clamp(55px, 5.4vw, 82px) !important; font-weight: 400 !important; line-height: .98 !important; letter-spacing: -.045em !important; }
+    .lk-buyer-hero h1 { margin: 0 !important; color: #0f0d0c !important; font-family: Georgia, "Instrument Serif", serif !important; font-size: clamp(55px, 5.4vw, 82px) !important; font-weight: 400 !important; line-height: .98 !important; letter-spacing: -.045em !important; }
     .lk-buyer-hero h1 span { display: block; color: #b6321f !important; font: inherit !important; font-style: normal !important; }
     .lk-buyer-hero__description { max-width: 560px; margin: 24px 0 0 !important; color: #626268 !important; font-size: 15px !important; line-height: 1.55 !important; }
     .lk-buyer-hero__actions { display: flex; gap: 14px; margin-top: 30px; }
@@ -54,7 +54,7 @@
     .lk-buyer-hero__badge { position: absolute; top: 16px; left: 16px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; border-radius: 999px; background: #fff0d7; color: #692b1f; font-size: 10px; font-weight: 900; letter-spacing: .02em; text-transform: uppercase; box-shadow: 0 4px 12px rgba(61,35,20,.08); }
     .lk-buyer-hero__badge i { color: #f4a31e; font-size: 16px; font-style: normal; line-height: 1; }
     .lk-buyer-hero__info { position: relative; min-height: 108px; padding: 17px 68px 17px 20px; background: rgba(249,241,232,.98); }
-    .lk-buyer-hero__name { display: -webkit-box; overflow: hidden; margin: 0; color: #1e1714; font-family: "Instrument Serif", Georgia, serif; font-size: clamp(20px, 1.8vw, 27px); font-weight: 400; line-height: 1.02; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .lk-buyer-hero__name { display: -webkit-box; overflow: hidden; margin: 0; color: #1e1714; font-family: Georgia, "Instrument Serif", serif; font-size: clamp(20px, 1.8vw, 27px); font-weight: 400; line-height: 1.02; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
     .lk-buyer-hero__meta { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 9px; color: #65554e; font-size: 11px; }
     .lk-buyer-hero__price { color: #a72e20; font-weight: 900; }
     .lk-buyer-hero__arrow { position: absolute; right: 16px; bottom: 18px; display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: #fff; color: #b43123; font-size: 23px; box-shadow: 0 5px 14px rgba(79,50,35,.08); transition: transform .18s ease; }

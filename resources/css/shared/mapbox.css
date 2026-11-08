@@ -108,7 +108,7 @@
 .lk-map-marker[data-role="logistics"] { background: #15803d; }
 .lk-map-marker[data-role="current"] { background: #475569; }
 .lk-map-marker[data-active-rider="true"] { box-shadow: 0 0 0 4px rgba(128, 0, 0, .2), 0 2px 9px rgba(40, 17, 12, .38); }
-.lk-map-popup { color: #321d17; font: 12px/1.4 Inter, Arial, sans-serif; }
+.lk-map-popup { color: #321d17; font: 12px/1.4 Poppins, ui-sans-serif, system-ui, sans-serif; }
 .lk-map-popup strong { display: block; margin-bottom: 2px; }
 .lk-map-popup span { color: #806356; }
 @media (max-width: 640px) {

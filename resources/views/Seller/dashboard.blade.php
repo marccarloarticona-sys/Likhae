@@ -39,7 +39,7 @@
     $pieBackground = $pieStops ? 'conic-gradient('.implode(', ', $pieStops).')' : 'conic-gradient(var(--sl-bg-soft) 0 100%)';
 @endphp
 <div class="sl-page sl-seller-dashboard">
-    <section class="sl-welcome-panel">
+    <section class="sl-welcome-panel sl-welcome-panel--weather">
         <div>
             <span class="sl-eyebrow">{{ now()->format('l, F j') }}</span>
             <h2>Good {{ now()->hour < 12 ? 'morning' : (now()->hour < 18 ? 'afternoon' : 'evening') }}, {{ $firstName }}.</h2>
@@ -56,6 +56,7 @@
             </a>
             <a href="{{ route('seller.orders') }}" class="sl-btn sl-btn-blue-soft">All Orders</a>
         </div>
+        <x-shared.dashboard-weather />
     </section>
 
     <section class="sl-dashboard-priorities" aria-labelledby="seller-priorities-title">
@@ -64,23 +65,25 @@
             <span>Actionable tasks</span>
         </header>
         <div class="sl-dashboard-priorities__grid">
-            <a class="sl-dashboard-priority {{ $orderStatusCounts['placed'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'placed']) }}">
-                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $orderStatusCounts['placed'] > 0 ? '!' : '✓' }}</span>
-                <span class="sl-dashboard-priority__copy"><strong>New orders</strong><small>{{ $orderStatusCounts['placed'] > 0 ? 'Review and confirm placed orders' : 'No placed orders to review' }}</small></span>
-                <strong class="sl-dashboard-priority__count">{{ number_format($orderStatusCounts['placed']) }}</strong>
-                <span class="sl-dashboard-priority__action">Review orders <span aria-hidden="true">→</span></span>
+            <a class="sl-dashboard-priority {{ $orderStatusCounts['placed'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'placed']) }}" aria-label="New orders: {{ number_format($orderStatusCounts['placed']) }}. {{ $orderStatusCounts['placed'] > 0 ? 'Review and confirm placed orders' : 'No placed orders to review' }}.">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12l2 4v14H4V7zM4 7h16M9 11h6"/></svg></span>
+                <span class="sl-dashboard-priority__copy"><span class="sl-dashboard-priority__label">New orders</span><strong class="sl-dashboard-priority__count">{{ number_format($orderStatusCounts['placed']) }}</strong><small>{{ $orderStatusCounts['placed'] > 0 ? 'Review and confirm placed orders' : 'No placed orders to review' }}</small></span>
             </a>
-            <a class="sl-dashboard-priority {{ $stats['pending_shipment'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}">
-                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $stats['pending_shipment'] > 0 ? '!' : '✓' }}</span>
-                <span class="sl-dashboard-priority__copy"><strong>Ready for pickup</strong><small>{{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for rider handoff' : 'No parcels waiting for pickup' }}</small></span>
-                <strong class="sl-dashboard-priority__count">{{ number_format($stats['pending_shipment']) }}</strong>
-                <span class="sl-dashboard-priority__action">View pickups <span aria-hidden="true">→</span></span>
+            <a class="sl-dashboard-priority {{ $orderStatusCounts['confirmed'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'confirmed']) }}" aria-label="Accepted orders: {{ number_format($orderStatusCounts['confirmed']) }}. {{ $orderStatusCounts['confirmed'] > 0 ? 'Start preparing accepted orders' : 'No accepted orders waiting to be prepared' }}.">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 14l2 2 4-4"/></svg></span>
+                <span class="sl-dashboard-priority__copy"><span class="sl-dashboard-priority__label">Accepted orders</span><strong class="sl-dashboard-priority__count">{{ number_format($orderStatusCounts['confirmed']) }}</strong><small>{{ $orderStatusCounts['confirmed'] > 0 ? 'Start preparing accepted orders' : 'No accepted orders waiting to be prepared' }}</small></span>
             </a>
-            <a class="sl-dashboard-priority {{ $stats['inventory_alerts'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.products', ['mode' => 'inventory']) }}">
-                <span class="sl-dashboard-priority__icon" aria-hidden="true">{{ $stats['inventory_alerts'] > 0 ? '!' : '✓' }}</span>
-                <span class="sl-dashboard-priority__copy"><strong>Inventory alerts</strong><small>{{ $stats['inventory_alerts'] > 0 ? 'Review low and out-of-stock products' : 'No stock alerts right now' }}</small></span>
-                <strong class="sl-dashboard-priority__count">{{ number_format($stats['inventory_alerts']) }}</strong>
-                <span class="sl-dashboard-priority__action">Manage stock <span aria-hidden="true">→</span></span>
+            <a class="sl-dashboard-priority {{ $orderStatusCounts['preparing'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'preparing']) }}" aria-label="Preparing orders: {{ number_format($orderStatusCounts['preparing']) }}. {{ $orderStatusCounts['preparing'] > 0 ? 'Finish packing orders for pickup' : 'No orders are being prepared' }}.">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16v14H4zM4 7l3-4h10l3 4M8 11h8M8 15h5"/></svg></span>
+                <span class="sl-dashboard-priority__copy"><span class="sl-dashboard-priority__label">Preparing</span><strong class="sl-dashboard-priority__count">{{ number_format($orderStatusCounts['preparing']) }}</strong><small>{{ $orderStatusCounts['preparing'] > 0 ? 'Finish packing orders for pickup' : 'No orders are being prepared' }}</small></span>
+            </a>
+            <a class="sl-dashboard-priority {{ $stats['pending_shipment'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.orders', ['status' => 'ready-for-pickup']) }}" aria-label="Ready for pickup: {{ number_format($stats['pending_shipment']) }}. {{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for rider handoff' : 'No parcels waiting for pickup' }}.">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6h11v11H3zM14 10h4l3 3v4h-7z"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="19" r="2"/></svg></span>
+                <span class="sl-dashboard-priority__copy"><span class="sl-dashboard-priority__label">Ready for pickup</span><strong class="sl-dashboard-priority__count">{{ number_format($stats['pending_shipment']) }}</strong><small>{{ $stats['pending_shipment'] > 0 ? 'Prepare parcels for rider handoff' : 'No parcels waiting for pickup' }}</small></span>
+            </a>
+            <a class="sl-dashboard-priority {{ $stats['inventory_alerts'] > 0 ? 'is-urgent' : 'is-clear' }}" href="{{ route('seller.products', ['mode' => 'inventory']) }}" aria-label="Inventory alerts: {{ number_format($stats['inventory_alerts']) }}. {{ $stats['inventory_alerts'] > 0 ? 'Review low and out-of-stock products' : 'No stock alerts right now' }}.">
+                <span class="sl-dashboard-priority__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m3 7.5 9-4.5 9 4.5v9L12 21l-9-4.5zM12 21v-9m9-4.5-9 4.5-9-4.5M7.5 5.25 16.5 9.75"/></svg></span>
+                <span class="sl-dashboard-priority__copy"><span class="sl-dashboard-priority__label">Inventory alerts</span><strong class="sl-dashboard-priority__count">{{ number_format($stats['inventory_alerts']) }}</strong><small>{{ $stats['inventory_alerts'] > 0 ? 'Review low and out-of-stock products' : 'No stock alerts right now' }}</small></span>
             </a>
         </div>
     </section>

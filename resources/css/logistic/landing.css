@@ -88,7 +88,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 28px; }
     font-size: clamp(58px, 6vw, 92px); font-weight: 600; line-height: 1.07; letter-spacing: -0.055em;
 }
 .lp-hero h1 em, .lp-workflow h2 em {
-    color: var(--lp-red); font-family: Georgia, "Times New Roman", serif;
+    color: var(--lp-red); font-family: Georgia, "Instrument Serif", "Times New Roman", serif;
     font-size: 1.12em; font-weight: 400; letter-spacing: -0.05em;
 }
 .lp-hero__description { max-width: 500px; margin: 0; color: #67574a; font-size: 16px; line-height: 1.8; text-wrap: pretty; }

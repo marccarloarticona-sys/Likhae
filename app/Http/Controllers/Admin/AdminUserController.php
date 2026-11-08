@@ -15,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
@@ -129,6 +130,7 @@ class AdminUserController extends Controller
             'buyers' => User::query()->where('account_type', User::TYPE_BUYER)->count(),
             'sellers' => User::query()->where('account_type', User::TYPE_SELLER)->count(),
             'delivery' => User::query()->where('account_type', User::TYPE_LOGISTICS)->count(),
+            'admins' => User::query()->where('account_type', User::TYPE_ADMIN)->count(),
             'open_buyer_risk_reviews' => $openRiskBuyerIds->count(),
         ];
 
@@ -147,6 +149,60 @@ class AdminUserController extends Controller
             'riskFilter',
             'openRiskBuyerIds',
         ));
+    }
+
+    public function storeAdministrator(Request $request): RedirectResponse
+    {
+        $request->merge([
+            'email' => mb_strtolower(trim((string) $request->input('email'))),
+        ]);
+
+        $data = $request->validate([
+            'first_name' => ['required', 'string', 'max:100'],
+            'middle_initial' => ['nullable', 'string', 'max:10'],
+            'last_name' => ['required', 'string', 'max:100'],
+            'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')],
+            'contact_number' => ['required', 'string', 'max:30', 'regex:/^(?:\\+63|0)9\\d{9}$/', Rule::unique('users', 'contact_number')],
+            'birthday' => ['required', 'date', 'before:today'],
+            'password' => ['required', 'confirmed', 'max:72', Password::min(8)->mixedCase()->numbers()],
+        ]);
+
+        $administrator = DB::transaction(function () use ($data, $request): User {
+            $administrator = User::create([
+                'account_type' => User::TYPE_ADMIN,
+                'first_name' => trim($data['first_name']),
+                'middle_initial' => filled($data['middle_initial'] ?? null) ? trim($data['middle_initial']) : null,
+                'last_name' => trim($data['last_name']),
+                'sex' => null,
+                'email' => mb_strtolower(trim($data['email'])),
+                'contact_number' => trim($data['contact_number']),
+                'birthday' => $data['birthday'],
+                'password' => $data['password'],
+                'status' => User::STATUS_ACTIVE,
+                'email_verified_at' => now(),
+            ]);
+
+            AuditLog::create([
+                'actor_user_id' => $request->user()->id,
+                'event' => 'admin.user.created',
+                'auditable_type' => User::class,
+                'auditable_id' => $administrator->id,
+                'new_values' => [
+                    'account_type' => User::TYPE_ADMIN,
+                    'email' => $administrator->email,
+                    'status' => User::STATUS_ACTIVE,
+                ],
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'created_at' => now(),
+            ]);
+
+            return $administrator;
+        });
+
+        return redirect()
+            ->route('admin.users', ['role' => 'admins'])
+            ->with('status', 'Administrator account created and activated.');
     }
 
     public function revokeSessions(Request $request, AdminUserSessionManager $sessions): RedirectResponse

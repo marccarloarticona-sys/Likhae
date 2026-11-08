@@ -58,6 +58,64 @@
                 <div class="sl-sticky-actions"><a href="{{ route('seller.store') }}" class="sl-btn sl-btn-ghost">Cancel</a><button type="submit" class="sl-btn sl-btn-primary">Save Shop Profile</button></div>
             </div>
         </form>
+        <section class="sl-card sl-follower-section" aria-labelledby="store-followers-title">
+            <header class="sl-card-head">
+                <div>
+                    <span class="sl-eyebrow">Community</span>
+                    <h2 id="store-followers-title">Store followers</h2>
+                    <p>Buyers who follow your store.</p>
+                </div>
+                <div class="sl-follower-total" aria-label="{{ number_format($followerCount) }} {{ \Illuminate\Support\Str::plural('follower', $followerCount) }}">
+                    <strong>{{ number_format($followerCount) }}</strong>
+                    <small>{{ \Illuminate\Support\Str::plural('follower', $followerCount) }}</small>
+                </div>
+            </header>
+
+            @if (! $followersAvailable)
+                <div class="sl-follower-empty">
+                    <strong>Follower list unavailable</strong>
+                    <span>Store following is not available right now.</span>
+                </div>
+            @elseif ($followers->isEmpty())
+                <div class="sl-follower-empty">
+                    <strong>No followers yet</strong>
+                    <span>Buyers who follow your store will appear here.</span>
+                </div>
+            @else
+                <div class="sl-follower-list">
+                    @foreach ($followers as $follower)
+                        @php($buyer = $follower->buyer)
+                        @php($followerName = $buyer?->name ?: 'LIKHAE buyer')
+                        <article class="sl-follower-row">
+                            <x-shared.profile-image :path="$buyer?->profile_photo_path" role="buyer" :alt="$followerName.' profile photo'" class="sl-follower-avatar" />
+                            <span class="sl-follower-copy">
+                                <strong>{{ $followerName }}</strong>
+                                <small>Following since {{ $follower->created_at?->format('M j, Y') ?: '—' }}</small>
+                            </span>
+                        </article>
+                    @endforeach
+                </div>
+
+                @if ($followers->hasPages())
+                    <nav class="sl-follower-pagination" aria-label="Follower list pages">
+                        <span>Showing {{ number_format($followers->firstItem()) }}–{{ number_format($followers->lastItem()) }} of {{ number_format($followerCount) }}</span>
+                        <div>
+                            @if ($followers->onFirstPage())
+                                <span class="is-disabled" aria-disabled="true">Previous</span>
+                            @else
+                                <a href="{{ $followers->previousPageUrl() }}" rel="prev">Previous</a>
+                            @endif
+                            <span class="sl-follower-pagination__page">Page {{ $followers->currentPage() }} of {{ $followers->lastPage() }}</span>
+                            @if ($followers->hasMorePages())
+                                <a href="{{ $followers->nextPageUrl() }}" rel="next">Next</a>
+                            @else
+                                <span class="is-disabled" aria-disabled="true">Next</span>
+                            @endif
+                        </div>
+                    </nav>
+                @endif
+            @endif
+        </section>
     @endif
 </div>
 @endsection

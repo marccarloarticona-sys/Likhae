@@ -71,7 +71,7 @@
 .lk-dashboard-heading h1 {
     margin: 7px 0 0;
     color: var(--ld-ink);
-    font-family: "Instrument Serif", Georgia, serif;
+    font-family: Georgia, "Instrument Serif", serif;
     font-size: clamp(36px, 4vw, 56px);
     font-weight: 500;
     letter-spacing: -.035em;
@@ -182,7 +182,7 @@
 .lk-dashboard-card-head h2 {
     margin: 0;
     color: var(--ld-ink);
-    font-family: "Instrument Serif", Georgia, serif;
+    font-family: Georgia, "Instrument Serif", serif;
     font-size: 23px;
     font-weight: 500;
     letter-spacing: -.025em;
@@ -651,7 +651,7 @@ html.dark .lk-rider-profile__logout-button:hover { background: #281816; }
 .lk-rider-management__access-panel { min-width: 0; padding: 17px; border: 1px solid var(--ld-line); border-radius: 15px; background: linear-gradient(145deg, var(--ld-paper), var(--ld-paper-soft)); }
 .lk-rider-management__panel-heading { margin-bottom: 14px; }
 .lk-rider-management__eyebrow { display: block; margin-bottom: 6px; color: var(--ld-maroon); font-size: 8px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; }
-.lk-rider-management__panel-heading h3 { margin: 0; color: var(--ld-ink); font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 500; line-height: 1.2; }
+.lk-rider-management__panel-heading h3 { margin: 0; color: var(--ld-ink); font-family: Georgia, "Instrument Serif", 'Times New Roman', serif; font-size: 21px; font-weight: 500; line-height: 1.2; }
 .lk-rider-management__panel-heading p,
 .lk-rider-management__copy,
 .lk-rider-management__current-state { margin: 7px 0 0; color: var(--ld-muted); font-size: 10px; line-height: 1.65; }
@@ -706,6 +706,44 @@ html.dark .lk-rider-management__danger-button { border-color: #A9433C; backgroun
 html.dark .lk-rider-management__notice--warning { border-color: #5E4927; background: #2C2418; color: #E8B96A; }
 html.dark .lk-rider-management__notice--danger { border-color: #59322E; background: #281816; color: #E6948C; }
 html.dark .lk-rider-management__tag { border-color: var(--ld-line-strong); background: var(--ld-paper-soft); color: var(--ld-muted); }
+
+/* Weather shares the Logistics dashboard title container. */
+.lk-logistics-dashboard .lk-dashboard-heading--weather {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(600px, .95fr);
+    align-items: center;
+    gap: 24px;
+}
+
+.lk-logistics-dashboard .lk-dashboard-heading--weather .lk-dashboard-weather {
+    grid-template-columns: minmax(0, .85fr) minmax(0, .9fr) minmax(0, 1.2fr);
+    gap: 10px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+html.dark .lk-logistics-dashboard .lk-dashboard-heading--weather .lk-dashboard-weather {
+    --lk-weather-ink: #F5EFE8;
+    --lk-weather-muted: #C0A99A;
+    --lk-weather-border: #49372E;
+}
+
+html.dark .lk-logistics-dashboard .lk-dashboard-heading--weather .lk-dashboard-weather__metrics > div,
+html.dark .lk-logistics-dashboard .lk-dashboard-heading--weather .lk-dashboard-weather__forecast li { background: rgba(255, 255, 255, .06); }
+
+@media (max-width: 1200px) {
+    .lk-logistics-dashboard .lk-dashboard-heading--weather {
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+    }
+}
+
+@media (max-width: 560px) {
+    .lk-logistics-dashboard .lk-dashboard-heading--weather .lk-dashboard-weather { grid-template-columns: minmax(0, 1fr); }
+}
 
 @media (max-width: 1050px) {
     .lk-rider-management__control-grid { grid-template-columns: 1fr; }

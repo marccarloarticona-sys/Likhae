@@ -94,7 +94,9 @@
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody
+                        data-product-table-body
+                    >
                         @forelse($products as $product)
                             @php
                                 $productCategory = $product->category?->parent?->name
@@ -177,8 +179,23 @@
                 </table>
             </div>
 
-            <div class="ad-card-body">
-                {{ $products->links() }}
+            <div
+                class="ad-products-load-more"
+                data-product-load-more
+                data-next-page-url="{{ $products->nextPageUrl() }}"
+                data-total-products="{{ $products->total() }}"
+                data-first-product="{{ $products->firstItem() ?? 0 }}"
+                data-loaded-products="{{ $products->count() }}"
+            >
+                <span data-product-count-label>
+                    Showing {{ $products->firstItem() ?? 0 }}-{{ $products->lastItem() ?? 0 }} of {{ $products->total() }} products
+                </span>
+
+                <button class="ad-btn ad-btn-secondary ad-btn-sm" type="button" data-product-load-more-button @if(!$products->hasMorePages()) hidden @endif>
+                    Load more products
+                </button>
+                <span data-product-load-more-status role="status" aria-live="polite"></span>
+                <span class="ad-products-load-more__sentinel" data-product-load-more-sentinel aria-hidden="true"></span>
             </div>
         </section>
     </div>

@@ -7,6 +7,343 @@ import '../shared/payout-destination.js';
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
+    const userLoadMore = one('[data-user-load-more]');
+    if (userLoadMore) {
+        const tableBody = one('[data-user-table-body]');
+        const loadMoreButton = one('[data-user-load-more-button]', userLoadMore);
+        const loadMoreStatus = one('[data-user-load-more-status]', userLoadMore);
+        const sentinel = one('[data-user-load-more-sentinel]', userLoadMore);
+        const countLabel = one('[data-user-count-label]', userLoadMore);
+        const total = Number(userLoadMore.dataset.totalUsers || 0);
+        const firstUser = Number(userLoadMore.dataset.firstUser || 0);
+        let loaded = Number(userLoadMore.dataset.loadedUsers || 0);
+        let nextPageUrl = userLoadMore.dataset.nextPageUrl || '';
+        let loading = false;
+        let loadFailed = false;
+
+        const updateCount = () => {
+            if (!countLabel) return;
+            const lastUser = loaded > 0 ? Math.min(firstUser + loaded - 1, total) : 0;
+            countLabel.textContent = `Showing ${loaded > 0 ? firstUser : 0}-${lastUser} of ${total} accounts`;
+        };
+
+        const updateLoadMoreButton = () => {
+            if (!loadMoreButton) return;
+            loadMoreButton.hidden = !nextPageUrl;
+            loadMoreButton.disabled = loading;
+            loadMoreButton.textContent = loading ? 'Loading accounts…' : 'Load more accounts';
+        };
+
+        const loadNextPage = async () => {
+            if (!nextPageUrl || !tableBody || loading) return;
+            loading = true;
+            loadFailed = false;
+            userLoadMore.setAttribute('aria-busy', 'true');
+            if (loadMoreStatus) loadMoreStatus.textContent = 'Loading more accounts…';
+            updateLoadMoreButton();
+
+            try {
+                const pageUrl = new URL(nextPageUrl, window.location.origin);
+                if (pageUrl.origin !== window.location.origin) throw new Error('The next page is not on this site.');
+
+                const response = await fetch(pageUrl.href, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'text/html', 'X-Requested-With': 'XMLHttpRequest' },
+                    cache: 'no-store',
+                });
+                if (!response.ok) throw new Error('The next set of accounts could not be loaded.');
+
+                const pageDocument = new DOMParser().parseFromString(await response.text(), 'text/html');
+                const nextTableBody = pageDocument.querySelector('[data-user-table-body]');
+                const nextPagination = pageDocument.querySelector('[data-user-load-more]');
+                if (!nextTableBody || !nextPagination) throw new Error('The next set of accounts could not be read.');
+
+                const rows = [...nextTableBody.children];
+                rows.forEach((row) => tableBody.append(document.importNode(row, true)));
+                one('[data-session-revocation-form]')?.dispatchEvent(new Event('change', { bubbles: true }));
+                loaded += rows.length;
+                nextPageUrl = nextPagination.dataset.nextPageUrl || '';
+                userLoadMore.dataset.loadedUsers = String(loaded);
+                userLoadMore.dataset.nextPageUrl = nextPageUrl;
+                updateCount();
+                if (loadMoreStatus) {
+                    loadMoreStatus.textContent = nextPageUrl ? 'Scroll to load more accounts.' : 'All accounts loaded.';
+                }
+            } catch (_) {
+                loadFailed = true;
+                if (loadMoreStatus) loadMoreStatus.textContent = 'Could not load more accounts. Select “Load more accounts” to retry.';
+            } finally {
+                loading = false;
+                userLoadMore.removeAttribute('aria-busy');
+                updateLoadMoreButton();
+                if (!loadFailed && nextPageUrl) requestAnimationFrame(checkAutomaticLoad);
+            }
+        };
+
+        const checkAutomaticLoad = () => {
+            if (!sentinel || !nextPageUrl || loading || loadFailed) return;
+
+            const bounds = sentinel.getBoundingClientRect();
+            const nearViewport = bounds.top <= window.innerHeight + 280 && bounds.bottom >= -280;
+            if (nearViewport) loadNextPage();
+        };
+
+        loadMoreButton?.addEventListener('click', () => loadNextPage());
+        if (sentinel && 'IntersectionObserver' in window) {
+            const observer = new IntersectionObserver((entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) checkAutomaticLoad();
+            }, { rootMargin: '0px 0px 220px 0px' });
+            observer.observe(sentinel);
+        }
+        document.addEventListener('scroll', checkAutomaticLoad, { capture: true, passive: true });
+        window.addEventListener('scroll', checkAutomaticLoad, { passive: true });
+        window.addEventListener('resize', checkAutomaticLoad, { passive: true });
+        updateCount();
+        updateLoadMoreButton();
+        if (loadMoreStatus) loadMoreStatus.textContent = nextPageUrl ? 'Scroll to load more accounts.' : 'All accounts loaded.';
+        requestAnimationFrame(checkAutomaticLoad);
+    }
+
+    const productLoadMore = one('[data-product-load-more]');
+    if (productLoadMore) {
+        const tableBody = one('[data-product-table-body]');
+        const loadMoreButton = one('[data-product-load-more-button]', productLoadMore);
+        const loadMoreStatus = one('[data-product-load-more-status]', productLoadMore);
+        const sentinel = one('[data-product-load-more-sentinel]', productLoadMore);
+        const countLabel = one('[data-product-count-label]', productLoadMore);
+        const total = Number(productLoadMore.dataset.totalProducts || 0);
+        const firstProduct = Number(productLoadMore.dataset.firstProduct || 0);
+        let loaded = Number(productLoadMore.dataset.loadedProducts || 0);
+        let nextPageUrl = productLoadMore.dataset.nextPageUrl || '';
+        let loading = false;
+        let loadFailed = false;
+
+        const updateCount = () => {
+            if (!countLabel) return;
+            const lastProduct = loaded > 0 ? Math.min(firstProduct + loaded - 1, total) : 0;
+            countLabel.textContent = `Showing ${loaded > 0 ? firstProduct : 0}-${lastProduct} of ${total} products`;
+        };
+
+        const updateLoadMoreButton = () => {
+            if (!loadMoreButton) return;
+            loadMoreButton.hidden = !nextPageUrl;
+            loadMoreButton.disabled = loading;
+            loadMoreButton.textContent = loading ? 'Loading products…' : 'Load more products';
+        };
+
+        const loadNextPage = async () => {
+            if (!nextPageUrl || !tableBody || loading) return;
+            loading = true;
+            loadFailed = false;
+            productLoadMore.setAttribute('aria-busy', 'true');
+            if (loadMoreStatus) loadMoreStatus.textContent = 'Loading more products…';
+            updateLoadMoreButton();
+
+            try {
+                const pageUrl = new URL(nextPageUrl, window.location.origin);
+                if (pageUrl.origin !== window.location.origin) throw new Error('The next page is not on this site.');
+
+                const response = await fetch(pageUrl.href, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'text/html', 'X-Requested-With': 'XMLHttpRequest' },
+                    cache: 'no-store',
+                });
+                if (!response.ok) throw new Error('The next set of products could not be loaded.');
+
+                const pageDocument = new DOMParser().parseFromString(await response.text(), 'text/html');
+                const nextTableBody = pageDocument.querySelector('[data-product-table-body]');
+                const nextPagination = pageDocument.querySelector('[data-product-load-more]');
+                if (!nextTableBody || !nextPagination) throw new Error('The next set of products could not be read.');
+
+                const rows = [...nextTableBody.children];
+                rows.forEach((row) => tableBody.append(document.importNode(row, true)));
+                loaded += rows.length;
+                nextPageUrl = nextPagination.dataset.nextPageUrl || '';
+                productLoadMore.dataset.loadedProducts = String(loaded);
+                productLoadMore.dataset.nextPageUrl = nextPageUrl;
+                updateCount();
+                if (loadMoreStatus) {
+                    loadMoreStatus.textContent = nextPageUrl ? 'More products load as you scroll.' : 'All products loaded.';
+                }
+            } catch (_) {
+                loadFailed = true;
+                if (loadMoreStatus) loadMoreStatus.textContent = 'Could not load more products. Select “Load more products” to retry.';
+            } finally {
+                loading = false;
+                productLoadMore.removeAttribute('aria-busy');
+                updateLoadMoreButton();
+                if (!loadFailed && nextPageUrl) requestAnimationFrame(checkAutomaticLoad);
+            }
+        };
+
+        const checkAutomaticLoad = () => {
+            if (!sentinel || !nextPageUrl || loading || loadFailed) return;
+
+            const bounds = sentinel.getBoundingClientRect();
+            const nearViewport = bounds.top <= window.innerHeight + 280 && bounds.bottom >= -280;
+            if (nearViewport) loadNextPage();
+        };
+
+        loadMoreButton?.addEventListener('click', () => loadNextPage());
+        if (sentinel && 'IntersectionObserver' in window) {
+            const observer = new IntersectionObserver((entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) checkAutomaticLoad();
+            }, { rootMargin: '0px 0px 220px 0px' });
+            observer.observe(sentinel);
+        }
+        document.addEventListener('scroll', checkAutomaticLoad, { capture: true, passive: true });
+        window.addEventListener('scroll', checkAutomaticLoad, { passive: true });
+        window.addEventListener('resize', checkAutomaticLoad, { passive: true });
+        updateCount();
+        updateLoadMoreButton();
+        if (loadMoreStatus) loadMoreStatus.textContent = nextPageUrl ? 'More products load as you scroll.' : 'All products loaded.';
+        requestAnimationFrame(checkAutomaticLoad);
+    }
+
+    const messagePreviewToggle = one('[data-admin-message-preview-toggle]');
+    const messagePreviewPopover = one('[data-admin-message-popover]');
+    const messagePreviewList = one('[data-admin-message-preview-list]', messagePreviewPopover || document);
+    const messagePreviewSummary = one('[data-admin-message-preview-summary]', messagePreviewPopover || document);
+    const messagePreviewBadge = one('[data-admin-message-count]');
+    let messagePreviewRequest = null;
+    let messagePreviewRefreshTimer = null;
+    let messagePreviewRefreshQueued = false;
+
+    const setMessageUnreadCount = (count) => {
+        const unreadCount = Math.max(0, Number.parseInt(count, 10) || 0);
+        const unreadLabel = unreadCount === 1 ? '1 unread message' : `${unreadCount} unread messages`;
+        if (messagePreviewBadge) {
+            messagePreviewBadge.textContent = String(unreadCount > 99 ? '99+' : unreadCount);
+            messagePreviewBadge.style.display = unreadCount > 0 ? '' : 'none';
+            messagePreviewBadge.setAttribute('aria-label', unreadLabel);
+        }
+        messagePreviewToggle?.setAttribute('aria-label', unreadCount > 0 ? `Messages, ${unreadLabel}` : 'Messages');
+        if (messagePreviewSummary) {
+            messagePreviewSummary.textContent = unreadCount > 0
+                ? `${unreadCount} unread`
+                : 'You are all caught up';
+        }
+    };
+
+    const renderMessagePreview = (payload) => {
+        if (!messagePreviewList || !messagePreviewPopover) return;
+        const items = Array.isArray(payload?.items) ? payload.items.slice(0, 6) : [];
+        const urlTemplate = messagePreviewPopover.dataset.messageUrlTemplate || '';
+        const rows = items.map((item) => {
+            const conversationId = String(item?.id || '');
+            if (!/^\d+$/.test(conversationId)) return null;
+
+            const row = document.createElement('a');
+            row.className = 'ad-message-preview';
+            row.classList.toggle('is-unread', Number(item.unread_count) > 0);
+            row.dataset.adminMessagePreviewItem = '';
+            row.dataset.conversationId = conversationId;
+            row.href = urlTemplate.replace('__conversation__', encodeURIComponent(conversationId));
+
+            const avatar = document.createElement('span');
+            avatar.className = 'ad-message-preview__avatar';
+            avatar.setAttribute('aria-hidden', 'true');
+            avatar.textContent = String(item.initial || item.name || '?').slice(0, 1);
+
+            const copy = document.createElement('span');
+            copy.className = 'ad-message-preview__copy';
+            const name = document.createElement('strong');
+            name.dataset.adminMessagePreviewName = '';
+            name.textContent = String(item.name || 'Conversation');
+            const preview = document.createElement('span');
+            preview.dataset.adminMessagePreviewText = '';
+            preview.textContent = String(item.preview || 'Start a conversation.');
+            const time = document.createElement('small');
+            time.dataset.adminMessagePreviewTime = '';
+            time.textContent = String(item.time || 'Just now');
+            copy.append(name, preview, time);
+
+            const unread = document.createElement('span');
+            unread.className = 'ad-message-preview__unread';
+            unread.dataset.adminMessagePreviewUnread = '';
+            const unreadCount = Math.max(0, Number.parseInt(item.unread_count, 10) || 0);
+            unread.textContent = String(unreadCount > 99 ? '99+' : unreadCount);
+            unread.style.display = unreadCount > 0 ? '' : 'none';
+            row.append(avatar, copy, unread);
+            return row;
+        }).filter(Boolean);
+
+        if (rows.length) {
+            messagePreviewList.replaceChildren(...rows);
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'ad-message-popover__empty';
+            empty.dataset.adminMessagePreviewEmpty = '';
+            const title = document.createElement('strong');
+            title.textContent = 'No messages yet';
+            const copy = document.createElement('span');
+            copy.textContent = 'New conversations will show up here.';
+            empty.append(title, copy);
+            messagePreviewList.replaceChildren(empty);
+        }
+
+        setMessageUnreadCount(payload?.unread_count);
+    };
+
+    const refreshMessagePreview = async () => {
+        if (!messagePreviewPopover?.dataset.previewUrl) return null;
+        if (messagePreviewRequest) {
+            messagePreviewRefreshQueued = true;
+            return messagePreviewRequest;
+        }
+        messagePreviewRequest = fetch(messagePreviewPopover.dataset.previewUrl, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+        }).then((response) => {
+            if (!response.ok) throw new Error('Message preview is unavailable.');
+            return response.json();
+        }).then(renderMessagePreview).catch(() => {
+            if (messagePreviewSummary && !messagePreviewList?.querySelector('[data-admin-message-preview-item]')) {
+                messagePreviewSummary.textContent = 'Unable to load messages';
+            }
+        }).finally(() => {
+            messagePreviewRequest = null;
+            if (messagePreviewRefreshQueued) {
+                messagePreviewRefreshQueued = false;
+                window.setTimeout(refreshMessagePreview, 0);
+            }
+        });
+        return messagePreviewRequest;
+    };
+
+    const closeMessagePreview = () => {
+        if (!messagePreviewPopover || messagePreviewPopover.hidden) return;
+        messagePreviewPopover.hidden = true;
+        messagePreviewToggle?.setAttribute('aria-expanded', 'false');
+    };
+
+    messagePreviewToggle?.addEventListener('click', () => {
+        if (!messagePreviewPopover) return;
+        const opening = messagePreviewPopover.hidden;
+        messagePreviewPopover.hidden = !opening;
+        messagePreviewToggle.setAttribute('aria-expanded', String(opening));
+        if (opening) refreshMessagePreview();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!messagePreviewPopover || messagePreviewPopover.hidden
+            || messagePreviewPopover.contains(event.target)
+            || event.target.closest('[data-admin-message-preview-toggle]')) return;
+        closeMessagePreview();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !messagePreviewPopover || messagePreviewPopover.hidden) return;
+        closeMessagePreview();
+        messagePreviewToggle?.focus();
+    });
+
+    document.addEventListener('likhae:admin-message-received', () => {
+        window.clearTimeout(messagePreviewRefreshTimer);
+        messagePreviewRefreshTimer = window.setTimeout(refreshMessagePreview, 250);
+    });
+
     all('[data-admin-password-toggle]').forEach((toggle) => {
         const form = toggle.closest('.ad-account-panel')?.querySelector('[data-admin-password-form]');
         const fields = form ? all('[data-admin-password-field]', form) : [];
@@ -610,20 +947,29 @@ document.addEventListener('DOMContentLoaded', () => {
     all('[data-select-all]').forEach((control) => {
         control.addEventListener('change', () => {
             const table = control.closest('table');
-            all('tbody input[type="checkbox"]', table || document)
-                .filter((checkbox) => !checkbox.disabled)
-                .forEach((checkbox) => { checkbox.checked = control.checked; });
+            const selectable = all('tbody [data-session-user-checkbox]', table || document)
+                .filter((checkbox) => !checkbox.disabled);
+            const selected = control.checked ? selectable.slice(0, 100) : [];
+            selectable.forEach((checkbox) => { checkbox.checked = selected.includes(checkbox); });
+            const selectionMessage = one('[data-session-selection-message]');
+            if (selectionMessage) {
+                selectionMessage.textContent = control.checked && selected.length < selectable.length
+                    ? 'Up to 100 accounts per action.'
+                    : '';
+            }
             control.dispatchEvent(new Event('selectionchange', { bubbles: true }));
         });
     });
 
     all('[data-session-revocation-form]').forEach((form) => {
         const selectAll = one('[data-select-all]', form);
-        const userCheckboxes = all('[data-session-user-checkbox]', form);
-        const selectedCount = one('[data-session-selected-count]', form);
-        const bulkSubmit = one('[data-session-bulk-submit]', form);
+        const sessionToolbar = one('[data-session-toolbar]');
+        const selectedCount = one('[data-session-selected-count]', sessionToolbar);
+        const selectionMessage = one('[data-session-selection-message]', sessionToolbar);
+        const bulkSubmit = one('[data-session-bulk-submit]', sessionToolbar);
 
         const updateSelection = () => {
+            const userCheckboxes = all('[data-session-user-checkbox]', form);
             const selectable = userCheckboxes.filter((checkbox) => !checkbox.disabled);
             const selected = selectable.filter((checkbox) => checkbox.checked);
             if (selectedCount) selectedCount.textContent = String(selected.length);
@@ -634,7 +980,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        form.addEventListener('change', updateSelection);
+        form.addEventListener('change', (event) => {
+            const checkbox = event.target.closest?.('[data-session-user-checkbox]');
+            if (!checkbox) {
+                updateSelection();
+                return;
+            }
+            if (checkbox.checked && all('[data-session-user-checkbox]:checked', form).length > 100) {
+                checkbox.checked = false;
+                if (selectionMessage) selectionMessage.textContent = 'Select up to 100 accounts per action.';
+            } else if (selectionMessage) {
+                selectionMessage.textContent = '';
+            }
+            updateSelection();
+        });
         selectAll?.addEventListener('selectionchange', updateSelection);
         updateSelection();
 

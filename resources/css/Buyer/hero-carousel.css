@@ -20,7 +20,7 @@
 .is-active .lk-carousel__copy > :nth-child(3) { transition-delay: 180ms; }
 .is-active .lk-carousel__copy > :nth-child(4) { transition-delay: 260ms; }
 .lk-carousel__eyebrow { display: block; font-size: 12px; font-weight: 700; letter-spacing: .18em; margin-bottom: 22px; color: #4b5951; }
-.lk-carousel__title { margin: 0; font-family: 'Playfair Display', Georgia, serif; font-size: clamp(36px, 4vw, 68px); font-weight: 700; line-height: 1.13; letter-spacing: -.035em; color: #243a32; }
+.lk-carousel__title { margin: 0; font-family: Georgia, 'Instrument Serif', serif; font-size: clamp(36px, 4vw, 68px); font-weight: 700; line-height: 1.13; letter-spacing: -.035em; color: #243a32; }
 .lk-carousel__title em { display: block; margin-top: 8px; color: #8c382f; }
 .lk-carousel__description { max-width: 510px; margin: 26px 0 32px; font-size: 16px; line-height: 1.85; color: #3e4a43; }
 .lk-carousel__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 24px; }

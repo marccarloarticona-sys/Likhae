@@ -10,7 +10,6 @@ use App\Models\Buyer\Order;
 use App\Models\Buyer\SellerFollower;
 use App\Models\Buyer\WishlistItem;
 use App\Models\Communication\Conversation;
-use App\Models\Communication\ConversationParticipant;
 use App\Models\Logistics\DeliveryAttempt;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\Shipment;
@@ -26,7 +25,6 @@ use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerOrderActionService;
-use App\Services\Marketplace\BuyerOrderTabService;
 use App\Services\Marketplace\ProductCatalogService;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Media\ImageOptimizationService;
@@ -58,7 +56,11 @@ class BuyerApiController extends Controller
                 ->where('status', 'ACTIVE')
                 ->where('store_visibility', true)
                 ->whereHas('user', fn ($userQuery) => $userQuery->where('status', 'ACTIVE')))
-            ->with(['sellerProfile.primaryCategory', 'sellerProfile.businessAddress'])
+            ->with([
+                'sellerProfile.primaryCategory',
+                'sellerProfile.businessAddress',
+                'sellerProfile.user:id,profile_photo_path',
+            ])
             ->latest()
             ->paginate(min(max($request->integer('per_page', 20), 1), 50));
 
@@ -72,7 +74,7 @@ class BuyerApiController extends Controller
                         'id' => $seller->id,
                         'user_id' => $seller->user_id,
                         'business_name' => $seller->business_name,
-                        'avatar_path' => $seller->avatar_path,
+                        'avatar_path' => $seller->avatar_path ?: $seller->user?->profile_photo_path,
                         'banner_path' => $seller->banner_path,
                         'category' => $seller->primaryCategory?->name,
                         'slug' => (string) $seller->id,
@@ -279,7 +281,6 @@ class BuyerApiController extends Controller
             'cart_item_ids.*' => ['required', 'integer', 'distinct'],
             'address_id' => ['required', 'integer', Rule::exists('addresses', 'id')->where('user_id', $request->user()->id)],
             'voucher_codes' => ['nullable', 'array'],
-            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'logistics_center_id' => ['nullable', 'integer'],
             'protection_item_ids' => ['nullable', 'array'],
             'protection_item_ids.*' => ['required', 'integer', 'distinct'],
@@ -315,7 +316,7 @@ class BuyerApiController extends Controller
             $voucherCodes,
             $request->user(),
             $provider,
-            $address,
+            $automaticRouting ? $address : null,
             $protectionItemIds,
             rewardPointsToRedeem: (int) ($data['reward_points'] ?? 0),
         );
@@ -342,12 +343,6 @@ class BuyerApiController extends Controller
                 (string) $item->id => (float) ($protectionQuote['fee'] ?? 0),
             ];
         })->all();
-        $shippingQuotes = collect($preview['groups'])->mapWithKeys(fn (array $group, int|string $sellerId): array => [
-            (string) $sellerId => [
-                'shipping_fee' => number_format((float) $group['shipping_fee'], 2, '.', ''),
-                'snapshot' => $group['shipping_rate_snapshot'],
-            ],
-        ]);
 
         return response()->json([
             'success' => true,
@@ -355,7 +350,6 @@ class BuyerApiController extends Controller
                 'subtotal' => (float) $preview['subtotal'],
                 'total_discount' => (float) $preview['total_discount'],
                 'shipping_total' => (float) $preview['shipping_total'],
-                'shipping_quotes' => $shippingQuotes,
                 'shipping_quote_token' => $checkout->shippingQuoteToken($request->user(), $address, $items, $preview),
                 'protection_total' => (float) $preview['protection_total'],
                 'protection_fees' => $protectionFees,
@@ -382,7 +376,6 @@ class BuyerApiController extends Controller
             'contact_number' => ['nullable', 'string', 'max:30', 'regex:/^(?:09|\\+?639)\\d{9}$/'],
             'payment_method' => ['required', Rule::in(['COD', 'ONLINE'])],
             'voucher_codes' => ['nullable', 'array'],
-            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
             'logistics_center_id' => ['nullable', 'integer'],
             'seller_notes' => ['nullable', 'array'],
             'seller_notes.*' => ['nullable', 'string', 'max:200'],
@@ -910,21 +903,29 @@ class BuyerApiController extends Controller
         $user = $request->user();
         $conversations = $service->listFor($user, false, 100, true);
         $unreadCounts = $service->unreadCountsFor($user, $conversations);
-        $rows = $conversations->map(function (Conversation $conversation) use ($request, $unreadCounts): array {
+        $rows = $conversations->map(function (Conversation $conversation) use ($request, $service, $unreadCounts): array {
             $other = $conversation->participants->first(fn (User $participant): bool => (int) $participant->id !== (int) $request->user()->id);
             $seller = $other?->sellerProfile;
+            $isSeller = $seller?->status === 'ACTIVE';
+            $isSupport = $other?->isAccountType(User::TYPE_ADMIN) ?? false;
+            $lastMessageAt = $conversation->latestMessage?->sent_at
+                ?? $conversation->latestMessage?->created_at;
 
             return [
                 'id' => (string) $conversation->id,
                 'conversation_id' => (string) $conversation->id,
                 'seller_id' => $other?->id,
-                'seller_name' => $seller?->business_name ?: $other?->name ?: 'LIKHAE User',
+                'seller_name' => $isSupport
+                    ? 'LIKHAE Support'
+                    : ($isSeller ? $seller->business_name : ($other?->name ?: 'LIKHAE User')),
+                'seller_avatar_url' => $other ? $service->avatarUrlFor($other) : null,
                 'seller_is_online' => $other && $other->isActive()
                     && (bool) data_get($other->notification_preferences, 'show_online_status', true)
                     && Cache::store('database')->has('message-presence:user:'.$other->id),
                 'slug' => 'conversation-'.$conversation->id,
-                'last_message' => $conversation->latestMessage?->body ?? '',
-                'time' => $conversation->latestMessage?->sent_at?->toIso8601String(),
+                'last_message' => $service->messagePreviewFor($conversation->latestMessage),
+                'time' => $lastMessageAt?->toIso8601String(),
+                'time_label' => $lastMessageAt?->diffForHumans() ?? '',
                 'unread' => (int) $unreadCounts->get($conversation->id, 0),
             ];
         })->values();
@@ -935,16 +936,17 @@ class BuyerApiController extends Controller
     public function conversationMessages(Request $request, int $conversation, ConversationService $service, MessageAttachmentService $attachments): JsonResponse
     {
         $this->authorizeBuyer($request);
+        $afterId = max(0, $request->integer('after_id')) ?: null;
         $messages = $service->messagesFor(
             $request->user(),
             $conversation,
             50,
-            max(0, $request->integer('after_id')) ?: null,
+            $afterId,
         );
-        ConversationParticipant::query()
-            ->where('conversation_id', $conversation)
-            ->where('user_id', $request->user()->id)
-            ->update(['last_read_at' => now()]);
+        if ($afterId === null) {
+            $thread = Conversation::query()->findOrFail($conversation);
+            $service->markRead($thread, $request->user());
+        }
 
         return response()->json([
             'success' => true,
@@ -1064,24 +1066,16 @@ class BuyerApiController extends Controller
 
     private function normalizeCheckoutVoucherCodes(Request $request, array $voucherCodes): array
     {
-        $autoApply = array_key_exists('auto_apply', $voucherCodes)
-            ? filter_var($voucherCodes['auto_apply'], FILTER_VALIDATE_BOOLEAN)
-            : true;
-        $structured = array_intersect(['seller', 'platform', 'shipping', 'auto_apply'], array_keys($voucherCodes)) !== [];
+        $structured = array_intersect(['seller', 'platform', 'shipping'], array_keys($voucherCodes)) !== [];
         if (! $structured) {
             $request->validate([
                 'voucher_codes.*' => ['nullable', 'string', 'max:80'],
             ]);
 
-            return [
-                'seller' => collect($voucherCodes)
-                    ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
-                    ->filter()
-                    ->all(),
-                'platform' => '',
-                'shipping' => '',
-                'auto_apply' => $autoApply,
-            ];
+            return collect($voucherCodes)
+                ->mapWithKeys(fn ($code, $sellerId): array => [(int) $sellerId => mb_strtoupper(trim((string) $code))])
+                ->filter()
+                ->all();
         }
 
         $request->validate([
@@ -1089,7 +1083,6 @@ class BuyerApiController extends Controller
             'voucher_codes.seller.*' => ['nullable', 'string', 'max:80'],
             'voucher_codes.platform' => ['nullable', 'string', 'max:80'],
             'voucher_codes.shipping' => ['nullable', 'string', 'max:80'],
-            'voucher_codes.auto_apply' => ['nullable', 'boolean'],
         ]);
 
         return [
@@ -1099,7 +1092,6 @@ class BuyerApiController extends Controller
                 ->all(),
             'platform' => mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? ''))),
             'shipping' => mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? ''))),
-            'auto_apply' => $autoApply,
         ];
     }
     private function authorizeBuyer(Request $request): void
@@ -1222,8 +1214,6 @@ class BuyerApiController extends Controller
             ];
         })->values();
         $primarySellerOrder = $sellerOrders->first();
-        $buyerFulfillmentStatus = app(BuyerOrderTabService::class)->forOrder($order, false);
-
         return [
             'id' => (string) $order->id,
             'order_number' => $order->order_number,
@@ -1235,8 +1225,7 @@ class BuyerApiController extends Controller
             'status' => $order->status,
             'buyer_status' => $activeReturnRequest ? 'returns' : null,
             'buyer_status_label' => $activeReturnRequest ? 'Return / Refund Requested' : null,
-            'fulfillment_status' => $buyerFulfillmentStatus,
-            'status_label' => BuyerOrderTabService::LABELS[$buyerFulfillmentStatus] ?? str($order->status)->headline()->toString(),
+            'status_label' => str($order->status)->headline()->toString(),
             'payment_method' => $order->payments->first()?->method ?? 'Not specified',
             'payment_status' => $order->payment_status,
             'grand_total' => (float) $order->grand_total,
@@ -1260,11 +1249,7 @@ class BuyerApiController extends Controller
                 'current_status' => $parcel->current_status,
                 'rider' => $this->riderIdentityPayload($parcel),
                 'rider_location' => $this->riderLocationPayload($parcel),
-                'status_label' => match ($parcel->current_status) {
-                    'READY_FOR_PICKUP' => 'Waiting for a pickup rider to be assigned',
-                    'PICKUP_ASSIGNED' => 'Pickup rider assigned',
-                    default => str($parcel->current_status)->headline()->toString(),
-                },
+                'status_label' => str($parcel->current_status)->headline()->toString(),
                 'events' => $parcel->events->map(fn ($event): array => [
                     'status' => $event->status,
                     'label' => str($event->status)->headline()->toString(),
@@ -1292,7 +1277,7 @@ class BuyerApiController extends Controller
                 'occurred_at' => $event->occurred_at?->toIso8601String(),
             ]),
             'created_at' => $order->placed_at?->toIso8601String(),
-            'allow_cancel' => $actionState['can_cancel'],
+            'allow_cancel' => in_array($order->status, ['PLACED', 'PROCESSING'], true),
             'allow_mark_received' => $actionState['can_confirm_received'],
             'allow_review' => $order->status === 'COMPLETED',
             'allow_return_request' => $actionState['can_request_return'],

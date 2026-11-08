@@ -27,7 +27,7 @@
     <section id="reports-overview" class="ad-report-tab-panel" aria-label="Report overview and filters">
     <section class="ad-report-summary" aria-label="Filtered sales summary">
         <article class="ad-report-stat is-sales">
-            <span class="ad-report-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2v20m5-15.5C17 4.6 14.9 3.5 12 3.5S7 4.9 7 7s1.7 3.1 5 4 5 2 5 4.2-2.2 3.3-5 3.3-5-1.2-5-3.3"/></svg></span>
+            <span class="ad-report-stat-icon ad-report-stat-icon--peso" aria-hidden="true">₱</span>
             <span class="ad-report-stat-copy"><span class="ad-report-stat-label">Buyer product charges</span><strong>PHP {{ number_format((float) ($summary->sales ?? 0), 2) }}</strong><small>After product discounts, excluding shipping</small></span>
         </article>
         <article class="ad-report-stat is-commission">

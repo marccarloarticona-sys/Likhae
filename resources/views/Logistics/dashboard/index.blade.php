@@ -1,6 +1,6 @@
 @extends('layouts.logistics.app')
 
-@section('title', 'Logistics Operations Dashboard - LIKHAE')
+@section('title', 'Logistics Operations - LIKHAE')
 
 @php
     $cards = [
@@ -55,12 +55,13 @@
 
 @section('content')
 <div class="lk-logistics-dashboard" data-dashboard-snapshot="{{ route('logistics.dashboard') }}">
-    <header class="lk-dashboard-heading lk-dashboard-heading--no-actions">
+    <header class="lk-dashboard-heading lk-dashboard-heading--no-actions lk-dashboard-heading--weather">
         <div class="lk-dashboard-heading__copy">
             <span class="lk-dashboard-overline">Control center</span>
-            <h1>Logistics Operations Dashboard</h1>
+            <h1>Logistics Operations</h1>
             <p>Monitor current parcels, delivery progress, and logistics performance.</p>
         </div>
+        <x-shared.dashboard-weather />
     </header>
 
     <div class="lk-dashboard-split">

@@ -11,7 +11,7 @@
         .lk-event-status.is-active { background: #E8F3EA; color: #256F4A; }
         .lk-event-status.is-upcoming { background: #F8EDD9; color: #8A5A12; }
         .lk-event-card__hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-        .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 "Instrument Serif", Georgia, serif; letter-spacing: -.025em; }
+        .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 Georgia, "Instrument Serif", serif; letter-spacing: -.025em; }
         .lk-event-card__offer { min-width: 170px; padding: 13px 24px; border: 1px solid rgba(233,199,165,.5); border-radius: 18px; background: rgba(255,248,242,.1); text-align: center; }
         .lk-event-card__offer strong { display: block; color: #FFF8F2; font-size: clamp(34px, 4vw, 48px); font-weight: 800; letter-spacing: -.04em; line-height: 1; }
         .lk-event-card__offer span { display: block; margin-top: 5px; color: #E9C7A5; font-size: 10px; font-weight: 900; letter-spacing: .22em; }

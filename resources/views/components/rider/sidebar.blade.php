@@ -30,11 +30,15 @@
         'dashboard' => '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
         'pickup'    => '<svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
         'delivery'  => '<svg viewBox="0 0 24 24"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="21" r="1"/><circle cx="20" cy="21" r="1"/></svg>',
+        'return'    => '<svg viewBox="0 0 24 24"><path d="m9 14-4-4 4-4"/><path d="M5 10h8a6 6 0 0 1 0 12h-2"/><path d="M16 4h4v4"/></svg>',
+        'transfer'  => '<svg viewBox="0 0 24 24"><path d="M4 7h15l-3-3"/><path d="m19 7-3 3"/><path d="M20 17H5l3 3"/><path d="m5 17 3-3"/></svg>',
         'history'   => '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
-        'earnings'  => '<svg viewBox="0 0 24 24"><path d="M6 3h8a4 4 0 0 1 0 8H6z"/><path d="M6 11h8a4 4 0 0 1 0 8H6z"/><path d="M4 7h4"/><path d="M4 15h4"/><path d="M6 3v18"/></svg>',
+        'wallet'    => '<svg viewBox="0 0 24 24"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4H19a1 1 0 0 1 1 1v2"/><path d="M5 6.5V18a2 2 0 0 0 2 2h12a1 1 0 0 0 1-1V9a2 2 0 0 0-2-2H7.5A2.5 2.5 0 0 0 5 9.5"/><path d="M15 13h5"/><circle cx="15.5" cy="13" r=".5"/></svg>',
+        'remittance' => '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
         'messages'  => '<svg viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 4z"/></svg>',
         'notifications' => '<svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>',
         'account'   => '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+        'settings'  => '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v2m0 15v2m6.7-16.2-1.4 1.4M6.7 17.3l-1.4 1.4M21.5 12h-2m-15 0h-2m16.2 6.7-1.4-1.4M6.7 6.7 5.3 5.3"/></svg>',
         'logout'    => '<svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
         default     => '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>',
     };
@@ -85,7 +89,7 @@
             <a href="{{ route('rider.returns') }}"
                class="sl-nav-link {{ $active === 'returns' ? 'is-active' : '' }}"
                data-title="{{ __('navigation.items.return_parcels') }}">
-                <span class="sl-nav-icon">{!! $icon('shipping') !!}</span>
+                <span class="sl-nav-icon">{!! $icon('return') !!}</span>
                 <span class="sl-nav-text">{{ __('navigation.items.return_parcels') }}</span>
             </a>
         </div>
@@ -108,7 +112,7 @@
             <a href="{{ route('rider.transfers', ['view' => 'history']) }}"
                class="sl-nav-link {{ $active === 'transfers' ? 'is-active' : '' }}"
                data-title="{{ __('navigation.items.inter_hub_transfers') }}">
-                <span class="sl-nav-icon">{!! $icon('pickup') !!}</span>
+                <span class="sl-nav-icon">{!! $icon('transfer') !!}</span>
                 <span class="sl-nav-text">{{ __('navigation.items.inter_hub_transfers') }}</span>
             </a>
         </div>
@@ -120,7 +124,7 @@
             <a href="{{ route('rider.wallet') }}"
                class="sl-nav-link {{ $active === 'wallet' ? 'is-active' : '' }}"
                data-title="{{ $canUseHubTransfers ? __('navigation.items.wallet_payroll') : __('navigation.items.wallet_payouts') }}">
-                <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
+                <span class="sl-nav-icon">{!! $icon('wallet') !!}</span>
                 <span class="sl-nav-text">{{ $canUseHubTransfers ? __('navigation.items.wallet_payroll') : __('navigation.items.wallet_payouts') }}</span>
                 @if(!$canUseHubTransfers && ($sidebarCounts['payout_requests'] ?? 0) > 0)<span class="sl-nav-badge">{{ $sidebarCounts['payout_requests'] }}</span>@endif
             </a>
@@ -128,7 +132,7 @@
             <a href="{{ route('rider.remittances') }}"
                class="sl-nav-link {{ $active === 'remittances' ? 'is-active' : '' }}"
                data-title="{{ __('navigation.items.cod_remittances') }}">
-                <span class="sl-nav-icon">{!! $icon('earnings') !!}</span>
+                <span class="sl-nav-icon">{!! $icon('remittance') !!}</span>
                 <span class="sl-nav-text">{{ __('navigation.items.cod_remittances') }}</span>
             </a>
             @endunless
@@ -162,7 +166,7 @@
             <a href="{{ route('rider.settings') }}"
                class="sl-nav-link {{ $active === 'settings' ? 'is-active' : '' }}"
                data-title="{{ __('navigation.items.system_settings') }}">
-                <span class="sl-nav-icon">{!! $icon('account') !!}</span>
+                <span class="sl-nav-icon">{!! $icon('settings') !!}</span>
                 <span class="sl-nav-text">{{ __('navigation.items.system_settings') }}</span>
             </a>
         </div>

@@ -30,7 +30,7 @@ return [
         'hub_transfers' => 'Hub Transfers', 'rider_assignment' => 'Rider Assignment',
         'delivery_trip_overview' => 'Delivery Trip Overview', 'return_to_seller' => 'Return to Seller',
         'finance' => 'Finance', 'shipping_rate' => 'Shipping Rate', 'pickups' => 'Pickups',
-        'pickup_assignments' => 'Pickup Assignments', 'deliveries' => 'Deliveries', 'delivery_batches' => 'Delivery Batches',
+        'pickup_assignments' => 'Pickup', 'deliveries' => 'Deliveries', 'delivery_batches' => 'Delivery',
         'return_parcels' => 'Return Parcels', 'history' => 'History', 'delivery_history' => 'Delivery History',
         'transfers' => 'Transfers', 'inter_hub_transfers' => 'Inter-Hub Transfers', 'wallet' => 'Wallet',
         'wallet_payroll' => 'Wallet & Payroll', 'cod_remittances' => 'COD Remittances', 'registrations' => 'Registrations',

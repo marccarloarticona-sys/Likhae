@@ -7,7 +7,7 @@
 @push('head')
 <style>
     .lk-deals-page { min-height: 100%; padding: 40px clamp(18px, 2.4vw, 36px) 56px; color: #3B211B; }
-    .lk-deals-heading { margin: 0; color: #561C17; font-family: "Instrument Serif", Georgia, serif; font-size: clamp(34px, 3vw, 46px); font-weight: 400; letter-spacing: -.035em; line-height: 1; }
+    .lk-deals-heading { margin: 0; color: #561C17; font-family: Georgia, "Instrument Serif", serif; font-size: clamp(34px, 3vw, 46px); font-weight: 400; letter-spacing: -.035em; line-height: 1; }
     .lk-deals-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
     .lk-deals-filters { display: grid; grid-template-columns: minmax(0, 1fr) 190px auto; gap: 10px; margin: 22px 0; }
     .lk-deals-filters input, .lk-deals-filters select { min-width: 0; min-height: 44px; border: 1px solid #DBCEC1; border-radius: 12px; background: #FFFDF9; padding: 0 13px; color: #3B211B; }

@@ -91,7 +91,7 @@
 
         color: var(--lk-text) !important;
 
-        font-family: "Instrument Serif", Georgia, serif !important;
+        font-family: Georgia, "Instrument Serif", serif !important;
         font-size: clamp(32px, 3vw, 46px) !important;
         font-weight: 400 !important;
         line-height: 0.98 !important;
@@ -150,7 +150,7 @@
     .lk-ed-hero h1 {
         color: var(--lk-maroon) !important;
 
-        font-family: "Instrument Serif", Georgia, serif !important;
+        font-family: Georgia, "Instrument Serif", serif !important;
         font-weight: 400 !important;
         letter-spacing: -0.05em !important;
         line-height: 0.92 !important;
@@ -294,6 +294,141 @@
     .lk-home-voucher-card button,
     .lk-home-voucher-card a { align-self: flex-start; }
     .lk-home-voucher-feedback { min-height: 1.25em; color: var(--lk-brown); font-size: 11px; }
+
+    .lk-home-page .lk-home-offers {
+        display: grid;
+        gap: 16px;
+        margin-top: 28px !important;
+        padding: clamp(16px, 2.2vw, 26px);
+        border: 1px solid var(--lk-home-line, #eadfd4);
+        border-radius: 24px;
+        background: var(--lk-home-paper, #fffdf9);
+        box-shadow: 0 14px 34px rgba(86, 28, 23, .055);
+    }
+    .lk-home-page .lk-home-offers__header,
+    .lk-home-page .lk-home-offer-card__top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .lk-home-page .lk-home-offers__header h2 {
+        margin: 3px 0 0;
+        color: var(--lk-home-ink, #171311);
+        font-size: clamp(21px, 2.3vw, 28px);
+        font-weight: 850;
+        letter-spacing: -.035em;
+    }
+    .lk-home-page .lk-home-offers__header p {
+        margin: 5px 0 0;
+        color: var(--lk-home-muted, #6b625c);
+        font-size: 12px;
+    }
+    .lk-home-page .lk-home-offers__refresh {
+        display: inline-flex;
+        min-height: 40px;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 0 14px;
+        border: 1px solid var(--lk-home-line, #eadfd4);
+        border-radius: 999px;
+        background: var(--lk-home-paper, #fffdf9);
+        color: var(--lk-home-copy-maroon, #561c17);
+        font-size: 11px;
+        font-weight: 800;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+    }
+    .lk-home-page .lk-home-offers__refresh:hover:not(:disabled) {
+        transform: translateY(-1px);
+        border-color: var(--lk-home-terracotta, #bd3e2b);
+        background: #f7eee7;
+    }
+    .lk-home-page .lk-home-offers__refresh:focus-visible,
+    .lk-home-page .lk-home-offer-card__link:focus-visible {
+        outline: 3px solid var(--lk-home-terracotta, #bd3e2b);
+        outline-offset: 3px;
+    }
+    .lk-home-page .lk-home-offers__refresh:disabled { opacity: .65; cursor: wait; }
+    .lk-home-page .lk-home-offers__refresh svg { width: 16px; height: 16px; }
+    .lk-home-page [data-home-offers][aria-busy="true"] .lk-home-offers__refresh svg { animation: lk-home-offers-spin 800ms linear infinite; }
+    .lk-home-page .lk-home-offers__grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 225px), 1fr));
+        align-items: stretch;
+        gap: 13px;
+    }
+    .lk-home-page .lk-home-offers__product { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+    .lk-home-page .lk-home-offers__type {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        min-height: 22px;
+        padding: 0 9px;
+        border-radius: 999px;
+        background: #f3e5dc;
+        color: var(--lk-home-copy-maroon, #561c17);
+        font-size: 9px;
+        font-weight: 850;
+        letter-spacing: .075em;
+        text-transform: uppercase;
+    }
+    .lk-home-page .lk-home-offer-card {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 15px;
+        border: 1px solid var(--lk-home-line, #eadfd4);
+        border-radius: 19px;
+        background: var(--lk-home-paper, #fffdf9);
+        color: var(--lk-home-ink, #171311);
+        box-shadow: 0 8px 22px rgba(86, 28, 23, .045);
+    }
+    .lk-home-page .lk-home-offer-card__top { width: 100%; align-items: center; }
+    .lk-home-page .lk-home-offer-card h3 { margin: 0; color: var(--lk-home-ink, #171311); font-size: 15px; font-weight: 850; line-height: 1.35; }
+    .lk-home-page .lk-home-offer-card p { margin: 0; color: var(--lk-home-muted, #6b625c); font-size: 11px; line-height: 1.55; }
+    .lk-home-page .lk-home-offer-card p strong { color: var(--lk-home-copy-maroon, #561c17); }
+    .lk-home-page .lk-home-offer-card .lk-home-offer-card__saving { color: var(--lk-home-muted, #6b625c); }
+    .lk-home-page .lk-home-offer-card__seller { margin-top: auto !important; font-weight: 700; }
+    .lk-home-page .lk-home-offer-card__stock { color: var(--lk-home-muted, #6b625c); font-size: 9px; font-weight: 750; text-align: right; }
+    .lk-home-page .lk-home-offer-card__link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: auto;
+        color: var(--lk-home-copy-maroon, #561c17);
+        font-size: 10px;
+        font-weight: 850;
+        text-decoration: none;
+    }
+    .lk-home-page .lk-home-offer-card__link:hover { color: var(--lk-home-terracotta, #bd3e2b); }
+    .lk-home-page .lk-home-offers .lk-home-voucher-card { justify-content: flex-start; }
+    .lk-home-page .lk-home-offers .lk-home-voucher-card > div { width: 100%; }
+    .lk-home-page .lk-home-offers .lk-home-voucher-card button,
+    .lk-home-page .lk-home-offers .lk-home-voucher-card a.lk-btn { margin-top: auto; }
+    .lk-home-page .lk-home-offers__empty {
+        grid-column: 1 / -1;
+        padding: 26px 18px;
+        border: 1px dashed var(--lk-home-line, #eadfd4);
+        border-radius: 18px;
+        color: var(--lk-home-ink, #171311);
+        text-align: center;
+    }
+    .lk-home-page .lk-home-offers__empty p { margin: 5px 0 0; color: var(--lk-home-muted, #6b625c); font-size: 12px; }
+    .lk-home-page .lk-home-offers__status { min-height: 1em; margin: 0; color: var(--lk-home-muted, #6b625c); font-size: 11px; }
+    @keyframes lk-home-offers-spin { to { transform: rotate(360deg); } }
+    @media (max-width: 560px) {
+        .lk-home-page .lk-home-offers__header { align-items: stretch; flex-direction: column; }
+        .lk-home-page .lk-home-offers__refresh { width: 100%; }
+        .lk-home-page .lk-home-offers__grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .lk-home-page [data-home-offers][aria-busy="true"] .lk-home-offers__refresh svg { animation: none; }
+    }
 
     .lk-quick-icon {
         display: inline-flex !important;
@@ -535,7 +670,7 @@
 
         color: #FFFFFF !important;
 
-        font-family: "Instrument Serif", Georgia, serif !important;
+        font-family: Georgia, "Instrument Serif", serif !important;
         font-size: clamp(36px, 4vw, 58px) !important;
         font-weight: 400 !important;
         line-height: 0.95 !important;
@@ -649,7 +784,7 @@
     .lk-platform-events-empty h3 {
         margin: 5px 0 0;
         color: var(--lk-text);
-        font-family: "Instrument Serif", Georgia, serif;
+        font-family: Georgia, "Instrument Serif", serif;
         font-size: clamp(26px, 3vw, 36px);
         font-weight: 400;
         line-height: 1.05;
@@ -673,7 +808,7 @@
     .lk-event-status.is-active { background: #E8F3EA; color: #256F4A; }
     .lk-event-status.is-upcoming { background: #F8EDD9; color: #8A5A12; }
     .lk-event-card__hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 "Instrument Serif", Georgia, serif; letter-spacing: -.025em; }
+    .lk-event-card__title { margin: 0; color: #FFF8F2; font: 400 clamp(34px, 4vw, 52px)/1 Georgia, "Instrument Serif", serif; letter-spacing: -.025em; }
     .lk-event-card__offer { min-width: 170px; padding: 13px 24px; border: 1px solid rgba(233,199,165,.5); border-radius: 18px; background: rgba(255,248,242,.1); text-align: center; }
     .lk-event-card__offer strong { display: block; color: #FFF8F2; font-size: clamp(34px, 4vw, 48px); font-weight: 800; letter-spacing: -.04em; line-height: 1; }
     .lk-event-card__offer span { display: block; margin-top: 5px; color: #E9C7A5; font-size: 10px; font-weight: 900; letter-spacing: .22em; }
@@ -965,7 +1100,7 @@
     .lk-home-page .lk-home-editorial-title {
         margin: 0;
         color: var(--lk-home-ink);
-        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-family: Georgia, "Instrument Serif", "Times New Roman", serif;
         font-size: clamp(56px, 5.2vw, 76px);
         font-weight: 400;
         letter-spacing: -.055em;
@@ -1062,7 +1197,7 @@
     .lk-home-page .lk-home-hero-event-title {
         margin: 0;
         color: var(--lk-home-ink);
-        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-family: Georgia, "Instrument Serif", "Times New Roman", serif;
         font-size: clamp(44px, 5vw, 70px);
         font-weight: 400;
         letter-spacing: -.045em;
@@ -1154,7 +1289,7 @@
     .lk-home-page .lk-home-category-heading h2 {
         margin: 0;
         color: var(--lk-home-ink);
-        font-family: "Instrument Serif", Georgia, "Times New Roman", serif;
+        font-family: Georgia, "Instrument Serif", "Times New Roman", serif;
         font-size: clamp(25px, 2.4vw, 32px);
         font-weight: 400;
         letter-spacing: -.035em;
@@ -1423,6 +1558,21 @@
     html.dark .lk-home-page .lk-home-category-card {
         border-color: #49342b;
         background: #241a17;
+    }
+
+    html.dark .lk-home-page .lk-home-offers__refresh {
+        border-color: #49342b;
+        background: #241a17;
+        color: #f0d0c5;
+    }
+
+    html.dark .lk-home-page .lk-home-offers__refresh:hover:not(:disabled) {
+        background: #392520;
+    }
+
+    html.dark .lk-home-page .lk-home-offers__type {
+        background: #4a2923;
+        color: #f0c8bc;
     }
 
     html.dark .lk-home-page .lk-home-category-visual {
@@ -2319,7 +2469,6 @@
 @endphp
 
 <div class="lk-page lk-home-page">
-
     @php $homeHeroSlideCount = 1 + $homeCarouselEvents->count(); @endphp
     <section class="lk-home-hero-carousel" data-home-hero-carousel aria-label="LIKHAE promotions" aria-roledescription="carousel">
         <div class="lk-home-hero-track">
@@ -2539,24 +2688,21 @@
         aria-busy="true"
     >
         <div data-deferred-content class="lk-home-deferred-skeleton" aria-hidden="true">
-            @for($section = 0; $section < 2; $section++)
-                <section class="lk-section lk-home-marketing-section">
-                    <div class="lk-section-head">
-                        <div><div class="lk-home-skeleton-heading"></div><div class="lk-home-skeleton-copy"></div></div>
-                        <span class="lk-home-skeleton-line is-short"></span>
-                    </div>
-                    <div class="lk-product-grid lk-home-product-grid">
-                        @for($card = 0; $card < 4; $card++)
-                            <article class="lk-home-skeleton-card"><div class="lk-home-skeleton-media"></div><div class="lk-home-skeleton-body"><span class="lk-home-skeleton-line is-short"></span><span class="lk-home-skeleton-line is-long"></span><span class="lk-home-skeleton-line"></span></div></article>
-                        @endfor
-                    </div>
-                </section>
-            @endfor
-            <div class="lk-home-voucher-grid"><div class="lk-home-skeleton-promo"></div><div class="lk-home-skeleton-promo"></div></div>
+            <section class="lk-section lk-home-marketing-section">
+                <div class="lk-section-head">
+                    <div><div class="lk-home-skeleton-heading"></div><div class="lk-home-skeleton-copy"></div></div>
+                    <span class="lk-home-skeleton-line is-short"></span>
+                </div>
+                <div class="lk-product-grid lk-home-product-grid">
+                    @for($card = 0; $card < 5; $card++)
+                        <article class="lk-home-skeleton-card"><div class="lk-home-skeleton-media"></div><div class="lk-home-skeleton-body"><span class="lk-home-skeleton-line is-short"></span><span class="lk-home-skeleton-line is-long"></span><span class="lk-home-skeleton-line"></span></div></article>
+                    @endfor
+                </div>
+            </section>
         </div>
         <p class="lk-home-deferred-status" data-deferred-status role="status" aria-live="polite" hidden></p>
         <button class="lk-btn lk-btn-light" type="button" data-deferred-retry hidden>Try again</button>
-        <noscript><p class="lk-home-deferred-status"><a href="{{ route('buyer.discounts') }}">View discounts</a> · <a href="{{ route('buyer.flash-deals') }}">View flash deals</a> · <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}">View vouchers</a></p></noscript>
+        <noscript><p class="lk-home-deferred-status"><a href="{{ route('buyer.discounts') }}">Discounts</a> &middot; <a href="{{ route('buyer.flash-deals') }}">Flash Deals</a> &middot; <a href="{{ route('buyer.bundle-deals') }}">Bundle Deals</a> &middot; <a href="{{ route('buyer.free-gifts') }}">Free Gifts</a> &middot; <a href="{{ route('buyer.rewards', ['tab' => 'vouchers']) }}">Vouchers</a></p></noscript>
     </div>
 
     </section>
@@ -2878,6 +3024,53 @@
                 status.textContent = `Load ${label.toLowerCase()} when ready.`;
                 retryButton.hidden = false;
                 slot.setAttribute('aria-busy', 'false');
+            }
+        });
+
+        document.addEventListener('click', async (event) => {
+            const button = event.target.closest('[data-home-offers-refresh]');
+            if (!button || button.disabled) return;
+
+            const section = button.closest('[data-home-offers]');
+            const status = section?.querySelector('[data-home-offers-status]');
+            const sourceUrl = section?.dataset.homeOffersUrl;
+            if (!section || !status || !sourceUrl) return;
+
+            const rotation = (Number(section.dataset.homeOffersRotation || 0) + 1) % 100000;
+            const url = new URL(sourceUrl, window.location.href);
+            url.searchParams.set('rotation', String(rotation));
+            button.disabled = true;
+            section.setAttribute('aria-busy', 'true');
+            status.textContent = 'Finding fresh offers…';
+
+            try {
+                const response = await fetch(url, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!response.ok) throw new Error('Offers could not be refreshed.');
+                const payload = await response.json();
+                if (typeof payload.html !== 'string') throw new Error('Offers could not be refreshed.');
+
+                const template = document.createElement('template');
+                template.innerHTML = payload.html;
+                template.content.querySelectorAll('style').forEach((style) => style.remove());
+                const updatedSection = template.content.querySelector('[data-home-offers]');
+                if (!updatedSection) throw new Error('Offers could not be refreshed.');
+
+                updatedSection.dataset.homeOffersRotation = String(rotation);
+                updatedSection.setAttribute('aria-busy', 'false');
+                const updatedStatus = updatedSection.querySelector('[data-home-offers-status]');
+                if (updatedStatus) updatedStatus.textContent = 'Showing fresh offers.';
+                section.replaceWith(updatedSection);
+                document.dispatchEvent(new CustomEvent('catalog:results-updated', {
+                    detail: { root: updatedSection },
+                }));
+                updatedSection.querySelector('[data-home-offers-refresh]')?.focus({ preventScroll: true });
+            } catch {
+                section.setAttribute('aria-busy', 'false');
+                button.disabled = false;
+                status.textContent = 'Offers could not be refreshed. Please try again.';
             }
         });
 

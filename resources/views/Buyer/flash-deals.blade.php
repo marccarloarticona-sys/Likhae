@@ -15,7 +15,7 @@
     .lk-deals-heading {
         margin: 0;
         color: #561C17;
-        font-family: "Instrument Serif", Georgia, serif;
+        font-family: Georgia, "Instrument Serif", serif;
         font-size: clamp(34px, 3vw, 46px);
         font-weight: 400;
         letter-spacing: -0.035em;

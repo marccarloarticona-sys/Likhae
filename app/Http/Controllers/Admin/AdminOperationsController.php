@@ -1001,6 +1001,19 @@ class AdminOperationsController extends Controller
         ]);
     }
 
+    public function messagePreview(Request $request, ConversationService $conversationService): JsonResponse
+    {
+        if (! Schema::hasTable('messages')
+            || ! Schema::hasTable('conversation_participants')
+            || ! Schema::hasTable('conversations')) {
+            return response()->json(['items' => [], 'unread_count' => 0])
+                ->header('Cache-Control', 'no-store, private');
+        }
+
+        return response()->json($conversationService->headerPreviewFor($request->user()))
+            ->header('Cache-Control', 'no-store, private');
+    }
+
     public function messageStream(Request $request, ConversationService $conversationService): JsonResponse
     {
         return response()->json([

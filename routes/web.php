@@ -16,6 +16,7 @@ use App\Http\Controllers\Communication\ConversationReceiptController;
 use App\Http\Controllers\Communication\ConversationReadController;
 use App\Http\Controllers\Communication\MessagePresenceController;
 use App\Http\Controllers\NotificationCenterController;
+use App\Http\Controllers\WeatherController;
 use App\Models\User;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
 use Illuminate\Http\Request;
@@ -31,6 +32,10 @@ require __DIR__.'/Seller.php';
 require __DIR__.'/Buyer.php';
 require __DIR__.'/logistics.php';
 require __DIR__.'/rider.php';
+
+Route::post('/dashboard/weather/current', [WeatherController::class, 'current'])
+    ->middleware(['auth', 'throttle:12,1'])
+    ->name('dashboard-weather.current');
 
 /*
 |--------------------------------------------------------------------------

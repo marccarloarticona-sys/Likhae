@@ -130,7 +130,7 @@
         border-right: 1px solid var(--buyer-line);
         background: var(--buyer-bg);
         color: var(--buyer-text);
-        font-family: "DM Sans", system-ui, sans-serif;
+        font-family: "Poppins", system-ui, sans-serif;
         transition:
             width .22s ease,
             transform .22s ease;

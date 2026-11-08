@@ -147,7 +147,7 @@
         .lk-confirm-eyebrow::before,.lk-confirm-eyebrow::after { width: clamp(24px,6vw,58px); height: 1px; background: var(--lk-modal-accent,#b98e70); content: ""; }
         .lk-confirm-eyebrow i { display: none; }
         .lk-confirm-title-wrap { display: grid; gap: 10px; }
-        .lk-confirm-card h2 { margin-top: 0; color: var(--lk-modal-ink,#4b211b); font-family: "Playfair Display",Georgia,"Times New Roman",serif; font-size: clamp(30px,4vw,38px); font-weight: 600; letter-spacing: -.045em; line-height: 1.08; }
+        .lk-confirm-card h2 { margin-top: 0; color: var(--lk-modal-ink,#4b211b); font-family: Georgia,"Instrument Serif","Times New Roman",serif; font-size: clamp(30px,4vw,38px); font-weight: 600; letter-spacing: -.045em; line-height: 1.08; }
         .lk-confirm-card > p { max-width: 52ch; margin-top: 8px; color: var(--lk-modal-muted,#927260); font-size: 14px; line-height: 1.5; }
         .lk-confirm-card > .lk-confirm-details { padding: 15px 18px; border-color: var(--lk-modal-line,#e8d6c5); border-radius: 16px; color: var(--lk-modal-ink,#4b211b); background: rgba(255,250,243,.72); font-size: 14px; }
         .lk-confirm-actions { gap: 10px; margin-top: 18px; padding-top: 0; border: 0; }

@@ -10,7 +10,7 @@
 
 
 <div class="ad-page ad-dashboard-page">
-    <div class="ad-page-head">
+    <div class="ad-page-head ad-page-head--weather">
         <div>
             <span class="ad-overline">Control center</span>
 
@@ -38,6 +38,8 @@
                 New announcement
             </a>
         </div>
+
+        <x-shared.dashboard-weather />
     </div>
 
     <section class="ad-stat-grid" aria-label="Platform summary">

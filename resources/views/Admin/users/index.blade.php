@@ -5,7 +5,7 @@
 @section('active', 'users')
 
 @php
-    $stats = array_merge(['total' => 0, 'buyers' => 0, 'sellers' => 0, 'delivery' => 0], $stats ?? []);
+    $stats = array_merge(['total' => 0, 'buyers' => 0, 'sellers' => 0, 'delivery' => 0, 'admins' => 0], $stats ?? []);
     $role = $role ?? request('role', 'all');
     $status = $status ?? request('status', 'all');
     $search = $search ?? request('q', '');
@@ -54,13 +54,19 @@
             </p>
         </div>
 
-        <a
-            class="ad-btn ad-btn-primary"
-            href="{{ route('admin.registrations') }}"
-        >
-            Review registrations
-        </a>
+        <div class="ad-inline-actions">
+            @if($role === 'admins')
+                <a class="ad-btn ad-btn-primary" href="#create-admin-account">Create administrator</a>
+                <a class="ad-btn ad-btn-secondary" href="{{ route('admin.registrations') }}">Review registrations</a>
+            @else
+                <a class="ad-btn ad-btn-primary" href="{{ route('admin.registrations') }}">Review registrations</a>
+            @endif
+        </div>
     </div>
+
+    @if(session('status'))
+        <div class="ad-note" role="status">{{ session('status') }}</div>
+    @endif
 
     @if($errors->any())
         <div class="ad-note" role="alert">
@@ -94,6 +100,12 @@
             <strong>{{ number_format($stats['delivery']) }}</strong>
             <small>Registered logistics accounts</small>
         </div>
+
+        <div class="ad-mini-stat">
+            <span>Administrators</span>
+            <strong>{{ number_format($stats['admins']) }}</strong>
+            <small>Registered administrator accounts</small>
+        </div>
     </section>
 
     @unless($accountEnforcementReady ?? false)
@@ -106,10 +118,6 @@
         <div class="ad-note" role="status">
             Active session details and sign-out controls are unavailable for the configured session driver or until the existing sessions table is installed.
         </div>
-    @else
-        <p class="ad-muted" style="margin:0 0 16px">
-            IP and browser details update when an account makes an authenticated request. Older sessions may show “Not captured” until then.
-        </p>
     @endunless
 
     <nav class="ad-tabs" aria-label="User role">
@@ -122,73 +130,135 @@
                 {{ $label }}
             </a>
         @endforeach
+        @if($role === 'buyers')
+            <div class="ad-users-safety-actions" style="margin-left:auto;flex:0 0 auto">
+                <a class="ad-btn ad-users-safety-review {{ $riskFilter === 'flagged' ? 'ad-btn-primary' : 'ad-btn-secondary' }}" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">
+                    Buyers flagged for safety review ({{ number_format($stats['open_buyer_risk_reviews'] ?? 0) }})
+                </a>
+                @if($riskFilter === 'flagged')
+                    <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers']) }}">Show all buyers</a>
+                @endif
+            </div>
+        @endif
     </nav>
 
-    @if($role === 'buyers')
-        <div class="ad-inline-actions" style="justify-content:flex-end; margin:12px 0">
-            <a class="ad-btn {{ $riskFilter === 'flagged' ? 'ad-btn-primary' : 'ad-btn-secondary' }} ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers', 'risk' => 'flagged']) }}">
-                Buyers flagged for safety review ({{ number_format($stats['open_buyer_risk_reviews'] ?? 0) }})
-            </a>
-            @if($riskFilter === 'flagged')
-                <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users', ['role' => 'buyers']) }}">Show all buyers</a>
-            @endif
-        </div>
+    @if($role === 'admins')
+        <section class="ad-card" id="create-admin-account" style="margin:16px 0">
+            <div class="ad-card-head">
+                <div>
+                    <span class="ad-overline">Administrator access</span>
+                    <h2>Create administrator account</h2>
+                    <p>This creates an active, email-verified Admin account. Use a temporary password and share it privately.</p>
+                </div>
+            </div>
+            <form
+                method="POST"
+                action="{{ route('admin.users.admins.store') }}"
+                class="ad-card-body"
+                data-confirm-title="Create administrator account?"
+                data-confirm-message="This grants the new account full Admin access immediately."
+                data-confirm-label="Create administrator"
+            >
+                @csrf
+                <div class="ad-form-grid">
+                    <label class="ad-field">
+                        <span>First name</span>
+                        <input name="first_name" value="{{ old('first_name') }}" maxlength="100" autocomplete="given-name" required>
+                        @error('first_name')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Middle initial <small>(optional)</small></span>
+                        <input name="middle_initial" value="{{ old('middle_initial') }}" maxlength="10" autocomplete="additional-name">
+                        @error('middle_initial')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Last name</span>
+                        <input name="last_name" value="{{ old('last_name') }}" maxlength="100" autocomplete="family-name" required>
+                        @error('last_name')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Email</span>
+                        <input name="email" type="email" value="{{ old('email') }}" maxlength="255" autocomplete="email" required>
+                        @error('email')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Contact number</span>
+                        <input name="contact_number" type="tel" value="{{ old('contact_number') }}" maxlength="30" inputmode="tel" autocomplete="tel" placeholder="09XXXXXXXXX or +639XXXXXXXXX" required>
+                        @error('contact_number')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Birthday</span>
+                        <input name="birthday" type="date" value="{{ old('birthday') }}" max="{{ now()->subDay()->toDateString() }}" autocomplete="bday" required>
+                        @error('birthday')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Password</span>
+                        <input name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+                        <small>At least 8 characters, with uppercase, lowercase, and a number.</small>
+                        @error('password')<small role="alert">{{ $message }}</small>@enderror
+                    </label>
+                    <label class="ad-field">
+                        <span>Confirm password</span>
+                        <input name="password_confirmation" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+                    </label>
+                </div>
+                <div class="ad-inline-actions" style="justify-content:flex-end;margin-top:16px">
+                    <button class="ad-btn ad-btn-primary" type="submit">Create administrator</button>
+                </div>
+            </form>
+        </section>
     @endif
 
     <section class="ad-card ad-users-card" id="user-table">
-        <form class="ad-filter-bar" action="{{ route('admin.users') }}" method="GET" role="search">
-            <input type="hidden" name="role" value="{{ $role }}">
-            @if($riskFilter === 'flagged')<input type="hidden" name="risk" value="flagged">@endif
-            <label class="ad-filter-search">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="11" cy="11" r="7"/>
-                    <path d="m20 20-3.5-3.5"/>
-                </svg>
+        <div class="ad-users-toolbar">
+            <form class="ad-filter-bar" action="{{ route('admin.users') }}" method="GET" role="search">
+                <input type="hidden" name="role" value="{{ $role }}">
+                @if($riskFilter === 'flagged')<input type="hidden" name="risk" value="flagged">@endif
+                <label class="ad-filter-search">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7"/>
+                        <path d="m20 20-3.5-3.5"/>
+                    </svg>
 
-                <input
-                    name="q"
-                    type="search"
-                    value="{{ $search }}"
-                    maxlength="100"
-                    placeholder="Search name, email, or user ID"
-                    aria-label="Search name, email, or user ID"
-                >
-            </label>
+                    <input
+                        name="q"
+                        type="search"
+                        value="{{ $search }}"
+                        maxlength="100"
+                        placeholder="Search name, email, or user ID"
+                        aria-label="Search name, email, or user ID"
+                    >
+                </label>
 
-            <div class="ad-inline-actions">
-                <select class="ad-select" name="status" aria-label="Account status">
-                    @foreach($statuses as $key => $label)
-                        <option value="{{ $key }}" @selected($status === $key)>{{ $label }}</option>
-                    @endforeach
-                </select>
+                <div class="ad-inline-actions">
+                    <select class="ad-select" name="status" aria-label="Account status">
+                        @foreach($statuses as $key => $label)
+                            <option value="{{ $key }}" @selected($status === $key)>{{ $label }}</option>
+                        @endforeach
+                    </select>
 
-                <button
-                    class="ad-btn ad-btn-primary ad-btn-sm"
-                    type="submit"
-                >
-                    Search
-                </button>
+                    <button
+                        class="ad-btn ad-btn-primary ad-btn-sm"
+                        type="submit"
+                    >
+                        Search
+                    </button>
 
-                <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users') }}">
-                    Clear
-                </a>
-            </div>
-        </form>
+                    <a class="ad-btn ad-btn-secondary ad-btn-sm" href="{{ route('admin.users') }}">
+                        Clear
+                    </a>
+                </div>
+            </form>
 
-        <form
-            method="POST"
-            action="{{ route('admin.users.sessions.revoke') }}"
-            data-session-revocation-form
-        >
-            @csrf
-
-            <div class="ad-inline-actions" style="justify-content:space-between; padding:16px 20px 0">
+            <div class="ad-inline-actions ad-users-session-toolbar" data-session-toolbar>
                 <span class="ad-muted" aria-live="polite">
-                    <strong data-session-selected-count>0</strong> selected on this page
+                    <strong data-session-selected-count>0</strong> selected accounts
+                    <small data-session-selection-message></small>
                 </span>
                 <button
                     class="ad-btn ad-btn-danger-soft ad-btn-sm"
                     type="submit"
+                    form="user-session-revocation-form"
                     data-session-bulk-submit
                     disabled
                     @disabled(! ($sessionManagementAvailable ?? false))
@@ -196,6 +266,15 @@
                     Suspend selected sessions
                 </button>
             </div>
+        </div>
+
+        <form
+            id="user-session-revocation-form"
+            method="POST"
+            action="{{ route('admin.users.sessions.revoke') }}"
+            data-session-revocation-form
+        >
+            @csrf
 
             <div class="ad-table-wrap">
                 <table class="ad-table">
@@ -205,7 +284,7 @@
                                 <input
                                     type="checkbox"
                                     data-select-all
-                                    aria-label="Select all users on this page"
+                                    aria-label="Select all loaded accounts"
                                     @disabled(! ($sessionManagementAvailable ?? false))
                                 >
                             </th>
@@ -219,7 +298,7 @@
                         </tr>
                     </thead>
 
-                    <tbody>
+                    <tbody data-user-table-body>
                         @forelse($users as $user)
                             @php
                                 $roleLabel = ucfirst(strtolower($user->account_type));
@@ -332,32 +411,23 @@
             </div>
         </form>
 
-        <div class="ad-pagination">
-            <span>
+        <div
+            class="ad-users-load-more"
+            data-user-load-more
+            data-next-page-url="{{ $users->nextPageUrl() }}"
+            data-total-users="{{ $users->total() }}"
+            data-first-user="{{ $users->firstItem() ?? 0 }}"
+            data-loaded-users="{{ $users->count() }}"
+        >
+            <span data-user-count-label>
                 Showing {{ $users->firstItem() ?? 0 }}-{{ $users->lastItem() ?? 0 }} of {{ $users->total() }} accounts
             </span>
 
-            <nav aria-label="User pages">
-                @if($users->onFirstPage())
-                    <span class="ad-page-btn" aria-disabled="true">Previous</span>
-                @else
-                    <a class="ad-page-btn" rel="prev" href="{{ $users->previousPageUrl() }}">Previous</a>
-                @endif
-
-                @foreach($users->getUrlRange(1, $users->lastPage()) as $page => $url)
-                    @if($page === $users->currentPage())
-                        <span class="ad-page-btn is-active" aria-current="page">{{ $page }}</span>
-                    @else
-                        <a class="ad-page-btn" href="{{ $url }}" aria-label="Go to page {{ $page }}">{{ $page }}</a>
-                    @endif
-                @endforeach
-
-                @if($users->hasMorePages())
-                    <a class="ad-page-btn" rel="next" href="{{ $users->nextPageUrl() }}">Next</a>
-                @else
-                    <span class="ad-page-btn" aria-disabled="true">Next</span>
-                @endif
-            </nav>
+            <button class="ad-btn ad-btn-secondary ad-btn-sm" type="button" data-user-load-more-button @if(!$users->hasMorePages()) hidden @endif>
+                Load more accounts
+            </button>
+            <span data-user-load-more-status role="status" aria-live="polite"></span>
+            <span class="ad-users-load-more__sentinel" data-user-load-more-sentinel aria-hidden="true"></span>
         </div>
     </section>
 </div>

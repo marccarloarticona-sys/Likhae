@@ -33,6 +33,11 @@ return [
     'sounds_description' => 'Manage interface sound cues.',
     'notification_sounds' => 'Notification Sounds',
     'notification_sounds_description' => 'Play sounds for supported operational notifications.',
+    'sound_type_previews' => 'Preview sound types',
+    'admin_sound_previews' => [
+        'messages' => 'Messages', 'orders' => 'Orders', 'delivery' => 'Delivery', 'promotions' => 'Promotions',
+        'payments' => 'Payments', 'alerts' => 'Alerts & security', 'returns' => 'Returns & refunds', 'general' => 'General',
+    ],
     'appearance' => 'Appearance',
     'appearance_description' => 'Apply your preferred LIKHAE theme.',
     'language' => 'Language',

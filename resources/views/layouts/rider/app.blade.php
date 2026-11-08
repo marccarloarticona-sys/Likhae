@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
     <link
-        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap"
         rel="stylesheet"
     >
 
@@ -47,6 +47,9 @@
         'resources/js/rider/app.js',
         'resources/js/shared/likhae-workspace-ai.js'
     ])
+    @if(request()->routeIs('rider.dashboard'))
+        @vite(['resources/css/shared/dashboard-weather.css', 'resources/css/rider/dashboard.css', 'resources/js/shared/dashboard-weather.js'])
+    @endif
     @stack('head')
 
     <style>
@@ -89,7 +92,7 @@
             margin: 0;
             background: var(--ra-page);
             color: var(--ra-text);
-            font-family: "DM Sans", system-ui, sans-serif;
+            font-family: "Poppins", system-ui, sans-serif;
         }
 
         .rider-layout {
@@ -132,7 +135,7 @@
             border-radius: 10px;
             background: var(--ra-maroon);
             color: #FFFFFF;
-            font-family: "Instrument Serif", Georgia, serif;
+            font-family: Georgia, "Instrument Serif", serif;
             font-size: 20px;
             line-height: 1;
             box-shadow: 0 8px 18px rgba(86, 28, 23, .16);

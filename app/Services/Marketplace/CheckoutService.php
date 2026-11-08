@@ -8,7 +8,6 @@ use App\Models\Buyer\CartItem;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Payment;
-use App\Models\Buyer\SellerFollower;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceAreaLocation;
 use App\Models\Logistics\Shipment;
@@ -30,9 +29,7 @@ use App\Services\Protection\FragileProtectionRuleService;
 use App\Support\AddressCoordinateValidator;
 use App\Support\FinancialRules;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Database\QueryException;
@@ -82,67 +79,6 @@ class CheckoutService
         }
     }
 
-    /**
-     * Sign the server-calculated shipping quote for this cart and address.
-     * The token is returned to checkout and verified again inside the order
-     * transaction so a displayed quote cannot be submitted after it changes.
-     *
-     * @param array<string, mixed> $preview
-     */
-    public function shippingQuoteToken(User $buyer, Address $address, Collection $items, array $preview): string
-    {
-        $sellerQuotes = collect($preview['groups'] ?? [])
-            ->mapWithKeys(fn (array $group, int|string $sellerId): array => [(string) $sellerId => [
-                'shipping_fee' => (string) ($group['shipping_fee'] ?? '0.00'),
-                'shipping_voucher_discount' => (string) ($group['shipping_voucher_discount'] ?? '0.00'),
-                'snapshot' => (array) ($group['shipping_rate_snapshot'] ?? []),
-                'routing_decision' => (array) ($group['routing_decision'] ?? []),
-            ]])
-            ->sortKeys()
-            ->all();
-
-        $payload = [
-            'buyer_id' => (int) $buyer->id,
-            'address_id' => (int) $address->id,
-            'items' => $this->checkoutCartLines($items),
-            'seller_quotes' => $sellerQuotes,
-        ];
-        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-
-        return hash_hmac('sha256', $encoded, (string) config('app.key'));
-    }
-
-    /** @return list<array{id:int,variant_id:int,quantity:int,seller_id:int}> */
-    private function checkoutCartLines(Collection $items): array
-    {
-        return $items->map(function (CartItem $item): array {
-            $item->loadMissing('productVariant.product');
-
-            return [
-                'id' => (int) $item->id,
-                'variant_id' => (int) $item->product_variant_id,
-                'quantity' => (int) $item->quantity,
-                'seller_id' => (int) ($item->productVariant?->product?->seller_profile_id ?? 0),
-            ];
-        })->sortBy('id')->values()->all();
-    }
-
-    /** @param array<string, mixed> $preview */
-    private function assertShippingQuoteToken(
-        ?string $expectedToken,
-        User $buyer,
-        Address $address,
-        Collection $items,
-        array $preview,
-    ): void {
-        $currentToken = $this->shippingQuoteToken($buyer, $address, $items, $preview);
-        if (! is_string($expectedToken) || ! hash_equals($currentToken, $expectedToken)) {
-            throw ValidationException::withMessages([
-                'shipping_quote' => 'Shipping fees or the delivery route changed while you were reviewing checkout. Review the updated delivery details before placing the order.',
-            ]);
-        }
-    }
-
     public function availableVouchers(Collection $items, ?User $buyer = null): Collection
     {
         $sellerVoucherGroups = $items
@@ -157,13 +93,12 @@ class CheckoutService
                     ->map(fn (CartItem $item): int => (int) $item->productVariant->product_id)
                     ->unique()
                     ->all();
-                $cartVariantIds = $sellerItems->pluck('product_variant_id')->map(fn ($id): int => (int) $id)->unique()->all();
 
                 return Voucher::query()
                     ->where('seller_profile_id', $sellerId)
                     ->when(Schema::hasColumn('vouchers', 'platform_code_key'), fn ($query) => $query->whereNull('platform_code_key'))
                     ->when(Schema::hasColumn('vouchers', 'benefit_scope'), fn ($query) => $query->where('benefit_scope', 'PRODUCT'))
-                    ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->whereIn('visibility', $buyer ? ['PUBLIC', 'FOLLOWERS'] : ['PUBLIC']))
+                    ->when(Schema::hasColumn('vouchers', 'visibility'), fn ($query) => $query->where('visibility', 'PUBLIC'))
                     ->where('is_active', true)
                     ->where(fn ($query) => $query->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
                     ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>=', now()))
@@ -182,17 +117,10 @@ class CheckoutService
                         ),
                     ])
                     ->with('eligibleProducts:id')
-                    ->when(Schema::hasTable('voucher_variants'), fn ($query) => $query->with('eligibleVariants:id,product_id'))
                     ->get()
                     ->filter(fn (Voucher $voucher): bool => ($voucher->usage_limit === null || $voucher->seller_orders_count < $voucher->usage_limit)
                         && ($voucher->per_user_limit === null || $voucher->buyer_uses_count < $voucher->per_user_limit)
-                        && (! $buyer || ! Schema::hasColumn('vouchers', 'visibility') || $voucher->visibility !== 'FOLLOWERS'
-                            || (Schema::hasTable('seller_followers') && SellerFollower::query()
-                                ->where('buyer_user_id', $buyer->id)
-                                ->where('seller_profile_id', $sellerId)
-                                ->exists()))
                         && ($voucher->applies_to !== 'PRODUCTS' || $voucher->eligibleProducts->contains(fn (Product $product): bool => in_array((int) $product->id, $cartProductIds, true)))
-                        && ($voucher->applies_to !== 'VARIANTS' || $voucher->eligibleVariants->contains(fn (ProductVariant $variant): bool => in_array((int) $variant->id, $cartVariantIds, true)))
                     )
                     ->values();
             })
@@ -211,18 +139,9 @@ class CheckoutService
             $buyerRedemptionCounts = $buyer
                 ? VoucherRedemptionCounter::countsFor($platformVouchers, (int) $buyer->id)
                 : collect();
-            $eligibility = app(PlatformCampaignEligibility::class);
             $platformVouchers = $platformVouchers->filter(fn (Voucher $voucher): bool =>
                 ($voucher->usage_limit === null || $redemptionCounts->get($voucher->id, 0) < $voucher->usage_limit)
                 && (! $buyer || $voucher->per_user_limit === null || $buyerRedemptionCounts->get($voucher->id, 0) < $voucher->per_user_limit)
-                && $eligibility->status($voucher) === 'ACTIVE'
-                && $eligibility->audienceEligible($voucher, $buyer)
-                && $eligibility->distribution($voucher) !== 'AUTO'
-                && ($eligibility->distribution($voucher) !== 'CLAIMABLE'
-                    || ($buyer && $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists()))
-                && (strtoupper((string) $voucher->benefit_scope) === 'SHIPPING' || $eligibility->hasEligibleItem($voucher, $items))
-                && ! $voucher->requiresReview()
-                && app(\App\Services\Finance\PlatformCampaignBudgetService::class)->selectable($voucher)
             )->values();
 
             $productVouchers = $platformVouchers->filter(fn (Voucher $voucher): bool => ! Schema::hasColumn('vouchers', 'benefit_scope')
@@ -249,62 +168,36 @@ class CheckoutService
             ->approvedActive()
             ->whereHas('serviceAreas', fn ($query) => $query
                 ->where('is_active', true)
-                ->whereHas('locations', fn ($locations) => $locations
-                    ->when($this->schema->coverageTypeReady(), fn ($coverage) => $coverage->where('coverage_type', 'PRIMARY'))))
+                ->whereHas('locations'))
             ->orderBy('business_name')
             ->get(['id', 'code', 'business_name'])
             ->each(fn (LogisticsCenter $center) => $center->setAttribute('shipping_fee', $globalShippingFee));
     }
 
-    /** @return array{available: bool, requires_review: bool, message: string|null, coverage_type: string|null, estimated_delivery_at: string|null} */
+    /** @return array{available: bool, requires_review: bool, message: string|null} */
     public function deliveryAvailability(Collection $items, Address $destination, ?LogisticsCenter $provider = null): array
     {
         try {
-            $routing = $this->assertDeliveryAvailable($items, $destination, $provider);
-            $fallbackDate = collect($routing['fallback_routes'])
-                ->pluck('estimated_delivery_at')
-                ->filter()
-                ->max();
-            $coverageTypes = collect($routing['coverage_types'])->unique()->values();
+            $requiresReview = $this->assertDeliveryAvailable($items, $destination, $provider);
 
             return [
                 'available' => true,
-                'requires_review' => $routing['requires_review'],
-                'coverage_type' => $coverageTypes->isEmpty() ? 'PRIMARY' : ($coverageTypes->count() === 1 ? $coverageTypes->first() : 'MIXED'),
-                'estimated_sla_hours' => collect($routing['fallback_routes'])->pluck('estimated_sla_hours')->filter()->max(),
-                'estimated_delivery_at' => $fallbackDate,
-                'failure_reason' => null,
-                'message' => $routing['requires_review']
-                    ? 'Delivery details may need confirmation after your order is placed.'
-                    : ($fallbackDate
-                        ? 'An approved delivery route serves this address. Estimated delivery by '.Carbon::parse($fallbackDate)->format('M j, Y').'.'
-                        : null),
+                'requires_review' => $requiresReview,
+                'message' => $requiresReview ? 'Delivery details may need confirmation after your order is placed.' : null,
             ];
         } catch (ValidationException $exception) {
             $message = collect($exception->errors())->flatten()->filter()->first()
                 ?: 'Delivery is not available for this address.';
-            if ($this->schema->smartFallbackEnabled()) {
-                Log::info('Smart logistics fallback quote is unavailable.', [
-                    'failure_code' => $this->routingFailureCode((string) $message),
-                ]);
-            }
 
             return [
                 'available' => false,
                 'requires_review' => false,
                 'message' => $this->buyerFacingDeliveryError((string) $message),
-                'coverage_type' => null,
-                'estimated_sla_hours' => null,
-                'estimated_delivery_at' => null,
-                'failure_reason' => 'DELIVERY_UNAVAILABLE',
             ];
         }
     }
 
-    /**
-     * @return array{requires_review:bool,fallback_routes:list<array{coverage_type:string,estimated_sla_hours:int,estimated_delivery_at:string|null}>,coverage_types:list<string>}
-     */
-    private function assertDeliveryAvailable(Collection $items, Address $destination, ?LogisticsCenter $provider = null): array
+    private function assertDeliveryAvailable(Collection $items, Address $destination, ?LogisticsCenter $provider = null): bool
     {
         try {
             AddressCoordinateValidator::assertValid([
@@ -336,43 +229,20 @@ class CheckoutService
                 ]);
             }
 
-            return ['requires_review' => false, 'fallback_routes' => [], 'coverage_types' => ['PRIMARY']];
+            return false;
         }
 
         $requiresReview = false;
-        $plannedRouteReservations = [];
-        $fallbackRoutes = [];
-        $coverageTypes = [];
-        $sellerGroups = $items->groupBy(function (CartItem $item): int {
-            $item->loadMissing('productVariant.product.sellerProfile');
-
-            return (int) ($item->productVariant?->product?->seller_profile_id ?? 0);
-        });
-        foreach ($sellerGroups as $sellerItems) {
-            $sellerItems->each(fn (CartItem $item) => $item->loadMissing('productVariant.product.sellerProfile.businessAddress'));
-            $seller = $sellerItems->first()?->productVariant?->product?->sellerProfile;
+        foreach ($items as $item) {
+            $item->loadMissing('productVariant.product.sellerProfile.businessAddress');
+            $seller = $item->productVariant?->product?->sellerProfile;
             if (! $seller) {
                 continue;
             }
 
             try {
-                $route = $this->routing->resolve($seller, $destination, [
-                    'required_parcels' => $sellerItems->count(),
-                    'planned_route_reservations' => $plannedRouteReservations,
-                ]);
+                $route = $this->routing->resolve($seller, $destination);
                 $this->assertCrossHubCustodyReady($route);
-                $coverageTypes[] = (string) $route['coverage_type'];
-                if ($route['coverage_route'] instanceof \App\Models\Logistics\LogisticsCoverageRoute) {
-                    $routeId = (int) $route['coverage_route']->id;
-                    $serviceDate = $route['service_date']->toDateString();
-                    $plannedRouteReservations[$routeId][$serviceDate] = (int) ($plannedRouteReservations[$routeId][$serviceDate] ?? 0)
-                        + $sellerItems->count();
-                    $fallbackRoutes[] = [
-                        'coverage_type' => (string) $route['coverage_type'],
-                        'estimated_sla_hours' => (int) $route['estimated_sla_hours'],
-                        'estimated_delivery_at' => $route['estimated_delivery_at']?->toIso8601String(),
-                    ];
-                }
             } catch (ValidationException $exception) {
                 $reason = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
                 if ($this->isUnserviceableBuyerAddress($reason) || str_contains(mb_strtolower($reason), 'cross-hub fulfillment')) {
@@ -394,18 +264,18 @@ class CheckoutService
             }
         }
 
-        if ($requiresReview && $coverageTypes === []) {
-            $coverageTypes[] = 'PRIMARY';
-        }
-
-        return ['requires_review' => $requiresReview, 'fallback_routes' => $fallbackRoutes, 'coverage_types' => array_values(array_unique($coverageTypes))];
+        return $requiresReview;
     }
 
     private function isUnserviceableBuyerAddress(string $reason): bool
     {
         $message = mb_strtolower($reason);
 
-        return str_contains($message, 'buyer delivery');
+        return str_contains($message, 'buyer delivery')
+            && (str_contains($message, 'no active logistics hub')
+                || str_contains($message, 'not covered')
+                || str_contains($message, 'missing a canonical')
+                || str_contains($message, 'missing or does not belong'));
     }
 
     private function buyerFacingDeliveryError(string $reason): string
@@ -432,8 +302,6 @@ class CheckoutService
         $singleVoucherCode = is_string($voucherCodes) ? mb_strtoupper(trim($voucherCodes)) : '';
         $structuredVoucherSelection = is_array($voucherCodes)
             && array_intersect(['seller', 'platform', 'shipping'], array_keys($voucherCodes)) !== [];
-        $autoApplyPlatform = (bool) (is_array($voucherCodes) ? ($voucherCodes['auto_apply_platform'] ?? $voucherCodes['auto_apply'] ?? true) : true);
-        $autoApplyShipping = (bool) (is_array($voucherCodes) ? ($voucherCodes['auto_apply_shipping'] ?? $voucherCodes['auto_apply'] ?? true) : true);
         $legacyVoucherCodes = is_array($voucherCodes) && ! $structuredVoucherSelection ? $voucherCodes : [];
         $groups = [];
         $subtotal = 0.0;
@@ -455,13 +323,6 @@ class CheckoutService
                 ->first();
         }
         $shippingQuotes = [];
-        $routingDecisions = [];
-        $plannedRouteReservations = [];
-        $sellerItemCounts = $items->groupBy(function (CartItem $item): int {
-            $item->loadMissing('productVariant.product');
-
-            return (int) ($item->productVariant?->product?->seller_profile_id ?? 0);
-        })->map(fn (Collection $sellerItems): int => $sellerItems->count());
 
         $this->assertFlashSaleAllocations($items);
 
@@ -536,41 +397,23 @@ class CheckoutService
             }
             $groupNeedsRoutingReview = false;
             $groupRoutingReviewReason = null;
-            $route = null;
             if ($this->automaticRoutingReady() && $logisticsProvider === null && $automaticDestination) {
-                if (! array_key_exists($sellerId, $routingDecisions)) {
-                    try {
-                        $resolved = $this->routing->resolve($seller, $automaticDestination, [
-                            'lock_capacity' => $lockVoucherUsage,
-                            'required_parcels' => max(1, (int) $sellerItemCounts->get($sellerId, 1)),
-                            'planned_route_reservations' => $plannedRouteReservations,
-                        ]);
-                        $this->assertCrossHubCustodyReady($resolved);
-                        $routingDecisions[$sellerId] = ['route' => $resolved, 'review_reason' => null];
-                        if ($resolved['coverage_route'] instanceof \App\Models\Logistics\LogisticsCoverageRoute) {
-                            $routeId = (int) $resolved['coverage_route']->id;
-                            $serviceDate = $resolved['service_date']->toDateString();
-                            $plannedRouteReservations[$routeId][$serviceDate] = (int) ($plannedRouteReservations[$routeId][$serviceDate] ?? 0)
-                                + max(1, (int) $sellerItemCounts->get($sellerId, 1));
-                        }
-                    } catch (ValidationException $exception) {
-                        // Keep seller-origin gaps in the existing Admin review
-                        // flow. Buyer destination gaps and unauthorized fallback
-                        // paths remain checkout blockers.
-                        $routeFailure = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
-                        if ($this->isUnserviceableBuyerAddress($routeFailure)) {
-                            throw $exception;
-                        }
-                        $reviewReason = $this->routingReviewReason($exception);
-                        if (! $reviewReason) {
-                            throw $exception;
-                        }
-                        $routingDecisions[$sellerId] = ['route' => null, 'review_reason' => $reviewReason];
+                try {
+                    $route = $this->routing->resolve($seller, $automaticDestination);
+                } catch (ValidationException $exception) {
+                    // Keep checkout available while preserving an explicit
+                    // unrouted parcel for administrator review after purchase.
+                    $reviewReason = $this->routingReviewReason($exception);
+                    if (! $reviewReason) {
+                        throw $exception;
                     }
+                    $groupNeedsRoutingReview = true;
+                    $groupRoutingReviewReason = $reviewReason;
+                    $route = null;
                 }
-                $route = $routingDecisions[$sellerId]['route'];
-                $groupNeedsRoutingReview = $routingDecisions[$sellerId]['review_reason'] !== null;
-                $groupRoutingReviewReason = $routingDecisions[$sellerId]['review_reason'];
+                if ($route) {
+                    $this->assertCrossHubCustodyReady($route);
+                }
             }
 
             $groups[$sellerId] ??= [
@@ -589,11 +432,6 @@ class CheckoutService
                 'shipping_fee' => $groupShippingFee,
                 'shipping_rate_version_id' => $ratePolicy['version']?->id,
                 'shipping_rate_snapshot' => $shippingSnapshot,
-                'routing_decision' => $route ? $this->routingDecisionSnapshot(
-                    $route,
-                    (float) $groupShippingFee,
-                    $ratePolicy['version']?->id,
-                ) : null,
                 'routing_review_required' => $groupNeedsRoutingReview,
                 'routing_review_reason' => $groupRoutingReviewReason,
                 'protection_total' => 0.0,
@@ -620,7 +458,6 @@ class CheckoutService
         $promotionDiscountTotal = $this->applySellerPromotions($groups, $lockVoucherUsage);
 
         $platformVoucher = null;
-        $platformAutoApplied = false;
         $shippingVoucher = null;
         if ($singleVoucherCode !== '') {
             $platformVoucher = $this->applySingleVoucherCode($groups, $singleVoucherCode, $buyer, $lockVoucherUsage);
@@ -656,9 +493,6 @@ class CheckoutService
                     ]);
                 }
                 $discount = $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items']));
-                app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
-                    $voucher, $discount, $lockVoucherUsage, 'seller_voucher_codes.'.$sellerId,
-                );
                 $group['seller_voucher'] = $voucher;
                 $group['seller_voucher_discount'] = $discount;
                 $group['voucher'] = $voucher;
@@ -666,58 +500,29 @@ class CheckoutService
             }
             unset($group);
 
-            $this->allocateSellerDiscountToItems($groups);
+            $eligibleProductTotal = array_sum(array_map(
+                fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['seller_voucher_discount']),
+                $groups,
+            ));
             $platformCode = mb_strtoupper(trim((string) ($voucherCodes['platform'] ?? '')));
-            if ($platformCode === '' && $autoApplyPlatform) {
-                $selectedShippingCode = mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? '')));
-                $selectedShippingVoucher = $selectedShippingCode !== ''
-                    ? Voucher::query()->whereNull('seller_profile_id')->where('platform_code_key', $selectedShippingCode)->first()
-                    : null;
-                $platformCode = $this->bestAutoPlatformVoucherCode($groups, $buyer, $lockVoucherUsage, 'PRODUCT', $selectedShippingVoucher);
-                $platformAutoApplied = $platformCode !== '';
-            }
             if ($platformCode !== '') {
-                $platformCandidate = Voucher::query()->whereNull('seller_profile_id')->where('platform_code_key', $platformCode)->first();
-                $eligibleProductTotal = $platformCandidate
-                    ? array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($platformCandidate, $group), $groups))
-                    : 0.0;
-                $platformVoucher = $this->usablePlatformVoucher($platformCode, 'PRODUCT', $eligibleProductTotal, $buyer, $lockVoucherUsage, $platformAutoApplied);
+                $platformVoucher = $this->usablePlatformVoucher($platformCode, 'PRODUCT', $eligibleProductTotal, $buyer, $lockVoucherUsage);
                 $platformDiscount = $this->discountAmount($platformVoucher, $eligibleProductTotal);
-                app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($platformVoucher, $platformDiscount, $lockVoucherUsage);
                 $this->allocatePlatformDiscount($groups, $platformVoucher, $platformDiscount, $eligibleProductTotal);
             }
 
             $shippingCode = mb_strtoupper(trim((string) ($voucherCodes['shipping'] ?? '')));
-            $shippingAutoApplied = false;
-            if ($shippingCode === '' && $autoApplyShipping) {
-                $shippingCode = $this->bestAutoPlatformVoucherCode($groups, $buyer, $lockVoucherUsage, 'SHIPPING', $platformVoucher);
-                $shippingAutoApplied = $shippingCode !== '';
-            }
             if ($shippingCode !== '') {
                 $eligibleShippingTotal = array_sum(array_map(fn (array $group): float => (float) $group['shipping_fee'], $groups));
                 $shippingSpendBase = array_sum(array_map(
                     fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['voucher_discount']),
                     $groups,
                 ));
-                $shippingVoucher = $this->usablePlatformVoucher(
-                    $shippingCode,
-                    'SHIPPING',
-                    $eligibleShippingTotal,
-                    $buyer,
-                    $lockVoucherUsage,
-                    $shippingAutoApplied,
-                    $shippingSpendBase,
-                );
-                if ($platformVoucher && (! app(PlatformCampaignEligibility::class)->stacksWithShipping($platformVoucher)
-                    || ! app(PlatformCampaignEligibility::class)->stacksWithShipping($shippingVoucher))) {
-                    throw ValidationException::withMessages(['shipping_voucher_code' => 'These LIKHAE vouchers cannot be used together.']);
-                }
+                $shippingVoucher = $this->usablePlatformVoucher($shippingCode, 'SHIPPING', $shippingSpendBase, $buyer, $lockVoucherUsage);
                 $shippingDiscount = $this->discountAmount($shippingVoucher, $eligibleShippingTotal);
-                app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($shippingVoucher, $shippingDiscount, $lockVoucherUsage);
                 $this->allocateShippingDiscount($groups, $shippingDiscount, $eligibleShippingTotal);
             }
         } else {
-            $shippingAutoApplied = false;
             foreach ($groups as $sellerId => &$group) {
                 $code = trim((string) ($legacyVoucherCodes[$sellerId] ?? ''));
                 $voucher = $code !== ''
@@ -736,11 +541,6 @@ class CheckoutService
                     ]);
                 }
                 $discount = $voucher ? $this->discountAmount($voucher, $this->voucherEligibleSubtotal($voucher, $group['items'])) : 0.0;
-                if ($voucher) {
-                    app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable(
-                        $voucher, $discount, $lockVoucherUsage, 'voucher_codes.'.$sellerId,
-                    );
-                }
 
                 $group['voucher'] = $voucher;
                 $group['seller_voucher'] = $voucher;
@@ -777,7 +577,6 @@ class CheckoutService
         }
 
         $this->allocateRewardPoints($groups, $rewardPointsToRedeem);
-        $this->allocateFundingToItems($groups);
 
         foreach ($groups as &$group) {
             $discount = (float) $group['voucher_discount'];
@@ -804,8 +603,6 @@ class CheckoutService
             'discount_total' => round($discountTotal, 2),
             'promotion_discount_total' => round($promotionDiscountTotal, 2),
             'platform_voucher' => $platformVoucher,
-            'platform_auto_applied' => $platformAutoApplied,
-            'shipping_auto_applied' => $shippingAutoApplied ?? false,
             'platform_voucher_discount' => $platformVoucherDiscountTotal,
             'shipping_voucher' => $shippingVoucher,
             'shipping_voucher_discount' => round($shippingVoucherDiscountTotal, 2),
@@ -818,6 +615,67 @@ class CheckoutService
             'protection_total' => round($protectionTotal, 2),
             'grand_total' => max(0.0, round($subtotal - $promotionDiscountTotal - $discountTotal - $rewardPointsDiscount + $shippingTotal - $shippingVoucherDiscountTotal + $protectionTotal, 2)),
         ];
+    }
+
+    /**
+     * Sign the server-calculated shipping quote for this cart and address.
+     * The token is returned to checkout and verified again inside the order
+     * transaction so a displayed quote cannot be submitted after it changes.
+     *
+     * @param array<string, mixed> $preview
+     */
+    public function shippingQuoteToken(User $buyer, Address $address, Collection $items, array $preview): string
+    {
+        $sellerQuotes = collect($preview['groups'] ?? [])
+            ->mapWithKeys(fn (array $group, int|string $sellerId): array => [(string) $sellerId => [
+                'shipping_fee' => (string) ($group['shipping_fee'] ?? '0.00'),
+                'shipping_voucher_discount' => (string) ($group['shipping_voucher_discount'] ?? '0.00'),
+                'snapshot' => (array) ($group['shipping_rate_snapshot'] ?? []),
+                'routing_decision' => (array) ($group['routing_decision'] ?? []),
+            ]])
+            ->sortKeys()
+            ->all();
+
+        $payload = [
+            'buyer_id' => (int) $buyer->id,
+            'address_id' => (int) $address->id,
+            'items' => $this->checkoutCartLines($items),
+            'seller_quotes' => $sellerQuotes,
+        ];
+        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        return hash_hmac('sha256', $encoded, (string) config('app.key'));
+    }
+
+    /** @return list<array{id:int,variant_id:int,quantity:int,seller_id:int}> */
+    private function checkoutCartLines(Collection $items): array
+    {
+        return $items->map(function (CartItem $item): array {
+            $item->loadMissing('productVariant.product');
+
+            return [
+                'id' => (int) $item->id,
+                'variant_id' => (int) $item->product_variant_id,
+                'quantity' => (int) $item->quantity,
+                'seller_id' => (int) ($item->productVariant?->product?->seller_profile_id ?? 0),
+            ];
+        })->sortBy('id')->values()->all();
+    }
+
+    /** @param array<string, mixed> $preview */
+    private function assertShippingQuoteToken(
+        ?string $expectedToken,
+        User $buyer,
+        Address $address,
+        Collection $items,
+        array $preview,
+    ): void {
+        $currentToken = $this->shippingQuoteToken($buyer, $address, $items, $preview);
+        if (! is_string($expectedToken) || ! hash_equals($currentToken, $expectedToken)) {
+            throw ValidationException::withMessages([
+                'shipping_quote' => 'Shipping fees or the delivery route changed while you were reviewing checkout. Review the updated delivery details before placing the order.',
+            ]);
+        }
     }
 
     public function placeOrder(
@@ -1159,16 +1017,6 @@ class CheckoutService
                 'initiated_at' => now(),
             ]);
 
-            $sourceAware = Schema::hasColumn('seller_orders', 'funding_snapshot_version')
-                && Schema::hasColumn('seller_orders', 'seller_voucher_discount')
-                && Schema::hasColumn('seller_orders', 'platform_voucher_discount')
-                && Schema::hasColumn('seller_orders', 'platform_shipping_voucher_discount')
-                && Schema::hasColumn('order_items', 'funding_snapshot_version')
-                && Schema::hasColumn('order_items', 'seller_voucher_discount')
-                && Schema::hasColumn('order_items', 'platform_voucher_discount')
-                && Schema::hasColumn('order_items', 'reward_points_discount')
-                && Schema::hasColumn('order_items', 'platform_shipping_voucher_discount');
-
             foreach ($preview['groups'] as $sellerId => $group) {
                 $sellerOrderAttributes = [
                     'seller_order_number' => $this->uniqueNumber('seller_orders', 'seller_order_number', 'SO'),
@@ -1190,18 +1038,9 @@ class CheckoutService
                 if (Schema::hasColumn('seller_orders', 'shipping_voucher_discount')) {
                     $sellerOrderAttributes['shipping_voucher_discount'] = $group['shipping_voucher_discount'];
                 }
-                if ($sourceAware) {
-                    $sellerOrderAttributes['seller_voucher_discount'] = $group['seller_voucher_discount'];
-                    $sellerOrderAttributes['platform_voucher_discount'] = $group['platform_voucher_discount'];
-                    $sellerOrderAttributes['platform_shipping_voucher_discount'] = $group['shipping_voucher_discount'];
-                    $sellerOrderAttributes['funding_snapshot_version'] = 1;
-                }
                 if ($group['shipping_rate_version_id'] !== null
                     && Schema::hasColumn('seller_orders', 'shipping_rate_version_id')) {
                     $sellerOrderAttributes['shipping_rate_version_id'] = $group['shipping_rate_version_id'];
-                }
-                if (Schema::hasColumn('seller_orders', 'delivery_routing_snapshot')) {
-                    $sellerOrderAttributes['delivery_routing_snapshot'] = $group['routing_decision'];
                 }
                 if (Schema::hasColumn('seller_orders', 'shipping_rate_snapshot')) {
                     $sellerOrderAttributes['shipping_rate_snapshot'] = $group['shipping_rate_snapshot'];
@@ -1235,14 +1074,6 @@ class CheckoutService
                         'discount_amount' => $discountAmount,
                         'line_total' => $lineTotal,
                     ];
-                    if (Schema::hasColumns('product_variants', ['length_cm', 'width_cm', 'height_cm'])
-                        && Schema::hasColumns('order_items', ['product_length_cm', 'product_width_cm', 'product_height_cm'])) {
-                        $itemAttributes += [
-                            'product_length_cm' => $variant?->length_cm,
-                            'product_width_cm' => $variant?->width_cm,
-                            'product_height_cm' => $variant?->height_cm,
-                        ];
-                    }
                     if ($snapshotReady) {
                         $itemAttributes['original_unit_price'] = number_format((float) $variant->price, 2, '.', '');
                     }
@@ -1256,13 +1087,6 @@ class CheckoutService
                         $snapshots = (array) $item->getAttribute('checkout_promotion_snapshot');
                         $itemAttributes['promotion_snapshot'] = $snapshots !== [] ? $snapshots : null;
                     }
-                    if ($sourceAware) {
-                        $itemAttributes['seller_voucher_discount'] = $item->getAttribute('checkout_seller_voucher_discount') ?? 0;
-                        $itemAttributes['platform_voucher_discount'] = $item->getAttribute('checkout_platform_voucher_discount') ?? 0;
-                        $itemAttributes['platform_shipping_voucher_discount'] = $item->getAttribute('checkout_shipping_voucher_discount') ?? 0;
-                        $itemAttributes['reward_points_discount'] = $item->getAttribute('checkout_reward_points_discount') ?? 0;
-                        $itemAttributes['funding_snapshot_version'] = 1;
-                    }
                     if (Schema::hasColumn('order_items', 'protection_selected')) {
                         $quote = (array) $item->getAttribute('protection_quote');
                         $itemAttributes += [
@@ -1275,32 +1099,8 @@ class CheckoutService
                         ];
                     }
                     $orderItem = $sellerOrder->items()->create($itemAttributes);
-                    if ($sourceAware) {
-                        $orderItem->setRelation('sellerOrder', $sellerOrder);
-                        if ($preview['platform_voucher']) {
-                            app(\App\Services\Finance\PlatformCampaignBudgetService::class)->reserve(
-                                $preview['platform_voucher'], $orderItem, $itemAttributes['platform_voucher_discount'], $lockedBuyer, 'PRODUCT_VOUCHER',
-                            );
-                        }
-                        if ($preview['shipping_voucher']) {
-                            app(\App\Services\Finance\PlatformCampaignBudgetService::class)->reserve(
-                                $preview['shipping_voucher'], $orderItem, $itemAttributes['platform_shipping_voucher_discount'], $lockedBuyer, 'SHIPPING_VOUCHER',
-                            );
-                        }
-                        if ($group['seller_voucher']) {
-                            app(\App\Services\Finance\SellerVoucherBudgetService::class)->reserve(
-                                $group['seller_voucher'], $orderItem, $itemAttributes['seller_voucher_discount'], $lockedBuyer,
-                            );
-                        }
-                    }
 
-                    $shipment = $this->createShipmentForOrderItem(
-                        $sellerOrder,
-                        $orderItem,
-                        $address,
-                        $logisticsProvider,
-                        $group['routing_decision'] ?? null,
-                    );
+                    $shipment = $this->createShipmentForOrderItem($sellerOrder, $orderItem, $address, $logisticsProvider);
                     app(CodCollectionService::class)->initializeForShipment($shipment);
 
                     if (Schema::hasTable('protection_selection_audits')) {
@@ -1819,78 +1619,11 @@ class CheckoutService
         return $normalized;
     }
 
-    /** @param array<string, mixed> $route @return array<string, mixed> */
-    private function routingDecisionSnapshot(array $route, float $shippingFee, ?int $shippingRateVersionId): array
-    {
-        $coverageRoute = $route['coverage_route'] ?? null;
-
-        return [
-            'serviceable' => true,
-            'coverage_type' => (string) ($route['coverage_type'] ?? 'PRIMARY'),
-            'coverage_route_id' => $coverageRoute?->id ? (int) $coverageRoute->id : null,
-            'origin_hub_id' => (int) $route['origin']->id,
-            'selected_hub_id' => (int) $route['destination']->id,
-            'service_area_id' => (int) $route['destination_area']->service_area_id,
-            'service_area_location_id' => (int) $route['destination_area']->id,
-            'service_date' => $route['service_date']?->toDateString(),
-            'scheduled_dispatch_at' => $route['scheduled_dispatch_at']?->toIso8601String(),
-            'estimated_sla_hours' => $route['estimated_sla_hours'] !== null ? (int) $route['estimated_sla_hours'] : null,
-            'estimated_delivery_at' => $route['estimated_delivery_at']?->toIso8601String(),
-            'capacity_remaining_at_quote' => $route['capacity_remaining_at_quote'] !== null
-                ? (int) $route['capacity_remaining_at_quote']
-                : null,
-            'eligibility_version' => (string) ($route['eligibility_version'] ?? ''),
-            'quoted_shipping_fee' => number_format($shippingFee, 2, '.', ''),
-            'shipping_rate_version_id' => $shippingRateVersionId,
-            'failure_reason' => null,
-        ];
-    }
-
-    /** Compare the locked order-creation route to the route shown in the signed checkout quote. */
-    private function assertRoutingDecisionMatches(array $expected, array $current): void
-    {
-        $currentSnapshot = $this->routingDecisionSnapshot(
-            $current,
-            (float) ($expected['quoted_shipping_fee'] ?? 0),
-            isset($expected['shipping_rate_version_id']) ? (int) $expected['shipping_rate_version_id'] : null,
-        );
-        foreach ([
-            'coverage_type',
-            'coverage_route_id',
-            'origin_hub_id',
-            'selected_hub_id',
-            'service_area_id',
-            'service_area_location_id',
-            'service_date',
-            'eligibility_version',
-        ] as $key) {
-            if (($expected[$key] ?? null) !== ($currentSnapshot[$key] ?? null)) {
-                throw ValidationException::withMessages([
-                    'shipping_quote' => 'The delivery route changed while you were reviewing checkout. Review the updated delivery details before placing the order.',
-                ]);
-            }
-        }
-    }
-
-    private function routingFailureCode(string $reason): string
-    {
-        $message = mb_strtolower($reason);
-
-        return match (true) {
-            str_contains($message, 'no approved secondary or extended') => 'NO_FEASIBLE_APPROVED_ROUTE',
-            str_contains($message, 'no active logistics hub') => 'NO_EXACT_HUB',
-            str_contains($message, 'not covered') => 'NO_EXACT_COVERAGE',
-            str_contains($message, 'ambiguous') => 'AMBIGUOUS_EXACT_COVERAGE',
-            default => 'DELIVERY_CHECK_FAILED',
-        };
-    }
-
     private function createShipmentForOrderItem(
         SellerOrder $sellerOrder,
         OrderItem $orderItem,
         Address $address,
         ?LogisticsCenter $logisticsProvider = null,
-        ?array $routingDecision = null,
     ): Shipment
     {
         $automaticRouting = $this->automaticRoutingReady() && $logisticsProvider === null;
@@ -1900,42 +1633,7 @@ class CheckoutService
         if ($automaticRouting) {
             $sellerOrder->loadMissing('sellerProfile.businessAddress');
             try {
-                $fallbackRouteId = (int) ($routingDecision['coverage_route_id'] ?? 0);
-                if ($fallbackRouteId > 0) {
-                    $route = $this->routing->revalidateStoredFallback(
-                        $sellerOrder->sellerProfile,
-                        $address,
-                        $fallbackRouteId,
-                        lock: true,
-                        serviceDate: isset($routingDecision['service_date']) ? (string) $routingDecision['service_date'] : null,
-                    );
-                    $this->assertRoutingDecisionMatches($routingDecision, $route);
-                    if (! $this->schema->smartCoverageReady()
-                        || blank($routingDecision['service_date'] ?? null)) {
-                        throw ValidationException::withMessages([
-                            'shipping_quote' => 'The approved route capacity reservation is unavailable. Review checkout and try again.',
-                        ]);
-                    }
-                    $serviceDate = Carbon::parse((string) $routingDecision['service_date'])->toDateString();
-                    $bookedForDate = Shipment::query()
-                        ->where('smart_coverage_route_id', $fallbackRouteId)
-                        ->whereDate('smart_coverage_service_date', $serviceDate)
-                        ->where('current_status', '!=', 'CANCELLED')
-                        ->lockForUpdate()
-                        ->get(['id'])
-                        ->count();
-                    if ($bookedForDate >= (int) $route['coverage_route']->max_parcels_per_day) {
-                        throw ValidationException::withMessages([
-                            'shipping_quote' => 'The approved delivery route reached its scheduled capacity. Review checkout for another available route.',
-                        ]);
-                    }
-                    $route['service_date'] = Carbon::parse($serviceDate);
-                } else {
-                    $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
-                    if ($routingDecision !== null) {
-                        $this->assertRoutingDecisionMatches($routingDecision, $route);
-                    }
-                }
+                $route = $this->routing->resolve($sellerOrder->sellerProfile, $address);
             } catch (ValidationException $exception) {
                 $routingReviewReason = $this->routingReviewReason($exception);
                 if (! $routingReviewReason) {
@@ -1972,10 +1670,6 @@ class CheckoutService
             'destination_barangay_name' => $address->barangay_name,
             'current_status' => 'PLACED',
         ];
-        if ($route && ($route['coverage_route'] ?? null) && $this->schema->smartCoverageReady()) {
-            $shipmentAttributes['smart_coverage_route_id'] = (int) $route['coverage_route']->id;
-            $shipmentAttributes['smart_coverage_service_date'] = $route['service_date']?->toDateString();
-        }
         if ($route) {
             $originAddress = $route['origin']->address;
             $shipmentAttributes += [
@@ -2000,26 +1694,12 @@ class CheckoutService
             'rider_assignment_id' => null,
             'notes' => $routingReviewReason
                 ? 'Parcel placed. ROUTING_REVIEW_REQUIRED: '.$routingReviewReason
-                : (($route['coverage_type'] ?? null) === 'SECONDARY' || ($route['coverage_type'] ?? null) === 'EXTENDED'
-                    ? 'Parcel for order item '.$orderItem->id.' placed with an approved fallback delivery route.'
-                    : 'Parcel for order item '.$orderItem->id.' placed by buyer.'),
+                : 'Parcel for order item '.$orderItem->id.' placed by buyer.',
             'occurred_at' => now(),
         ]);
 
         if ($route && (int) $route['origin']->id !== (int) $route['destination']->id) {
             $this->transfers->createPlannedLeg($shipment, $route['origin'], $route['destination']);
-        }
-
-        if ($route && ($route['coverage_route'] ?? null)) {
-            Log::info('Smart logistics fallback route selected for shipment.', [
-                'shipment_id' => (int) $shipment->id,
-                'coverage_route_id' => (int) $route['coverage_route']->id,
-                'origin_hub_id' => (int) $route['origin']->id,
-                'destination_hub_id' => (int) $route['destination']->id,
-                'coverage_type' => (string) $route['coverage_type'],
-                'service_date' => $shipment->smart_coverage_service_date?->toDateString(),
-                'eligibility_version' => (string) ($route['eligibility_version'] ?? ''),
-            ]);
         }
 
         return $shipment;
@@ -2054,7 +1734,6 @@ class CheckoutService
             ->where('province_code', $address->province_code)
             ->where('municipality_code', $address->municipality_code)
             ->where('barangay_code', $address->barangay_code)
-            ->when($this->schema->coverageTypeReady(), fn ($query) => $query->where('coverage_type', 'PRIMARY'))
             ->whereHas('serviceArea', function ($query) use ($logisticsProvider): void {
                 $query->where('is_active', true)
                     ->when($logisticsProvider, fn ($providerQuery) => $providerQuery->where('logistics_center_id', $logisticsProvider->id));
@@ -2105,7 +1784,6 @@ class CheckoutService
                     ->where('account_type', User::TYPE_SELLER)
                     ->where('status', User::STATUS_ACTIVE)))
             ->with('eligibleProducts:id')
-            ->when(Schema::hasTable('voucher_variants'), fn ($query) => $query->with('eligibleVariants:id,product_id'))
             ->withCount([
                 'sellerOrders' => fn ($query) => $query->where('status', '<>', 'CANCELLED'),
                 'sellerOrders as buyer_uses_count' => fn ($query) => $query->where('status', '<>', 'CANCELLED')->when(
@@ -2127,25 +1805,6 @@ class CheckoutService
             return null;
         }
 
-        if ($voucher->requiresReview()) {
-            throw ValidationException::withMessages([
-                $errorKey => 'This voucher is under review and cannot be used. Please choose another voucher.',
-            ]);
-        }
-
-        if ($buyer && Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS') {
-            $isFollowing = Schema::hasTable('seller_followers')
-                && SellerFollower::query()
-                    ->where('buyer_user_id', $buyer->id)
-                    ->where('seller_profile_id', $sellerId)
-                    ->exists();
-            if (! $isFollowing) {
-                throw ValidationException::withMessages([
-                    $errorKey => 'Follow this store to use its follower reward.',
-                ]);
-            }
-        }
-
         $eligibleSubtotal = $this->voucherEligibleSubtotal($voucher, $items);
         if ($eligibleSubtotal <= 0) {
             throw ValidationException::withMessages([
@@ -2163,13 +1822,24 @@ class CheckoutService
 
     private function voucherEligibleSubtotal(Voucher $voucher, Collection $items): float
     {
-        if (! in_array($voucher->applies_to, ['PRODUCTS', 'VARIANTS'], true)) {
+        if ($voucher->applies_to !== 'PRODUCTS') {
             return round((float) $items->sum(fn (CartItem $item): float => $this->checkoutItemSubtotalAfterPromotions($item)), 2);
         }
 
-        return round((float) $items->sum(fn (CartItem $item): float => $this->sellerVoucherItemEligible($voucher, $item)
-            ? $this->checkoutItemSubtotalAfterPromotions($item)
-            : 0.0), 2);
+        $productIds = $voucher->relationLoaded('eligibleProducts')
+            ? $voucher->eligibleProducts->modelKeys()
+            : $voucher->eligibleProducts()->pluck('products.id')->all();
+        $eligibleIds = array_fill_keys(array_map('intval', $productIds), true);
+
+        return round((float) $items->sum(function (CartItem $item) use ($eligibleIds): float {
+            $item->loadMissing('productVariant');
+            $variant = $item->productVariant;
+            if (! $variant || ! isset($eligibleIds[(int) $variant->product_id])) {
+                return 0.0;
+            }
+
+            return $this->checkoutItemSubtotalAfterPromotions($item);
+        }), 2);
     }
 
     private function checkoutItemSubtotalAfterPromotions(CartItem $item): float
@@ -2210,15 +1880,7 @@ class CheckoutService
         });
     }
 
-    private function usablePlatformVoucher(
-        string $code,
-        string $scope,
-        float $eligibleSubtotal,
-        ?User $buyer,
-        bool $lockVoucherUsage,
-        bool $autoSelected = false,
-        ?float $minimumSpendSubtotal = null,
-    ): Voucher
+    private function usablePlatformVoucher(string $code, string $scope, float $eligibleSubtotal, ?User $buyer, bool $lockVoucherUsage): Voucher
     {
         $field = $scope === 'SHIPPING' ? 'shipping_voucher_code' : 'platform_voucher_code';
         if (! Schema::hasColumn('vouchers', 'platform_code_key')) {
@@ -2236,17 +1898,6 @@ class CheckoutService
         if (! $voucher) {
             throw ValidationException::withMessages([$field => 'Choose an available LIKHAE voucher for this category.']);
         }
-        $eligibility = app(PlatformCampaignEligibility::class);
-        if ($eligibility->distribution($voucher) === 'AUTO' && ! $autoSelected) {
-            throw ValidationException::withMessages([$field => 'This voucher is applied automatically at checkout.']);
-        }
-        if ($eligibility->distribution($voucher) === 'CLAIMABLE'
-            && (! $buyer || ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists())) {
-            throw ValidationException::withMessages([$field => 'Collect this LIKHAE voucher in Rewards before using it.']);
-        }
-        if (! $eligibility->audienceEligible($voucher, $buyer)) {
-            throw ValidationException::withMessages([$field => 'This voucher is unavailable for your order history.']);
-        }
 
         $usage = $lockVoucherUsage
             ? VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id)
@@ -2256,8 +1907,11 @@ class CheckoutService
             ? VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id)
             : 0);
 
-        if ($eligibility->status($voucher) !== 'ACTIVE') {
-            throw ValidationException::withMessages([$field => 'This voucher is not active.']);
+        if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
+            throw ValidationException::withMessages([$field => 'This voucher is not active yet.']);
+        }
+        if ($voucher->ends_at && $voucher->ends_at->isPast()) {
+            throw ValidationException::withMessages([$field => 'This voucher has expired.']);
         }
         if ($voucher->usage_limit !== null && $redemptions >= $voucher->usage_limit) {
             throw ValidationException::withMessages([$field => 'This voucher has reached its redemption limit.']);
@@ -2265,62 +1919,11 @@ class CheckoutService
         if ($buyer && $voucher->per_user_limit !== null && $buyerRedemptions >= $voucher->per_user_limit) {
             throw ValidationException::withMessages([$field => 'You have already used this voucher the maximum number of times.']);
         }
-        if (($minimumSpendSubtotal ?? $eligibleSubtotal) < (float) $voucher->minimum_order_amount) {
+        if ($eligibleSubtotal < (float) $voucher->minimum_order_amount) {
             throw ValidationException::withMessages([$field => 'The eligible amount does not meet this voucher’s minimum spend.']);
-        }
-        if ($eligibleSubtotal <= 0) {
-            throw ValidationException::withMessages([$field => 'This voucher does not apply to the selected charges.']);
         }
 
         return $voucher;
-    }
-
-    /** @param array<int, array<string, mixed>> $groups */
-    private function bestAutoPlatformVoucherCode(array $groups, ?User $buyer, bool $lockVoucherUsage, string $scope = 'PRODUCT', ?Voucher $otherPlatformVoucher = null): string
-    {
-        if (! Schema::hasColumn('vouchers', 'distribution_mode')) {
-            return '';
-        }
-        $eligibility = app(PlatformCampaignEligibility::class);
-        $budgets = app(\App\Services\Finance\PlatformCampaignBudgetService::class);
-        $best = null;
-        $bestCents = 0;
-        $candidates = Voucher::query()->whereNull('seller_profile_id')->whereNotNull('platform_code_key')
-            ->where('distribution_mode', 'AUTO')->where('benefit_scope', $scope)
-            ->orderBy('id')->get();
-        foreach ($candidates as $candidate) {
-            if ($eligibility->status($candidate) !== 'ACTIVE'
-                || ($scope === 'PRODUCT' && ! $eligibility->stacksWithSeller($candidate)
-                    && collect($groups)->contains(fn (array $group): bool => (float) $group['seller_voucher_discount'] > 0))) {
-                continue;
-            }
-            if ($otherPlatformVoucher && (! $eligibility->stacksWithShipping($candidate)
-                || ! $eligibility->stacksWithShipping($otherPlatformVoucher))) {
-                continue;
-            }
-            $subtotal = $scope === 'PRODUCT'
-                ? array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($candidate, $group), $groups))
-                : array_sum(array_map(fn (array $group): float => (float) $group['shipping_fee'], $groups));
-            try {
-                $spendBase = $scope === 'SHIPPING'
-                    ? array_sum(array_map(fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['voucher_discount']), $groups))
-                    : $subtotal;
-                $this->usablePlatformVoucher($candidate->code, $scope, $subtotal, $buyer, $lockVoucherUsage, true, $spendBase);
-                $discountCents = FinancialRules::cents($this->discountAmount($candidate, $subtotal));
-                $summary = $budgets->summary($candidate);
-                if ($discountCents <= 0 || $summary['available_cents'] === null || $summary['available_cents'] < $discountCents) {
-                    continue;
-                }
-                if ($discountCents > $bestCents) {
-                    $best = $candidate;
-                    $bestCents = $discountCents;
-                }
-            } catch (ValidationException) {
-                continue;
-            }
-        }
-
-        return $best?->code ?? '';
     }
 
     /** @param array<int, array<string, mixed>> $groups */
@@ -2383,10 +1986,35 @@ class CheckoutService
                     'voucher_code' => 'Choose shipping vouchers from the Shipping Voucher picker.',
                 ]);
             }
-            $subtotal = array_sum(array_map(fn (array $group): float => $this->platformEligibleGroupSubtotal($voucher, $group), $groups));
-            $voucher = $this->usablePlatformVoucher($voucher->code, 'PRODUCT', $subtotal, $buyer, $lockVoucherUsage);
+            $subtotal = array_sum(array_map(fn (array $group): float => max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total']), $groups));
+            $usage = $lockVoucherUsage
+                ? VoucherRedemptionCounter::lockedUsageFor((int) $voucher->id, $buyer?->id)
+                : null;
+            $redemptions = $usage['redemptions'] ?? VoucherRedemptionCounter::count((int) $voucher->id);
+            $buyerRedemptions = $usage['buyer_redemptions'] ?? ($buyer
+                ? VoucherRedemptionCounter::count((int) $voucher->id, (int) $buyer->id)
+                : 0);
+
+            if (! $voucher->is_active || ($voucher->starts_at && $voucher->starts_at->isFuture())) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher is not active yet.']);
+            }
+            if ($voucher->ends_at && $voucher->ends_at->isPast()) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has expired.']);
+            }
+            if ($voucher->usage_limit !== null && $redemptions >= $voucher->usage_limit) {
+                throw ValidationException::withMessages(['voucher_code' => 'This platform voucher has reached its redemption limit.']);
+            }
+            if ($buyer && $voucher->per_user_limit !== null && $buyerRedemptions >= $voucher->per_user_limit) {
+                throw ValidationException::withMessages(['voucher_code' => 'You have already used this platform voucher the maximum number of times.']);
+            }
+            if ($subtotal < (float) $voucher->minimum_order_amount) {
+                $remaining = (float) $voucher->minimum_order_amount - $subtotal;
+                throw ValidationException::withMessages([
+                    'voucher_code' => 'Add PHP '.number_format($remaining, 2).' more to use this platform voucher.',
+                ]);
+            }
+
             $discount = $this->discountAmount($voucher, $subtotal);
-            app(\App\Services\Finance\PlatformCampaignBudgetService::class)->assertAvailable($voucher, $discount, $lockVoucherUsage);
             $this->allocatePlatformDiscount($groups, $voucher, $discount, $subtotal);
 
             return $voucher;
@@ -2404,21 +2032,6 @@ class CheckoutService
             || ($requiresClaim && ! $voucher->buyerClaims()->where('buyer_user_id', $buyer->id)->exists())) {
             throw ValidationException::withMessages([
                 'voucher_code' => 'Collect this Seller voucher in Rewards before using it.',
-            ]);
-        }
-
-        if ($voucher->requiresReview()) {
-            throw ValidationException::withMessages([
-                'voucher_code' => 'This voucher is under review and cannot be used. Please choose another voucher.',
-            ]);
-        }
-        if (Schema::hasColumn('vouchers', 'visibility') && $voucher->visibility === 'FOLLOWERS'
-            && (! Schema::hasTable('seller_followers') || ! SellerFollower::query()
-                ->where('buyer_user_id', $buyer->id)
-                ->where('seller_profile_id', $voucher->seller_profile_id)
-                ->exists())) {
-            throw ValidationException::withMessages([
-                'voucher_code' => 'Follow this store to use its follower reward.',
             ]);
         }
 
@@ -2480,7 +2093,6 @@ class CheckoutService
         }
 
         $discount = $this->discountAmount($voucher, $eligibleSubtotal);
-        app(\App\Services\Finance\SellerVoucherBudgetService::class)->assertAvailable($voucher, $discount, $lockVoucherUsage, 'voucher_code');
         $group['seller_voucher'] = $voucher;
         $group['seller_voucher_discount'] = $discount;
         $group['voucher'] = $voucher;
@@ -2492,98 +2104,19 @@ class CheckoutService
     /** @param array<int, array<string, mixed>> $groups */
     private function allocatePlatformDiscount(array &$groups, Voucher $voucher, float $discount, float $subtotal): void
     {
-        $eligibility = app(PlatformCampaignEligibility::class);
-        if (! $eligibility->stacksWithSeller($voucher)
-            && collect($groups)->contains(fn (array $group): bool => (float) $group['seller_voucher_discount'] > 0)) {
-            throw ValidationException::withMessages(['platform_voucher_code' => 'This LIKHAE voucher cannot be combined with a Seller voucher.']);
-        }
-        $weights = array_map(fn (array $group): int => FinancialRules::cents($this->platformEligibleGroupSubtotal($voucher, $group)), $groups);
-        $shares = FinancialRules::allocateCents(FinancialRules::cents($discount), array_values($weights));
+        $allocated = 0.0;
+        $lastSellerId = array_key_last($groups);
+
         foreach ($groups as $sellerId => &$group) {
-            $share = ($shares[array_search($sellerId, array_keys($groups), true)] ?? 0) / 100;
+            $eligibleGroupSubtotal = max(0.0, (float) $group['item_subtotal'] - (float) $group['promotion_discount_total'] - (float) $group['seller_voucher_discount']);
+            $share = (int) $sellerId === (int) $lastSellerId
+                ? round($discount - $allocated, 2)
+                : round($subtotal > 0 ? $discount * ($eligibleGroupSubtotal / $subtotal) : 0.0, 2);
+            $share = min($eligibleGroupSubtotal, max(0.0, $share));
             $group['platform_voucher_discount'] = $share;
-            $group['platform_voucher'] = $voucher;
             $group['voucher_discount'] = (float) $group['seller_voucher_discount'] + $share;
             $group['voucher'] = $group['seller_voucher'] ?? $voucher;
-        }
-        unset($group);
-    }
-
-    /** @param array<int, array<string, mixed>> $groups */
-    private function allocateSellerDiscountToItems(array &$groups): void
-    {
-        foreach ($groups as &$group) {
-            $items = $group['items']->values();
-            $voucher = $group['seller_voucher'];
-            $weights = $items->map(fn (CartItem $item): int => $voucher && $this->sellerVoucherItemEligible($voucher, $item)
-                ? FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item)) : 0)->all();
-            $shares = FinancialRules::allocateCents(FinancialRules::cents($group['seller_voucher_discount']), $weights);
-            $group['seller_voucher_item_discounts'] = [];
-            foreach ($items as $index => $item) {
-                $item->setAttribute('checkout_seller_voucher_discount', ($shares[$index] ?? 0) / 100);
-                $group['seller_voucher_item_discounts'][(int) $item->id] = $shares[$index] ?? 0;
-            }
-        }
-        unset($group);
-    }
-
-    private function sellerVoucherItemEligible(Voucher $voucher, CartItem $item): bool
-    {
-        if ($voucher->applies_to === 'VARIANTS') {
-            if (! Schema::hasTable('voucher_variants')) {
-                return false;
-            }
-            $variantIds = $voucher->relationLoaded('eligibleVariants')
-                ? $voucher->eligibleVariants->modelKeys()
-                : $voucher->eligibleVariants()->pluck('product_variant_id')->all();
-
-            return in_array((int) $item->product_variant_id, array_map('intval', $variantIds), true);
-        }
-        if ($voucher->applies_to !== 'PRODUCTS') {
-            return true;
-        }
-        if (! Schema::hasTable('voucher_products')) {
-            return false;
-        }
-        $ids = $voucher->relationLoaded('eligibleProducts')
-            ? $voucher->eligibleProducts->modelKeys()
-            : $voucher->eligibleProducts()->pluck('products.id')->all();
-
-        return in_array((int) ($item->productVariant?->product_id ?? 0), array_map('intval', $ids), true);
-    }
-
-    /** @param array<string, mixed> $group */
-    private function platformEligibleGroupSubtotal(Voucher $voucher, array $group): float
-    {
-        $eligibility = app(PlatformCampaignEligibility::class);
-
-        return round((float) $group['items']->sum(fn (CartItem $item): float => $eligibility->itemEligible($voucher, $item)
-            ? max(0.0, $this->checkoutItemSubtotalAfterPromotions($item)
-                - (float) ($item->getAttribute('checkout_seller_voucher_discount') ?? 0))
-            : 0.0), 2);
-    }
-
-    /** @param array<int, array<string, mixed>> $groups */
-    private function allocateFundingToItems(array &$groups): void
-    {
-        $this->allocateSellerDiscountToItems($groups);
-        $eligibility = app(PlatformCampaignEligibility::class);
-        foreach ($groups as &$group) {
-            $items = $group['items']->values();
-            $base = $items->map(fn (CartItem $item): int => FinancialRules::cents($this->checkoutItemSubtotalAfterPromotions($item)))->all();
-            $seller = $items->map(fn (CartItem $item): int => FinancialRules::cents($item->getAttribute('checkout_seller_voucher_discount') ?? 0))->all();
-            $platformVoucher = $group['platform_voucher'] ?? null;
-            $platformWeights = $items->map(fn (CartItem $item, int $index): int => $platformVoucher && $eligibility->itemEligible($platformVoucher, $item)
-                ? max(0, $base[$index] - $seller[$index]) : 0)->all();
-            $platformShares = FinancialRules::allocateCents(FinancialRules::cents($group['platform_voucher_discount']), $platformWeights);
-            $rewardWeights = array_map(fn (int $index): int => max(0, $base[$index] - $seller[$index] - ($platformShares[$index] ?? 0)), array_keys($base));
-            $rewardShares = FinancialRules::allocateCents(FinancialRules::cents($group['reward_points_discount']), $rewardWeights);
-            $shippingShares = FinancialRules::allocateCents(FinancialRules::cents($group['shipping_voucher_discount']), $base);
-            foreach ($items as $index => $item) {
-                $item->setAttribute('checkout_platform_voucher_discount', ($platformShares[$index] ?? 0) / 100);
-                $item->setAttribute('checkout_shipping_voucher_discount', ($shippingShares[$index] ?? 0) / 100);
-                $item->setAttribute('checkout_reward_points_discount', ($rewardShares[$index] ?? 0) / 100);
-            }
+            $allocated += $share;
         }
         unset($group);
     }
@@ -2649,3 +2182,4 @@ class CheckoutService
         return $value;
     }
 }
+Displaying BuyerApiController.php.

@@ -33,6 +33,11 @@ return [
     'sounds_description' => 'Pagdumala sa mga tingog sa interface.',
     'notification_sounds' => 'Mga Tingog sa Pahibalo',
     'notification_sounds_description' => 'Patukar og tingog para sa gisuportahang mga pahibalo sa operasyon.',
+    'sound_type_previews' => 'Tan-awa daan ang mga matang sa tingog',
+    'admin_sound_previews' => [
+        'messages' => 'Mga Mensahe', 'orders' => 'Mga Order', 'delivery' => 'Paghatod', 'promotions' => 'Mga Promo',
+        'payments' => 'Mga Bayad', 'alerts' => 'Mga Alerto ug seguridad', 'returns' => 'Mga Return ug refund', 'general' => 'Kinatibuk-an',
+    ],
     'appearance' => 'Panagway',
     'appearance_description' => 'Ibutang ang imong gustong tema sa LIKHAE.',
     'language' => 'Pinulongan',

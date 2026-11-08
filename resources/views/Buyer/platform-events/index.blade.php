@@ -7,10 +7,10 @@
 @push('head')
 <style>
     .lk-events-page { min-height: 100%; padding: 40px clamp(18px, 2.4vw, 36px) 56px; color: #3B211B; }
-    .lk-events-heading { margin: 0; color: #561C17; font-family: "Instrument Serif", Georgia, serif; font-size: clamp(34px, 3vw, 46px); font-weight: 400; letter-spacing: -.035em; line-height: 1; }
+    .lk-events-heading { margin: 0; color: #561C17; font-family: Georgia, "Instrument Serif", serif; font-size: clamp(34px, 3vw, 46px); font-weight: 400; letter-spacing: -.035em; line-height: 1; }
     .lk-events-intro { margin: 10px 0 24px; color: #987865; font-size: 13px; line-height: 1.7; }
     .lk-events-empty { padding: 28px; border: 1px solid #EADCCC; border-radius: 22px; background: #FFFDF9; color: #6C4936; }
-    .lk-events-empty h2 { margin: 0; color: #3B211B; font: 400 28px/1.1 "Instrument Serif", Georgia, serif; }
+    .lk-events-empty h2 { margin: 0; color: #3B211B; font: 400 28px/1.1 Georgia, "Instrument Serif", serif; }
     .lk-events-empty p { margin: 8px 0 0; font-size: 13px; }
     html.dark .lk-events-page { color: #FFF8F2; }
     html.dark .lk-events-heading, html.dark .lk-events-empty h2 { color: #FFF8F2; }
