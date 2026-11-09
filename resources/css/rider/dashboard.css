@@ -15,12 +15,15 @@
 }
 
 .rider-main .rider-dashboard-heading__copy { min-width: 0; }
+.rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > * {
+    font-family: Georgia, "Times New Roman", serif;
+}
 .rider-main .rider-dashboard-heading > .lk-dashboard-weather {
     justify-self: stretch;
     align-self: stretch;
     width: 100%;
     max-width: 100%;
-    min-width: 0;
+    min-width: min(640px, calc(100vw - 48px));
     grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
     gap: 10px;
     padding: 0;

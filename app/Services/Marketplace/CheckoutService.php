@@ -60,6 +60,41 @@ class CheckoutService
         return $this->shippingRates->currentPolicy()['shipping_fee'];
     }
 
+    /**
+     * Return the open COD order count while the buyer has no completed order.
+     * A null result means the buyer has already completed an order and the
+     * new-buyer limit no longer applies.
+     */
+    public function newBuyerOpenCodOrderCount(User $buyer): ?int
+    {
+        $hasCompletedOrder = Order::query()
+            ->where('buyer_user_id', $buyer->id)
+            ->where('status', 'COMPLETED')
+            ->exists();
+
+        if ($hasCompletedOrder) {
+            return null;
+        }
+
+        return Order::query()
+            ->where('buyer_user_id', $buyer->id)
+            ->whereIn('status', ['PLACED', 'PROCESSING', 'PARTIALLY_CANCELLED'])
+            ->whereHas('payments', fn ($payments) => $payments->where('method', 'COD'))
+            ->count();
+    }
+
+    private function assertNewBuyerOpenCodOrderCapacity(User $buyer): void
+    {
+        $limit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 1));
+        $openOrders = $this->newBuyerOpenCodOrderCount($buyer);
+
+        if ($openOrders !== null && $openOrders >= $limit) {
+            throw ValidationException::withMessages([
+                'new_buyer_cod_order_limit' => "New buyers can have up to {$limit} open COD orders until their first successful delivery. Complete or close an existing order before placing another.",
+            ]);
+        }
+    }
+
     public function checkoutCartToken(User $buyer, Collection $items): string
     {
         $encoded = json_encode([
@@ -755,6 +790,7 @@ class CheckoutService
             // Serialize point redemption across simultaneous checkouts so a
             // buyer cannot spend the same balance on two orders at once.
             $lockedBuyer = User::query()->whereKey($buyer->id)->lockForUpdate()->firstOrFail();
+            $this->assertNewBuyerOpenCodOrderCapacity($lockedBuyer);
 
             // Lock the owning active cart before its selected lines. A second
             // submission then observes the committed deletion/conversion.

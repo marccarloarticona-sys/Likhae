@@ -59,6 +59,7 @@ Route::prefix('seller')
         Route::put('/products/{product}', [SellerProductController::class, 'update'])->name('products.update');
         Route::patch('/products/{product}/stock', [SellerProductController::class, 'stock'])->name('products.stock');
         Route::patch('/products/{product}/variants/{variant}/stock', [SellerProductController::class, 'variantStock'])->name('products.variants.stock');
+        Route::patch('/products/{product}/variants/{variant}/reserve-stock', [SellerProductController::class, 'variantReserveStock'])->name('products.variants.reserve-stock');
         Route::patch('/products/{product}/toggle', [SellerProductController::class, 'toggle'])->name('products.toggle');
         Route::delete('/products/{product}', [SellerProductController::class, 'destroy'])->name('products.destroy');
         Route::delete('/products/{product}/images/{image}', [SellerProductController::class, 'deleteImage'])->name('products.images.destroy');

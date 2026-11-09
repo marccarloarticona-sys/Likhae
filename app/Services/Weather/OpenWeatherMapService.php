@@ -5,6 +5,7 @@ namespace App\Services\Weather;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -49,7 +50,7 @@ class OpenWeatherMapService
 
             $currentResponse = $responses['current'] ?? null;
 
-            if (! $currentResponse || ! $currentResponse->successful()) {
+            if (! $currentResponse instanceof Response || ! $currentResponse->successful()) {
                 return null;
             }
 
@@ -62,7 +63,9 @@ class OpenWeatherMapService
             }
 
             $forecastResponse = $responses['forecast'] ?? null;
-            $forecast = $forecastResponse?->successful() ? $forecastResponse->json() : [];
+            $forecast = $forecastResponse instanceof Response && $forecastResponse->successful()
+                ? $forecastResponse->json()
+                : [];
             $timezoneOffset = (int) data_get($forecast, 'city.timezone', data_get($current, 'timezone', 0));
             $forecastItems = collect(data_get($forecast, 'list', []))
                 ->take(4)

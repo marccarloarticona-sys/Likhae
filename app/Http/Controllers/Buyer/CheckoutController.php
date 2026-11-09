@@ -180,6 +180,11 @@ class CheckoutController extends Controller
             }
         }
 
+        $newBuyerOpenCodOrderCount = $this->checkoutService->newBuyerOpenCodOrderCount($request->user());
+        $newBuyerOpenCodOrderLimit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 1));
+        $newBuyerCodOrderLimitReached = $newBuyerOpenCodOrderCount !== null
+            && $newBuyerOpenCodOrderCount >= $newBuyerOpenCodOrderLimit;
+
         return view('buyer.checkout', [
             'cartItems' => $items,
             'addresses' => $addresses,
@@ -204,6 +209,9 @@ class CheckoutController extends Controller
             'selectedAddressId' => $selectedAddress?->id,
             'selectedProviderId' => $selectedProvider?->id,
             'deliveryAvailability' => $deliveryAvailability,
+            'newBuyerOpenCodOrderCount' => $newBuyerOpenCodOrderCount,
+            'newBuyerOpenCodOrderLimit' => $newBuyerOpenCodOrderLimit,
+            'newBuyerCodOrderLimitReached' => $newBuyerCodOrderLimitReached,
             'priceChangeNotice' => $request->session()->pull('checkout_price_change_notice'),
         ]);
     }

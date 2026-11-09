@@ -400,6 +400,34 @@ class SellerCatalogService
         return $updatedVariant;
     }
 
+    public function updateVariantReserveStock(
+        SellerProfile $seller,
+        Product $product,
+        ProductVariant $variant,
+        int $reserveStock,
+    ): ProductVariant {
+        abort_unless(Schema::hasTable('product_variants') && Schema::hasColumn('product_variants', 'reserve_stock'), 503, 'Reserve stock is not available until the inventory migration is installed.');
+        abort_unless((int) $product->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $variant->product_id === (int) $product->id, 404);
+
+        return DB::transaction(function () use ($seller, $product, $variant, $reserveStock): ProductVariant {
+            $isOwned = Product::query()
+                ->whereKey($product->id)
+                ->where('seller_profile_id', $seller->id)
+                ->exists();
+            abort_unless($isOwned, 403);
+
+            $lockedVariant = ProductVariant::query()
+                ->whereKey($variant->id)
+                ->where('product_id', $product->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $lockedVariant->update(['reserve_stock' => $reserveStock]);
+
+            return $lockedVariant;
+        }, attempts: 3);
+    }
+
     private function assertFlashSaleAllocationFitsStock(ProductVariant $variant, int $stock): void
     {
         if ($variant->flash_sale_allocation === null) {

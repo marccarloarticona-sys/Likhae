@@ -186,6 +186,7 @@
                         <label class="sl-field"><span>Reserve stock</span><input name="reserve_stock" type="number" min="0" max="999999" value="{{ old('reserve_stock', data_get($singleVariant, 'reserve_stock', 0)) }}" @disabled(!$reserveStockReady)>@if($reserveStockReady)<small>Checkout fallback only. Buyers see regular stock.</small>@else<small role="status">Available after its inventory migration is installed.</small>@endif @error('reserve_stock')<small class="sl-error">{{ $message }}</small>@enderror</label>
                         <label class="sl-field"><span>Weight (kg)</span><input name="weight_kg" type="number" min="0.001" max="9999999.999" step="0.001" value="{{ old('weight_kg', data_get($singleVariant, 'weight_kg')) }}" placeholder="e.g. 0.500"><small>Weight of one item, before packing.</small></label>
                         @if($productDimensionsReady)
+                            <p class="sl-span-2 sl-sidebar-help">These describe the item itself. Enter packed parcel dimensions when preparing an order; these fields do not currently calculate shipping rates.</p>
                             <label class="sl-field"><span>Length (cm)</span><input name="length_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('length_cm', data_get($singleVariant, 'length_cm')) }}" placeholder="e.g. 20.00">@error('length_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
                             <label class="sl-field"><span>Width (cm)</span><input name="width_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('width_cm', data_get($singleVariant, 'width_cm')) }}" placeholder="e.g. 12.00">@error('width_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
                             <label class="sl-field"><span>Height (cm)</span><input name="height_cm" type="number" min="0.01" max="99999999.99" step="0.01" value="{{ old('height_cm', data_get($singleVariant, 'height_cm')) }}" placeholder="e.g. 8.00">@error('height_cm')<small class="sl-error">{{ $message }}</small>@enderror</label>
@@ -203,6 +204,7 @@
                     <div class="sl-variation-head">
                         <div><strong>Variation Details</strong><small>Each row maps directly to product_variants. Remove a combination to intentionally make it unavailable.</small></div>
                     </div>
+                    @if($productDimensionsReady)<p class="sl-sidebar-help">Dimensions describe the item itself. Packed parcel dimensions are entered during order preparation; these product dimensions do not currently calculate shipping rates.</p>@endif
                     @unless($reserveStockReady)<p class="sl-sidebar-help" role="status">Reserve stock controls are disabled until its inventory migration is installed.</p>@endunless
                     <div class="sl-variation-bulk" data-variation-bulk>
                         <label><span>Apply to</span><select data-bulk-scope><option value="all">All variations</option><option value="selected">Selected variations</option></select></label>
@@ -294,7 +296,7 @@
                 <header class="sl-inventory-panel__head">
                     <div class="sl-inventory-panel__title">
                         <h3 id="inventory-products-title">Inventory by product</h3>
-                        <p>Manage quantities and stock status for each variant.</p>
+                        <p>Available stock is buyer-visible. Reserve stock stays private and is a checkout fallback.</p>
                     </div>
                     <form method="GET" action="{{ route('seller.products') }}" class="sl-inventory-toolbar">
                         <input type="hidden" name="mode" value="inventory">
@@ -314,7 +316,7 @@
                     <article class="sl-inventory-product" data-inventory-product data-product-id="{{ $group['db_id'] }}" data-product-name="{{ mb_strtolower($group['name']) }}">
                         <header class="sl-inventory-product__summary">
                             <img class="sl-inventory-product__image" src="{{ $group['image'] ?: $productImageFallback }}" alt="{{ $group['name'] }}" loading="lazy" onerror="this.onerror=null;this.src='{{ $productImageFallback }}'">
-                            <div class="sl-inventory-product__identity"><h3>{{ $group['name'] }}</h3><span>{{ $group['variant_count'] }} active {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} total units</span><span class="sl-status {{ strtoupper($group['listing_status']) === 'ACTIVE' ? 'is-success' : 'is-neutral' }}">{{ str($group['listing_status'])->replace('_', ' ')->title() }} listing</span></div>
+                            <div class="sl-inventory-product__identity"><h3>{{ $group['name'] }}</h3><span>{{ $group['variant_count'] }} active {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} buyer-visible units @if($reserveStockReady)· {{ $group['total_reserve_stock'] }} reserve units@endif</span><span class="sl-status {{ strtoupper($group['listing_status']) === 'ACTIVE' ? 'is-success' : 'is-neutral' }}">{{ str($group['listing_status'])->replace('_', ' ')->title() }} listing</span></div>
                             <div class="sl-inventory-product__badges" aria-label="Stock summary">
                                 <span class="sl-inventory-badge is-low"><strong>{{ $group['low_stock_count'] }}</strong> Low Stock</span>
                                 <span class="sl-inventory-badge is-out"><strong>{{ $group['out_of_stock_count'] }}</strong> Out of Stock</span>
@@ -330,9 +332,11 @@
                                     <div class="sl-inventory-variant__field is-variant"><span>Variant</span><strong>{{ $item['variant'] }}</strong></div>
                                     <div class="sl-inventory-variant__field is-sku"><span>SKU</span><strong>{{ $item['sku'] ?: 'Not assigned' }}</strong></div>
                                     <div class="sl-inventory-variant__field is-price"><span>Price</span><strong>₱{{ number_format($item['price'], 2) }}</strong></div>
-                                    <div class="sl-inventory-variant__field is-available"><span>Available</span><strong>{{ $item['stock'] }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-available"><span>Buyer-visible stock</span><strong>{{ $item['stock'] }}</strong></div>
+                                    <div class="sl-inventory-variant__field is-reserve"><span>Reserve stock</span><strong>{{ $reserveStockReady ? $item['reserve_stock'] : 'Unavailable' }}</strong></div>
                                     <div class="sl-inventory-variant__field is-status"><span>Status</span><span class="sl-status {{ $item['stock_level'] === 'out' ? 'is-danger' : ($item['stock_level'] === 'low' ? 'is-warning' : 'is-success') }}">{{ $item['stock_status'] }}</span></div>
                                     <form method="POST" action="{{ route('seller.products.variants.stock', ['product' => $item['db_id'], 'variant' => $item['variant_id']]) }}" class="sl-inline-stock sl-inventory-variant__update">@csrf @method('PATCH')<label class="sr-only" for="inventory-stock-{{ $item['variant_id'] }}">Update stock for {{ $item['variant'] }}</label><input id="inventory-stock-{{ $item['variant_id'] }}" name="stock" type="number" min="0" max="999999" required value="{{ $item['stock'] }}"><button class="sl-btn sl-btn-soft sl-btn-sm" type="submit">Update stock</button></form>
+                                    <form method="POST" action="{{ route('seller.products.variants.reserve-stock', ['product' => $item['db_id'], 'variant' => $item['variant_id']]) }}" class="sl-inline-stock sl-inventory-variant__update">@csrf @method('PATCH')<label class="sr-only" for="inventory-reserve-stock-{{ $item['variant_id'] }}">Update reserve stock for {{ $item['variant'] }}</label><input id="inventory-reserve-stock-{{ $item['variant_id'] }}" name="reserve_stock" type="number" min="0" max="999999" required value="{{ $item['reserve_stock'] }}" @disabled(!$reserveStockReady)><button class="sl-btn sl-btn-soft sl-btn-sm" type="submit" @disabled(!$reserveStockReady)>Update reserve</button></form>
                                 </article>
                             @endforeach
                         </div>

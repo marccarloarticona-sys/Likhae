@@ -49,6 +49,16 @@ class MapDataService
         } elseif (! $shipment->relationLoaded('transferLegs')) {
             $shipment->setRelation('transferLegs', collect());
         }
+        if (Schema::hasTable('shipment_events')) {
+            $relations[] = 'events.logisticsCenter.address';
+        } elseif (! $shipment->relationLoaded('events')) {
+            $shipment->setRelation('events', collect());
+        }
+        if (Schema::hasTable('parcel_scans')) {
+            $relations[] = 'scans.logisticsCenter.address';
+        } elseif (! $shipment->relationLoaded('scans')) {
+            $shipment->setRelation('scans', collect());
+        }
         $shipment->loadMissing($relations);
         $activeTransferManifest = $this->activeTransferManifest($shipment);
         $tracking = $this->trackingState($shipment, $viewer);
@@ -148,10 +158,74 @@ class MapDataService
             }
         }
 
+        // Older shipments may not have transfer-leg rows yet, but their scan
+        // and status history still records which sorting centers handled the
+        // parcel. Keep those visited centers on the buyer's route.
+        $observations = collect();
+        foreach ($shipment->events ?? [] as $event) {
+            if ($event->logisticsCenter) {
+                $observations->push([
+                    'center' => $event->logisticsCenter,
+                    'at' => $event->occurred_at,
+                    'status' => $event->status,
+                ]);
+            }
+        }
+        foreach ($shipment->scans ?? [] as $scan) {
+            if ($scan->result === 'SUCCESS' && $scan->logisticsCenter) {
+                $observations->push([
+                    'center' => $scan->logisticsCenter,
+                    'at' => $scan->scanned_at,
+                    'status' => $scan->scan_type,
+                ]);
+            }
+        }
+        $observations = $observations
+            ->sortBy(fn (array $observation): int => $observation['at']?->getTimestamp() ?? 0)
+            ->values();
+        $knownCenterIds = array_fill_keys(array_map('intval', array_filter([
+            $shipment->origin_logistics_center_id,
+            $shipment->destination_logistics_center_id,
+        ])), true);
+        foreach (array_keys($transferCenterMarkerIndexes) as $centerId) {
+            $knownCenterIds[(int) $centerId] = true;
+        }
+        $observedCenterMarkers = [];
+        foreach ($observations as $observation) {
+            $center = $observation['center'];
+            $centerId = (int) ($center?->id ?? 0);
+            if ($centerId === 0 || isset($knownCenterIds[$centerId])) {
+                continue;
+            }
+
+            $marker = $this->centerMarker($center);
+            if (! $marker) {
+                continue;
+            }
+
+            $knownCenterIds[$centerId] = true;
+            $sequence = (int) ($transferLegs->max('sequence_no') ?? 0) + count($observedCenterMarkers) + 1;
+            $label = $center->business_name ?: 'Sorting center';
+            $marker['id'] = 'logistics-center-'.$centerId.'-shipment-'.$shipment->id.'-visited';
+            $marker['shipment_id'] = $shipment->id;
+            $marker['target_kind'] = 'logistics';
+            $marker['center_role'] = 'intermediate';
+            $marker['sequence_no'] = $sequence;
+            $marker['transfer_status'] = 'RECEIVED';
+            $marker['label'] = 'Visited sorting center: '.$label;
+            $marker['title'] = $marker['label'];
+            $observedCenterMarkers[] = $marker;
+        }
+        foreach ($observedCenterMarkers as $marker) {
+            $transferCenterMarkerIndexes[(int) $marker['center_id']] = count($markers);
+            $markers[] = $marker;
+        }
+
         // The route endpoints are saved before transfer legs exist. Include
         // them so buyers can still see the sorting centers while a parcel is
         // waiting for its first hub transfer to be created.
-        $plannedRouteSequence = (int) ($transferLegs->max('sequence_no') ?? 0);
+        $plannedRouteSequence = (int) ($transferLegs->max('sequence_no') ?? 0)
+            + count($observedCenterMarkers);
         foreach ([
             ['center' => $shipment->originLogisticsCenter, 'role' => 'origin', 'sequence' => 0],
             ['center' => $shipment->destinationLogisticsCenter, 'role' => 'destination', 'sequence' => $plannedRouteSequence + 1],
@@ -332,6 +406,24 @@ class MapDataService
             $shipmentModels->each(function (Shipment $shipment): void {
                 if (! $shipment->relationLoaded('transferLegs')) {
                     $shipment->setRelation('transferLegs', collect());
+                }
+            });
+        }
+        if (Schema::hasTable('shipment_events')) {
+            $relations[] = 'events.logisticsCenter.address';
+        } else {
+            $shipmentModels->each(function (Shipment $shipment): void {
+                if (! $shipment->relationLoaded('events')) {
+                    $shipment->setRelation('events', collect());
+                }
+            });
+        }
+        if (Schema::hasTable('parcel_scans')) {
+            $relations[] = 'scans.logisticsCenter.address';
+        } else {
+            $shipmentModels->each(function (Shipment $shipment): void {
+                if (! $shipment->relationLoaded('scans')) {
+                    $shipment->setRelation('scans', collect());
                 }
             });
         }

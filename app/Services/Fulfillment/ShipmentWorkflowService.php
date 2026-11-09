@@ -782,9 +782,9 @@ class ShipmentWorkflowService
                 $rider->loadMissing('logisticsCenter.address');
                 $pickupCenter = $pickupArea?->logisticsCenter ?? $rider->logisticsCenter;
                 $sellerAddress = $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress;
-                $uncoveredFallback = $allowUncoveredPickupRoute
+                $uncoveredPickupRoute = $allowUncoveredPickupRoute
                     && $this->isSellerSelectedFallbackPickup($shipment, $pickupCenter, $sellerAddress);
-                if (! $pickupArea && ! $allowPickupAreaOverride && ! $uncoveredFallback) {
+                if (! $pickupArea && ! $allowPickupAreaOverride && ! $uncoveredPickupRoute) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
                 if (! $pickupCenter
@@ -794,7 +794,7 @@ class ShipmentWorkflowService
                         $pickupCenter,
                         (string) $sellerAddress->province_code,
                         (string) $sellerAddress->municipality_code,
-                    ) && ! $uncoveredFallback)) {
+                    ) && ! $uncoveredPickupRoute)) {
                     throw new RuntimeException('The rider must belong to the logistics center that covers the seller pickup municipality.');
                 }
                 if ($pickupArea) {
@@ -803,7 +803,7 @@ class ShipmentWorkflowService
 
                 if (! $this->riderCoversSellerPickupArea($shipment, $rider, $pickupAddress)
                     && ! $allowPickupAreaOverride
-                    && ! $uncoveredFallback) {
+                    && ! $uncoveredPickupRoute) {
                     throw new RuntimeException('The selected rider is not assigned to the seller pickup area. Assign that area to the rider or choose another rider.');
                 }
             } else {
@@ -1326,18 +1326,21 @@ class ShipmentWorkflowService
             ->with('pickupRequest')
             ->first()?->pickupRequest;
         if (! $pickupRequest
-            || (int) $pickupRequest->preferred_logistics_center_id !== (int) $center->id
             || ! in_array($pickupRequest->status, ['REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
             return false;
         }
 
         if ((bool) $pickupRequest->seller_selected_fallback) {
-            return true;
+            return $this->schema->sellerPickupCenterOffersReady()
+                && $pickupRequest->hasAcceptedOriginCenter((int) $center->id)
+                && (int) $shipment->origin_logistics_center_id === (int) $center->id
+                && (int) $shipment->logistics_center_id === (int) $center->id;
         }
 
-        return ! $this->localRiderEligibility->hasApprovedCenterCoverageForAddress(
-            $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress,
-        );
+        return (int) $pickupRequest->preferred_logistics_center_id === (int) $center->id
+            && ! $this->localRiderEligibility->hasApprovedCenterCoverageForAddress(
+                $pickupAddress ?? $shipment->sellerOrder?->sellerProfile?->businessAddress,
+            );
     }
 
     /** Match pickup coverage using the saved PSGC codes only. */
@@ -2276,14 +2279,14 @@ class ShipmentWorkflowService
     private function requireShipmentStatus(Shipment $shipment, array $statuses, string $action): void
     {
         if (! in_array($shipment->current_status, $statuses, true)) {
-            throw new RuntimeException('The shipment must be '.implode(' or ', $statuses).' to '.$action.'.');
+            abort(409, 'The shipment must be '.implode(' or ', $statuses).' to '.$action.'.');
         }
     }
 
     private function requireAssignmentStatus(RiderAssignment $assignment, array $statuses, string $action): void
     {
         if (! in_array($assignment->status, $statuses, true)) {
-            throw new RuntimeException('The assignment must be '.implode(' or ', $statuses).' to '.$action.'.');
+            abort(409, 'The assignment must be '.implode(' or ', $statuses).' to '.$action.'.');
         }
     }
 }

@@ -56,15 +56,15 @@ class SellerInventoryPdfService
                     $this->startPage($report, true);
                 }
                 $this->productHeading($group);
-                $this->tableHeader();
+                $this->tableHeader((bool) ($report['reserveStockReady'] ?? false));
 
                 foreach ($group['variants'] as $variant) {
                     if ($this->cursorY < 70) {
                         $this->startPage($report, true);
                         $this->productHeading($group, true);
-                        $this->tableHeader();
+                        $this->tableHeader((bool) ($report['reserveStockReady'] ?? false));
                     }
-                    $this->variantRow($variant);
+                    $this->variantRow($variant, (bool) ($report['reserveStockReady'] ?? false));
                 }
                 $this->cursorY -= 7;
             }
@@ -107,30 +107,39 @@ class SellerInventoryPdfService
         $this->fillRect(42, $this->cursorY - 5, 528, 19, 'F3E4DE');
         $name = $group['name'].($continued ? ' (continued)' : '');
         $this->text(50, $this->cursorY + 1, $this->truncate($name, 47), 8, '641F19', 'F2');
-        $summary = $group['variant_count'].' variants / '.$group['total_stock'].' units';
-        $this->text(430, $this->cursorY + 1, $summary, 7, '80675A');
+        $reserveStockReady = (bool) ($group['reserve_stock_ready'] ?? false);
+        $summary = $reserveStockReady
+            ? $group['total_stock'].' visible / '.$group['total_reserve_stock'].' reserve'
+            : $group['variant_count'].' variants / '.$group['total_stock'].' units';
+        $this->text($reserveStockReady ? 407 : 430, $this->cursorY + 1, $this->truncate($summary, 26), 6.5, '80675A');
         $this->cursorY -= 22;
     }
 
-    private function tableHeader(): void
+    private function tableHeader(bool $reserveStockReady = false): void
     {
         $this->fillRect(42, $this->cursorY - 4, 528, 17, 'FAF3EC');
         $this->text(50, $this->cursorY + 1, 'VARIANT', 6.5, '9A6558', 'F2');
-        $this->text(220, $this->cursorY + 1, 'SKU', 6.5, '9A6558', 'F2');
-        $this->text(415, $this->cursorY + 1, 'PRICE', 6.5, '9A6558', 'F2');
-        $this->text(475, $this->cursorY + 1, 'STOCK', 6.5, '9A6558', 'F2');
+        $this->text($reserveStockReady ? 190 : 220, $this->cursorY + 1, 'SKU', 6.5, '9A6558', 'F2');
+        $this->text($reserveStockReady ? 363 : 415, $this->cursorY + 1, 'PRICE', 6.5, '9A6558', 'F2');
+        $this->text($reserveStockReady ? 421 : 475, $this->cursorY + 1, 'STOCK', 6.5, '9A6558', 'F2');
+        if ($reserveStockReady) {
+            $this->text(463, $this->cursorY + 1, 'RESERVE', 6.2, '9A6558', 'F2');
+        }
         $this->text(520, $this->cursorY + 1, 'STATUS', 6.5, '9A6558', 'F2');
         $this->cursorY -= 19;
     }
 
     /** @param array<string, mixed> $variant */
-    private function variantRow(array $variant): void
+    private function variantRow(array $variant, bool $reserveStockReady = false): void
     {
         $this->line(42, $this->cursorY - 4, 570, $this->cursorY - 4, 'E8D8C8');
-        $this->text(50, $this->cursorY + 2, $this->truncate($variant['variant'], 27), 7.5, '4D3329');
-        $this->text(220, $this->cursorY + 2, $this->truncate((string) ($variant['sku'] ?: 'Not assigned'), 30), 7.2, '4D3329');
-        $this->text(415, $this->cursorY + 2, 'PHP '.number_format((float) $variant['price'], 2), 7, '4D3329');
-        $this->text(480, $this->cursorY + 2, (string) $variant['stock'], 7.5, '4D3329', 'F2');
+        $this->text(50, $this->cursorY + 2, $this->truncate($variant['variant'], $reserveStockReady ? 22 : 27), 7.5, '4D3329');
+        $this->text($reserveStockReady ? 190 : 220, $this->cursorY + 2, $this->truncate((string) ($variant['sku'] ?: 'Not assigned'), $reserveStockReady ? 27 : 30), 7.2, '4D3329');
+        $this->text($reserveStockReady ? 363 : 415, $this->cursorY + 2, 'PHP '.number_format((float) $variant['price'], 2), 7, '4D3329');
+        $this->text($reserveStockReady ? 426 : 480, $this->cursorY + 2, (string) $variant['stock'], 7.5, '4D3329', 'F2');
+        if ($reserveStockReady) {
+            $this->text(474, $this->cursorY + 2, (string) ($variant['reserve_stock'] ?? 0), 7.5, '4D3329', 'F2');
+        }
         $this->text(520, $this->cursorY + 2, $variant['stock_status'], 6.8, $this->statusColor($variant['stock_level']), 'F2');
         $this->cursorY -= 19;
     }

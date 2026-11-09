@@ -50,6 +50,14 @@ class SellerPickupRequest extends Model
         return $this->hasMany(SellerPickupCenterOffer::class, 'seller_pickup_request_id')->orderBy('attempt_number');
     }
 
+    public function hasAcceptedOriginCenter(int $centerId): bool
+    {
+        return $this->centerOffers()
+            ->where('logistics_center_id', $centerId)
+            ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+            ->exists();
+    }
+
     protected function casts(): array
     {
         return ['seller_selected_fallback' => 'boolean'];

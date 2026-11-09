@@ -736,7 +736,7 @@ class BuyerOrderController extends Controller
             })->filter();
         })->values();
 
-        return view('buyer.return-refund', [
+        return view('Buyer.return-refund', [
             'order' => $order,
             'returnParcels' => $returnParcels,
             'issues' => $this->returnRefundIssues(),
@@ -879,7 +879,6 @@ class BuyerOrderController extends Controller
         try {
             $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $shipmentId, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
-            abort_if($this->activeReturnRefund($lockedOrder, $request->user()->id), 409, 'Your return/refund request is already under review.');
             $lockedItems = OrderItem::query()
                 ->whereIn('id', $itemIds)
                 ->orderBy('id')
@@ -1060,7 +1059,7 @@ class BuyerOrderController extends Controller
             ], 201);
         }
 
-        return view('buyer.return-refund-success', ['requestRecord' => $requestRecord, 'order' => $order]);
+        return view('Buyer.return-refund-success', ['requestRecord' => $requestRecord, 'order' => $order]);
     }
 
     public function returns(): RedirectResponse

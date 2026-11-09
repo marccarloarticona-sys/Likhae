@@ -135,6 +135,37 @@ class BuyerApiController extends Controller
         return response()->json(['success' => true, 'data' => $this->cartItemPayload($item)], 201);
     }
 
+    public function buyNow(Request $request, CartService $cart): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+        $data = $request->validate([
+            'product_id' => ['required', 'integer'],
+            'product_variant_id' => ['required', 'integer'],
+            'quantity' => ['sometimes', 'integer', 'min:1', 'max:999'],
+        ]);
+
+        $product = Product::query()->visible()->with('sellerProfile')->findOrFail($data['product_id']);
+        try {
+            $item = $cart->setForCheckout(
+                $request->user(),
+                $product,
+                (int) $data['product_variant_id'],
+                (int) ($data['quantity'] ?? 1),
+            );
+        } catch (ValidationException $exception) {
+            if (str_contains(mb_strtolower((string) collect($exception->errors())->flatten()->first()), 'currently on vacation')) {
+                throw ValidationException::withMessages([
+                    'product_id' => 'This seller is currently on vacation and is not accepting purchases.',
+                ]);
+            }
+
+            throw $exception;
+        }
+        $item->load(['productVariant.product.images', 'productVariant.product.sellerProfile', 'productVariant.optionValues.option']);
+
+        return response()->json(['success' => true, 'data' => $this->cartItemPayload($item)]);
+    }
+
     public function updateCartItem(Request $request, CartItem $item, CartService $cart): JsonResponse
     {
         $this->authorizeBuyer($request);
@@ -1181,6 +1212,12 @@ class BuyerApiController extends Controller
         ]))->values();
         $parcels = $order->sellerOrders->flatMap(fn ($sellerOrder) => $sellerOrder->shipments)->values();
         $shipment = $parcels->first();
+        $shipmentRouteStops = $shipment
+            ? collect(app(\App\Services\Maps\MapDataService::class)->forShipment($shipment, includeDestination: false))
+                ->filter(fn (array $marker): bool => ($marker['kind'] ?? null) === 'center')
+                ->values()
+                ->all()
+            : [];
         $activeReturnRequest = $order->disputes->first(
             fn (Dispute $dispute): bool => $dispute->type === 'RETURN_REFUND'
                 && in_array($dispute->status, ['OPEN', 'UNDER_REVIEW'], true),
@@ -1243,6 +1280,7 @@ class BuyerApiController extends Controller
             ] : null,
             'tracking_number' => $shipment?->tracking_number,
             'shipment_id' => $shipment?->id,
+            'shipment_route_stops' => $shipmentRouteStops,
             'parcels' => $parcels->map(fn (Shipment $parcel): array => [
                 'id' => (string) $parcel->id,
                 'tracking_number' => $parcel->tracking_number,

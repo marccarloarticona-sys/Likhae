@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
     <link
-        href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
         rel="stylesheet"
     >
 
@@ -38,7 +38,7 @@
     </script>
 
     @vite([
-        'resources/css/logistic/app.css',
+        'resources/css/rider/app.css',
         'resources/css/shared/status-guidance.css',
         'resources/css/shared/modal-refresh.css',
         'resources/css/shared/announcement-popup.css',
@@ -48,7 +48,7 @@
         'resources/js/shared/likhae-workspace-ai.js'
     ])
     @if(request()->routeIs('rider.dashboard'))
-        @vite(['resources/css/shared/dashboard-weather.css', 'resources/css/rider/dashboard.css', 'resources/js/shared/dashboard-weather.js'])
+        @vite(['resources/css/shared/dashboard-weather.css', 'resources/js/shared/dashboard-weather.js'])
     @endif
     @stack('head')
 
@@ -135,7 +135,7 @@
             border-radius: 10px;
             background: var(--ra-maroon);
             color: #FFFFFF;
-            font-family: Georgia, "Instrument Serif", serif;
+            font-family: Georgia, serif;
             font-size: 20px;
             line-height: 1;
             box-shadow: 0 8px 18px rgba(86, 28, 23, .16);

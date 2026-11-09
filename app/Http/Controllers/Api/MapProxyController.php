@@ -73,6 +73,8 @@ class MapProxyController extends Controller
             'waypoints' => implode('|', $waypoints),
             'mode' => 'drive',
             'format' => 'geojson',
+            'details' => 'instruction_details',
+            'lang' => 'en',
         ]);
 
         $features = $payload['features'] ?? [];
@@ -105,11 +107,44 @@ class MapProxyController extends Controller
         }
 
         $properties = $feature['properties'] ?? [];
+        $instructions = [];
+        foreach (($properties['legs'] ?? []) as $legIndex => $leg) {
+            if (! is_array($leg)) {
+                continue;
+            }
+            $legCoordinates = $lines[$legIndex] ?? [];
+            foreach (($leg['steps'] ?? []) as $step) {
+                if (! is_array($step)) {
+                    continue;
+                }
+
+                $instruction = $step['instruction'] ?? [];
+                $instructionText = is_array($instruction)
+                    ? ($instruction['text'] ?? '')
+                    : (string) $instruction;
+                $fromIndex = filter_var($step['from_index'] ?? null, FILTER_VALIDATE_INT);
+                $point = $fromIndex === false ? null : ($legCoordinates[$fromIndex] ?? null);
+                if (trim((string) $instructionText) === '' || ! is_array($point) || count($point) < 2) {
+                    continue;
+                }
+
+                $instructions[] = [
+                    'instruction' => trim((string) $instructionText),
+                    'type' => is_array($instruction) ? ($instruction['type'] ?? null) : null,
+                    'distance' => (float) ($step['distance'] ?? 0),
+                    'duration' => (float) ($step['time'] ?? 0),
+                    'route_index' => $fromIndex,
+                    'coordinates' => [(float) $point[0], (float) $point[1]],
+                ];
+            }
+        }
+
         return response()->json([
             'routes' => count($coordinates) >= 2 ? [[
                 'geometry' => ['type' => 'LineString', 'coordinates' => $coordinates],
                 'distance' => (float) ($properties['distance'] ?? 0),
                 'duration' => (float) ($properties['time'] ?? 0),
+                'steps' => $instructions,
             ]] : [],
         ]);
     }

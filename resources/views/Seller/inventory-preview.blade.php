@@ -42,11 +42,11 @@
                 <article class="sl-inventory-report-group">
                     <header>
                         <h4>{{ $group['name'] }}</h4>
-                        <span>{{ $group['variant_count'] }} {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} total units</span>
+                        <span>{{ $group['variant_count'] }} {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} buyer-visible units @if($reserveStockReady)· {{ $group['total_reserve_stock'] }} reserve units@endif</span>
                     </header>
                     <div class="sl-inventory-report-table-wrap">
                         <table class="sl-inventory-report-table">
-                            <thead><tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col">Price</th><th scope="col">Stock</th><th scope="col">Status</th></tr></thead>
+                            <thead><tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col">Price</th><th scope="col">Buyer-visible stock</th>@if($reserveStockReady)<th scope="col">Reserve stock</th>@endif<th scope="col">Status</th></tr></thead>
                             <tbody>
                                 @foreach($group['variants'] as $variant)
                                     <tr>
@@ -54,6 +54,7 @@
                                         <td>{{ $variant['sku'] ?: 'Not assigned' }}</td>
                                         <td>₱{{ number_format($variant['price'], 2) }}</td>
                                         <td>{{ $variant['stock'] }}</td>
+                                        @if($reserveStockReady)<td>{{ $variant['reserve_stock'] }}</td>@endif
                                         <td><span class="sl-inventory-report-status is-{{ $variant['stock_level'] }}">{{ $variant['stock_status'] }}</span></td>
                                     </tr>
                                 @endforeach

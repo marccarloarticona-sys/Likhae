@@ -26,7 +26,9 @@
                 <p class="rr-muted mt-4 text-sm">Choose the delivered parcel that contains the items you are reporting. Each request is linked to one physical parcel and its tracking code.</p>
                 <div class="mt-4 grid gap-4">
                     @forelse($returnParcels as $parcel)
-                        @php($shipment = $parcel['shipment'])
+                        @php
+                            $shipment = $parcel['shipment'];
+                        @endphp
                         <section class="rounded-2xl border border-[#eadbce] p-4 dark:border-[#5a443c]" data-parcel-card>
                             <label class="flex cursor-pointer items-start gap-3 rounded-xl bg-[#fff7f2] p-3 dark:bg-[#30211d]">
                                 <input class="mt-1" type="radio" name="shipment_id" value="{{ $shipment->id }}" data-parcel-radio required @checked((string) old('shipment_id') === (string) $shipment->id) @disabled($parcel['active'])>

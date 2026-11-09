@@ -7,7 +7,7 @@
     @if(session('status'))
         <div class="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-semibold text-green-700">{{ session('status') }}</div>
     @endif
-    <header class="rider-dashboard-heading">
+    <header class="rider-dashboard-heading rider-dashboard-heading--operations">
         <div class="rider-dashboard-heading__copy">
             <span class="lk-dashboard-overline">Rider workspace</span>
             <h1>Rider Operations</h1>

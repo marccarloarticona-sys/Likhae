@@ -49,6 +49,85 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         ]);
     }
 
+    public function test_new_buyer_cod_limit_blocks_a_second_open_order_and_is_lifted_after_completion(): void
+    {
+        config(['buyer_risk.new_buyer_max_open_cod_orders' => 1]);
+        $fixture = $this->checkoutFixture();
+        $checkout = app(CheckoutService::class);
+        $createCartItem = function () use ($fixture): CartItem {
+            $cart = Cart::query()->create([
+                'buyer_user_id' => $fixture['buyer']->id,
+                'status' => Cart::STATUS_ACTIVE,
+            ]);
+
+            return CartItem::query()->create([
+                'cart_id' => $cart->id,
+                'product_variant_id' => $fixture['itemA']->product_variant_id,
+                'quantity' => 1,
+            ]);
+        };
+
+        $firstItem = $createCartItem();
+        $firstOrder = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$firstItem->id],
+            'COD',
+            [],
+            null,
+            [],
+            [],
+            (string) \Illuminate\Support\Str::uuid(),
+        );
+
+        $checkoutPage = $this->actingAs($fixture['buyer'])
+            ->withSession(['checkout_cart_item_ids' => [$fixture['itemA']->id]])
+            ->get(route('buyer.checkout'))
+            ->assertOk()
+            ->assertSee('You have 1 open COD order, the maximum');
+        $document = new \DOMDocument;
+        @$document->loadHTML($checkoutPage->getContent());
+        $placeOrderButton = (new \DOMXPath($document))->query('//button[@data-place-order-submit]')->item(0);
+        $this->assertNotNull($placeOrderButton);
+        $this->assertTrue($placeOrderButton->hasAttribute('disabled'));
+
+        $secondItem = $createCartItem();
+        $secondAttemptKey = (string) \Illuminate\Support\Str::uuid();
+        try {
+            $checkout->placeOrder(
+                $fixture['buyer'],
+                $fixture['address'],
+                [$secondItem->id],
+                'COD',
+                [],
+                null,
+                [],
+                [],
+                $secondAttemptKey,
+            );
+            $this->fail('A new buyer must not create a second open COD order.');
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $this->assertArrayHasKey('new_buyer_cod_order_limit', $exception->errors());
+        }
+        $this->assertDatabaseCount('orders', 1);
+
+        $firstOrder->update(['status' => 'COMPLETED', 'completed_at' => now()]);
+        $secondOrder = $checkout->placeOrder(
+            $fixture['buyer'],
+            $fixture['address'],
+            [$secondItem->id],
+            'COD',
+            [],
+            null,
+            [],
+            [],
+            $secondAttemptKey,
+        );
+
+        $this->assertSame('PLACED', $secondOrder->status);
+        $this->assertDatabaseCount('orders', 2);
+    }
+
     public function test_cart_and_checkout_present_products_in_separate_seller_groups(): void
     {
         $fixture = $this->checkoutFixture();
@@ -2405,6 +2484,9 @@ class CheckoutSellerNoteAndProtectionTest extends TestCase
         $this->assertSame(3, (int) $orderItem->quantity);
         $this->assertSame(0, (int) $variant->fresh()->stock);
         $this->assertSame(1, (int) $variant->fresh()->reserve_stock);
+
+        // This next checkout represents a returning buyer after a successful delivery.
+        $order->update(['status' => 'COMPLETED', 'completed_at' => now()]);
 
         $nextCart = Cart::query()->create([
             'buyer_user_id' => $fixture['buyer']->id,

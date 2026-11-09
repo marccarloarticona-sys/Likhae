@@ -76,11 +76,21 @@ class SellerReturnRefundController extends Controller
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
         $data = $request->validate(['confirm_approval' => ['required', 'accepted']]);
 
-        DB::transaction(function () use ($request, $sellerRequest, $workflow): void {
+        $approvalResult = DB::transaction(function () use ($request, $sellerRequest, $workflow): string {
             $locked = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with('request')->firstOrFail();
+
+            if ($locked->status === SellerReturnRefundRequest::STATUS_APPROVED) {
+                return 'already_approved';
+            }
+
             abort_unless($locked->status === SellerReturnRefundRequest::STATUS_SELLER_REVIEW, 409, 'This request is no longer awaiting Seller review.');
             $responseDeadline = $locked->created_at?->copy()->addDays(ReturnRefundWorkflowService::SELLER_RESPONSE_DAYS);
-            abort_unless($responseDeadline && now()->lt($responseDeadline), 409, 'The Seller response deadline has passed. The request is awaiting automatic handling.');
+            abort_unless($responseDeadline, 409, 'The Seller response deadline could not be determined. Refresh the request and try again.');
+
+            if (now()->greaterThanOrEqualTo($responseDeadline)) {
+                return 'deadline_passed';
+            }
+
             $from = $locked->status;
             $locked->update([
                 'status' => SellerReturnRefundRequest::STATUS_APPROVED,
@@ -92,7 +102,26 @@ class SellerReturnRefundController extends Controller
             $workflow->recordEvent($locked->request, 'SELLER_APPROVED', $request->user(), $locked, $from, $locked->status, 'Seller approved the requested refund amount.');
             $workflow->syncParentStatus($locked->request);
             $this->notifyBuyer($locked, 'Refund request approved', 'The Seller approved your request '.$locked->request->request_number.'.');
+
+            return 'approved';
         });
+
+        if ($approvalResult === 'deadline_passed') {
+            $autoApproved = $workflow->autoApproveExpiredSellerResponse((int) $sellerRequest->id);
+            if ($autoApproved) {
+                return back()->with('status', 'The Seller response deadline passed, so the system automatically approved this request.');
+            }
+
+            if ($sellerRequest->fresh()?->status === SellerReturnRefundRequest::STATUS_APPROVED) {
+                return back()->with('status', 'This request has already been approved. No duplicate approval was recorded.');
+            }
+
+            abort(409, 'The Seller response deadline has passed and this request is not eligible for automatic approval. Refresh to review its current status.');
+        }
+
+        if ($approvalResult === 'already_approved') {
+            return back()->with('status', 'This request has already been approved. No duplicate approval was recorded.');
+        }
 
         return back()->with('status', 'Refund request approved. The cash obligation remains pending physical return receipt, inspection, and an authorized cash payer.');
     }

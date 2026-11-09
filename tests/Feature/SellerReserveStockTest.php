@@ -26,6 +26,39 @@ class SellerReserveStockTest extends TestCase
         $this->category = Category::query()->findOrFail($this->seller->sellerProfile->primary_category_id);
     }
 
+    public function test_inventory_shows_and_updates_reserve_without_changing_buyer_visible_stock(): void
+    {
+        $this->actingAs($this->seller)->post(route('seller.products.store'), [
+            'product_type' => 'single',
+            'name' => 'Inventory Reserve Example',
+            'category_id' => $this->category->id,
+            'price' => 250,
+            'stock' => 10,
+            'reserve_stock' => 2,
+            'listing_status' => 'draft',
+        ])->assertRedirect()->assertSessionHas('product_saved.status', 'DRAFT');
+
+        $product = Product::query()->where('name', 'Inventory Reserve Example')->sole();
+        $variant = $product->variants()->sole();
+
+        $this->get(route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id]))
+            ->assertOk()
+            ->assertSee('Buyer-visible stock')
+            ->assertSee('Reserve stock')
+            ->assertSee('10 buyer-visible units')
+            ->assertSee('2 reserve units');
+
+        $this->patch(route('seller.products.variants.reserve-stock', ['product' => $product, 'variant' => $variant]), [
+            'reserve_stock' => 4,
+        ])->assertRedirect(route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id]));
+
+        $this->assertDatabaseHas('product_variants', [
+            'id' => $variant->id,
+            'stock' => 10,
+            'reserve_stock' => 4,
+        ]);
+    }
+
     public function test_single_product_reserve_stock_is_saved_prefilled_and_editable(): void
     {
         $this->actingAs($this->seller)->post(route('seller.products.store'), [

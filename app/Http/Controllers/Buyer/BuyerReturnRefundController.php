@@ -43,7 +43,7 @@ class BuyerReturnRefundController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        return view('buyer.returns', compact('requests'));
+        return view('Buyer.returns', compact('requests'));
     }
 
     public function show(Request $request, SellerReturnRefundRequest $sellerRequest): View
@@ -96,7 +96,7 @@ class BuyerReturnRefundController extends Controller
         abort_unless((int) $workflow->seller_return_refund_request_id === (int) $sellerRequest->id, 404);
         $workflow->load(['logisticsCenter.address', 'buyerDropoffCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.shipments']);
 
-        return view('buyer.return-waybill', compact('sellerRequest', 'workflow'));
+        return view('Buyer.return-waybill', compact('sellerRequest', 'workflow'));
     }
 
     public function parentShow(Request $request, ReturnRefundRequest $returnRequest): View
@@ -104,7 +104,7 @@ class BuyerReturnRefundController extends Controller
         abort_unless((int) $returnRequest->buyer_user_id === (int) $request->user()->id, 403);
         $returnRequest->load(['order', 'sellerRequests.sellerProfile', 'sellerRequests.sellerOrder', 'sellerRequests.items.orderItem', 'sellerRequests.payouts']);
 
-        return view('buyer.returns-parent', compact('returnRequest'));
+        return view('Buyer.returns-parent', compact('returnRequest'));
     }
 
     public function confirm(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse|JsonResponse

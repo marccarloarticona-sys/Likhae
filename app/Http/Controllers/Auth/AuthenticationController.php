@@ -143,17 +143,25 @@ class AuthenticationController extends Controller
             'account_id' => ['nullable', 'integer'],
         ]);
 
-        $savedAccount = collect($request->session()->get('saved_accounts', []))
-            ->filter(fn ($account): bool => is_array($account))
-            ->first(fn (array $account): bool => (int) ($account['id'] ?? 0) === (int) ($data['account_id'] ?? 0));
+        $savedAccounts = $this->allSavedAccounts($request);
+        $savedAccount = $savedAccounts
+            ->first(fn (array $account): bool => (int) $account['id'] === (int) ($data['account_id'] ?? 0));
 
-        $availability->markOfflineOnLogout($request->user());
+        $user = $request->user();
+        $savedAccounts = $user instanceof User
+            ? $this->rememberAccount($request, $user)
+            : $savedAccounts->all();
+
+        $availability->markOfflineOnLogout($user);
         Auth::logout();
         $request->session()->regenerate();
         $request->session()->regenerateToken();
 
         if (! $savedAccount) {
-            return redirect()->route('login')->with('status', 'Sign in with the account you want to use.');
+            return redirect()
+                ->route('login')
+                ->withCookie($this->savedAccountsCookie($request, $savedAccounts))
+                ->with('status', 'Sign in with the account you want to use.');
         }
 
         $loginRoute = ($savedAccount['portal'] ?? 'marketplace') === 'logistics'
@@ -161,6 +169,7 @@ class AuthenticationController extends Controller
             : 'login';
 
         return redirect()->route($loginRoute, ['email' => $savedAccount['email']])
+            ->withCookie($this->savedAccountsCookie($request, $savedAccounts))
             ->with('status', 'Enter your password to switch accounts.');
     }
 
@@ -169,7 +178,9 @@ class AuthenticationController extends Controller
         $user = $request->user();
         $portal = $user instanceof User
             && $user->isAccountType(User::TYPE_LOGISTICS, User::TYPE_RIDER);
-        $savedAccounts = $this->allSavedAccounts($request)->all();
+        $savedAccounts = $user instanceof User
+            ? $this->rememberAccount($request, $user)
+            : $this->allSavedAccounts($request)->all();
 
         $availability->markOfflineOnLogout($user);
         Auth::logout();
@@ -199,6 +210,7 @@ class AuthenticationController extends Controller
             'account_type' => $user->account_type,
             'avatar_path' => $user->profile_photo_path,
             'portal' => $portal,
+            'expires_at' => now()->addHours(24)->timestamp,
             'remembered' => true,
         ];
 
@@ -223,6 +235,8 @@ class AuthenticationController extends Controller
             $cookieAccounts = json_decode($cookieAccounts, true);
         }
 
+        $now = now()->timestamp;
+
         return collect($request->session()->get('saved_accounts', []))
             ->merge(is_array($cookieAccounts) ? $cookieAccounts : [])
             ->filter(fn ($account): bool => is_array($account)
@@ -232,6 +246,8 @@ class AuthenticationController extends Controller
                 && is_string($account['email'] ?? null)
                 && filter_var($account['email'], FILTER_VALIDATE_EMAIL) !== false
                 && in_array(strtoupper((string) ($account['account_type'] ?? '')), User::ACCOUNT_TYPES, true)
+                && is_numeric($account['expires_at'] ?? null)
+                && (int) $account['expires_at'] > $now
                 && in_array($account['portal'] ?? 'marketplace', ['marketplace', 'logistics'], true)
                 && (($account['portal'] ?? 'marketplace') === 'logistics'
                     ? in_array(strtoupper((string) $account['account_type']), [User::TYPE_LOGISTICS, User::TYPE_RIDER], true)
@@ -243,6 +259,7 @@ class AuthenticationController extends Controller
                 'account_type' => strtoupper((string) $account['account_type']),
                 'avatar_path' => $this->safeAvatarPath($account['avatar_path'] ?? null),
                 'portal' => $account['portal'] ?? 'marketplace',
+                'expires_at' => (int) $account['expires_at'],
                 'remembered' => true,
             ])
             ->unique(fn (array $account): string => $account['portal'].':'.$account['id'])
@@ -279,7 +296,7 @@ class AuthenticationController extends Controller
         return cookie()->make(
             'likhae_saved_accounts',
             json_encode($accounts, JSON_THROW_ON_ERROR),
-            60 * 24 * 30,
+            60 * 24,
             '/',
             null,
             $request->isSecure(),

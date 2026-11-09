@@ -133,15 +133,15 @@ final class SellerPickupBatchService
             }
 
             $allowUncoveredPickupRoute = false;
-            if ($linkedPickupRequest && app(LogisticsSchemaReadiness::class)->sellerSelectedFallbackHubsReady()) {
+            $schema = app(LogisticsSchemaReadiness::class);
+            if ($linkedPickupRequest && $schema->sellerSelectedFallbackHubsReady()) {
                 $selectedOriginMatches = (int) $linkedPickupRequest->preferred_logistics_center_id === (int) $center->id;
-                $allowUncoveredPickupRoute = $selectedOriginMatches
-                    && ((bool) $linkedPickupRequest->seller_selected_fallback
-                        || ($automaticDispatch && $this->isVerifiedUncoveredSelectedOrigin(
-                            $linkedPickupRequest,
-                            $center,
-                            $pickupAddress,
-                        )));
+                $allowUncoveredPickupRoute = (bool) $linkedPickupRequest->seller_selected_fallback
+                    ? ($schema->sellerPickupCenterOffersReady()
+                        && $linkedPickupRequest->hasAcceptedOriginCenter((int) $center->id))
+                    : ($selectedOriginMatches
+                        && $automaticDispatch
+                        && $this->isVerifiedUncoveredSelectedOrigin($linkedPickupRequest, $center, $pickupAddress));
             }
 
             $pickupArea = null;
@@ -176,7 +176,7 @@ final class SellerPickupBatchService
                     $coverageOverride = true;
                     $coverageOverrideReason ??= 'Nearest eligible online local rider selected by recent GPS location; no service area is configured for the seller pickup address.';
                 }
-                if (! $area && ! $coverageOverride) {
+                if (! $area && ! $coverageOverride && ! $allowUncoveredPickupRoute) {
                     throw new RuntimeException('The seller pickup address is not covered by an active service area.');
                 }
                 if ($pickupArea && (int) $pickupArea->id !== (int) $area->id) {
@@ -189,7 +189,7 @@ final class SellerPickupBatchService
                     $coverageOverride = true;
                     $coverageOverrideReason ??= 'Nearest eligible online local rider selected by recent GPS location; the rider was not required to have a pickup service-area assignment.';
                 }
-                if (! $riderCoversArea && ! $coverageOverride) {
+                if (! $riderCoversArea && ! $coverageOverride && ! $allowUncoveredPickupRoute) {
                     throw new RuntimeException('The rider must be an active local rider assigned to the seller pickup barangay.');
                 }
                 if ($coverageOverride && ! $riderCoversArea && ! $automaticDispatch) {

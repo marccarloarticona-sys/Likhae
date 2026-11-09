@@ -85,6 +85,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/buyer/following-stores', [BuyerApiController::class, 'followingStores'])->name('api.v1.buyer.following-stores.index');
         Route::get('/buyer/cart', [BuyerApiController::class, 'cart'])->name('api.v1.buyer.cart.index');
         Route::post('/buyer/cart', [BuyerApiController::class, 'addCartItem'])->name('api.v1.buyer.cart.store');
+        Route::post('/buyer/cart/buy-now', [BuyerApiController::class, 'buyNow'])->name('api.v1.buyer.cart.buy-now');
         Route::patch('/buyer/cart/items/{item}', [BuyerApiController::class, 'updateCartItem'])->name('api.v1.buyer.cart.update');
         Route::delete('/buyer/cart/items/{item}', [BuyerApiController::class, 'removeCartItem'])->name('api.v1.buyer.cart.destroy');
         Route::get('/buyer/orders', [BuyerApiController::class, 'orders'])->name('api.v1.buyer.orders.index');

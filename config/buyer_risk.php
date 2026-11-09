@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'new_buyer_max_open_cod_orders' => 1,
     'cancellation_window_days' => 30,
     'minimum_orders_for_cancellation_signal' => 4,
     'minimum_buyer_cancellations' => 3,

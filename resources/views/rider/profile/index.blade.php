@@ -21,7 +21,7 @@
         $canUseLocalRoutes = \App\Support\RiderVehicleType::isLocalBarangay($rider->vehicle_type);
     @endphp
 
-    <div class="lk-logistics-dashboard lk-rider-profile">
+    <div class="lk-rider-profile">
         <header class="lk-dashboard-heading lk-rider-profile__hero">
             <div class="lk-dashboard-heading__copy">
                 <span class="lk-dashboard-overline">Rider account</span>

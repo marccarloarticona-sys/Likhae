@@ -3005,7 +3005,7 @@ html.dark .sl-compliance-notice-list article, html.dark .sl-compliance-timeline 
 .sl-inventory-toggle__icon { font-size: 17px; line-height: 1; }
 .sl-inventory-variants { display: grid; border-top: 1px solid var(--sl-border); }
 .sl-inventory-variants[hidden], .sl-inventory-variant[hidden], .sl-inventory-product[hidden], .sl-no-results[hidden] { display: none !important; }
-.sl-inventory-variant { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.2fr) minmax(82px, .7fr) minmax(74px, .55fr) minmax(110px, .9fr) auto; align-items: center; gap: 12px; padding: 13px 15px; background: var(--sl-card); }
+.sl-inventory-variant { display: grid; grid-template-columns: minmax(105px, 1.15fr) minmax(90px, .95fr) minmax(72px, .7fr) minmax(64px, .55fr) minmax(64px, .55fr) minmax(96px, .85fr) auto auto; align-items: center; gap: 9px; padding: 13px 15px; background: var(--sl-card); }
 .sl-inventory-variant + .sl-inventory-variant { border-top: 1px solid var(--sl-border); }
 .sl-inventory-variant__field { display: grid; justify-items: start; gap: 4px; min-width: 0; }
 .sl-inventory-variant__field > span:first-child { color: var(--sl-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
@@ -3062,11 +3062,12 @@ html.dark .sl-inventory-product, html.dark .sl-inventory-variant { background: v
 .sl-inventory-toggle { min-height: 36px; padding: 7px 11px; color: var(--sl-blue); font-size: 10px; }
 .sl-inventory-toggle__icon { width: 17px; height: 17px; display: inline-grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 12px; }
 .sl-inventory-variants { background: var(--sl-bg); }
-.sl-inventory-variant { grid-template-columns: minmax(130px, 1.25fr) minmax(110px, 1fr) minmax(82px, .75fr) minmax(72px, .6fr) minmax(100px, .8fr) auto; gap: 12px; padding: 12px 16px; }
+.sl-inventory-variant { grid-template-columns: minmax(100px, 1.1fr) minmax(82px, .9fr) minmax(70px, .68fr) minmax(62px, .55fr) minmax(62px, .55fr) minmax(90px, .8fr) auto auto; gap: 8px; padding: 12px 13px; }
 .sl-inventory-variant__field { gap: 3px; }
 .sl-inventory-variant__field > span:first-child { font-size: 8px; letter-spacing: .055em; }
 .sl-inventory-variant__field > strong { font-size: 10px; }
 .sl-inventory-variant__field.is-available > strong { font-size: 14px; font-weight: 750; }
+.sl-inventory-variant__field.is-reserve > strong { font-size: 14px; font-weight: 750; }
 .sl-inventory-variant__update input { width: 70px; min-height: 34px; padding: 6px 8px; background: var(--sl-card); font-size: 10px; }
 .sl-inventory-variant__update input:focus { border-color: var(--sl-tan); outline: 0; box-shadow: 0 0 0 3px rgba(193, 151, 113, .16); }
 .sl-inventory-variant__update button { min-height: 34px; padding: 6px 10px; font-size: 9px; }

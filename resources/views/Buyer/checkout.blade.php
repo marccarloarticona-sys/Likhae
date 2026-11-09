@@ -49,6 +49,18 @@
 <div class="lk-page-narrow">
     <div class="lk-page-title"><div><span class="lk-kicker">Secure Checkout</span><h1>Review and place your order</h1><p>Confirm your delivery address and payment method.</p></div><a class="lk-btn lk-btn-light" href="{{ route('buyer.cart') }}">Back to Cart</a></div>
 
+    @if($newBuyerOpenCodOrderCount !== null)
+        <section class="mt-5 rounded-2xl border {{ $newBuyerCodOrderLimitReached ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-stone-200 bg-white text-stone-800' }} p-4 shadow-sm" role="{{ $newBuyerCodOrderLimitReached ? 'alert' : 'status' }}" aria-live="polite">
+            <h2 class="text-sm font-bold">New buyer COD order limit</h2>
+            @if($newBuyerCodOrderLimitReached)
+                <p class="mt-1 text-xs leading-5">You have {{ $newBuyerOpenCodOrderCount }} open COD order{{ $newBuyerOpenCodOrderCount === 1 ? '' : 's' }}, the maximum until your first successful delivery. Complete or close an existing order before placing another.</p>
+                <a class="mt-2 inline-flex text-xs font-semibold underline" href="{{ route('buyer.orders') }}">View My Orders</a>
+            @else
+                <p class="mt-1 text-xs leading-5">You can have up to {{ $newBuyerOpenCodOrderLimit }} open COD order{{ $newBuyerOpenCodOrderLimit === 1 ? '' : 's' }} until your first successful delivery. You currently have {{ $newBuyerOpenCodOrderCount }}.</p>
+            @endif
+        </section>
+    @endif
+
     @if($cartItems->isEmpty())
         <x-buyer.empty-state title="Your cart is empty" message="Add a product before checking out." />
     @elseif($addresses->isEmpty())
@@ -362,7 +374,7 @@
                     <div class="flex justify-between border-t border-stone-200 pt-3 text-base font-bold"><dt>Estimated total</dt><dd id="checkout-grand-total">&#8369;{{ number_format((float) data_get($preview, 'grand_total', 0), 2) }}</dd></div>
                 </dl>
                 @error('cart')<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{{ $message }}</p>@enderror
-                <button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked || !data_get($selectedDeliveryAvailability, 'available'))>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) || !data_get($selectedDeliveryAvailability, 'available') ? 'Delivery unavailable' : ($checkoutBlocked || $hasUnavailableStock ? 'Review checkout' : 'Place Order') }}</button>
+                <button class="lk-btn lk-btn-red lk-btn-full mt-5" type="submit" data-place-order-submit @disabled((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked || $newBuyerCodOrderLimitReached || !data_get($selectedDeliveryAvailability, 'available'))>{{ (!$automaticRouting && $logisticsProviders->isEmpty()) || !data_get($selectedDeliveryAvailability, 'available') ? 'Delivery unavailable' : ($newBuyerCodOrderLimitReached ? 'COD order limit reached' : ($checkoutBlocked || $hasUnavailableStock ? 'Review checkout' : 'Place Order')) }}</button>
                 <p class="mt-3 text-center text-[10px] leading-4 text-stone-400">Review your delivery and payment details before placing the order.</p>
             </aside>
 
@@ -584,6 +596,7 @@
             const deliveryAvailability = @json($deliveryAvailability);
             const automaticRouting = @json($automaticRouting);
             const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked);
+            const newBuyerCodOrderLimitReached = @json($newBuyerCodOrderLimitReached);
             const availabilityMessage = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
             let shippingQuoteFresh = Boolean(shippingQuoteToken?.value && shippingQuoteToken.value.length === 64);
             let quoteRequestSequence = 0;
@@ -736,10 +749,12 @@
                     deliveryStatus.classList.toggle('text-red-800', !availability.available);
                 }
                 if (placeOrderButton && !placeOrderButton.textContent.includes('Placing order')) {
-                    placeOrderButton.disabled = checkoutBlocked || !availability.available || !shippingQuoteFresh;
+                    placeOrderButton.disabled = checkoutBlocked || newBuyerCodOrderLimitReached || !availability.available || !shippingQuoteFresh;
                     placeOrderButton.textContent = checkoutBlocked
                         ? 'Review checkout'
-                        : (!shippingQuoteFresh ? 'Updating shipping…' : (availability.available ? 'Place Order' : 'Delivery unavailable'));
+                        : (newBuyerCodOrderLimitReached
+                            ? 'COD order limit reached'
+                            : (!shippingQuoteFresh ? 'Updating shipping…' : (availability.available ? 'Place Order' : 'Delivery unavailable')));
                 }
             };
             const refreshShippingQuote = async () => {

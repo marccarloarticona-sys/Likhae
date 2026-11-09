@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
                     'resources/css/shared/modal-refresh.css',
                     'resources/css/shared/announcement-popup.css',
                     'resources/css/shared/dashboard-weather.css',
-                    'resources/css/rider/dashboard.css',
+                    'resources/css/rider/app.css',
                     'resources/css/shared/workspace-settings.css',
                     'resources/css/admin/system-settings.css',
                     'resources/js/app.js',
@@ -85,6 +85,9 @@ export default defineConfig(({ mode }) => {
         server: {
             host: '0.0.0.0',
             port: 5173,
+            watch: {
+                ignored: ['**/vendor/**'],
+            },
             // Keep the development URL deterministic. Silently moving to
             // 5174+ leaves already-open pages attached to a stale Vite/Echo
             // process and makes Reverb failures very hard to diagnose.

@@ -76,7 +76,7 @@ class SellerProductController extends Controller
             $inventoryPage = $productsQuery->paginate(20)->withQueryString();
             $products = $inventoryPage->getCollection();
             $sellerProducts = collect();
-            $inventoryProducts = $this->inventoryRows($products);
+            $inventoryProducts = $this->inventoryRows($products, $reserveStockReady);
             if ($search !== '') {
                 $needle = mb_strtolower($search);
                 $inventoryProducts = $inventoryProducts->filter(fn (array $row): bool => str_contains(mb_strtolower($row['name']), $needle)
@@ -149,6 +149,7 @@ class SellerProductController extends Controller
                 'image' => $first['image'],
                 'variant_count' => $variants->count(),
                 'total_stock' => (int) $variants->sum('stock'),
+                'total_reserve_stock' => (int) $variants->sum('reserve_stock'),
                 'low_stock_count' => $variants->where('stock_level', 'low')->count(),
                 'out_of_stock_count' => $variants->where('stock_level', 'out')->count(),
                 'variants' => $variants->values(),
@@ -456,6 +457,28 @@ class SellerProductController extends Controller
             ->with('status', 'Stock updated for '.($variant->description ?: 'Standard').'.');
     }
 
+    public function variantReserveStock(Request $request, Product $product, ProductVariant $variant): RedirectResponse
+    {
+        abort_unless(Schema::hasTable('product_variants') && Schema::hasColumn('product_variants', 'reserve_stock'), 503, 'Reserve stock is not available until the inventory migration is installed.');
+
+        $data = $request->validate([
+            'reserve_stock' => ['required', 'integer', 'min:0', 'max:999999'],
+        ]);
+
+        $variant = $this->sellerCatalog->updateVariantReserveStock(
+            $this->seller($request),
+            $product,
+            $variant,
+            (int) $data['reserve_stock'],
+        );
+
+        $variant->loadMissing('optionValues.option');
+
+        return redirect()
+            ->route('seller.products', ['mode' => 'inventory', 'expanded_product' => $product->id])
+            ->with('status', 'Reserve stock updated for '.($variant->description ?: 'Standard').'.');
+    }
+
     public function toggle(Request $request, Product $product): RedirectResponse
     {
         $updated = $this->sellerCatalog->archiveOrRestore($this->seller($request), $product);
@@ -565,9 +588,9 @@ class SellerProductController extends Controller
 
     /**
      * @param Collection<int, Product> $products
-     * @return Collection<int, array{db_id:int,variant_id:int,name:string,variant:string,sku:?string,price:float,stock:int,stock_level:string,stock_status:string,listing_status:string,image:string}>
+     * @return Collection<int, array{db_id:int,variant_id:int,name:string,variant:string,sku:?string,price:float,stock:int,reserve_stock:int,stock_level:string,stock_status:string,listing_status:string,image:string}>
      */
-    private function inventoryRows(Collection $products): Collection
+    private function inventoryRows(Collection $products, bool $reserveStockReady = false): Collection
     {
         return $products->flatMap(function (Product $product): Collection {
             $primaryImage = $product->images->firstWhere('is_primary', true) ?? $product->images->first();
@@ -582,6 +605,7 @@ class SellerProductController extends Controller
                         ->join(' / ') ?: 'Standard';
                     $imagePath = $primaryImage?->file_path;
                     $stock = (int) $variant->stock;
+                    $reserveStock = $reserveStockReady ? (int) $variant->reserve_stock : 0;
 
                     return [
                         'db_id' => (int) $product->id,
@@ -591,6 +615,7 @@ class SellerProductController extends Controller
                         'sku' => $variant->sku,
                         'price' => (float) $variant->final_price,
                         'stock' => $stock,
+                        'reserve_stock' => $reserveStock,
                         'stock_level' => InventoryStockStatus::level($stock),
                         'stock_status' => InventoryStockStatus::label($stock),
                         'listing_status' => (string) $product->status,
@@ -646,9 +671,11 @@ class SellerProductController extends Controller
         $search = mb_strtolower(trim((string) ($filters['search'] ?? '')));
         $status = $filters['status'] ?? 'all';
 
-        $groups = $this->inventoryRows($products)
+        $reserveStockReady = Schema::hasTable('product_variants')
+            && Schema::hasColumn('product_variants', 'reserve_stock');
+        $groups = $this->inventoryRows($products, $reserveStockReady)
             ->groupBy('db_id')
-            ->map(function (Collection $variants) use ($search, $status): ?array {
+            ->map(function (Collection $variants) use ($search, $status, $reserveStockReady): ?array {
                 $first = $variants->first();
                 $productMatches = $search !== '' && str_contains(mb_strtolower($first['name']), $search);
                 $matchingVariants = $variants->filter(function (array $variant) use ($search, $status, $productMatches): bool {
@@ -670,6 +697,8 @@ class SellerProductController extends Controller
                     'image' => $first['image'],
                     'variant_count' => $matchingVariants->count(),
                     'total_stock' => (int) $matchingVariants->sum('stock'),
+                    'total_reserve_stock' => (int) $matchingVariants->sum('reserve_stock'),
+                    'reserve_stock_ready' => $reserveStockReady,
                     'low_stock_count' => $matchingVariants->where('stock_level', 'low')->count(),
                     'out_of_stock_count' => $matchingVariants->where('stock_level', 'out')->count(),
                     'healthy_count' => $matchingVariants->where('stock_level', 'healthy')->count(),
@@ -692,6 +721,7 @@ class SellerProductController extends Controller
             'appliedSearch' => trim((string) ($filters['search'] ?? '')),
             'appliedStatus' => $status,
             'appliedStatusLabel' => $statusLabels[$status],
+            'reserveStockReady' => $reserveStockReady,
             'inventoryGroups' => $groups,
             'inventoryStats' => [
                 'total' => $reportVariants->count(),

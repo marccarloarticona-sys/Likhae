@@ -295,6 +295,11 @@ final class SellerPickupRequestService
                 && (int) $pickupRequest->preferred_logistics_center_id !== (int) $center->id) {
                 throw new RuntimeException('This Seller chose a different Logistics center for the pickup.');
             }
+            if ((bool) $pickupRequest->seller_selected_fallback
+                && (! app(LogisticsSchemaReadiness::class)->sellerPickupCenterOffersReady()
+                    || ! $pickupRequest->hasAcceptedOriginCenter((int) $center->id))) {
+                throw new RuntimeException('This Logistics center must accept the Seller fallback route before assigning a pickup Rider.');
+            }
 
             $memberships = $pickupRequest->memberships->sortBy('shipment_id')->values();
             $count = $memberships->count();

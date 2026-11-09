@@ -6,7 +6,9 @@ use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderAddress;
 use App\Models\Buyer\Address;
 use App\Models\Logistics\LogisticsCenter;
+use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\Shipment;
+use App\Models\Logistics\ShipmentEvent;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderAssignmentLocation;
 use App\Models\Rider\RiderProfile;
@@ -15,6 +17,7 @@ use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Maps\MapDataService;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class MapboxComponentTest extends TestCase
@@ -58,6 +61,62 @@ class MapboxComponentTest extends TestCase
         $this->assertStringNotContainsString('Unavailable</strong>', $html);
         $this->assertStringContainsString('function navigationMetricPlaceholder', file_get_contents(resource_path('js/shared/mapbox.js')));
         $this->assertStringContainsString('#800000', file_get_contents(resource_path('css/shared/mapbox.css')));
+    }
+
+    public function test_mobile_route_proxy_returns_turn_by_turn_steps(): void
+    {
+        config(['geoapify.api_key' => 'geoapify-test-key']);
+        Http::fake([
+            'api.geoapify.com/v1/routing*' => Http::response([
+                'features' => [[
+                    'type' => 'Feature',
+                    'geometry' => [
+                        'type' => 'LineString',
+                        'coordinates' => [[120.1, 14.1], [120.2, 14.2], [120.3, 14.3]],
+                    ],
+                    'properties' => [
+                        'distance' => 2500,
+                        'time' => 300,
+                        'legs' => [[
+                            'steps' => [
+                                [
+                                    'from_index' => 0,
+                                    'to_index' => 1,
+                                    'distance' => 120,
+                                    'time' => 25,
+                                    'instruction' => [
+                                        'text' => 'Continue onto Main Road.',
+                                        'type' => 'StartAt',
+                                    ],
+                                ],
+                                [
+                                    'from_index' => 1,
+                                    'to_index' => 2,
+                                    'distance' => 2380,
+                                    'time' => 275,
+                                    'instruction' => [
+                                        'text' => 'Turn right onto Buyer Street.',
+                                        'type' => 'Right',
+                                    ],
+                                ],
+                            ],
+                        ]],
+                    ],
+                ]],
+            ]),
+        ]);
+
+        $this->getJson('/api/v1/maps/route?waypoints=120.1%2C14.1%3B120.3%2C14.3')
+            ->assertOk()
+            ->assertJsonPath('routes.0.steps.0.instruction', 'Continue onto Main Road.')
+            ->assertJsonPath('routes.0.steps.1.type', 'Right')
+            ->assertJsonPath('routes.0.steps.1.coordinates', [120.2, 14.2]);
+
+        Http::assertSent(fn ($request): bool =>
+            str_starts_with($request->url(), 'https://api.geoapify.com/v1/routing?') &&
+            $request['details'] === 'instruction_details' &&
+            $request['lang'] === 'en'
+        );
     }
 
     public function test_address_pin_component_exposes_explicit_coordinate_confirmation_fields(): void
@@ -136,6 +195,59 @@ class MapboxComponentTest extends TestCase
         $this->assertSame(['origin', 'destination'], $hubs->pluck('center_role')->all());
         $this->assertSame([14.58, 14.60], $hubs->pluck('latitude')->all());
         $this->assertSame([120.98, 121.00], $hubs->pluck('longitude')->all());
+    }
+
+    public function test_buyer_route_includes_centers_from_successful_scans_and_shipment_history(): void
+    {
+        $makeCenter = static function (int $id, string $name, float $latitude, float $longitude): LogisticsCenter {
+            $address = new Address([
+                'barangay_name' => 'Barangay Test',
+                'municipality_name' => 'Test City',
+                'province_name' => 'Test Province',
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+            ]);
+            $center = new LogisticsCenter(['business_name' => $name]);
+            $center->id = $id;
+            $center->setRelation('address', $address);
+
+            return $center;
+        };
+
+        $visitedCenter = $makeCenter(1912, 'Visited Hub', 14.59, 120.99);
+        $event = new ShipmentEvent([
+            'status' => 'AT_SORTING_CENTER',
+            'occurred_at' => now()->subHour(),
+        ]);
+        $event->setRelation('logisticsCenter', $visitedCenter);
+        $scan = new ParcelScan([
+            'scan_type' => 'TRANSFER_ARRIVAL',
+            'result' => 'SUCCESS',
+            'scanned_at' => now(),
+        ]);
+        $scan->setRelation('logisticsCenter', $visitedCenter);
+
+        $shipment = new Shipment(['current_status' => 'AT_SORTING_CENTER']);
+        $shipment->id = 1911;
+        $shipment->setRelation('sellerOrder', null);
+        $shipment->setRelation('riderAssignments', collect());
+        $shipment->setRelation('transferLegs', collect());
+        $shipment->setRelation('events', collect([$event]));
+        $shipment->setRelation('scans', collect([$scan]));
+        $shipment->setRelation('logisticsCenter', null);
+        $shipment->setRelation('serviceArea', null);
+        $shipment->setRelation('originLogisticsCenter', null);
+        $shipment->setRelation('destinationLogisticsCenter', null);
+
+        $hubs = collect(app(MapDataService::class)->forShipment($shipment, false, false))
+            ->where('kind', 'center')
+            ->values();
+
+        $this->assertCount(1, $hubs);
+        $this->assertSame('Visited sorting center: Visited Hub', $hubs[0]['label']);
+        $this->assertSame(14.59, $hubs[0]['latitude']);
+        $this->assertSame(120.99, $hubs[0]['longitude']);
+        $this->assertSame('intermediate', $hubs[0]['center_role']);
     }
 
     public function test_rider_map_exposes_location_update_endpoint_before_first_gps_coordinate(): void
