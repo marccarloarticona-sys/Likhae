@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Controllers\Admin\AdminCashRefundController;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminFinanceController;
 use App\Http\Controllers\Admin\AdminMarketingController;
@@ -110,7 +109,6 @@ Route::prefix('admin')
         Route::post('/finance/product-proceeds/{entry}/resolve', [AdminFinanceController::class, 'resolveProductProceeds'])->name('finance.product-proceeds.resolve');
         Route::post('/finance/rider-remittances/{remittance}/resolve', [AdminFinanceController::class, 'resolveRiderRemittance'])->name('finance.rider-remittances.resolve');
         Route::post('/finance/cod-collections/{collection}/resolve', [AdminFinanceController::class, 'resolveBuyerCodDiscrepancy'])->name('finance.cod-collections.resolve');
-        Route::post('/cash-refunds/{obligation}/paid', [AdminCashRefundController::class, 'markPaid'])->name('cash-refunds.paid');
         Route::get('/reports', [AdminOperationsController::class, 'reports'])->name('reports');
         Route::get('/messages', [AdminOperationsController::class, 'messages'])->name('messages');
         Route::get('/messages/preview', [AdminOperationsController::class, 'messagePreview'])

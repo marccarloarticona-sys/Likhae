@@ -592,12 +592,12 @@ class SellerProductController extends Controller
      */
     private function inventoryRows(Collection $products, bool $reserveStockReady = false): Collection
     {
-        return $products->flatMap(function (Product $product): Collection {
+        return $products->flatMap(function (Product $product) use ($reserveStockReady): Collection {
             $primaryImage = $product->images->firstWhere('is_primary', true) ?? $product->images->first();
 
             return $product->variants
                 ->where('is_active', true)
-                ->map(function (ProductVariant $variant) use ($product, $primaryImage): array {
+                ->map(function (ProductVariant $variant) use ($product, $primaryImage, $reserveStockReady): array {
                     $variantLabel = $variant->optionValues
                         ->sortBy(fn ($value) => $value->option?->sort_order ?? 0)
                         ->pluck('value')

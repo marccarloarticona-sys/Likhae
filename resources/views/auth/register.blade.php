@@ -1504,10 +1504,12 @@
                                         type="password"
                                         placeholder="Re-enter your password"
                                         autocomplete="new-password"
+                                        aria-describedby="passwordMatchMessage"
                                         required
                                     >
                                     <button type="button" class="register-password-toggle" data-password-toggle="password_confirmation" aria-label="Show confirmation password" aria-pressed="false">Show</button>
                                 </div>
+                                <small id="passwordMatchMessage" class="register-password-match" data-password-match-message role="status" aria-live="polite"></small>
                             </div>
 
                         </div>

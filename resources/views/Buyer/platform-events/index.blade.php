@@ -31,7 +31,7 @@
     @if($campaigns->isNotEmpty())
         <div class="lk-platform-events-grid {{ $campaigns->count() === 1 ? 'is-single-event' : '' }}">
             @foreach($campaigns as $campaign)
-                @include('Buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
+                @include('buyer.platform-events.partials.campaign-card', ['campaign' => $campaign])
             @endforeach
         </div>
     @else

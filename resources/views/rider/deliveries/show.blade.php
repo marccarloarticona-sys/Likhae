@@ -116,13 +116,13 @@
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
                         <section class="grid gap-3 rounded-2xl border border-line bg-page-secondary p-4" aria-labelledby="delivery-scan-heading">
-                            <div><span class="text-xs font-bold uppercase tracking-wider text-primary">Step 1</span><h3 id="delivery-scan-heading" class="mt-1 font-bold text-ink">Scan this parcel’s waybill</h3><p class="mt-1 text-sm text-muted">Scan the barcode with your camera or type the tracking number shown above. The code must match this assigned parcel.</p></div>
+                            <div><span class="text-xs font-bold uppercase tracking-wider text-primary">Step 1</span><h3 id="delivery-scan-heading" class="mt-1 font-bold text-ink">Scan this parcel’s waybill</h3><p class="mt-1 text-sm text-muted">Scan the QR code or barcode with your camera, or type the tracking number shown above. The code must match this assigned parcel.</p></div>
                             <x-shared.parcel-scanner
                                 :action="route('rider.scan')"
                                 :scanner-only="true"
                                 :fill-target="'#delivery-scanned-code'"
                                 :method-target="'#delivery-scan-method'"
-                                title="Scan delivery barcode"
+                                title="Scan delivery QR / barcode"
                                 description="Point the camera at the parcel’s QR code or barcode. The scan fills the tracking field for verification."
                             />
                             <label class="grid gap-2 text-sm font-semibold text-ink">Tracking number

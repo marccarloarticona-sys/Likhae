@@ -660,6 +660,14 @@ class BuyerParityApiController extends Controller
             'items' => $returnRequest->items->map(fn ($item): array => ['product_name' => $item->orderItem?->product_name, 'quantity' => (int) $item->quantity, 'amount' => (float) $item->refundable_amount, 'parcel_tracking_number' => $parcelReturnsReady ? $item->shipment?->tracking_number : null])->values(),
             'events' => $returnRequest->events->sortBy('created_at')->map(fn ($event): array => ['event' => $event->event, 'note' => $event->note, 'created_at' => $event->created_at?->toIso8601String()])->values(),
             'evidence' => $returnRequest->evidence->map(fn ($evidence): array => ['id' => (string) $evidence->id, 'name' => $evidence->original_name, 'mime_type' => $evidence->mime_type])->values(),
+            'refund_destination' => strtoupper((string) $returnRequest->refund_method) === 'SAVED_DESTINATION' && is_array($returnRequest->refund_destination_snapshot)
+                ? [
+                    'method' => $returnRequest->refund_destination_snapshot['payout_method'] ?? null,
+                    'bank_name' => $returnRequest->refund_destination_snapshot['payout_bank_name'] ?? null,
+                    'account_name' => $returnRequest->refund_destination_snapshot['payout_account_name'] ?? null,
+                    'account_number_last4' => substr((string) ($returnRequest->refund_destination_snapshot['payout_account_number'] ?? ''), -4),
+                ]
+                : null,
             'seller_cases' => $returnRequest->sellerRequests->map(function (SellerReturnRefundRequest $case) use ($sellerEvidence, $parcelReturnsReady): array {
                 $cashRefund = $case->relationLoaded('cashRefundObligation')
                     ? $case->getRelation('cashRefundObligation')

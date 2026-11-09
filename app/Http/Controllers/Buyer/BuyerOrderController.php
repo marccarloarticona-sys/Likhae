@@ -37,6 +37,8 @@ use App\Services\Marketplace\CartService;
 use App\Support\AddressCoordinateValidator;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
+use App\Services\Finance\PayoutDestinationManager;
+use App\Services\Finance\PayoutDestinationReadiness;
 use App\Support\FinancialRules;
 use App\Support\OrderItemParcelAmount;
 use Illuminate\Http\JsonResponse;
@@ -67,7 +69,7 @@ class BuyerOrderController extends Controller
                 ->first();
         }
 
-        return view('buyer.orders', [
+        return view('buyer.orders.index', [
             'mode' => 'success',
             'selectedOrder' => $order,
             'orders' => $request->user()->orders()->with(['sellerOrders.shipments', 'payments'])->latest()->paginate(10),
@@ -162,7 +164,7 @@ class BuyerOrderController extends Controller
             }
         });
 
-        return view('buyer.orders', [
+        return view('buyer.orders.index', [
             'mode' => 'index',
             'filter' => $filter,
             'orders' => $orders,
@@ -320,7 +322,7 @@ class BuyerOrderController extends Controller
         $mapMarkers = app(MapDataService::class)->forShipments($selectedOrder->sellerOrders->flatMap->shipments, includeSeller: true);
         $deliveryPinRequired = $this->canConfirmDeliveryPin($selectedOrder, $selectedOrder->address);
 
-        return view('buyer.orders', [
+        return view('buyer.orders.index', [
             'mode' => 'show',
             'selectedOrder' => $selectedOrder,
             'riderRatingsByShipment' => $riderRatingsByShipment,
@@ -683,7 +685,7 @@ class BuyerOrderController extends Controller
         return back()->with('buyer_notice', $notice);
     }
 
-    public function returnRefundForm(Request $request, Order $order): View|RedirectResponse
+    public function returnRefundForm(Request $request, Order $order, PayoutDestinationReadiness $destinationReadiness, PayoutDestinationManager $destinationManager): View|RedirectResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         if (! $this->returnRefundStorageReady()) {
@@ -736,17 +738,31 @@ class BuyerOrderController extends Controller
             })->filter();
         })->values();
 
-        return view('Buyer.return-refund', [
+        $refundDestinationsReady = $destinationReadiness->readyFor('users')
+            && Schema::hasColumn('return_refund_requests', 'refund_destination_snapshot');
+        $refundDestinations = $refundDestinationsReady
+            ? collect($destinationManager->accounts($request->user()))
+                ->filter(fn (array $destination): bool => in_array($destination['payout_method'] ?? '', ['GCash', 'Maya', 'Bank Transfer'], true)
+                    && filled($destination['payout_account_name'] ?? null)
+                    && filled($destination['payout_account_number'] ?? null)
+                    && (($destination['payout_method'] ?? null) !== 'Bank Transfer' || filled($destination['payout_bank_name'] ?? null)))
+                ->values()
+                ->all()
+            : [];
+
+        return view('buyer.returns.request', [
             'order' => $order,
             'returnParcels' => $returnParcels,
             'issues' => $this->returnRefundIssues(),
             'refundMethods' => $this->refundMethods($order),
+            'refundDestinationsReady' => $refundDestinationsReady,
+            'refundDestinations' => $refundDestinations,
             'deliveredAt' => $deliveredAt,
             'deadline' => $deadline,
         ]);
     }
 
-    public function returnRefund(Request $request, Order $order, ReturnRefundWorkflowService $workflow, RefundProofStorageService $proofs): View|RedirectResponse|JsonResponse
+    public function returnRefund(Request $request, Order $order, ReturnRefundWorkflowService $workflow, RefundProofStorageService $proofs, PayoutDestinationReadiness $destinationReadiness, PayoutDestinationManager $destinationManager): View|RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
 
@@ -778,6 +794,8 @@ class BuyerOrderController extends Controller
         $data = $request->validate([
             'issue_category' => ['required', 'string', Rule::in(array_keys($issues))],
             'issue_reason' => ['required', 'string', 'max:150'],
+            'refund_method' => [Rule::requiredIf(! $request->routeIs('api.v1.buyer.orders.return-refund')), 'nullable', 'string', Rule::in(['CASH', 'SAVED_DESTINATION'])],
+            'refund_destination_id' => ['required_if:refund_method,SAVED_DESTINATION', 'nullable', 'string', 'max:80'],
             'shipment_id' => ['required', 'integer'],
             'item_ids' => ['required', 'array', 'min:1'],
             'item_ids.*' => ['integer'],
@@ -829,9 +847,19 @@ class BuyerOrderController extends Controller
             ],
             'video' => ['nullable', 'file', 'mimes:mp4,mov,webm', 'max:204800'],
             'buyer_email' => ['required', 'email', 'max:255'],
-            'confirm_cash' => ['required', 'accepted'],
+            'confirm_refund_method' => [Rule::requiredIf(! $request->routeIs('api.v1.buyer.orders.return-refund') || strtoupper((string) $request->input('refund_method')) === 'SAVED_DESTINATION'), 'accepted'],
+            'confirm_cash' => ['nullable', 'accepted'],
             'confirm_request' => ['required', 'accepted'],
         ]);
+
+        $data['refund_method'] = strtoupper((string) ($data['refund_method'] ?? 'CASH'));
+        if ($data['refund_method'] === 'SAVED_DESTINATION'
+            && (! $destinationReadiness->readyFor('users')
+                || ! Schema::hasColumn('return_refund_requests', 'refund_destination_snapshot'))) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'refund_method' => 'Saved e-wallet or bank refunds are temporarily unavailable. Choose the COD cash refund option or try again after the latest deployment.',
+            ]);
+        }
 
         $issue = $issues[$data['issue_category']];
         abort_unless(in_array($data['issue_reason'], $issue['reasons'], true), 422, 'Choose a valid reason for the selected issue.');
@@ -877,7 +905,7 @@ class BuyerOrderController extends Controller
 
         $storedProofPaths = [];
         try {
-            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $shipmentId, $workflow, $proofs, &$storedProofPaths): ReturnRefundRequest {
+            $requestRecord = DB::transaction(function () use ($request, $order, $data, $issue, $totalRefund, $selectedItems, $itemIds, $shipmentId, $workflow, $proofs, $destinationManager, &$storedProofPaths): ReturnRefundRequest {
             $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             $lockedItems = OrderItem::query()
                 ->whereIn('id', $itemIds)
@@ -925,6 +953,27 @@ class BuyerOrderController extends Controller
             $totalRefund = $totalRefundCents / 100;
             $requestNumber = 'RR-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
             $description = trim($data['description']);
+            $refundDestinationSnapshot = null;
+            if ($data['refund_method'] === 'SAVED_DESTINATION') {
+                $lockedBuyer = User::query()->whereKey($request->user()->id)->lockForUpdate()->firstOrFail();
+                $destination = collect($destinationManager->accounts($lockedBuyer))
+                    ->first(fn (array $account): bool => (string) ($account['id'] ?? '') === (string) $data['refund_destination_id']);
+                abort_unless($destination
+                    && in_array($destination['payout_method'] ?? '', ['GCash', 'Maya', 'Bank Transfer'], true)
+                    && filled($destination['payout_account_name'] ?? null)
+                    && filled($destination['payout_account_number'] ?? null)
+                    && (($destination['payout_method'] ?? null) !== 'Bank Transfer' || filled($destination['payout_bank_name'] ?? null)),
+                    422,
+                    'Choose a complete saved GCash, Maya, or bank destination from your account.');
+                $refundDestinationSnapshot = [
+                    'id' => (string) $destination['id'],
+                    'payout_method' => (string) $destination['payout_method'],
+                    'payout_bank_name' => $destination['payout_bank_name'] ?? null,
+                    'payout_account_name' => (string) $destination['payout_account_name'],
+                    'payout_account_type' => (string) ($destination['payout_account_type'] ?? 'ACCOUNT_NUMBER'),
+                    'payout_account_number' => (string) $destination['payout_account_number'],
+                ];
+            }
             // The legacy dispute-based creation block remains below only as a
             // compatibility reference; ordinary submissions now use the
             // seller-scoped records and never execute it.
@@ -962,7 +1011,8 @@ class BuyerOrderController extends Controller
                 'issue_reason' => $data['issue_reason'],
                 'solution' => $issue['solution'],
                 'description' => $description,
-                'refund_method' => 'CASH',
+                'refund_method' => $data['refund_method'],
+                'refund_destination_snapshot' => $refundDestinationSnapshot,
                 'refundable_amount' => round($totalRefund, 2),
                 'requested_amount' => round($totalRefund, 2),
                 'buyer_email' => $data['buyer_email'],
@@ -1059,7 +1109,7 @@ class BuyerOrderController extends Controller
             ], 201);
         }
 
-        return view('Buyer.return-refund-success', ['requestRecord' => $requestRecord, 'order' => $order]);
+        return view('buyer.returns.success', ['requestRecord' => $requestRecord, 'order' => $order]);
     }
 
     public function returns(): RedirectResponse
@@ -1155,7 +1205,10 @@ class BuyerOrderController extends Controller
 
     private function refundMethods(Order $order): array
     {
-        return ['CASH' => 'Cash after approval, return custody, and inspection'];
+        return [
+            'SAVED_DESTINATION' => 'Saved e-wallet or bank account after approval and return checks',
+            'CASH' => 'Cash after approval, return custody, and inspection',
+        ];
     }
 
     private function storeDisputeEvidence(Dispute $dispute, mixed $file, int $userId, string $notes): void

@@ -13,7 +13,7 @@
         <p>Discover more products from trusted local sellers.</p>
     </div>
     <div class="lk-product-grid {{ $activeView === 'list' ? 'is-list-view' : '' }}" data-recommendation-grid>
-        @include('buyer.products.recommendation-cards', ['products' => $recommendationProducts])
+        @include('buyer.catalog.partials.recommendation-cards', ['products' => $recommendationProducts])
     </div>
     @if($recommendationProducts->isEmpty())
         <p class="lk-search-recommendations__status">No other products are available for these filters right now.</p>

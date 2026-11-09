@@ -89,6 +89,7 @@ Route::prefix('seller')
         Route::post('/orders/refunds/{sellerRequest}/reject', [SellerReturnRefundController::class, 'reject'])->name('orders.refunds.reject');
         Route::post('/orders/refunds/{sellerRequest}/payout', [SellerReturnRefundController::class, 'payout'])->name('orders.refunds.payout');
         Route::post('/orders/refunds/{sellerRequest}/cash-ready', [SellerReturnRefundController::class, 'cashReady'])->name('orders.refunds.cash-ready');
+        Route::post('/orders/refunds/{sellerRequest}/cash-paid', [SellerReturnRefundController::class, 'cashPaid'])->name('orders.refunds.cash-paid');
         Route::post('/orders/refunds/{sellerRequest}/receive', [SellerReturnRefundController::class, 'receiveReturn'])->name('orders.refunds.receive');
         Route::post('/orders/refunds/{sellerRequest}/items/{item}/inspect', [SellerReturnRefundController::class, 'inspectReturn'])->name('orders.refunds.inspect');
         Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');

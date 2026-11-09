@@ -94,7 +94,7 @@ class BuyerController extends Controller
             ->filter(fn ($campaign): bool => Storage::disk('public')->exists((string) $campaign->homepage_carousel_desktop_image_path))
             ->values();
 
-        return view('buyer.home', [
+        return view('buyer.home.index', [
             'products' => $products,
             'buyerProducts' => $products->map(fn (Product $product) => $this->catalog->productPayload($product)),
             'recommendationExcludedProductIds' => $featuredProductIds,
@@ -139,7 +139,7 @@ class BuyerController extends Controller
         )->take(1)->values();
 
         return response()->json([
-            'html' => view('buyer.partials.home-marketing', compact(
+            'html' => view('buyer.home.partials.marketing', compact(
                 'rotation',
                 'dealProducts',
                 'flashDealProducts',
@@ -184,7 +184,7 @@ class BuyerController extends Controller
             ->map(fn (Product $product): array => $this->catalog->recommendationCardPayload($product));
 
         return response()->json([
-            'html' => view('buyer.partials.home-recommendation-cards', compact('recommendedProducts'))->render(),
+            'html' => view('buyer.home.partials.recommendation-cards', compact('recommendedProducts'))->render(),
             'has_more' => $recommendationPage['has_more'],
         ]);
     }
@@ -340,7 +340,7 @@ class BuyerController extends Controller
             ->filter()
             ->values();
 
-        return view('Buyer.discounts', [
+        return view('buyer.promotions.discounts', [
             'products' => $products,
             'dealProducts' => $discountProducts,
         ]);
@@ -348,7 +348,7 @@ class BuyerController extends Controller
 
     public function freeGifts(Request $request): View
     {
-        return view('buyer.free-gifts', [
+        return view('buyer.promotions.free-gifts', [
             'promotions' => $this->sellerPromotions->forMarketplace(
                 $request->user(),
                 80,
@@ -359,7 +359,7 @@ class BuyerController extends Controller
 
     public function bundleDeals(Request $request): View
     {
-        return view('buyer.bundle-deals', [
+        return view('buyer.promotions.bundle-deals', [
             'promotions' => $this->sellerPromotions->forMarketplace(
                 $request->user(),
                 80,
@@ -420,7 +420,7 @@ class BuyerController extends Controller
             ->values();
         $reminderStates = $reminders->reminderStatesFor($request->user(), $upcomingProducts);
 
-        return view('buyer.flash-deals', [
+        return view('buyer.promotions.flash-deals', [
             'products' => $products,
             'dealProducts' => $dealProducts,
             'upcomingDealProducts' => $upcomingProducts,
@@ -746,7 +746,7 @@ class BuyerController extends Controller
             ? $this->searchRecommendations($filters, 1)
             : null;
 
-        return view('buyer.products', [
+        return view('buyer.catalog.index', [
             'products' => $paginator,
             'buyerProducts' => $paginator->getCollection()->map(fn (Product $product) => $this->buyerCatalogPayload($product)),
             'categories' => $this->catalog->categories(),
@@ -791,11 +791,11 @@ class BuyerController extends Controller
         }
 
         return response()->json([
-            'html' => view('buyer.products.recommendation-cards', ['products' => $cardProducts])->render(),
+            'html' => view('buyer.catalog.partials.recommendation-cards', ['products' => $cardProducts])->render(),
             'has_more' => $products->hasMorePages(),
             'next_page' => $products->hasMorePages() ? $page + 1 : null,
             'recommendations_html' => $recommendations
-                ? view('buyer.products.search-recommendations', [
+                ? view('buyer.catalog.partials.search-recommendations', [
                     'recommendations' => $recommendations,
                     'recommendationProducts' => $recommendationProducts,
                     'queryParameters' => $this->catalogQueryParameters($filters),
@@ -820,7 +820,7 @@ class BuyerController extends Controller
             ->map(fn (Product $product) => $this->buyerCatalogPayload($product));
 
         return response()->json([
-            'html' => view('buyer.products.recommendation-cards', ['products' => $products])->render(),
+            'html' => view('buyer.catalog.partials.recommendation-cards', ['products' => $products])->render(),
             'has_more' => $recommendations->hasMorePages(),
             'next_page' => $recommendations->hasMorePages() ? $page + 1 : null,
         ]);
@@ -1266,7 +1266,7 @@ class BuyerController extends Controller
             $productVouchers->each(fn (Voucher $voucher) => $voucher->setAttribute('buyer_has_claim', in_array((int) $voucher->id, $claimedIds, true)));
         }
 
-        return view('buyer.product-details', [
+        return view('buyer.catalog.show', [
             'productModel' => $product,
             'product' => $productPayload,
             'sellerPromotions' => $this->sellerPromotions->forProduct($product, $request->user()),
@@ -1475,7 +1475,7 @@ class BuyerController extends Controller
                 ->values();
         }
 
-        return view($guest ? 'guest.store' : 'buyer.store', [
+        return view($guest ? 'guest.store' : 'buyer.catalog.store', [
             'seller' => $sellerProfile,
             'products' => $products,
             'buyerProducts' => $products->getCollection()->map(fn (Product $product) => $this->catalog->productPayload($product)),
@@ -1664,7 +1664,7 @@ class BuyerController extends Controller
             ->unique('id')
             ->values();
 
-        return view('buyer.cart', [
+        return view('buyer.cart.index', [
             'cartItems' => $cartItems,
             'availableVouchers' => $availableVouchers,
             'cartPromotions' => $cartPromotions,
@@ -2193,7 +2193,7 @@ class BuyerController extends Controller
             );
         }
 
-        return view('buyer.messages', [
+        return view('buyer.messages.index', [
             'buyerProducts' => $referenceProduct ? collect([$referenceProduct]) : collect(),
             'conversationRows' => $rows,
             'dbActiveSeller' => null,
@@ -2328,7 +2328,7 @@ class BuyerController extends Controller
                 return $payload;
             });
 
-        return view('buyer.wishlist', compact('wishlistProducts'));
+        return view('buyer.catalog.wishlist', compact('wishlistProducts'));
     }
 
     public function toggleWishlist(Request $request, string $productId): RedirectResponse|JsonResponse
@@ -2513,7 +2513,7 @@ class BuyerController extends Controller
                 'status' => str($order->status)->headline()->toString(),
             ]))->values();
 
-        return view('Buyer.vouchers', [
+        return view('buyer.promotions.vouchers', [
             'sellerVoucherCards' => $collectedSellerCards->concat($claimableSellerCards)->values(),
             'platformVoucherCards' => $platformVoucherCards,
             'voucherHistory' => $voucherHistory,
@@ -2749,7 +2749,7 @@ class BuyerController extends Controller
             && $walletReadiness->supportsMultipleFor('users');
         $walletDestinations = $walletDestinationReady ? $walletManager->accounts($buyer) : [];
 
-        return view('buyer.account', array_merge([
+        return view('buyer.account.index', array_merge([
             'tab' => $request->query('tab', 'profile'),
             'addresses' => $addresses,
             'addressCount' => $addresses->count(),

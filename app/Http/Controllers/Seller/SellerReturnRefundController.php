@@ -8,6 +8,7 @@ use App\Models\Admin\AuditLog;
 use App\Models\Buyer\ReturnRefundEvidence;
 use App\Models\Seller\RefundPayout;
 use App\Models\Seller\SellerReturnRefundRequest;
+use App\Services\Fulfillment\ShipmentReturnWorkflowService;
 use App\Services\RefundProofStorageService;
 use App\Services\ReturnRefundWorkflowService;
 use App\Services\Returns\CashRefundWorkflowService;
@@ -123,7 +124,7 @@ class SellerReturnRefundController extends Controller
             return back()->with('status', 'This request has already been approved. No duplicate approval was recorded.');
         }
 
-        return back()->with('status', 'Refund request approved. The cash obligation remains pending physical return receipt, inspection, and an authorized cash payer.');
+        return back()->with('status', 'Refund request approved. After the return is received and inspected, you will pay the approved COD cash refund to the Buyer.');
     }
 
     public function reject(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse
@@ -156,12 +157,17 @@ class SellerReturnRefundController extends Controller
         return back()->with('status', 'Refund request rejected with a recorded reason.');
     }
 
-    public function payout(Request $request, SellerReturnRefundRequest $sellerRequest, RefundProofStorageService $proofs, ReturnRefundWorkflowService $workflow): RedirectResponse
+    public function payout(Request $request, SellerReturnRefundRequest $sellerRequest, RefundProofStorageService $proofs, ReturnRefundWorkflowService $workflow, CashRefundWorkflowService $cashRefunds): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
         $sellerRequest->loadMissing('request');
-        abort_unless(strtoupper((string) $sellerRequest->request?->refund_method) !== 'CASH', 409, 'New COD refunds are cash-only. GCash payment reports are retained only for historical online refund records.');
+        $refundMethod = strtoupper((string) $sellerRequest->request?->refund_method);
+        abort_unless($refundMethod !== 'CASH', 409, 'New COD cash refunds must use the cash refund workflow.');
+        if ($refundMethod === 'SAVED_DESTINATION') {
+            abort_unless(is_array($sellerRequest->request?->refund_destination_snapshot), 409, 'The saved refund destination snapshot is unavailable. Contact Admin before sending payment.');
+            $request->validate(['confirm_direct_transfer' => ['required', 'accepted']]);
+        }
         $data = $request->validate([
             'amount_sent' => ['required', 'numeric', 'decimal:0,2', 'min:0.01'],
             'transaction_reference' => ['required', 'string', 'min:3', 'max:150'],
@@ -178,7 +184,7 @@ class SellerReturnRefundController extends Controller
 
         $stored = $proofs->storeImage($request->file('proof'), 'refund-proof/'.$sellerRequest->id);
         try {
-            DB::transaction(function () use ($request, $sellerRequest, $data, $stored, $workflow): void {
+            DB::transaction(function () use ($request, $sellerRequest, $data, $stored, $workflow, $cashRefunds): void {
                 $locked = SellerReturnRefundRequest::query()->whereKey($sellerRequest->id)->lockForUpdate()->with(['request', 'payouts'])->firstOrFail();
             abort_unless(in_array($locked->status, [SellerReturnRefundRequest::STATUS_APPROVED, SellerReturnRefundRequest::STATUS_ADMIN_REFUND_REQUIRED], true), 409, 'Only an approved refund can receive payment proof.');
                 abort_if($locked->payouts->isNotEmpty(), 409, 'A payout report has already been recorded for this refund.');
@@ -200,11 +206,19 @@ class SellerReturnRefundController extends Controller
                     'seller_note' => $data['seller_note'] ?? null,
                     'payment_report_state' => 'REPORTED_SENT',
                 ]);
+                if (strtoupper((string) $locked->request?->refund_method) === 'SAVED_DESTINATION') {
+                    $cashRefunds->recordDirectRefundReversals($locked, $request->user());
+                }
                 $from = $locked->status;
                 $locked->update(['status' => SellerReturnRefundRequest::STATUS_REFUND_SENT]);
-                $workflow->recordEvent($locked->request, 'PAYMENT_PROOF_SUBMITTED', $request->user(), $locked, $from, $locked->status, 'Seller submitted a manual GCash payment report.', ['payout_id' => $payout->id, 'amount_sent' => (float) $payout->amount_sent]);
+                $isSavedDestination = strtoupper((string) $locked->request?->refund_method) === 'SAVED_DESTINATION';
+                $workflow->recordEvent($locked->request, 'PAYMENT_PROOF_SUBMITTED', $request->user(), $locked, $from, $locked->status, $isSavedDestination ? 'Seller submitted proof of manual refund transfer to the Buyer’s saved destination.' : 'Seller submitted a manual GCash payment report.', ['payout_id' => $payout->id, 'amount_sent' => (float) $payout->amount_sent]);
                 $workflow->syncParentStatus($locked->request);
-                $this->notifyBuyer($locked, 'Refund payment reported', 'Your Seller has submitted GCash refund payment details. Please check your GCash account.');
+                $this->notifyBuyer(
+                    $locked,
+                    $isSavedDestination ? 'Refund sent to your saved destination' : 'Refund payment reported',
+                    $isSavedDestination ? 'Your Seller reports sending the approved refund to your saved e-wallet or bank account. Check the account and confirm receipt after the funds arrive.' : 'Your Seller has submitted GCash refund payment details. Please check your GCash account.',
+                );
             });
         } catch (\RuntimeException $exception) {
             \Illuminate\Support\Facades\Storage::disk($stored['disk'])->delete($stored['path']);
@@ -228,7 +242,34 @@ class SellerReturnRefundController extends Controller
             return back()->withErrors(['return' => $exception->getMessage()])->withInput();
         }
 
-        return back()->with('status', 'Cash refund obligation is ready. Physical cash payment remains blocked until an authorized payer policy is configured.');
+        return back()->with('status', 'Cash refund is ready. Pay the approved amount to the Buyer, then record the cash handoff here.');
+    }
+
+    public function cashPaid(Request $request, SellerReturnRefundRequest $sellerRequest, CashRefundWorkflowService $cashRefunds): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerRequest->seller_profile_id === (int) $seller->id, 403);
+        abort_unless(Schema::hasTable('cash_refund_obligations'), 409, 'The COD cash-refund workflow is not available yet.');
+
+        $data = $request->validate([
+            'payment_reference' => ['required', 'string', 'min:3', 'max:150'],
+            'confirm_cash_paid' => ['required', 'accepted'],
+        ]);
+
+        $obligation = $sellerRequest->cashRefundObligation()->firstOrFail();
+        $alreadyRecordedAsPaid = in_array($obligation->state, [\App\Models\Returns\CashRefundObligation::CASH_PAID, \App\Models\Returns\CashRefundObligation::COMPLETED], true);
+        try {
+            $cashRefunds->markCashPaid($obligation, $request->user(), $data['payment_reference']);
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['cash_refund' => $exception->getMessage()])->withInput();
+        }
+
+        $sellerRequest->loadMissing('request');
+        if (! $alreadyRecordedAsPaid) {
+            $this->notifyBuyer($sellerRequest, 'COD cash refund paid', 'Your Seller recorded the approved cash refund as paid. Confirm receipt only after you receive the cash.');
+        }
+
+        return back()->with('status', 'Cash refund recorded as paid. The Buyer must confirm receipt.');
     }
 
     public function receiveReturn(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnCustodyService $custody, ShipmentReturnWorkflowService $returns): RedirectResponse

@@ -68,7 +68,7 @@ class CashRefundWorkflowService
                 return $obligation->refresh();
             }
             $obligation->update(['state' => CashRefundObligation::CASH_READY, 'cash_ready_by_user_id' => $actor->id, 'cash_ready_at' => now()]);
-            app(ReturnRefundWorkflowService::class)->recordEvent($request, 'CASH_REFUND_READY', $actor, $locked, $locked->status, $locked->status, 'Approved cash refund obligation is ready; physical payout remains pending authorized payer policy.', ['obligation_id' => $obligation->id]);
+            app(ReturnRefundWorkflowService::class)->recordEvent($request, 'CASH_REFUND_READY', $actor, $locked, $locked->status, $locked->status, 'Approved COD cash refund is ready for the Seller to pay.', ['obligation_id' => $obligation->id]);
             return $obligation->refresh();
         });
     }
@@ -77,8 +77,10 @@ class CashRefundWorkflowService
     {
         $this->assertReady();
         $allowed = array_filter((array) config('likhae.cash_refund_authorized_account_types', []));
-        if ($actor->status !== User::STATUS_ACTIVE || $allowed === [] || ! in_array($actor->account_type, $allowed, true)) {
-            throw new RuntimeException('The authorized physical cash-refund payer policy is not configured for this account.');
+        $isOwnerSeller = $actor->account_type !== User::TYPE_SELLER
+            || (int) ($actor->sellerProfile?->id ?? 0) === (int) $obligation->sellerRequest()->value('seller_profile_id');
+        if ($actor->status !== User::STATUS_ACTIVE || $allowed === [] || ! in_array($actor->account_type, $allowed, true) || ! $isOwnerSeller) {
+            throw new RuntimeException('Only the Seller responsible for this return can record its COD cash refund.');
         }
         $reference = trim($paymentReference);
         if ($reference === '') {
@@ -103,7 +105,7 @@ class CashRefundWorkflowService
             ]);
             $sellerRequest = $locked->sellerRequest()->with(['request', 'items.orderItem'])->first();
             if ($sellerRequest) {
-                app(\App\Services\ReturnRefundWorkflowService::class)->recordEvent($sellerRequest->request, 'CASH_REFUND_PAID', $actor, $sellerRequest, $sellerRequest->status, $sellerRequest->status, 'Authorized cash payer recorded the physical cash payment. Buyer receipt confirmation is still pending.', ['obligation_id' => $locked->id]);
+                app(\App\Services\ReturnRefundWorkflowService::class)->recordEvent($sellerRequest->request, 'CASH_REFUND_PAID', $actor, $sellerRequest, $sellerRequest->status, $sellerRequest->status, 'Seller recorded the physical COD cash refund. Buyer receipt confirmation is still pending.', ['obligation_id' => $locked->id]);
                 $this->recordReversalEntries($locked, $sellerRequest, $actor);
             }
 
@@ -149,11 +151,24 @@ class CashRefundWorkflowService
         }
     }
 
-    private function recordReversalEntries(CashRefundObligation $obligation, SellerReturnRefundRequest $sellerRequest, User $actor): void
+    public function recordDirectRefundReversals(SellerReturnRefundRequest $sellerRequest, User $actor): void
+    {
+        $sellerRequest->loadMissing('request');
+        if (strtoupper(trim((string) $sellerRequest->request?->refund_method)) !== 'SAVED_DESTINATION') {
+            throw new RuntimeException('Direct refund accounting can only be recorded for saved e-wallet or bank refunds.');
+        }
+
+        $this->recordReversalEntries(null, $sellerRequest, $actor);
+    }
+
+    private function recordReversalEntries(?CashRefundObligation $obligation, SellerReturnRefundRequest $sellerRequest, User $actor): void
     {
         if (! Schema::hasTable('financial_ledger_entries')) {
             return;
         }
+        $sourceType = $obligation ? 'cash-refund' : 'direct-refund';
+        $sourceId = $obligation?->id ?? $sellerRequest->id;
+        $sourceKey = $sourceType.'-'.$sourceId;
         $sellerOrder = $sellerRequest->sellerOrder()->with(['commissionTransaction', 'shipments', 'items'])->first();
         $allocation = $sellerOrder
             ? ShipmentFinancialAllocation::query()->where('seller_order_id', $sellerOrder->id)->first()
@@ -164,7 +179,7 @@ class CashRefundWorkflowService
         $sourceAware = (int) ($sellerOrder?->funding_snapshot_version ?? 0) === 1
             && $refundItems->isNotEmpty()
             && $refundItems->every(fn ($requestItem): bool => (int) ($requestItem->orderItem?->funding_snapshot_version ?? 0) === 1);
-        $sellerReversalCents = FinancialRules::cents($obligation->product_refund_amount ?? $obligation->approved_amount);
+        $sellerReversalCents = FinancialRules::cents($obligation?->product_refund_amount ?? $obligation?->approved_amount ?? $sellerRequest->approved_amount ?? $sellerRequest->requested_amount);
         $commissionReversalCents = 0;
         $commissionRate = (float) ($commission?->commission_rate
             ?? $sellerOrder?->commission_rate_snapshot
@@ -218,8 +233,8 @@ class CashRefundWorkflowService
             ));
         }
         $entries = [
-            ['account_type' => 'SELLER', 'entry_type' => 'REFUND_SELLER_REVERSAL', 'amount' => FinancialRules::amount($sellerReversalCents), 'key' => 'cash-refund-seller-reversal-'.$obligation->id],
-            ['account_type' => 'PLATFORM', 'entry_type' => 'REFUND_COMMISSION_REVERSAL', 'amount' => FinancialRules::amount($commissionReversalCents), 'key' => 'cash-refund-commission-reversal-'.$obligation->id],
+            ['account_type' => 'SELLER', 'entry_type' => 'REFUND_SELLER_REVERSAL', 'amount' => FinancialRules::amount($sellerReversalCents), 'key' => $sourceType.'-seller-reversal-'.$sourceId],
+            ['account_type' => 'PLATFORM', 'entry_type' => 'REFUND_COMMISSION_REVERSAL', 'amount' => FinancialRules::amount($commissionReversalCents), 'key' => $sourceType.'-commission-reversal-'.$sourceId],
         ];
         foreach ($entries as $entry) {
             if (FinancialRules::cents($entry['amount']) <= 0) {
@@ -240,7 +255,9 @@ class CashRefundWorkflowService
                     'actor_user_id' => $actor->id,
                     'posted_at' => now(),
                     'metadata' => [
-                        'cash_refund_obligation_id' => $obligation->id,
+                        'cash_refund_obligation_id' => $obligation?->id,
+                        'refund_settlement_source' => strtoupper($sourceType),
+                        'seller_return_refund_request_id' => $sellerRequest->id,
                         'funding_snapshot_version' => $sourceAware ? 1 : null,
                         'shipping_and_protection_policy' => 'PENDING_OWNER_POLICY',
                     ],
@@ -252,7 +269,7 @@ class CashRefundWorkflowService
             app(SellerSettlementService::class)->applyRefundDebtToUnpaidSettlements((int) $sellerRequest->seller_profile_id, $actor);
         }
 
-        $this->recordDeliveryFeeReversals($obligation, $sellerRequest, $sellerOrder, $allocation, $allocationShipmentId, $actor);
+        $this->recordDeliveryFeeReversals($obligation, $sellerRequest, $sellerOrder, $allocation, $allocationShipmentId, $actor, $sourceType, $sourceId);
 
         $budgetService = app(PlatformCampaignBudgetService::class);
         foreach ($refundItems as $requestItem) {
@@ -275,7 +292,7 @@ class CashRefundWorkflowService
             $budgetService->reverseForOrderItem(
                 $orderItem,
                 FinancialRules::amount($refundShareCents),
-                'cash-refund-'.$obligation->id.'-request-item-'.$requestItem->id,
+                $sourceKey.'-request-item-'.$requestItem->id,
                 $actor,
                 'PRODUCT_VOUCHER',
             );
@@ -289,12 +306,12 @@ class CashRefundWorkflowService
             app(\App\Services\Finance\SellerVoucherBudgetService::class)->reverseForOrderItem(
                 $orderItem,
                 FinancialRules::amount($sellerVoucherRefundCents),
-                'cash-refund-'.$obligation->id.'-request-item-'.$requestItem->id,
+                $sourceKey.'-request-item-'.$requestItem->id,
                 $actor,
             );
         }
-        if (strtoupper((string) ($obligation->shipping_refund_policy ?? '')) === 'REFUNDABLE'
-            && FinancialRules::cents($obligation->shipping_refund_amount ?? 0) > 0
+        if (strtoupper((string) ($obligation?->shipping_refund_policy ?? '')) === 'REFUNDABLE'
+            && FinancialRules::cents($obligation?->shipping_refund_amount ?? 0) > 0
             && $sellerOrder) {
             $shippingPaidCents = max(0,
                 FinancialRules::cents($sellerOrder->shipping_fee ?? 0)
@@ -305,7 +322,7 @@ class CashRefundWorkflowService
                 ->all();
             $shippingSubsidyTotal = array_sum($shippingSubsidyWeights);
             if ($shippingPaidCents > 0 && $shippingSubsidyTotal > 0) {
-                $shippingRefundCents = min($shippingPaidCents, FinancialRules::cents($obligation->shipping_refund_amount));
+                $shippingRefundCents = min($shippingPaidCents, FinancialRules::cents($obligation?->shipping_refund_amount));
                 $shippingSubsidyReversalCents = min(
                     $shippingSubsidyTotal,
                     intdiv(($shippingSubsidyTotal * $shippingRefundCents) + intdiv($shippingPaidCents, 2), $shippingPaidCents),
@@ -318,7 +335,7 @@ class CashRefundWorkflowService
                     $budgetService->reverseForOrderItem(
                         $orderItem,
                         FinancialRules::amount($shippingShares[$index]),
-                        'cash-refund-'.$obligation->id.'-shipping-item-'.$orderItem->id,
+                        $sourceKey.'-shipping-item-'.$orderItem->id,
                         $actor,
                         'SHIPPING_VOUCHER',
                     );
@@ -328,22 +345,24 @@ class CashRefundWorkflowService
     }
 
     private function recordDeliveryFeeReversals(
-        CashRefundObligation $obligation,
+        ?CashRefundObligation $obligation,
         SellerReturnRefundRequest $sellerRequest,
         $sellerOrder,
         ?ShipmentFinancialAllocation $allocation,
         ?int $shipmentId,
         User $actor,
+        string $sourceType,
+        int $sourceId,
     ): void {
         $componentRefunds = [
             'shipping' => [
-                'amount' => $obligation->shipping_refund_amount ?? 0,
-                'policy' => strtoupper((string) ($obligation->shipping_refund_policy ?? 'PENDING_OWNER_POLICY')),
+                'amount' => $obligation?->shipping_refund_amount ?? 0,
+                'policy' => strtoupper((string) ($obligation?->shipping_refund_policy ?? 'PENDING_OWNER_POLICY')),
                 'eligible_amount' => $allocation?->shipping_fee ?? 0,
             ],
             'additional_care' => [
-                'amount' => $obligation->protection_refund_amount ?? 0,
-                'policy' => strtoupper((string) ($obligation->protection_refund_policy ?? 'PENDING_OWNER_POLICY')),
+                'amount' => $obligation?->protection_refund_amount ?? 0,
+                'policy' => strtoupper((string) ($obligation?->protection_refund_policy ?? 'PENDING_OWNER_POLICY')),
                 'eligible_amount' => $allocation?->protection_amount ?? 0,
             ],
         ];
@@ -354,11 +373,11 @@ class CashRefundWorkflowService
                 continue;
             }
             if ($data['policy'] !== 'REFUNDABLE' || ! $allocation) {
-                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, $data['policy'], $actor);
+                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, $data['policy'], $actor, $sourceType, $sourceId);
                 continue;
             }
             if ($amountCents > FinancialRules::cents($data['eligible_amount'])) {
-                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'EXCEEDS_ORIGINAL_COMPONENT', $actor);
+                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'EXCEEDS_ORIGINAL_COMPONENT', $actor, $sourceType, $sourceId);
                 continue;
             }
             $refunds[$component] = $amountCents;
@@ -373,7 +392,7 @@ class CashRefundWorkflowService
         $allocationCount = ShipmentFinancialAllocation::query()->where('seller_order_id', $sellerRequest->seller_order_id)->count();
         if ($allocationCount !== 1 || ! $allocation) {
             foreach ($refunds as $component => $amountCents) {
-                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'AMBIGUOUS_MULTI_SHIPMENT_RECIPIENT', $actor);
+                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'AMBIGUOUS_MULTI_SHIPMENT_RECIPIENT', $actor, $sourceType, $sourceId);
             }
 
             return;
@@ -384,7 +403,7 @@ class CashRefundWorkflowService
             + FinancialRules::cents($allocation->protection_amount ?? 0);
         if ($totalRefundCents > $originalDeliveryCents) {
             foreach ($refunds as $component => $amountCents) {
-                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'EXCEEDS_ORIGINAL_DELIVERY_CHARGE', $actor);
+                $this->recordDeliveryRefundReview($obligation, $sellerRequest, $shipmentId, $component, $amountCents, 'EXCEEDS_ORIGINAL_DELIVERY_CHARGE', $actor, $sourceType, $sourceId);
             }
 
             return;
@@ -443,7 +462,7 @@ class CashRefundWorkflowService
                     continue;
                 }
                 FinancialLedgerEntry::query()->firstOrCreate(
-                    ['idempotency_key' => 'cash-refund-delivery-'.$recipient['account'].'-'.$component.'-'.$obligation->id],
+                    ['idempotency_key' => $sourceType.'-delivery-'.$recipient['account'].'-'.$component.'-'.$sourceId],
                     [
                         'shipment_financial_allocation_id' => $allocation->id,
                         'shipment_id' => $allocation->shipment_id,
@@ -457,7 +476,9 @@ class CashRefundWorkflowService
                         'actor_user_id' => $actor->id,
                         'posted_at' => now(),
                         'metadata' => [
-                            'cash_refund_obligation_id' => $obligation->id,
+                            'cash_refund_obligation_id' => $obligation?->id,
+                            'refund_settlement_source' => strtoupper($sourceType),
+                            'seller_return_refund_request_id' => $sellerRequest->id,
                             'component' => $component,
                             'component_refund_amount' => FinancialRules::amount($amountCents),
                             'refund_policy' => 'REFUNDABLE',
@@ -470,16 +491,18 @@ class CashRefundWorkflowService
     }
 
     private function recordDeliveryRefundReview(
-        CashRefundObligation $obligation,
+        ?CashRefundObligation $obligation,
         SellerReturnRefundRequest $sellerRequest,
         ?int $shipmentId,
         string $component,
         int $amountCents,
         string $reason,
         User $actor,
+        string $sourceType,
+        int $sourceId,
     ): void {
         FinancialLedgerEntry::query()->firstOrCreate(
-            ['idempotency_key' => 'cash-refund-delivery-review-'.$component.'-'.$obligation->id],
+            ['idempotency_key' => $sourceType.'-delivery-review-'.$component.'-'.$sourceId],
             [
                 'shipment_id' => $shipmentId,
                 'seller_order_id' => $sellerRequest->seller_order_id,
@@ -492,7 +515,9 @@ class CashRefundWorkflowService
                 'actor_user_id' => $actor->id,
                 'posted_at' => now(),
                 'metadata' => [
-                    'cash_refund_obligation_id' => $obligation->id,
+                    'cash_refund_obligation_id' => $obligation?->id,
+                    'refund_settlement_source' => strtoupper($sourceType),
+                    'seller_return_refund_request_id' => $sellerRequest->id,
                     'component' => $component,
                     'reason' => $reason,
                 ],

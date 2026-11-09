@@ -14,6 +14,6 @@ return [
     // Keep off until route coverage, schedule, and capacity have been reviewed.
     'smart_nearby_logistics_fallback' => (bool) env('LIKHAE_SMART_NEARBY_LOGISTICS_FALLBACK', false),
     'automatic_seller_pickup_matching' => (bool) env('LIKHAE_AUTOMATIC_SELLER_PICKUP_MATCHING', true),
-    // Empty until the owner approves the physical source of cash refunds.
-    'cash_refund_authorized_account_types' => [],
+    // The Seller issues COD cash refunds after return receipt and inspection.
+    'cash_refund_authorized_account_types' => ['SELLER'],
 ];

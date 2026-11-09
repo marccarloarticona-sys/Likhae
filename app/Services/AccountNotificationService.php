@@ -84,15 +84,21 @@ class AccountNotificationService
     {
         $sellerOrder->loadMissing('sellerProfile.user', 'order.buyer');
         $status = $this->label($sellerOrder->status);
+        $sellerAccepted = strtoupper((string) $sellerOrder->status) === 'CONFIRMED';
+        $buyerTitle = $sellerAccepted ? 'Your order has been accepted by the Seller' : 'Order update: '.$status;
+        $buyerMessage = $sellerAccepted
+            ? 'Seller '.($sellerOrder->sellerProfile?->business_name ?: 'your Seller').' accepted order '.($sellerOrder->order?->order_number ?: $sellerOrder->seller_order_number).'. Your parcel is being prepared.'
+            : 'Seller order '.$sellerOrder->seller_order_number.'.';
 
         $this->record(
             $sellerOrder->order?->buyer,
             'SELLER_ORDER_'.strtoupper((string) $sellerOrder->status),
-            'Order update: '.$status,
-            'Seller order '.$sellerOrder->seller_order_number.'.',
+            $buyerTitle,
+            $buyerMessage,
             'SELLER_ORDER_STATUS',
             $sellerOrder->id,
             '/buyer/orders/'.$sellerOrder->order_id,
+            email: $sellerAccepted,
         );
 
         $this->record(
@@ -110,9 +116,21 @@ class AccountNotificationService
     {
         $shipment->loadMissing('sellerOrder.order.buyer', 'sellerOrder.sellerProfile.user', 'logisticsCenter.owner');
         $status = $this->label($shipment->current_status);
-        $message = 'Parcel '.$shipment->tracking_number.'.';
+        $outForDelivery = strtoupper((string) $shipment->current_status) === 'OUT_FOR_DELIVERY';
+        $message = $outForDelivery
+            ? 'Parcel '.$shipment->tracking_number.' is out for delivery.'
+            : 'Parcel '.$shipment->tracking_number.'.';
 
-        $this->record($shipment->sellerOrder?->order?->buyer, 'SHIPMENT_'.strtoupper((string) $shipment->current_status), 'Delivery update: '.$status, $message, 'SHIPMENT_STATUS', $shipment->id, '/buyer/orders/'.$shipment->sellerOrder?->order_id);
+        $this->record(
+            $shipment->sellerOrder?->order?->buyer,
+            'SHIPMENT_'.strtoupper((string) $shipment->current_status),
+            $outForDelivery ? 'Your order is out for delivery' : 'Delivery update: '.$status,
+            $message,
+            'SHIPMENT_STATUS',
+            $shipment->id,
+            '/buyer/orders/'.$shipment->sellerOrder?->order_id,
+            email: $outForDelivery,
+        );
         $this->record($shipment->sellerOrder?->sellerProfile?->user, 'SELLER_SHIPMENT_'.strtoupper((string) $shipment->current_status), 'Delivery update: '.$status, $message, 'SELLER_SHIPMENT_STATUS', $shipment->id, '/seller/orders');
         $this->record($shipment->logisticsCenter?->owner, 'LOGISTICS_SHIPMENT_'.strtoupper((string) $shipment->current_status), 'Parcel status: '.$status, $message, 'LOGISTICS_SHIPMENT_STATUS', $shipment->id, '/logistics/parcels/'.$shipment->id);
     }

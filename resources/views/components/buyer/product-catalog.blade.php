@@ -181,7 +181,7 @@
                     </div>
                 @endif
                 @if(! $guest && $recommendations)
-                    @include('buyer.products.search-recommendations', [
+                    @include('buyer.catalog.partials.search-recommendations', [
                         'recommendations' => $recommendations,
                         'recommendationProducts' => $recommendationProducts,
                         'queryParameters' => $queryParameters,

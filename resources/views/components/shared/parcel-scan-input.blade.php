@@ -17,5 +17,5 @@
     </div>
     <input id="{{ $id }}" name="{{ $name }}" value="{{ $value }}" @required($required) autocomplete="off" data-scanner-input class="min-w-0 rounded-lg border border-line bg-white px-3 py-2 text-[10px] text-ink" placeholder="Scan or enter tracking number">
     <input type="hidden" name="{{ $methodName }}" value="MANUAL" data-scanner-method>
-    <p data-scanner-message class="min-h-4 text-[9px] text-muted" aria-live="polite">Camera scan or manual tracking entry is accepted.</p>
+    <p data-scanner-message class="min-h-4 text-[9px] text-muted" aria-live="polite">One camera scanner reads QR codes and barcodes. Manual tracking entry is also accepted.</p>
 </div>

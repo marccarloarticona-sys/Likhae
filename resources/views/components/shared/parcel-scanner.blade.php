@@ -3,7 +3,7 @@
     'tracking' => '',
     'method' => 'MANUAL',
     'title' => 'Scan Parcel',
-    'description' => 'Scan the waybill QR or Code 128 barcode, or enter the tracking number manually.',
+    'description' => 'Scan the waybill QR code or barcode, or enter the tracking number manually.',
     'button' => 'Find Parcel',
     'formMethod' => 'GET',
     'inputName' => 'tracking',

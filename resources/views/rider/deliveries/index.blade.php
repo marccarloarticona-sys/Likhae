@@ -25,7 +25,7 @@
         :tracking="old('tracking', request('tracking', ''))"
         :method="request('scan_method', 'MANUAL')"
         title="Scan Waybill"
-        description="Find a delivery assigned to your rider account. A scan never marks the parcel delivered."
+        description="Scan the waybill QR code or barcode to find a delivery assigned to your rider account. A scan never marks the parcel delivered."
         button="Find Assigned Delivery"
     />
 

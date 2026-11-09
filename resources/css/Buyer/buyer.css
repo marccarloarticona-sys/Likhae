@@ -9472,12 +9472,12 @@ body.lk-buyer-body .lk-shell {
 
 .lk-buyer-theme-toggle .lk-theme-toggle-icon--light,
 .lk-buyer-theme-toggle .lk-theme-toggle-icon--dark {
-    display: none;
+    display: none !important;
 }
 
 html:not(.dark) .lk-buyer-theme-toggle .lk-theme-toggle-icon--dark,
 html.dark .lk-buyer-theme-toggle .lk-theme-toggle-icon--light {
-    display: block;
+    display: block !important;
 }
 
 .lk-header.is-buyer .lk-profile-container {
@@ -10092,8 +10092,8 @@ html.dark .lk-buyer-notification-count {
 }
 
 .lk-buyer-header-search.is-expanded {
-    width: 168px;
-    flex-basis: 168px;
+    width: 260px;
+    flex-basis: 260px;
 }
 
 .lk-buyer-header-search-form[hidden] {
@@ -10116,8 +10116,15 @@ html.dark .lk-buyer-notification-count {
 
 @media (max-width: 1279px) and (min-width: 901px) {
     .lk-buyer-header-search.is-expanded {
-        width: 136px;
-        flex-basis: 136px;
+        width: 220px;
+        flex-basis: 220px;
+    }
+}
+
+@media (max-width: 900px) and (min-width: 641px) {
+    .lk-buyer-header-search.is-expanded {
+        width: 220px;
+        flex-basis: 220px;
     }
 }
 
@@ -10128,8 +10135,8 @@ html.dark .lk-buyer-notification-count {
     }
 
     .lk-buyer-header-search.is-expanded {
-        width: clamp(84px, 24vw, 120px);
-        flex-basis: clamp(84px, 24vw, 120px);
+        width: clamp(150px, 42vw, 210px);
+        flex-basis: clamp(150px, 42vw, 210px);
     }
 }
 
@@ -10146,5 +10153,106 @@ html.dark .lk-header.is-buyer .lk-buyer-theme-toggle {
     color: #fff8f2 !important;
     background: #352923 !important;
     border-color: #715144 !important;
+}
+
+html:not(.dark) .lk-header.is-buyer .lk-buyer-theme-toggle {
+    color: var(--lk-brown) !important;
+}
+
+.lk-header.is-buyer .lk-buyer-theme-toggle > svg,
+.lk-header.is-buyer .lk-buyer-theme-toggle > svg * {
+    fill: none !important;
+    stroke: currentColor !important;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+@media (max-width: 640px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(38px, auto) minmax(36px, auto);
+        column-gap: 10px;
+        row-gap: 0;
+        padding: 5px 12px 0;
+    }
+
+    .lk-buyer-header-brand {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+        gap: 8px;
+        overflow: visible;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        width: auto;
+        height: 24px;
+        max-width: 112px;
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        grid-column: 2;
+        grid-row: 1;
+        width: auto;
+        min-width: 0;
+        justify-self: end;
+        gap: 4px;
+    }
+
+    .lk-buyer-nav {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: 100%;
+        min-width: 0;
+        min-height: 36px;
+        margin: 0;
+        justify-content: flex-start;
+        gap: 4px;
+        overflow-x: auto;
+        padding: 2px 0 5px;
+        border-top: 1px solid var(--lk-border);
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .lk-buyer-nav-link {
+        min-height: 30px;
+        flex: 0 0 auto;
+        gap: 5px;
+        padding-inline: 9px;
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 360px) {
+    .lk-header.is-buyer {
+        column-gap: 6px;
+        padding-inline: 8px;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        height: 22px;
+        max-width: 96px;
+    }
+
+    .lk-buyer-nav-link {
+        padding-inline: 7px;
+        font-size: 10px;
+    }
+}
+
+/* Center the buyer navigation when it fits, while keeping overflow reachable. */
+.lk-buyer-nav::before,
+.lk-buyer-nav::after {
+    content: "";
+    flex: 1 0 0;
+}
+
+/* Add a little more inner gutter to buyer return/refund summary cards. */
+.rr-content-spacing .p-5 {
+    padding-inline: clamp(22px, 2.5vw, 28px);
 }
 

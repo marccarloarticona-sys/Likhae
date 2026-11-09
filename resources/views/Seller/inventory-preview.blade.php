@@ -42,7 +42,7 @@
                 <article class="sl-inventory-report-group">
                     <header>
                         <h4>{{ $group['name'] }}</h4>
-                        <span>{{ $group['variant_count'] }} {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} buyer-visible units @if($reserveStockReady)· {{ $group['total_reserve_stock'] }} reserve units@endif</span>
+                        <span>{{ $group['variant_count'] }} {{ \Illuminate\Support\Str::plural('variant', $group['variant_count']) }} · {{ $group['total_stock'] }} buyer-visible units @if($reserveStockReady)· {{ $group['total_reserve_stock'] }} reserve units @endif</span>
                     </header>
                     <div class="sl-inventory-report-table-wrap">
                         <table class="sl-inventory-report-table">

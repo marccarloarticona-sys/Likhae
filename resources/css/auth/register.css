@@ -2061,6 +2061,14 @@ select.is-invalid {
 
 .register-field .register-inline-error { display: block; margin-top: 3px; color: #b42318; font-size: 10px; font-weight: 600; }
 .register-field [aria-invalid="true"] { border-color: #b42318; }
+.register-field .register-password-field input.is-match,
+.register-field .register-password-field input.is-match:focus {
+    border-color: var(--reg-success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--reg-success) 14%, transparent);
+}
+.register-password-match:empty { display: none; }
+.register-password-match.is-match { color: var(--reg-success); font-weight: 700; }
+.register-password-match.is-mismatch { color: var(--reg-error); font-weight: 700; }
 .upload-box .register-inline-error { display: block; margin-top: 6px; color: #b42318; font-size: 10px; font-weight: 600; }
 .upload-box input[aria-invalid="true"] + .upload-box__label { border-color: #b42318; }
 

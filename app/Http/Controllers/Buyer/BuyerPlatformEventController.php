@@ -13,7 +13,7 @@ class BuyerPlatformEventController extends Controller
 
     public function index(): View
     {
-        return view('Buyer.platform-events.index', [
+        return view('buyer.platform-events.index', [
             'campaigns' => $this->campaigns->available(),
         ]);
     }
@@ -23,7 +23,7 @@ class BuyerPlatformEventController extends Controller
         $campaign = $this->campaigns->available()->firstWhere('id', $voucher->id);
         abort_unless($campaign instanceof Voucher, 404);
 
-        return view('Buyer.platform-events.show', [
+        return view('buyer.platform-events.show', [
             'campaign' => $campaign,
         ]);
     }

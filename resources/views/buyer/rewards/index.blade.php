@@ -5,5 +5,5 @@
 @section('subtitle', 'Track your balance, earnings, and redemptions.')
 
 @section('content')
-@include('buyer.partials.rewards-content')
+@include('buyer.account.partials.rewards-content')
 @endsection

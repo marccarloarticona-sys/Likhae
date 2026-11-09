@@ -25,8 +25,34 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    document.getElementById('password_confirmation')?.addEventListener('input', (event) => {
-        event.currentTarget.setCustomValidity('');
+    const passwordInput = document.getElementById('password');
+    const passwordConfirmationInput = document.getElementById('password_confirmation');
+    const passwordMatchMessage = document.querySelector('[data-password-match-message]');
+
+    function updatePasswordMatch() {
+        if (!passwordInput || !passwordConfirmationInput || !passwordMatchMessage) return;
+
+        const hasConfirmation = passwordConfirmationInput.value.length > 0;
+        const matches = hasConfirmation
+            && passwordInput.value.length > 0
+            && passwordInput.value === passwordConfirmationInput.value;
+        const mismatches = hasConfirmation && !matches;
+
+        passwordConfirmationInput.setCustomValidity(mismatches ? 'Passwords must match.' : '');
+        passwordConfirmationInput.setAttribute('aria-invalid', String(mismatches));
+        passwordConfirmationInput.classList.toggle('is-match', matches);
+        passwordMatchMessage.classList.toggle('is-match', matches);
+        passwordMatchMessage.classList.toggle('is-mismatch', mismatches);
+        passwordMatchMessage.textContent = matches
+            ? 'Passwords match.'
+            : mismatches
+                ? 'Passwords do not match.'
+                : '';
+    }
+
+    [passwordInput, passwordConfirmationInput].forEach((input) => {
+        input?.addEventListener('input', updatePasswordMatch);
+        input?.addEventListener('change', updatePasswordMatch);
     });
 
     const registrationStepInput = document.getElementById('registration_step');
@@ -1499,9 +1525,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 nextButton?.click();
                 return;
             }
-            const password = document.getElementById('password');
-            const confirmation = document.getElementById('password_confirmation');
-            confirmation.setCustomValidity(password.value === confirmation.value ? '' : 'Passwords must match.');
+            updatePasswordMatch();
             if (!validateCurrentStep()) {
                 event.preventDefault();
                 return;

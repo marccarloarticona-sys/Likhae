@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\AccountAlert;
 use App\Models\Admin\AuditLog;
 use App\Models\Admin\Notification;
 use App\Models\Auth\ApplicationDocument;
@@ -13,6 +14,8 @@ use App\Services\Buyer\BuyerRiskMonitor;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -614,17 +617,22 @@ class AdminUserController extends Controller
             return back()->with('status', 'This account warning is already recorded and remains open for review.');
         }
 
+        $warningTitle = 'Account warning from LIKHAE';
+        $warningMessage = 'Your account received a warning for '.$newValues['category_label'].'. Reason: '.$newValues['reason'].' Corrective action: '.$newValues['corrective_action'].' Reference: '.$reference;
         Notification::create([
             'user_id' => $user->id,
             'type' => 'ACCOUNT_WARNING',
-            'title' => 'Account warning from LIKHAE',
-            'message' => 'Your account received a warning for '.$newValues['category_label'].'. Reason: '.$newValues['reason'].' Corrective action: '.$newValues['corrective_action'].' Reference: '.$reference,
+            'title' => $warningTitle,
+            'message' => $warningMessage,
             'reference_type' => User::class,
             'reference_id' => $user->id,
-            'action_url' => null,
+            'action_url' => route('notifications.index'),
         ]);
+        $emailSent = $this->sendAccountAlertEmail($user, 'ACCOUNT_WARNING', $warningTitle, $warningMessage, route('notifications.index'));
 
-        return back()->with('status', 'Account warning recorded and notification sent. Reference: '.$reference);
+        return back()->with('status', $emailSent
+            ? 'Account warning recorded. The account received an in-app notification and email. Reference: '.$reference
+            : 'Account warning recorded. The in-app notification was saved; the email could not be sent. Reference: '.$reference);
     }
 
     public function reviewWarning(Request $request, User $user, AuditLog $warning): RedirectResponse
@@ -661,7 +669,24 @@ class AdminUserController extends Controller
             'created_at' => now(),
         ]);
 
-        return back()->with('status', 'Account warning review saved.');
+        $reviewMessage = 'Your account warning '.($values['reference'] ?? '').' was updated to '.str($data['status'])->replace('_', ' ')->headline().'.';
+        if (filled($values['resolution_note'] ?? null)) {
+            $reviewMessage .= ' Admin note: '.$values['resolution_note'];
+        }
+        Notification::create([
+            'user_id' => $user->id,
+            'type' => 'ACCOUNT_WARNING_REVIEWED',
+            'title' => 'Account warning updated',
+            'message' => $reviewMessage,
+            'reference_type' => AuditLog::class,
+            'reference_id' => $warning->id,
+            'action_url' => route('notifications.index'),
+        ]);
+        $emailSent = $this->sendAccountAlertEmail($user, 'ACCOUNT_WARNING_REVIEWED', 'Account warning updated', $reviewMessage, route('notifications.index'));
+
+        return back()->with('status', $emailSent
+            ? 'Account warning review saved. The account was notified in-app and by email.'
+            : 'Account warning review saved. The in-app notification was saved; the email could not be sent.');
     }
 
     public function reviewRiskSignal(Request $request, User $user, AuditLog $signal): RedirectResponse
@@ -755,15 +780,18 @@ class AdminUserController extends Controller
                 'created_at' => now(),
             ]);
         });
+        $suspensionTitle = 'Account suspended';
+        $suspensionMessage = 'Your LIKHAE account was suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reason: '.trim($data['reason']).' Reference: '.$reference;
         Notification::create([
             'user_id' => $user->id,
             'type' => 'ACCOUNT_SUSPENDED',
-            'title' => 'Account suspended',
-            'message' => 'Your LIKHAE account was suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reason: '.trim($data['reason']).' Reference: '.$reference,
+            'title' => $suspensionTitle,
+            'message' => $suspensionMessage,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
+        $this->sendAccountAlertEmail($user, 'ACCOUNT_SUSPENDED', $suspensionTitle, $suspensionMessage, null);
 
         return back()->with('status', 'User suspended until '.$suspendedUntil->format('M d, Y h:i A').'. Reference: '.$reference);
     }
@@ -810,15 +838,18 @@ class AdminUserController extends Controller
                 'created_at' => now(),
             ]);
         });
+        $reactivationTitle = 'Account reactivated';
+        $reactivationMessage = 'Your LIKHAE account was reactivated by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference;
         Notification::create([
             'user_id' => $user->id,
             'type' => 'ACCOUNT_REACTIVATED',
-            'title' => 'Account reactivated',
-            'message' => 'Your LIKHAE account was reactivated by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference,
+            'title' => $reactivationTitle,
+            'message' => $reactivationMessage,
             'reference_type' => User::class,
             'reference_id' => $user->id,
-            'action_url' => null,
+            'action_url' => route('login'),
         ]);
+        $this->sendAccountAlertEmail($user, 'ACCOUNT_REACTIVATED', $reactivationTitle, $reactivationMessage, route('login'));
 
         return back()->with('status', 'User reactivated. Reference: '.$reference);
     }
@@ -875,15 +906,18 @@ class AdminUserController extends Controller
             ]);
         });
 
+        $banTitle = 'Account permanently banned';
+        $banMessage = 'Your LIKHAE account was permanently banned by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference;
         Notification::create([
             'user_id' => $user->id,
             'type' => 'ACCOUNT_PERMANENTLY_BANNED',
-            'title' => 'Account permanently banned',
-            'message' => 'Your LIKHAE account was permanently banned by Admin. Reason: '.trim($data['reason']).' Reference: '.$reference,
+            'title' => $banTitle,
+            'message' => $banMessage,
             'reference_type' => User::class,
             'reference_id' => $user->id,
             'action_url' => null,
         ]);
+        $this->sendAccountAlertEmail($user, 'ACCOUNT_PERMANENTLY_BANNED', $banTitle, $banMessage, null);
 
         return back()->with('status', 'User permanently banned. Reference: '.$reference);
     }
@@ -891,6 +925,34 @@ class AdminUserController extends Controller
     private function makeAccountReference(User $user, string $action): string
     {
         return 'USR-'.$user->id.'-'.$action.'-'.Str::upper((string) Str::ulid());
+    }
+
+    private function sendAccountAlertEmail(User $user, string $type, string $title, string $body, ?string $actionUrl): bool
+    {
+        if (blank($user->email) || $user->email_verified_at === null) {
+            return false;
+        }
+
+        try {
+            Mail::to($user->email)->send(new AccountAlert(
+                type: $type,
+                title: $title,
+                body: $body,
+                actionUrl: $actionUrl,
+                actionLabel: 'View notification',
+                userName: $user->name,
+            ));
+
+            return true;
+        } catch (\Throwable $exception) {
+            Log::warning('Account enforcement email could not be sent.', [
+                'user_id' => $user->id,
+                'notification_type' => $type,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     private function ensureViewable(User $user): void

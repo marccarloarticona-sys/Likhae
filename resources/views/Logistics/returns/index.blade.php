@@ -49,7 +49,7 @@
             @csrf
             <div>
                 <h2 class="text-base font-bold text-ink">Receive parcels from a completed rider route</h2>
-                <p class="mt-1 text-sm text-muted">Scan waybill barcodes with your camera or enter tracking numbers, one per line. Each parcel is validated and recorded separately; a failed scan does not confirm receipt.</p>
+                <p class="mt-1 text-sm text-muted">Scan waybill QR codes or barcodes with the camera scanner, or enter tracking numbers one per line. Each parcel is validated and recorded separately; a failed scan does not confirm receipt.</p>
             </div>
             <x-shared.parcel-scanner
                 :action="route('logistics.returns.receive-batch')"

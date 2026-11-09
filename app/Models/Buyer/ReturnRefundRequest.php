@@ -34,7 +34,10 @@ class ReturnRefundRequest extends Model
         'gcash_mobile_last4',
         'gcash_details_confirmed_at',
         'gcash_details_confirmed_by_user_id',
+        'refund_destination_snapshot',
     ];
+
+    protected $hidden = ['refund_destination_snapshot'];
 
     protected function casts(): array
     {
@@ -45,6 +48,7 @@ class ReturnRefundRequest extends Model
             'gcash_recipient_name' => 'encrypted',
             'gcash_mobile' => 'encrypted',
             'gcash_details_confirmed_at' => 'datetime',
+            'refund_destination_snapshot' => 'encrypted:array',
         ];
     }
 

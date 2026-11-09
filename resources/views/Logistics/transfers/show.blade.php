@@ -69,8 +69,8 @@
                         <section class="rounded-lg border border-line bg-white p-4" data-parcel-scanner data-scanner-autosubmit="false" data-scanner-fill-matching="true">
                             <h2 class="text-sm font-semibold text-ink">Scan parcels at handoff</h2>
                             <p class="mt-1 text-sm text-muted">Each scan releases its matching parcel immediately. The manifest becomes released after the final parcel.</p>
-                            <label class="mt-3 grid gap-1 text-sm font-semibold text-ink">Scan parcel barcode
-                                <input type="text" data-scanner-input autofocus autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Scan or enter a tracking number" class="min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink">
+                            <label class="mt-3 grid gap-1 text-sm font-semibold text-ink">Scan parcel QR code or barcode
+                                <input type="text" data-scanner-input autofocus autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Scan QR / barcode or enter a tracking number" class="min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink">
                             </label>
                             <div class="relative mt-3 overflow-hidden rounded-lg border border-line bg-black">
                                 <video data-scanner-video class="hidden aspect-video w-full object-cover" playsinline muted></video>
@@ -99,7 +99,7 @@
                             <form method="POST" action="{{ route('logistics.transfers.items.release', [$manifest, $item]) }}" data-transfer-parcel-row data-released="{{ $isReleased ? 'true' : 'false' }}" class="grid gap-2 border-b border-line pb-3 text-[10px] sm:grid-cols-[1fr_1fr_auto_auto] sm:items-center">
                                 @csrf
                                 <strong>{{ $trackingNumber }}</strong>
-                                <input name="scanned_code" value="{{ $isReleased ? $trackingNumber : '' }}" data-expected-tracking="{{ $trackingNumber }}" @required(! $isReleased) @readonly($isReleased) autocomplete="off" placeholder="Scan parcel barcode" class="rounded-lg border border-line px-3 py-2">
+                                <input name="scanned_code" value="{{ $isReleased ? $trackingNumber : '' }}" data-expected-tracking="{{ $trackingNumber }}" @required(! $isReleased) @readonly($isReleased) autocomplete="off" placeholder="Scan QR / barcode" class="rounded-lg border border-line px-3 py-2">
                                 <span data-scan-verification class="{{ $isReleased ? 'text-xs font-semibold text-green-700' : 'text-xs text-muted' }}">{{ $isReleased ? 'Released' : 'Awaiting scan' }}</span>
                                 <input type="hidden" name="scan_method" value="MANUAL" data-scan-method-for="{{ $trackingNumber }}">
                                 <button type="submit" @disabled($isReleased) class="rounded-lg bg-primary px-3 py-2 font-semibold text-white disabled:cursor-default disabled:bg-green-700">{{ $isReleased ? 'Released' : 'Release parcel' }}</button>
@@ -118,8 +118,8 @@
                             <h2 class="text-sm font-semibold text-blue-950">Receive parcels at this hub</h2>
                             <p class="mt-1 text-sm leading-5 text-blue-900">Scan each parcel as it arrives. A successful scan records destination custody and moves it into sorting. Choose Damaged before scanning a damaged parcel; record Missing manually.</p>
                         </div>
-                        <label class="grid gap-1 text-sm font-semibold text-ink">Scan parcel barcode
-                            <input type="text" data-scanner-input autofocus autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Scan or enter a tracking number" class="min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink">
+                        <label class="grid gap-1 text-sm font-semibold text-ink">Scan parcel QR code or barcode
+                            <input type="text" data-scanner-input autofocus autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Scan QR / barcode or enter a tracking number" class="min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink">
                         </label>
                         <div class="relative overflow-hidden rounded-lg border border-line bg-black">
                             <video data-scanner-video class="hidden aspect-video w-full object-cover" playsinline muted></video>
@@ -303,7 +303,7 @@
                                     <form method="POST" action="{{ route('logistics.transfers.items.receive', $item) }}" data-transfer-parcel-row data-released="false" class="grid gap-2 sm:grid-cols-2">
                                         @csrf
                                         <select name="outcome" class="rounded border border-line px-2 py-2"><option value="RECEIVED">Received</option><option value="DAMAGED">Damaged</option><option value="MISSING">Missing</option></select>
-                                        <input name="scanned_code" data-expected-tracking="{{ $buyerReturn?->return_tracking_number ?? $item->transferLeg?->shipment?->tracking_number }}" autocomplete="off" placeholder="Scan parcel barcode to receive" class="rounded border border-line px-2 py-2">
+                                        <input name="scanned_code" data-expected-tracking="{{ $buyerReturn?->return_tracking_number ?? $item->transferLeg?->shipment?->tracking_number }}" autocomplete="off" placeholder="Scan parcel QR / barcode to receive" class="rounded border border-line px-2 py-2">
                                         <input type="hidden" name="scan_method" value="MANUAL">
                                         <input name="notes" placeholder="Notes / exception details" class="rounded border border-line px-2 py-2 sm:col-span-2">
                                         <span data-scan-verification class="text-xs font-semibold text-muted">Awaiting receipt scan</span>

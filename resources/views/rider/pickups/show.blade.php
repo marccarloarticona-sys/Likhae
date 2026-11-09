@@ -128,8 +128,8 @@
                     input-name="scanned_code"
                     input-label="Scan seller waybill"
                     input-placeholder="Scan or enter a waybill number"
-                    title="Scan Pickup Barcode"
-                    description="Scan the seller waybill with your camera or enter its tracking number. Each accepted scan verifies one assigned parcel."
+                    title="Scan Pickup QR / Barcode"
+                    description="Scan the seller waybill QR code or barcode with your camera, or enter its tracking number. Each accepted scan verifies one assigned parcel."
                     button="Verify Parcel"
                 />
             </div>

@@ -185,7 +185,7 @@ class CheckoutController extends Controller
         $newBuyerCodOrderLimitReached = $newBuyerOpenCodOrderCount !== null
             && $newBuyerOpenCodOrderCount >= $newBuyerOpenCodOrderLimit;
 
-        return view('buyer.checkout', [
+        return view('buyer.checkout.index', [
             'cartItems' => $items,
             'addresses' => $addresses,
             'availableVouchers' => $availableVouchers,

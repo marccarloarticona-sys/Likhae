@@ -761,7 +761,7 @@
                                         <li class="py-3" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
                                                 <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} of {{ $sellerOrder->shipments->count() }} · Tracking {{ $returnShipment->tracking_number }}</span>
-                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                             <div class="mt-3 flex items-start gap-3">
                                                 <x-shared.product-thumbnail :item="$item" size="56" class="rounded-lg border border-stone-100" />
@@ -781,7 +781,7 @@
                                         @php $returnParcelNumber = $sellerOrder->shipments->search(fn ($candidate) => (int) $candidate->id === (int) $returnShipment->id) + 1; @endphp
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $returnShipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $returnShipment->id) }}">
                                             <span class="text-[11px] text-stone-600">Parcel {{ $returnParcelNumber }} of {{ $sellerOrder->shipments->count() }} · Tracking {{ $returnShipment->tracking_number }}</span>
-                                            @include('buyer.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                            @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $returnShipment, 'status' => 'Return / Refund', 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
                                 </div>
@@ -841,7 +841,7 @@
                                     @foreach($unmappedShipmentsForTab as $shipment)
                                         <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
                                             <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} of {{ $sellerShipments->count() }} · Tracking {{ $shipment->tracking_number }}</span>
-                                            @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                            @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                         </div>
                                     @endforeach
                                 </div>
@@ -863,7 +863,7 @@
                                             @endphp
                                             <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
                                                 <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }} · Qty {{ $shipmentForItem->parcel_quantity }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
-                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
                                         <div class="flex items-start gap-3">
@@ -946,7 +946,7 @@
                                         @foreach($unmappedShipmentsForTab as $shipment)
                                             <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2" data-shipment-tab-key-id="{{ $shipment->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipment->id) }}">
                                                 <span class="text-[11px] text-stone-600">Parcel {{ $sellerShipments->search(fn ($candidate) => (int) $candidate->id === (int) $shipment->id) + 1 }} of {{ $sellerShipments->count() }} · Tracking {{ $shipment->tracking_number }}</span>
-                                                @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $shipment, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                             </div>
                                         @endforeach
                                     </div>
@@ -969,7 +969,7 @@
                                                 <div class="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-shipment-tab-key-id="{{ $shipmentForItem->id }}" data-shipment-tab-key="{{ $shipmentTabKeys->get((int) $shipmentForItem->id) }}">
                                                     <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }} · Qty {{ $shipmentForItem->parcel_quantity }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
                                                     <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
-                                                        @include('buyer.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
+                                                        @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
                                                         @if(in_array($activeTabKey, ['all', 'to-receive'], true))
                                                             <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $shipmentForItem]) }}" data-confirm-shipment-action="{{ $shipmentForItem->id }}" @if(! in_array((int) $shipmentForItem->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }}? Only this parcel will move to Completed.');">
                                                                 @csrf<input type="hidden" name="confirm_receipt" value="1">

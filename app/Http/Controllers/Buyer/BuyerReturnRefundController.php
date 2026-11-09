@@ -43,7 +43,7 @@ class BuyerReturnRefundController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        return view('Buyer.returns', compact('requests'));
+        return view('buyer.returns.index', compact('requests'));
     }
 
     public function show(Request $request, SellerReturnRefundRequest $sellerRequest): View
@@ -75,7 +75,7 @@ class BuyerReturnRefundController extends Controller
             $sellerRequest->setRelation('shipment', null);
         }
 
-        return view('Buyer.return-refund-show', compact('sellerRequest', 'buyerWaybillReady'));
+        return view('buyer.returns.show', compact('sellerRequest', 'buyerWaybillReady'));
     }
 
     public function createReturnWaybill(Request $request, SellerReturnRefundRequest $sellerRequest, ShipmentReturnWorkflowService $returns): RedirectResponse
@@ -96,7 +96,7 @@ class BuyerReturnRefundController extends Controller
         abort_unless((int) $workflow->seller_return_refund_request_id === (int) $sellerRequest->id, 404);
         $workflow->load(['logisticsCenter.address', 'buyerDropoffCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.shipments']);
 
-        return view('Buyer.return-waybill', compact('sellerRequest', 'workflow'));
+        return view('buyer.returns.waybill', compact('sellerRequest', 'workflow'));
     }
 
     public function parentShow(Request $request, ReturnRefundRequest $returnRequest): View
@@ -104,7 +104,7 @@ class BuyerReturnRefundController extends Controller
         abort_unless((int) $returnRequest->buyer_user_id === (int) $request->user()->id, 403);
         $returnRequest->load(['order', 'sellerRequests.sellerProfile', 'sellerRequests.sellerOrder', 'sellerRequests.items.orderItem', 'sellerRequests.payouts']);
 
-        return view('Buyer.returns-parent', compact('returnRequest'));
+        return view('buyer.returns.parent', compact('returnRequest'));
     }
 
     public function confirm(Request $request, SellerReturnRefundRequest $sellerRequest, ReturnRefundWorkflowService $workflow): RedirectResponse|JsonResponse
@@ -120,7 +120,8 @@ class BuyerReturnRefundController extends Controller
 
             $from = $locked->status;
             $locked->update(['status' => SellerReturnRefundRequest::STATUS_CONFIRMED]);
-            $workflow->recordEvent($locked->request, 'BUYER_CONFIRMED_RECEIPT', $request->user(), $locked, $from, $locked->status, 'Buyer confirmed receiving the reported GCash refund.');
+            $isSavedDestination = strtoupper((string) $locked->request?->refund_method) === 'SAVED_DESTINATION';
+            $workflow->recordEvent($locked->request, 'BUYER_CONFIRMED_RECEIPT', $request->user(), $locked, $from, $locked->status, $isSavedDestination ? 'Buyer confirmed receiving the refund transfer to the saved destination.' : 'Buyer confirmed receiving the reported GCash refund.');
             $workflow->syncParentStatus($locked->request);
 
             $sellerUser = $locked->sellerOrder?->sellerProfile?->user;

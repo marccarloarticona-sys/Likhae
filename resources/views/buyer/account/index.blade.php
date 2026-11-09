@@ -217,35 +217,6 @@
                 <span class="h-2 w-2 rounded-full bg-red-500"></span>
                 Account active
             </span>
-
-            @if (Route::has('logout'))
-                <form
-                    method="POST"
-                    action="{{ route('logout') }}"
-                    data-confirm-title="{{ __('common.confirmation.logout_title') }}"
-                    data-confirm-message="{{ __('common.confirmation.logout_message') }}"
-                    data-confirm-label="{{ __('common.confirmation.logout_label') }}"
-                >
-                    @csrf
-                    <button
-                        type="submit"
-                        class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-800 bg-red-800 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:border-red-900 hover:bg-red-900 focus:outline-none focus:ring-4 focus:ring-red-200"
-                    >
-                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path d="M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        {{ __('navigation.items.logout') }}
-                    </button>
-                </form>
-            @else
-                <a
-                    href="{{ Route::has('login') ? route('login') : url('/login') }}"
-                    class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-red-800 bg-red-800 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:border-red-900 hover:bg-red-900 focus:outline-none focus:ring-4 focus:ring-red-200"
-                >
-                    {{ __('navigation.items.logout') }}
-                </a>
-            @endif
         </div>
     </header>
 
@@ -295,6 +266,55 @@
                         </span>
                     </a>
                 @endforeach
+
+                @if (Route::has('logout'))
+                    <form
+                        method="POST"
+                        action="{{ route('logout') }}"
+                        class="shrink-0 lg:w-full"
+                        data-confirm-title="{{ __('common.confirmation.logout_title') }}"
+                        data-confirm-message="{{ __('common.confirmation.logout_message') }}"
+                        data-confirm-label="{{ __('common.confirmation.logout_label') }}"
+                    >
+                        @csrf
+                        <button
+                            type="submit"
+                            class="group flex min-w-max items-center gap-3 rounded-xl px-3 py-2.5 text-red-700 transition hover:bg-red-50 hover:text-red-900 focus:outline-none focus:ring-4 focus:ring-red-100 lg:w-full"
+                        >
+                            <span class="h-5 w-5 shrink-0 [&>svg]:h-full [&>svg]:w-full [&>svg]:fill-none [&>svg]:stroke-current [&>svg]:stroke-[1.8] [&>svg]:stroke-linecap-round [&>svg]:stroke-linejoin-round">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </span>
+                            <span>
+                                <strong class="block text-xs font-semibold">
+                                    {{ __('navigation.items.logout') }}
+                                </strong>
+                                <small class="mt-0.5 hidden text-[10px] font-normal text-stone-400 lg:block">
+                                    Sign out of your account
+                                </small>
+                            </span>
+                        </button>
+                    </form>
+                @else
+                    <a
+                        href="{{ Route::has('login') ? route('login') : url('/login') }}"
+                        class="group flex min-w-max shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-red-700 transition hover:bg-red-50 hover:text-red-900 focus:outline-none focus:ring-4 focus:ring-red-100 lg:w-full"
+                    >
+                        <span class="h-5 w-5 shrink-0 [&>svg]:h-full [&>svg]:w-full [&>svg]:fill-none [&>svg]:stroke-current [&>svg]:stroke-[1.8] [&>svg]:stroke-linecap-round [&>svg]:stroke-linejoin-round">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </span>
+                        <span>
+                            <strong class="block text-xs font-semibold">
+                                {{ __('navigation.items.logout') }}
+                            </strong>
+                        </span>
+                    </a>
+                @endif
             </nav>
         </aside>
 
@@ -302,12 +322,12 @@
         <main class="min-w-0 rounded-2xl border border-stone-200 bg-white shadow-sm">
             @if ($activeTab === 'settings')
                 <div class="p-4 sm:p-6">
-                    @include('buyer.partials.settings-content')
+                    @include('buyer.account.partials.settings-content')
                 </div>
             @endif
             @if ($activeTab === 'rewards')
                 <div class="p-4 sm:p-6">
-                    @include('buyer.partials.rewards-content')
+                    @include('buyer.account.partials.rewards-content')
                 </div>
             @endif
             @if ($activeTab === 'profile')
@@ -488,7 +508,7 @@
                         <div>
                             <span class="payout-overline">Buyer Center</span>
                             <h2 id="wallet-heading">Wallet</h2>
-                            <p>Save a GCash, Maya, or bank account as your destination for future digital refunds.</p>
+                            <p>Save a GCash, Maya, or bank account to receive an approved refund.</p>
                         </div>
                         @if($walletDestinationReady && count($walletDestinations))
                             <span class="payout-saved-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>Refund details saved</span>
@@ -500,17 +520,13 @@
                             <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900" role="status">{{ session('status') }}</div>
                         @endif
 
-                        <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
-                            Online checkout remains disabled; new purchases use Cash on Delivery. New return/refund requests currently use the cash refund process after approval, return receipt, and inspection. Saved account details are reserved for future digital refunds and do not enable online checkout.
-                        </div>
-
                         @if($walletDestinationReady)
                             @include('components.shared.payout-destination-manager', [
                                 'payoutDestinations' => $walletDestinations,
                                 'payoutDestinationRoute' => 'buyer.account.wallet.update',
-                                'payoutChangeDescription' => 'Choose which saved account should be the default destination for future digital refunds.',
+                                'payoutChangeDescription' => 'Choose the saved account where approved e-wallet or bank refunds can be sent.',
                                 'payoutPurpose' => 'digital refunds',
-                                'payoutSecurityCopy' => 'Your saved account details are private and reserved for future digital refunds.',
+                                'payoutSecurityCopy' => 'Your saved account details are private and used only for approved refund payouts.',
                                 'payoutHelpId' => 'buyer-wallet-payment-number-help',
                                 'payoutButtonClass' => 'payout-inline-button',
                                 'destinationNoun' => 'refund destination',
@@ -522,7 +538,7 @@
                                 'destinationEditTitle' => 'Update refund destination',
                                 'destinationIncompleteNote' => 'Incomplete details; add a complete refund destination before setting it as your default.',
                                 'destinationChannelLabel' => 'Refund destination method',
-                                'destinationChannelHelp' => 'Choose where future digital refunds could be sent.',
+                                'destinationChannelHelp' => 'Choose which saved e-wallet or bank account can receive your refund.',
                             ])
                         @else
                             <div class="rounded-xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-600" role="status">

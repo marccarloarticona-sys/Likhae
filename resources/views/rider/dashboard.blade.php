@@ -35,9 +35,9 @@
             :tracking="old('tracking', '')"
             :method="old('scan_method', 'MANUAL')"
             title="Parcel Scanner"
-            description="Pickup · Delivery · Hub Transfer. Scan the waybill or enter the tracking number to open only a parcel assigned to you."
+            description="Pickup · Delivery · Hub Transfer. Scan the waybill QR code or barcode, or enter the tracking number to open only a parcel assigned to you."
             button="Verify Tracking"
-            input-placeholder="Scan barcode or enter tracking number"
+            input-placeholder="Scan QR / barcode or enter tracking number"
         />
         <article class="rounded-3xl border border-line bg-surface p-6">
             <h2 class="text-lg font-bold text-ink">Pickup · Delivery · Hub Transfer</h2>

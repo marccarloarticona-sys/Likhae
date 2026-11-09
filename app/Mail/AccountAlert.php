@@ -31,7 +31,9 @@ class AccountAlert extends Mailable
     {
         $view = str_starts_with($this->type, 'RIDER_MODERATION_')
             ? 'rider.emails.moderation-alert'
-            : 'rider.emails.assignment-alert';
+            : (str_starts_with($this->type, 'RIDER_')
+                ? 'rider.emails.assignment-alert'
+                : 'mail.account-alert');
 
         return new Content(view: $view);
     }

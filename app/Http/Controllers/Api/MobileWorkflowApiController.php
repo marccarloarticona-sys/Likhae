@@ -76,7 +76,12 @@ class MobileWorkflowApiController extends Controller
                 ->where('users.id', $request->user()->id)
                 ->whereNull('conversation_participants.left_at'))
             ->with([
-                'latestMessage:id,conversation_id,sender_user_id,sent_at',
+                'latestMessage' => fn ($query) => $query->select(
+                    'messages.id',
+                    'messages.conversation_id',
+                    'messages.sender_user_id',
+                    'messages.sent_at',
+                ),
                 'participantRecords' => fn ($query) => $query->whereNull('left_at')->with('user:id,first_name,middle_initial,last_name,name_extension'),
             ])
             ->firstOrFail();

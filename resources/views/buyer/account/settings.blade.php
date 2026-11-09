@@ -2,5 +2,5 @@
 @section('title', 'Settings')
 @section('active', 'account')
 @section('content')
-@include('buyer.partials.settings-content')
+@include('buyer.account.partials.settings-content')
 @endsection

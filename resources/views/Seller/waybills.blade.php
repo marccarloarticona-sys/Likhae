@@ -4,55 +4,61 @@
     <meta charset="utf-8">
     <title>Parcel Waybills {{ $sellerOrder->seller_order_number }}</title>
     <style>
+        @page{size:4in 6in portrait;margin:0}
         *{box-sizing:border-box}
-        body{font-family:Arial,sans-serif;color:#1c1917;margin:24px}
-        .waybill{max-width:900px;border:2px solid #292524;padding:22px;margin:0 auto 20px}
+        body{font-family:Arial,sans-serif;color:#1c1917;margin:18px;background:#f5f5f4;font-size:11px}
+        .waybill{width:min(100%,390px);min-height:560px;border:1.5px solid #292524;padding:14px;margin:0 auto 18px;background:#fff}
         .waybill.page-break{break-after:page;page-break-after:always}
-        .head{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #292524;padding-bottom:14px}
-        .brand-logo{display:block;width:194px;height:42px;max-width:100%;object-fit:contain;object-position:left center}
+        .head{display:flex;justify-content:space-between;align-items:center;border-bottom:1.5px solid #292524;padding-bottom:8px;gap:8px}
+        .brand-logo{display:block;width:142px;height:31px;max-width:100%;object-fit:contain;object-position:left center}
+        .head strong{font-size:11px}
         .order-ref{text-align:right}
-        .order-ref strong{font-size:20px}
-        .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
-        .box{border:1px solid #a8a29e;padding:12px;line-height:1.45}
-        .box h2{font-size:11px;text-transform:uppercase;margin:0 0 6px;color:#57534e}
-        .packages{width:100%;border-collapse:collapse;margin-top:18px;table-layout:fixed}
-        .packages th,.packages td{border:1px solid #a8a29e;padding:9px;text-align:left;vertical-align:top}
-        .packages th{background:#f5f5f4;font-size:11px;text-transform:uppercase}
-        .package-title{font-weight:800}
-        .package-meta{font-size:12px;line-height:1.5;color:#44403c;margin-top:3px}
-        .package-code{font:700 12px/1.3 monospace;letter-spacing:.5px;white-space:nowrap}
-        .parcel-barcode-row td{padding:10px 16px}
-        .barcode-label{display:flex;justify-content:space-between;align-items:center;gap:12px}
-        .package-barcode{width:100%;margin:4px 0 0}
+        .order-ref strong{font-size:14px}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}
+        .box{border:1px solid #a8a29e;padding:7px;line-height:1.25;overflow-wrap:anywhere}
+        .box h2{font-size:8px;text-transform:uppercase;margin:0 0 4px;color:#57534e}
+        .package-info{display:grid;grid-template-columns:1.25fr .75fr;gap:7px;margin-top:9px}
+        .package-product,.package-specs{border:1px solid #a8a29e;padding:7px;line-height:1.25;min-width:0}
+        .package-product h2,.package-specs h2{font-size:8px;text-transform:uppercase;margin:0 0 4px;color:#57534e}
+        .package-title{font-weight:800;font-size:12px;overflow-wrap:anywhere}
+        .package-meta{font-size:9px;line-height:1.3;color:#44403c;margin-top:2px;overflow-wrap:anywhere}
+        .package-specs>div+div{border-top:1px solid #d6d3d1;margin-top:5px;padding-top:5px}
+        .package-specs small{display:block;color:#57534e;font-size:8px;font-weight:700;text-transform:uppercase}
+        .package-code{font:700 9px/1.2 monospace;letter-spacing:.2px;overflow-wrap:anywhere;text-align:right}
+        .scan-card{border:1px solid #a8a29e;padding:11px;margin-top:11px}
+        .barcode-label{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:9px}
+        .barcode-label strong{font-size:9px;text-transform:uppercase}
+        .scan-codes{display:block}
+        .package-barcode{width:100%;margin:0;min-width:0}
         .package-barcode .waybill-barcode{width:100%!important;max-width:none!important;margin:0!important;padding:4px!important}
         .package-barcode .waybill-barcode__svg svg{width:100%!important;height:auto!important}
         .package-barcode .waybill-barcode strong{display:none!important}
-        .summary{display:flex;justify-content:space-between;gap:14px;margin-top:16px}
-        .summary .box{flex:1}
-        .note{font-size:11px;color:#57534e;margin:12px 0 0}
+        .waybill-qr{display:grid;place-items:center;width:82px;height:82px;padding:2px;background:#fff}
+        .waybill-qr svg{display:block;width:100%!important;height:100%!important}
+        .attempts{display:grid;grid-template-columns:minmax(0,1fr) 108px minmax(0,1fr);align-items:stretch;gap:6px;margin-top:9px}
+        .attempt-card{border:1px solid #a8a29e;padding:6px}
+        .attempt-card h2{margin:0 0 5px;font-size:8px;text-transform:uppercase;letter-spacing:.3px}
+        .attempt-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px}
+        .attempt-slot{display:grid;place-items:center;min-width:0;min-height:32px;border:1px solid #d6d3d1;padding:4px}
+        .attempt-number{font-size:15px;font-weight:700;line-height:1}
+        .attempt-qr{display:grid;align-content:center;justify-items:center;gap:4px;text-align:center;font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+        .attempt-qr .waybill-qr{width:94px;height:94px}
         @media print{
-            body{margin:0}
-            .waybill{border:0;max-width:none;margin:0;padding:18px}
+            body{margin:0;background:#fff}
+            .waybill{width:4in;max-width:4in;height:6in;min-height:6in;border:1px solid #292524;margin:0 auto;padding:.12in}
             .waybill.page-break{break-after:page;page-break-after:always}
-            .packages tr{break-inside:avoid;page-break-inside:avoid}
+            .attempts,.head,.grid,.package-info,.scan-card{break-inside:avoid;page-break-inside:avoid}
+            *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
         }
     </style>
 </head>
 <body>
 @php
     $address = $sellerOrder->order?->address;
-    $paymentMethod = $sellerOrder->order?->payments?->first()?->method;
 @endphp
 @foreach($shipments as $index => $shipment)
     @php
         $item = $shipment->orderItem;
-        $codCollection = $shipment->relationLoaded('codCollection') ? $shipment->getRelation('codCollection') : null;
-        $codAmount = $codCollection?->expected_amount;
-        if ($paymentMethod === 'COD' && $codAmount === null) {
-            $codAmount = $item
-                ? \App\Support\OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['total']
-                : ($totalParcelCount === 1 ? (float) $sellerOrder->grand_total : null);
-        }
     @endphp
     <main class="waybill {{ $loop->last ? '' : 'page-break' }}">
         <header class="head">
@@ -68,43 +74,52 @@
             <div class="box"><h2>Deliver to</h2><strong>{{ $address?->recipient_name }}</strong><br>{{ $address?->contact_number }}<br>{{ $address?->formatted() }}</div>
         </section>
 
-        <table class="packages">
-            <colgroup><col style="width:10%"><col style="width:35%"><col style="width:15%"><col style="width:40%"></colgroup>
-            <thead><tr><th>Parcel</th><th>Product and quantity</th><th>Weight</th><th>Packed size (L × W × H)</th></tr></thead>
-            <tbody>
-                <tr>
-                    <td><span class="package-title">{{ $index + 1 }} of {{ $totalParcelCount }}</span></td>
-                    <td>
-                        <span class="package-title">{{ $item?->product_name ?? 'Order parcel' }}</span>
-                        @if($item)<div class="package-meta">Variant: {{ $item->variant_description ?: 'Standard' }}@if($item->sku)<br>SKU: {{ $item->sku }}@endif</div>@endif
-                        <div class="package-meta">Quantity: {{ $shipment->parcel_quantity }}</div>
-                        @if($item?->hasAdditionalCare())<div class="package-meta"><strong>FRAGILE / HANDLE WITH CARE</strong></div>@endif
-                    </td>
-                    <td>
-                        @php($weight = \App\Support\ParcelWeightEstimator::recordedWeight($shipment) ?? ($item ? \App\Support\ParcelWeightEstimator::productEstimate($shipment) : null))
-                        @if($weight !== null){{ number_format($weight, 3) }} kg @else Not recorded @endif
-                    </td>
-                    <td>
-                        @if($shipment->parcel_length_cm !== null && $shipment->parcel_width_cm !== null && $shipment->parcel_height_cm !== null)
-                            {{ number_format((float) $shipment->parcel_length_cm, 2) }} × {{ number_format((float) $shipment->parcel_width_cm, 2) }} × {{ number_format((float) $shipment->parcel_height_cm, 2) }} cm
-                        @else
-                            Not recorded
-                        @endif
-                    </td>
-                </tr>
-                <tr class="parcel-barcode-row">
-                    <td colspan="4">
-                        <div class="barcode-label"><strong>Parcel scan code</strong><span class="package-code">{{ $shipment->tracking_number }}</span></div>
-                        <div class="package-barcode"><x-shared.waybill-barcode :tracking="$shipment->tracking_number" :height="110" /></div>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-
-        <section class="summary">
-            <div class="box"><strong>Payment</strong><br>@if($paymentMethod === 'COD') COD · {{ $codAmount !== null ? 'PHP '.number_format((float) $codAmount, 2) : 'See order payment details' }} @elseif($paymentMethod === 'ONLINE') Prepaid @else Payment method unavailable @endif</div>
+        @php($weight = \App\Support\ParcelWeightEstimator::recordedWeight($shipment) ?? ($item ? \App\Support\ParcelWeightEstimator::productEstimate($shipment) : null))
+        <section class="package-info">
+            <div class="package-product">
+                <h2>Parcel {{ $index + 1 }} of {{ $totalParcelCount }} · Product</h2>
+                <strong class="package-title">{{ $item?->product_name ?? 'Order parcel' }}</strong>
+                @if($item)<div class="package-meta">{{ $item->variant_description ?: 'Standard' }}@if($item->sku) · SKU {{ $item->sku }}@endif</div>@endif
+                <div class="package-meta"><strong>Quantity: {{ $shipment->parcel_quantity }}</strong></div>
+                @if($item?->hasAdditionalCare())<div class="package-meta"><strong>FRAGILE / HANDLE WITH CARE</strong></div>@endif
+            </div>
+            <div class="package-specs">
+                <div><small>Weight</small><strong>@if($weight !== null){{ number_format($weight, 3) }} kg @else Not recorded @endif</strong></div>
+                <div><small>Packed size (L × W × H)</small><strong>@if($shipment->parcel_length_cm !== null && $shipment->parcel_width_cm !== null && $shipment->parcel_height_cm !== null){{ number_format((float) $shipment->parcel_length_cm, 1) }} × {{ number_format((float) $shipment->parcel_width_cm, 1) }} × {{ number_format((float) $shipment->parcel_height_cm, 1) }} cm @else Not recorded @endif</strong></div>
+            </div>
         </section>
-        <p class="note">This waybill is for parcel {{ $index + 1 }} only. Use its scan code for Logistics intake and tracking.</p>
+
+        <section class="scan-card">
+            <div class="barcode-label"><strong>Scan parcel</strong><span class="package-code">{{ $shipment->tracking_number }}</span></div>
+            <div class="scan-codes">
+                <div class="package-barcode"><x-shared.waybill-barcode :tracking="$shipment->tracking_number" :height="72" /></div>
+            </div>
+        </section>
+
+        <section class="attempts" aria-label="Delivery and return attempt records">
+            <div class="attempt-card">
+                <h2>Delivery attempts</h2>
+                <div class="attempt-list">
+                    @for($attemptNumber = 1; $attemptNumber <= 3; $attemptNumber++)
+                        <div class="attempt-slot">
+                            <span class="attempt-number">{{ $attemptNumber }}</span>
+                        </div>
+                    @endfor
+                </div>
+            </div>
+            <div class="attempt-qr"><span>Scan QR</span><x-shared.waybill-qr :tracking="$shipment->tracking_number" :size="128" /></div>
+            <div class="attempt-card">
+                <h2>Return attempts</h2>
+                <div class="attempt-list">
+                    @for($attemptNumber = 1; $attemptNumber <= 3; $attemptNumber++)
+                        <div class="attempt-slot">
+                            <span class="attempt-number">{{ $attemptNumber }}</span>
+                        </div>
+                    @endfor
+                </div>
+            </div>
+        </section>
+
     </main>
 @endforeach
 <script>window.addEventListener('load',()=>window.print())</script>

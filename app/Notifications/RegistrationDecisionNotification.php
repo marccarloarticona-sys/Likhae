@@ -26,6 +26,7 @@ class RegistrationDecisionNotification extends Notification
     {
         $approved = $this->application->status === RegistrationApplication::STATUS_APPROVED;
         $type = strtoupper((string) $this->application->user?->account_type);
+        $buyerAccountReady = $type === User::TYPE_BUYER && $approved;
         $label = match ($type) {
             User::TYPE_SELLER => 'Seller',
             User::TYPE_LOGISTICS => 'Logistics',
@@ -38,8 +39,17 @@ class RegistrationDecisionNotification extends Notification
             : 'login';
 
         $mail = (new MailMessage)
-            ->subject('LIKHAE '.$label.' Registration '.($approved ? 'Approved' : 'Decision'))
+            ->subject($buyerAccountReady
+                ? 'Your LIKHAE Buyer account is ready'
+                : 'LIKHAE '.$label.' Registration '.($approved ? 'Approved' : 'Decision'))
             ->greeting('Hello '.$notifiable->first_name.',');
+
+        if ($buyerAccountReady) {
+            return $mail
+                ->line('Your LIKHAE Buyer account is ready.')
+                ->line('You can now log in to LIKHAE using the account you created.')
+                ->action('Log in to LIKHAE', route($loginRoute));
+        }
 
         if ($approved) {
             return $mail

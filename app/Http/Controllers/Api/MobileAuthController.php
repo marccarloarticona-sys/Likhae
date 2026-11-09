@@ -85,7 +85,9 @@ class MobileAuthController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Registration submitted. Wait for account approval before signing in.',
+            'message' => $application->user?->isAccountType(User::TYPE_BUYER)
+                ? 'Your Buyer account is active. You can now sign in using your account.'
+                : 'Registration submitted. Wait for account approval before signing in.',
             'data' => [
                 'application_number' => $application->application_number,
                 'status' => $application->status,
