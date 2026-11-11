@@ -1,6 +1,32 @@
 @extends('layouts.buyer.app')
 @section('title', 'Refund Request '.$sellerRequest->request->request_number)
 @section('active', 'orders')
+@push('head')
+<style>
+    .rr-history { padding: 20px 22px; border-color: #eadbce; background: #fffdf9; }
+    .rr-history__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .rr-history__heading h2 { color: #3b211b; font-size: 16px; }
+    .rr-history__count { padding: 5px 9px; border: 1px solid #eadbce; border-radius: 999px; background: #fff8f2; color: #76594c; font-size: 11px; font-weight: 700; }
+    .rr-history__list { position: relative; display: grid; gap: 0; margin: 17px 0 0; padding: 0; list-style: none; }
+    .rr-history__list::before { position: absolute; top: 12px; bottom: 18px; left: 7px; width: 1px; background: #e9d8ca; content: ''; }
+    .rr-history__item { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 12px; padding: 0 0 17px; }
+    .rr-history__item:last-child { padding-bottom: 0; }
+    .rr-history__dot { position: relative; z-index: 1; width: 15px; height: 15px; margin-top: 2px; border: 4px solid #fffdf9; border-radius: 50%; background: #bd7664; box-shadow: 0 0 0 1px #dcb7a7; }
+    .rr-history__item:first-child .rr-history__dot { background: #7b2c23; box-shadow: 0 0 0 1px #b97767, 0 0 0 4px #f8ebe4; }
+    .rr-history__event { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; }
+    .rr-history__event strong { color: #432720; font-size: 13px; font-weight: 750; letter-spacing: 0; line-height: 1.4; text-transform: none; }
+    .rr-history__event time { color: #987865; font-size: 11px; }
+    .rr-history__details { margin: 4px 0 0; color: #6e574b; font-size: 12px; line-height: 1.5; }
+    .rr-history__empty { padding: 18px; border: 1px dashed #e7d8cc; border-radius: 12px; color: #806b5e; font-size: 13px; }
+    html.dark .rr-history { border-color: #4b3831; background: #241b18; }
+    html.dark .rr-history__heading h2, html.dark .rr-history__event strong { color: #f5eee8; }
+    html.dark .rr-history__count { border-color: #4b3831; background: #30231f; color: #ddc5b5; }
+    html.dark .rr-history__list::before { background: #60473d; }
+    html.dark .rr-history__dot { border-color: #241b18; }
+    html.dark .rr-history__event time, html.dark .rr-history__details, html.dark .rr-history__empty { color: #c4ada0; }
+    @media (max-width: 640px) { .rr-history { padding: 17px; } }
+</style>
+@endpush
 @section('content')
 @php
     $parent = $sellerRequest->request;
@@ -25,6 +51,7 @@
     $returnStatusLabel = $cashState ? str($cashState)->replace('_', ' ')->title() : str($sellerRequest->status)->replace('_', ' ')->title();
     $buyerReturnWorkflow = $sellerRequest->buyerReturnWorkflow;
     $physicalReturnRequired = trim((string) $parent->solution) === 'Return & Refund';
+    $returnEvents = $parent->events->where('seller_return_refund_request_id', $sellerRequest->id)->sortByDesc('created_at')->values();
 @endphp
 <div class="mx-auto w-full max-w-5xl rr-content-spacing">
     <div class="lk-page-title mb-5"><div><span class="lk-kicker">Returns & Refunds</span><h1>{{ $parent->request_number }}</h1><p>Order {{ $parent->order?->order_number }} &middot; Seller {{ $sellerRequest->sellerProfile?->business_name ?: 'Seller' }}</p></div><a class="lk-btn lk-btn-light" href="{{ route('buyer.returns') }}">Back to Returns</a></div>
@@ -75,7 +102,28 @@
         @if(in_array($sellerRequest->status,[\App\Models\Seller\SellerReturnRefundRequest::STATUS_REJECTED,\App\Models\Seller\SellerReturnRefundRequest::STATUS_REFUND_SENT,\App\Models\Seller\SellerReturnRefundRequest::STATUS_APPROVED],true))<details class="rounded-2xl border border-[#eadbce] bg-[#fffdf9] p-5 shadow-sm dark:border-[#4b3831] dark:bg-[#241b18]"><summary class="cursor-pointer font-bold">Report a Problem</summary><form method="POST" enctype="multipart/form-data" action="{{ route('buyer.returns.escalate',$sellerRequest) }}" class="mt-4 grid gap-3">@csrf<input class="rr-field" name="reason" required maxlength="150" placeholder="Escalation reason"><textarea class="rr-field" name="explanation" required minlength="10" maxlength="4000" rows="4" placeholder="Explain what needs Admin review."></textarea><input class="rr-field" type="file" name="evidence[]" accept="image/jpeg,image/png,image/webp" multiple><label class="flex items-start gap-2 text-sm"><input class="mt-1" type="checkbox" name="confirm_escalation" value="1" required><span>I confirm that this complaint is accurate and should be sent to Admin.</span></label><button class="lk-btn lk-btn-light" type="submit">File Complaint to Admin</button></form></details>@endif
         </aside>
     </div>
-    <section class="mt-5 rounded-2xl border border-[#eadbce] bg-[#fffdf9] p-5 shadow-sm dark:border-[#4b3831] dark:bg-[#241b18]"><h2 class="font-bold">History</h2><ol class="mt-4 grid gap-3">@forelse($parent->events->where('seller_return_refund_request_id',$sellerRequest->id)->sortByDesc('created_at') as $event)<li class="border-l-2 border-[#b24a3c] pl-3 text-sm"><strong>{{ str($event->event_type)->headline() }}</strong><span class="ml-2 text-stone-500">{{ $event->created_at?->format('M d, Y g:i A') }}</span>@if($event->details)<p class="mt-1 text-stone-600 dark:text-stone-300">{{ $event->details }}</p>@endif</li>@empty<li class="text-sm text-stone-500">No history yet.</li>@endforelse</ol></section>
+    <section class="rr-history mt-5 rounded-2xl border shadow-sm dark:shadow-none" aria-labelledby="return-history-heading">
+        <div class="rr-history__heading">
+            <div><span class="lk-kicker">Request updates</span><h2 id="return-history-heading" class="mt-1 font-bold">Process history</h2></div>
+            <span class="rr-history__count">{{ $returnEvents->count() }} {{ \Illuminate\Support\Str::plural('update', $returnEvents->count()) }}</span>
+        </div>
+        <ol class="rr-history__list">
+            @forelse($returnEvents as $event)
+                <li class="rr-history__item">
+                    <span class="rr-history__dot" aria-hidden="true"></span>
+                    <div>
+                        <div class="rr-history__event">
+                            <strong>{{ str($event->event_type)->replace('_', ' ')->lower()->title() }}</strong>
+                            <time datetime="{{ $event->created_at?->toIso8601String() }}">{{ $event->created_at?->format('M d, Y · g:i A') }}</time>
+                        </div>
+                        @if($event->details)<p class="rr-history__details">{{ $event->details }}</p>@endif
+                    </div>
+                </li>
+            @empty
+                <li class="rr-history__empty">No process updates have been recorded yet.</li>
+            @endforelse
+        </ol>
+    </section>
 </div>
 @if($parent->evidence->isNotEmpty())<section class="mt-5 rounded-2xl border border-[#eadbce] bg-[#fffdf9] p-5 shadow-sm dark:border-[#4b3831] dark:bg-[#241b18]"><h2 class="font-bold">Your evidence</h2><div class="mt-3 grid gap-2 text-sm">@foreach($parent->evidence as $evidence)<a class="underline" href="{{ route('buyer.returns.evidence',$evidence) }}" target="_blank">View {{ $evidence->original_name }}</a>@endforeach</div></section>@endif
 @endsection

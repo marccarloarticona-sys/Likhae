@@ -11,6 +11,7 @@
     $statDescriptions = [
         'Total Riders' => 'Rider accounts assigned to this center',
         'Active' => 'Active or warned rider profiles',
+        'Online now' => 'Local riders available for dispatch',
         'Warned' => 'Riders with an active warning',
         'Pending' => 'Profiles awaiting approval',
         'Suspended / Banned' => 'Accounts restricted from operations',
@@ -111,15 +112,16 @@
             </div>
 
             <div class="rider-directory__table-wrap overflow-x-auto border-t border-line">
-                <table class="rider-directory__table w-full min-w-[1040px] border-collapse text-left">
+                <table class="rider-directory__table w-full min-w-[1120px] border-collapse text-left">
                     <thead class="bg-page-secondary text-[8px] font-bold uppercase tracking-[0.12em] text-muted">
                         <tr>
                             <th class="w-10 px-4 py-3"><input type="checkbox" data-rider-select-all aria-label="Select all Riders on this page" class="h-3.5 w-3.5 rounded border-line text-primary focus:ring-primary" @disabled(! $sessionManagementAvailable)></th>
                             <th class="px-3 py-3">Rider</th>
                             <th class="px-3 py-3">Rider type</th>
                             <th class="px-3 py-3">Area &amp; capacity</th>
+                            <th class="px-3 py-3">Availability</th>
                             <th class="px-3 py-3">Active sessions</th>
-                            <th class="px-3 py-3">Status</th>
+                            <th class="px-3 py-3">Rider status</th>
                             <th class="px-4 py-3 text-right">Actions</th>
                         </tr>
                     </thead>
@@ -173,11 +175,25 @@
                                     <strong class="block max-w-[190px] truncate text-[9px] font-semibold text-ink">{{ $activeArea }}</strong>
                                     @if($rider->vehicleRole() === 'LOCAL_BARANGAY')
                                         <span class="mt-1 block text-[8px] text-muted">{{ $rider->active_assignments_count }} active assignment{{ $rider->active_assignments_count === 1 ? '' : 's' }} · {{ $rider->remaining_parcel_capacity }} capacity left</span>
-                                        <span class="mt-0.5 block text-[8px] text-muted">{{ $rider->completed_deliveries_today_count }} deliveries today · {{ $rider->is_online ? 'Online' : 'Offline' }}</span>
+                                        <span class="mt-0.5 block text-[8px] text-muted">{{ $rider->completed_deliveries_today_count }} deliveries today</span>
                                     @elseif($rider->vehicleRole() === 'INTER_LOGISTICS')
                                         <span class="mt-1 block text-[8px] text-muted">{{ $rider->approved_parcel_capacity ?? '—' }} parcels · {{ $rider->approved_weight_capacity_kg ?? '—' }} kg capacity</span>
                                     @else
                                         <span class="mt-1 block text-[8px] text-muted">Not eligible for local or interhub assignment</span>
+                                    @endif
+                                </td>
+                                <td class="px-3 py-4">
+                                    @if($rider->vehicleRole() === 'LOCAL_BARANGAY')
+                                        <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[8px] font-semibold {{ $rider->is_online ? 'border-success/20 bg-success-soft text-success' : 'border-line bg-page-secondary text-muted' }}">
+                                            <span class="h-1.5 w-1.5 rounded-full {{ $rider->is_online ? 'bg-success' : 'bg-muted' }}" aria-hidden="true"></span>
+                                            {{ $rider->is_online ? 'Online' : 'Offline' }}
+                                        </span>
+                                        <span class="mt-1 block text-[8px] text-muted">Dispatch availability</span>
+                                    @elseif($rider->vehicleRole() === 'INTER_LOGISTICS')
+                                        <span class="inline-flex rounded-full border border-line bg-page-secondary px-2.5 py-1 text-[8px] font-semibold text-muted">Transfer driver</span>
+                                        <span class="mt-1 block text-[8px] text-muted">Availability is managed by manifests</span>
+                                    @else
+                                        <span class="text-[8px] text-muted">Not applicable</span>
                                     @endif
                                 </td>
                                 <td class="px-3 py-4">
@@ -205,7 +221,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="7" class="px-6 py-14 text-center">
+                                <td colspan="8" class="px-6 py-14 text-center">
                                     <span class="mx-auto grid h-11 w-11 place-items-center rounded-full border border-line bg-page-secondary text-muted" aria-hidden="true">
                                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path stroke-linecap="round" d="M4 21a8 8 0 0 1 16 0"/></svg>
                                     </span>

@@ -106,10 +106,12 @@ class SellerFinanceController extends Controller
             $payoutBalances['paid_out'] = (float) $recordedPayouts()->sum('payout_amount');
         }
 
+        $destinations->prepareForDisplay($seller);
+        $payoutDestinationUnreadable = (bool) $seller->getAttribute('payout_destination_unreadable');
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($seller);
 
-        return view('seller.settlements.index', compact('seller', 'ready', 'settlements', 'payoutBalances', 'payoutDestinationReady', 'payoutDestinationSaved'));
+        return view('seller.settlements.index', compact('seller', 'ready', 'settlements', 'payoutBalances', 'payoutDestinationReady', 'payoutDestinationSaved', 'payoutDestinationUnreadable'));
     }
 
     public function updatePayoutDestination(Request $request, PayoutDestinationReadiness $destinations, PayoutDestinationManager $manager, PayoutDestinationInput $input): RedirectResponse

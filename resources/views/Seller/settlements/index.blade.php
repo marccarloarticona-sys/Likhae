@@ -7,6 +7,7 @@
 <div class="sl-page lk-wallet-page">
     @if(session('status'))<div class="lk-wallet-alert lk-wallet-alert--success" role="status">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="lk-wallet-alert lk-wallet-alert--error" role="alert">{{ $errors->first() }}</div>@endif
+    @if($payoutDestinationUnreadable ?? false)<div class="lk-wallet-alert lk-wallet-alert--error" role="alert"><strong>Saved payout details need attention.</strong> We couldn’t read the encrypted payout details with the current application key. The saved data has not been changed. Contact LIKHAE support before replacing it.</div>@endif
     <div class="sl-page-toolbar lk-wallet-header">
         <div class="lk-wallet-header__copy"><span class="sl-eyebrow">Seller wallet</span><h2>Wallet &amp; payout history</h2><p>Your paid-out balance includes transfers recorded by Admin, whether awaiting your receipt confirmation or already confirmed. Eligible and requested proceeds remain unpaid.</p></div>
         <div class="lk-wallet-actions"><a href="{{ route('seller.messages') }}" class="sl-btn sl-btn-ghost">Contact Support</a><a href="{{ route('seller.dashboard') }}" class="sl-btn sl-btn-ghost">Dashboard</a></div>

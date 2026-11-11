@@ -364,6 +364,7 @@ class LogisticsPortalController extends Controller
         $stats = [
             ['label' => 'Total Riders', 'value' => (clone $riderQuery)->count()],
             ['label' => 'Active', 'value' => (clone $riderQuery)->whereIn('status', ['ACTIVE', 'WARNED'])->count()],
+            ['label' => 'Online now', 'value' => (clone $riderQuery)->whereIn('vehicle_type', RiderVehicleType::localValues())->where('is_online', true)->count()],
             ['label' => 'Warned', 'value' => (clone $riderQuery)->where('status', 'WARNED')->count()],
             ['label' => 'Pending', 'value' => (clone $riderQuery)->where('status', 'PENDING')->count()],
             ['label' => 'Suspended / Banned', 'value' => (clone $riderQuery)->whereIn('status', ['SUSPENDED', 'BANNED', 'DEACTIVATED'])->count()],

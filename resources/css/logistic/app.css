@@ -2028,3 +2028,24 @@ html.dark .rider-directory__row:hover { background: var(--rider-dir-soft); }
 
     body:is(.logistics-shell, .rider-shell) main .overflow-x-auto { margin-inline: 0; }
 }
+
+/* Keep logistics screens readable even where older templates use tiny utility sizes. */
+html { font-size: 16px; }
+body.logistics-shell { font-size: 1rem; line-height: 1.55; }
+
+.logistics-shell [class~="text-[7px]"],
+.logistics-shell [class~="text-[8px]"] { font-size: 12px !important; }
+.logistics-shell [class~="text-[9px]"],
+.logistics-shell [class~="text-[10px]"],
+.logistics-shell [class~="text-[11px]"] { font-size: 13px !important; }
+.logistics-shell [class~="text-[12px]"] { font-size: 14px !important; }
+
+.logistics-shell main table:not([role="presentation"]) th,
+.logistics-shell main table:not([role="presentation"]) td {
+    font-size: 13px !important;
+}
+
+.logistics-shell main table:not([role="presentation"]) th *,
+.logistics-shell main table:not([role="presentation"]) td * {
+    font-size: max(12px, 1em) !important;
+}

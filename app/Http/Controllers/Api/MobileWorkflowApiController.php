@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Communication\Conversation;
+use App\Models\Communication\Message;
 use App\Models\Rider\InterhubAttendanceSession;
 use App\Services\Fulfillment\InterhubTimekeepingService;
 use App\Services\Marketplace\SellerPromotionBuyerService;
@@ -76,16 +77,14 @@ class MobileWorkflowApiController extends Controller
                 ->where('users.id', $request->user()->id)
                 ->whereNull('conversation_participants.left_at'))
             ->with([
-                'latestMessage' => fn ($query) => $query->select(
-                    'messages.id',
-                    'messages.conversation_id',
-                    'messages.sender_user_id',
-                    'messages.sent_at',
-                ),
                 'participantRecords' => fn ($query) => $query->whereNull('left_at')->with('user:id,first_name,middle_initial,last_name,name_extension'),
             ])
             ->firstOrFail();
-        $latestMessage = $thread->latestMessage;
+        $latestMessage = Message::query()
+            ->where('conversation_id', $thread->id)
+            ->orderByDesc('sent_at')
+            ->orderByDesc('id')
+            ->first(['id', 'conversation_id', 'sender_user_id', 'sent_at']);
 
         return response()->json([
             'success' => true,

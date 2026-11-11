@@ -241,6 +241,8 @@ class SellerAccountController extends Controller
                 409,
                 'This address is used by existing pickup routes. Add another address to preserve those routes.');
         }
+        $destinations->prepareForDisplay($shop);
+        $payoutDestinationUnreadable = (bool) $shop->getAttribute('payout_destination_unreadable');
         $payoutDestinationReady = $destinations->readyFor('seller_profiles');
         $payoutDestinationSaved = $payoutDestinationReady && $destinations->hasDestination($shop);
         $payoutMultipleReady = $destinations->supportsMultipleFor('seller_profiles');
@@ -266,6 +268,7 @@ class SellerAccountController extends Controller
             'pickupAddressDeleteProtectedIds' => $pickupAddressDeleteProtectedIds,
             'payoutProfile' => $shop,
             'payoutDestinationReady' => $payoutDestinationReady,
+            'payoutDestinationUnreadable' => $payoutDestinationUnreadable,
             'payoutDestinationSaved' => $payoutDestinationSaved,
             'payoutMultipleReady' => $payoutMultipleReady,
             'payoutDestinations' => $payoutDestinations,

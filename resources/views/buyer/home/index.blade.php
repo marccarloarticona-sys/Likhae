@@ -2771,7 +2771,7 @@
                     <span>4 at a time</span>
                 </span>
                 <div class="lk-home-category-nav" role="group" aria-label="Category carousel controls">
-                    <span class="lk-home-category-range" data-category-range aria-live="polite">{{ $categoryTotal > 0 ? '1â€“'.min(4, $categoryTotal).' of '.$categoryTotal : '0â€“0 of 0' }}</span>
+                    <span class="lk-home-category-range" data-category-range aria-live="polite">{{ $categoryTotal > 0 ? '1–'.min(4, $categoryTotal).' of '.$categoryTotal : '0–0 of 0' }}</span>
                     <button class="lk-home-category-arrow" type="button" data-category-previous aria-label="Previous categories" disabled>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
                     </button>
@@ -3172,7 +3172,7 @@
 
                 const firstCategory = currentPage * 4 + 1;
                 const lastCategory = Math.min((currentPage + 1) * 4, total);
-                range.textContent = `${firstCategory}â€“${lastCategory} of ${total}`;
+                range.textContent = `${firstCategory}–${lastCategory} of ${total}`;
                 previous.disabled = currentPage === 0;
                 next.disabled = currentPage === pages.length - 1;
             };
