@@ -1,5 +1,5 @@
 @extends('layouts.seller.app')
-@section('title', 'Wallet & payouts')
+@section('title', 'Wallet and payouts')
 @section('active', 'payouts')
 @section('subtitle', 'Seller proceeds become requestable after the parent order is Completed, finance review is cleared, and Admin verifies full COD remittance. Review balances and confirm verified transfers here.')
 

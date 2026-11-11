@@ -179,7 +179,8 @@ html.dark .ad-search-option:hover, html.dark .ad-search-option:focus-visible, ht
 .ad-app.is-collapsed .ad-nav-group { margin-top: 5px; }
 .ad-app.is-collapsed .ad-theme-copy, .ad-app.is-collapsed .ad-theme-state { display: none !important; }
 .ad-app.is-collapsed .ad-theme-toggle { justify-content: center; padding-inline: 8px; }
-.ad-app.is-collapsed .ad-nav-link, .ad-app.is-collapsed .ad-nav-toggle { justify-content: center; padding-inline: 8px; }
+.ad-app.is-collapsed .ad-nav-link, .ad-app.is-collapsed .ad-nav-toggle { justify-content: center; padding-inline: 0; }
+.ad-app.is-collapsed .ad-nav-badge { display: none !important; }
 .ad-app.is-collapsed .ad-nav-link[data-title]:hover::after, .ad-app.is-collapsed .ad-nav-toggle[data-title]:hover::after { position: fixed; left: 62px; z-index: 80; padding: 6px 9px; border: 1px solid var(--ad-border); border-radius: 7px; color: #fff; background: var(--ad-navy); box-shadow: var(--ad-shadow); content: attr(data-title); font-size: 9px; white-space: nowrap; }
 .ad-theme-copy { display: grid; min-width: 0; flex: 1; text-align: left; }
 .ad-theme-copy strong { font-size: 10px; font-weight: 600; }
@@ -5789,3 +5790,16 @@ html.dark .ad-finance-page .ad-finance-table--seller-payouts th:last-child { bac
     .ad-finance-page .ad-finance-table--seller-payouts th:last-child,
     .ad-finance-page .ad-finance-table--seller-payouts td:last-child { min-width: 210px; }
 }
+
+/* Make the report rankings readable without changing other admin tables. */
+.ad-report-rankings-section .ad-report-section-head p,
+.ad-report-rankings-section .ad-report-rank-card .ad-card-head p { font-size: 10px; }
+.ad-report-rankings-section .ad-report-rank-card .ad-card-head h3 { font-size: 14px; }
+.ad-report-rankings-section .ad-report-rank-badge { font-size: 10px; }
+.ad-report-rankings-section .ad-report-table th { padding: 12px 13px; font-size: 10px; }
+.ad-report-rankings-section .ad-report-table td,
+.ad-report-rankings-section .ad-report-table td strong { font-size: 12px; }
+.ad-report-rankings-section .ad-report-table td { padding: 12px 13px; line-height: 1.45; }
+.ad-report-rankings-section .ad-report-table td small { font-size: 10px; line-height: 1.45; }
+.ad-report-rankings-section .ad-report-empty,
+.ad-report-rankings-section .ad-report-footnote { font-size: 10px; line-height: 1.55; }
