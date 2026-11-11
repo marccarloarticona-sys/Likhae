@@ -10256,3 +10256,59 @@ html:not(.dark) .lk-header.is-buyer .lk-buyer-theme-toggle {
     padding-inline: clamp(22px, 2.5vw, 28px);
 }
 
+/* Give the desktop buyer header more room and clearer tap targets. */
+@media (min-width: 1200px) {
+    .lk-header.is-buyer {
+        grid-template-columns: minmax(150px, 180px) minmax(0, 1fr) auto;
+        min-height: 70px;
+        gap: clamp(12px, 1.4vw, 22px);
+        padding-block: 8px;
+    }
+
+    .likhae-logo--buyer-header img,
+    .likhae-logo--buyer-header .likhae-logo__image {
+        height: 32px;
+        max-width: 152px;
+    }
+
+    .lk-buyer-nav {
+        gap: clamp(4px, .55vw, 9px);
+    }
+
+    .lk-buyer-nav-link {
+        min-height: 42px;
+        padding-inline: clamp(9px, .8vw, 14px);
+        font-size: 13px;
+    }
+
+    .lk-header.is-buyer .lk-header-primary {
+        gap: 10px;
+    }
+
+    .lk-header.is-buyer .lk-icon-btn {
+        width: 40px;
+        height: 40px;
+        flex-basis: 40px;
+        border-radius: 12px;
+    }
+
+    .lk-header.is-buyer .lk-profile-container {
+        min-height: 40px;
+        gap: 8px;
+        padding: 3px 8px;
+    }
+
+    .lk-header.is-buyer .lk-profile-avatar {
+        width: 34px;
+        height: 34px;
+        flex-basis: 34px;
+    }
+
+    .lk-header.is-buyer .lk-profile-info strong { font-size: 12px; }
+    .lk-header.is-buyer .lk-profile-info small { font-size: 10px; }
+}
+
+@media (min-width: 1500px) {
+    .lk-buyer-nav-link { font-size: 14px; }
+}
+

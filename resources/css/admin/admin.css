@@ -5716,3 +5716,76 @@ html.dark .ad-dashboard-page .ad-page-head--weather .lk-dashboard-weather__forec
     .ad-dashboard-page .ad-page-head--weather { grid-template-columns: minmax(0, 1fr); }
     .ad-dashboard-page .ad-page-head--weather > .lk-dashboard-weather { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Seller payout queue status and action scanning */
+.ad-finance-queue-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0 18px 16px;
+}
+.ad-finance-queue-summary > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 12px 14px;
+    border: 1px solid var(--ad-border);
+    border-radius: 10px;
+    background: var(--ad-bg);
+}
+.ad-finance-queue-summary span,
+.ad-finance-queue-summary small { color: var(--ad-muted); font-size: 11px; line-height: 1.4; }
+.ad-finance-queue-summary strong { color: var(--ad-text); font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ad-finance-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 25px;
+    padding: 4px 9px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: #F2EEE9;
+    color: #55463D;
+    font-size: 11px;
+    font-weight: 750;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+.ad-finance-status--available,
+.ad-finance-status--paid { border-color: #B9DCC5; color: #28633D; background: #EDF8F0; }
+.ad-finance-status--payout_requested { border-color: #EAD19D; color: #75521C; background: #FFF7E6; }
+.ad-finance-status--authorized { border-color: #BBD4EE; color: #28557D; background: #EFF7FF; }
+.ad-finance-status--payout_pending_ack { border-color: #D7C4E8; color: #62447E; background: #F7F1FC; }
+.ad-finance-status--failed,
+.ad-finance-status--review_required { border-color: #E8BEB6; color: #8B352B; background: #FFF1EE; }
+.ad-finance-status-note { display: block; margin-top: 7px; }
+.ad-finance-page .ad-finance-table--seller-payouts th:last-child,
+.ad-finance-page .ad-finance-table--seller-payouts td:last-child {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    min-width: 235px;
+    background: var(--ad-card);
+    box-shadow: -8px 0 12px -12px rgba(31, 22, 18, .8);
+}
+.ad-finance-page .ad-finance-table--seller-payouts th:last-child { z-index: 4; background: #F5F0EB !important; }
+html.dark .ad-finance-queue-summary > div { background: var(--ad-card); }
+html.dark .ad-finance-queue-summary span,
+html.dark .ad-finance-queue-summary small { color: #C8B7AD; }
+html.dark .ad-finance-status { border-color: #53453D; color: #E7DAD0; background: #302722; }
+html.dark .ad-finance-status--available,
+html.dark .ad-finance-status--paid { border-color: #365E43; color: #A9D9B7; background: #1E3325; }
+html.dark .ad-finance-status--payout_requested { border-color: #69552D; color: #E8CB8E; background: #352B19; }
+html.dark .ad-finance-status--authorized { border-color: #345777; color: #A6CBEA; background: #1D2E3E; }
+html.dark .ad-finance-status--payout_pending_ack { border-color: #5B456E; color: #D0B4E8; background: #302438; }
+html.dark .ad-finance-status--failed,
+html.dark .ad-finance-status--review_required { border-color: #70413A; color: #F1B6AA; background: #38221F; }
+html.dark .ad-finance-page .ad-finance-table--seller-payouts th:last-child { background: #2A211D !important; }
+@media (max-width: 900px) {
+    .ad-finance-queue-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-inline: 12px; }
+}
+@media (max-width: 520px) {
+    .ad-finance-queue-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .ad-finance-queue-summary > div { padding: 10px; }
+    .ad-finance-page .ad-finance-table--seller-payouts th:last-child,
+    .ad-finance-page .ad-finance-table--seller-payouts td:last-child { min-width: 210px; }
+}

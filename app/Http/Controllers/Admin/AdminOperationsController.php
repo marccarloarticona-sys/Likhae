@@ -776,6 +776,15 @@ class AdminOperationsController extends Controller
             }
         }
 
+        $sellerSettlements?->getCollection()->each(fn (SellerSettlement $settlement) =>
+            $destinations->prepareForDisplay($settlement->sellerProfile)
+        );
+        $logisticsPayouts?->getCollection()->each(function (ShipmentFinancialAllocation $allocation) use ($destinations): void {
+            $allocation->logisticsPools->each(fn (LogisticsEarningPool $pool) =>
+                $destinations->prepareForDisplay($pool->logisticsCenter)
+            );
+        });
+
         return view('Admin.finance.index', [
             'payments' => Payment::with('order.buyer')->latest()->paginate(15),
             'commissions' => CommissionTransaction::with('sellerOrder.sellerProfile.user')->latest()->paginate(15),

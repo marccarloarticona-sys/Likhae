@@ -188,6 +188,14 @@
             </div>
         </form>
         <div class="ad-finance-payout-results" data-seller-payout-results aria-live="polite" aria-busy="false">
+        @php($visiblePayouts = $sellerSettlements->getCollection())
+        <div class="ad-finance-queue-summary" aria-label="Seller payout status counts for this page">
+            <div><span>Showing records</span><strong>{{ $sellerSettlements->firstItem() ?? 0 }}–{{ $sellerSettlements->lastItem() ?? 0 }}</strong><small>of {{ $sellerSettlements->total() }}</small></div>
+            <div><span>Requests to review</span><strong>{{ $visiblePayouts->where('payout_status', 'PAYOUT_REQUESTED')->count() }}</strong></div>
+            <div><span>Transfers to record</span><strong>{{ $visiblePayouts->where('payout_status', 'AUTHORIZED')->count() }}</strong></div>
+            <div><span>Awaiting seller receipt</span><strong>{{ $visiblePayouts->where('payout_status', 'PAYOUT_PENDING_ACK')->count() }}</strong></div>
+            <div><span>Needs review</span><strong>{{ $visiblePayouts->whereIn('payout_status', ['REVIEW_REQUIRED', 'FAILED'])->count() }}</strong></div>
+        </div>
         <div class="ad-table-wrap"><table class="ad-table ad-finance-table--seller-payouts"><thead><tr><th>Seller</th><th>Order / parcel</th><th>Product / fee</th><th>Seller amount</th><th>Payment destination</th><th>Status</th><th>Payout receipt / acknowledgment</th><th>Action</th></tr></thead><tbody>
         @forelse($sellerSettlements as $settlement)
             @php($sellerPayoutType = \App\Support\PayoutAccountDetails::typeFor($settlement->sellerProfile))
@@ -197,8 +205,8 @@
                 <td>{{ $settlement->sellerOrder?->seller_order_number }}<br>{{ $settlement->allocation?->shipment?->tracking_number ?? 'Historical order settlement' }}</td>
                 <td>{{ $settlement->seller_payable === null ? 'Review required' : 'Product PHP '.number_format((float) $settlement->allocation?->product_amount, 2).' · fee PHP '.number_format((float) $settlement->platform_commission, 2) }}</td>
                 <td>{{ $settlement->seller_payable === null ? 'Review required' : 'PHP '.number_format((float) $settlement->seller_payable, 2) }}</td>
-                <td>@if($payoutDestinationReady && $settlement->sellerProfile?->payout_account_number){{ $settlement->sellerProfile->payout_method }}@if($settlement->sellerProfile->payout_bank_name)<br>{{ $settlement->sellerProfile->payout_bank_name }}@endif<br>{{ $settlement->sellerProfile->payout_account_name }}<br>{{ \App\Support\PayoutAccountDetails::typeLabel($sellerPayoutType) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($settlement->sellerProfile->payout_account_number, $sellerPayoutType) }}@elseif(!$payoutDestinationReady)Details unavailable until migration@else Not provided @endif</td>
-                <td>{{ str($settlement->payout_status)->replace('_', ' ')->headline() }}@if($settlement->payout_failure_reason)<br><small>{{ $settlement->payout_failure_reason }}</small>@endif</td>
+                <td>@if($settlement->sellerProfile?->payout_destination_unreadable)<span>Saved payout details cannot be decrypted with this app key. Ask the seller to re-enter them.</span>@elseif($payoutDestinationReady && $settlement->sellerProfile?->payout_account_number){{ $settlement->sellerProfile->payout_method }}@if($settlement->sellerProfile->payout_bank_name)<br>{{ $settlement->sellerProfile->payout_bank_name }}@endif<br>{{ $settlement->sellerProfile->payout_account_name }}<br>{{ \App\Support\PayoutAccountDetails::typeLabel($sellerPayoutType) }}: {{ \App\Support\PayoutAccountDetails::formatNumber($settlement->sellerProfile->payout_account_number, $sellerPayoutType) }}@elseif(!$payoutDestinationReady)Details unavailable until migration@else Not provided @endif</td>
+                <td><span class="ad-finance-status ad-finance-status--{{ strtolower($settlement->payout_status) }}">{{ str($settlement->payout_status)->replace('_', ' ')->headline() }}</span>@if($settlement->payout_failure_reason)<small class="ad-finance-status-note">{{ $settlement->payout_failure_reason }}</small>@endif</td>
                         <td>{{ $settlement->settlement_reference }}<br>{{ $settlement->payout_method }} {{ $settlement->payout_external_reference }}<br>@if(\Illuminate\Support\Str::startsWith((string) $settlement->payout_external_reference, 'SIM-'))<strong>Legacy demo entry — no transfer proof</strong><br>@elseif($settlement->payout_proof_path)<a href="{{ route('admin.finance.seller-settlements.proof', $settlement) }}">View transfer proof</a><br>@endif{{ $settlement->paid_at?->format('M d, Y g:i A') ?? '' }}@if($settlement->seller_acknowledged_at)<br>Receipt confirmed {{ $settlement->seller_acknowledged_at->format('M d, Y g:i A') }}@elseif($settlement->payout_status === 'PAYOUT_PENDING_ACK' && $settlement->paid_at)<br>Awaiting seller acknowledgment @elseif($settlement->payout_status === 'AUTHORIZED')<br>Awaiting transfer @endif</td>
                 <td>
                     @if((in_array($settlement->payout_status, ['AVAILABLE', 'PAYOUT_REQUESTED', 'FAILED'], true) || ($settlement->payout_status === 'PENDING' && $sellerShipmentReceived)) && $settlement->seller_payable !== null)
@@ -444,7 +452,7 @@
                                                             <button class="ad-btn ad-btn-primary">Record {{ $routeRole === 'ORIGIN' ? 'Origin' : ($routeRole === 'DESTINATION' ? 'Destination' : 'Same-Hub') }} total</button>
                                                         </form>
                                                     @else
-                                                        <p>Waiting for complete Logistics payout details.</p>
+                                                        <p>@if($pool->logisticsCenter?->payout_destination_unreadable)Saved payout details cannot be decrypted with this app key. Ask the Logistics partner to re-enter them.@else Waiting for complete Logistics payout details.@endif</p>
                                                     @endif
                                                 @elseif(in_array($pool->status, ['PAYOUT_REQUESTED', 'PENDING', 'APPROVED'], true))
                                                     <p>No amount due for this route.</p>

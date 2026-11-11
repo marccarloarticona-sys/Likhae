@@ -1175,6 +1175,55 @@
         background: #f4e6df;
     }
 
+    .lk-home-page .lk-home-recommendation-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        margin: 8px auto 0;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination[hidden] {
+        display: none !important;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination button {
+        min-height: 40px;
+        padding: 8px 16px;
+        border: 1px solid var(--lk-home-line, #eadfd4);
+        border-radius: 999px;
+        background: var(--lk-home-paper, #fffdf9);
+        color: var(--lk-home-copy-maroon, #561c17);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background .15s ease, border-color .15s ease, opacity .15s ease;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination button:hover:not(:disabled) {
+        border-color: var(--lk-home-copy-maroon, #561c17);
+        background: #f4e6df;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination button:focus-visible {
+        outline: 2px solid var(--lk-home-copy-maroon, #561c17);
+        outline-offset: 3px;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination button:disabled {
+        cursor: not-allowed;
+        opacity: .45;
+    }
+
+    .lk-home-page .lk-home-recommendation-pagination span {
+        min-width: 64px;
+        color: var(--lk-home-muted, #6b625c);
+        font-size: 12px;
+        font-weight: 700;
+        text-align: center;
+    }
+
     @media (max-width: 1279px) and (min-width: 768px) {
         .lk-home-page .lk-home-product-grid,
         .lk-home-page .lk-home-recommendation-grid {
@@ -2722,7 +2771,7 @@
                     <span>4 at a time</span>
                 </span>
                 <div class="lk-home-category-nav" role="group" aria-label="Category carousel controls">
-                    <span class="lk-home-category-range" data-category-range aria-live="polite">{{ $categoryTotal > 0 ? '1–'.min(4, $categoryTotal).' of '.$categoryTotal : '0–0 of 0' }}</span>
+                    <span class="lk-home-category-range" data-category-range aria-live="polite">{{ $categoryTotal > 0 ? '1â€“'.min(4, $categoryTotal).' of '.$categoryTotal : '0â€“0 of 0' }}</span>
                     <button class="lk-home-category-arrow" type="button" data-category-previous aria-label="Previous categories" disabled>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
                     </button>
@@ -2906,7 +2955,7 @@
                 class="lk-text-link"
             >
                 See All
-                <span aria-hidden="true">→</span>
+                <span aria-hidden="true">â†’</span>
             </a>
         </div>
 
@@ -2972,7 +3021,7 @@
                     class="lk-text-link"
                 >
                     See All
-                    <span aria-hidden="true">→</span>
+                    <span aria-hidden="true">â†’</span>
                 </a>
             </div>
         </div>
@@ -2984,9 +3033,14 @@
             @endfor
         </div>
         <div class="lk-home-recommendation-more" data-recommendation-sentinel>
-            <span data-recommendation-status role="status" aria-live="polite">Recommendations load when you reach this section.</span>
+            <span data-recommendation-status role="status" aria-live="polite">Your recommendations are ready to load.</span>
             <button type="button" data-recommendation-retry hidden>Load recommendations</button>
         </div>
+        <nav class="lk-home-recommendation-pagination" data-recommendation-pagination aria-label="Recommended products pages" hidden>
+            <button type="button" data-recommendation-previous disabled>Previous</button>
+            <span data-recommendation-page aria-live="polite">Page 1</span>
+            <button type="button" data-recommendation-next>Next</button>
+        </nav>
         <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center" data-recommendation-empty hidden>
             <h3 class="text-sm font-semibold text-stone-900">More recommendations will appear here</h3>
             <p class="mt-1 text-xs text-stone-500">Explore products to help us prepare recommendations for you.</p>
@@ -3118,7 +3172,7 @@
 
                 const firstCategory = currentPage * 4 + 1;
                 const lastCategory = Math.min((currentPage + 1) * 4, total);
-                range.textContent = `${firstCategory}–${lastCategory} of ${total}`;
+                range.textContent = `${firstCategory}â€“${lastCategory} of ${total}`;
                 previous.disabled = currentPage === 0;
                 next.disabled = currentPage === pages.length - 1;
             };
@@ -3151,7 +3205,7 @@
                 if (!content.innerHTML.trim()) content.innerHTML = skeleton;
                 status.hidden = false;
                 status.classList.remove('is-error');
-                status.textContent = `Loading ${label.toLowerCase()}…`;
+                status.textContent = `Loading ${label.toLowerCase()}â€¦`;
                 retryButton.hidden = true;
                 slot.setAttribute('aria-busy', 'true');
 
@@ -3216,7 +3270,7 @@
             url.searchParams.set('rotation', String(rotation));
             button.disabled = true;
             section.setAttribute('aria-busy', 'true');
-            status.textContent = 'Finding fresh offers…';
+            status.textContent = 'Finding fresh offersâ€¦';
 
             try {
                 const response = await fetch(url, {
@@ -3253,30 +3307,35 @@
             const sentinel = grid.parentElement?.querySelector('[data-recommendation-sentinel]');
             const status = sentinel?.querySelector('[data-recommendation-status]');
             const retryButton = sentinel?.querySelector('[data-recommendation-retry]');
-            if (!sentinel || !status || !retryButton) return;
-
             const skeleton = grid.parentElement?.querySelector('[data-recommendation-skeleton]');
             const emptyState = grid.parentElement?.querySelector('[data-recommendation-empty]');
-            let page = Number(grid.dataset.nextPage || 1);
+            const pagination = grid.parentElement?.querySelector('[data-recommendation-pagination]');
+            const previousButton = pagination?.querySelector('[data-recommendation-previous]');
+            const nextButton = pagination?.querySelector('[data-recommendation-next]');
+            const pageLabel = pagination?.querySelector('[data-recommendation-page]');
+            if (!sentinel || !status || !retryButton || !pagination || !previousButton || !nextButton || !pageLabel) return;
+
+            let page = 0;
             let isLoading = false;
             let hasMore = true;
+            let retryPage = 1;
             let observer = null;
-            const observerSupported = 'IntersectionObserver' in window;
-            const prefetchMargin = 1200;
 
-            const loadMore = async () => {
-                if (isLoading || !hasMore) return;
+            const loadPage = async (targetPage) => {
+                if (isLoading || targetPage < 1 || (targetPage > page && !hasMore)) return;
 
                 isLoading = true;
-                status.textContent = 'Loading more recommendations…';
+                retryPage = targetPage;
+                status.textContent = `Loading recommendations page ${targetPage}…`;
                 retryButton.hidden = true;
+                previousButton.disabled = true;
+                nextButton.disabled = true;
                 grid.setAttribute('aria-busy', 'true');
-                if (page === 1 && skeleton) skeleton.hidden = false;
+                if (page === 0 && skeleton) skeleton.hidden = false;
 
                 try {
                     const url = new URL(grid.dataset.recommendationUrl, window.location.href);
-                    url.searchParams.set('recommendation_page', String(page));
-
+                    url.searchParams.set('recommendation_page', String(targetPage));
                     const excludedProductIds = grid.dataset.excludeProductIds || '';
                     if (excludedProductIds) url.searchParams.set('exclude', excludedProductIds);
 
@@ -3294,67 +3353,55 @@
                         throw new Error('Recommendations could not be loaded.');
                     }
 
-                    if (payload.html.trim()) {
-                        const template = document.createElement('template');
-                        template.innerHTML = payload.html;
-                        template.content.querySelectorAll('style').forEach((style) => style.remove());
-                        grid.append(template.content);
-                        document.dispatchEvent(new CustomEvent('catalog:results-updated', {
-                            detail: { root: grid },
-                        }));
-                    }
+                    const template = document.createElement('template');
+                    template.innerHTML = payload.html;
+                    template.content.querySelectorAll('style').forEach((style) => style.remove());
+                    grid.replaceChildren(template.content);
+                    document.dispatchEvent(new CustomEvent('catalog:results-updated', {
+                        detail: { root: grid },
+                    }));
 
-                    page += 1;
-                    grid.dataset.nextPage = String(page);
+                    page = targetPage;
+                    grid.dataset.currentPage = String(page);
                     hasMore = payload.has_more;
                     if (skeleton) skeleton.hidden = true;
-                    if (!grid.children.length && emptyState) emptyState.hidden = false;
+                    if (emptyState) emptyState.hidden = grid.children.length > 0;
 
-                    if (hasMore) {
-                        status.textContent = 'More recommendations will load as you scroll.';
-                        retryButton.textContent = 'Load more recommendations';
-                        retryButton.hidden = observerSupported;
-                    } else {
-                        status.textContent = 'You’ve seen all available recommendations.';
-                        observer?.disconnect();
-                    }
+                    pagination.hidden = page === 1 && !hasMore;
+                    pageLabel.textContent = `Page ${page}`;
+                    previousButton.disabled = page <= 1;
+                    nextButton.disabled = !hasMore;
+                    status.textContent = hasMore
+                        ? 'Choose Next to see more recommendations.'
+                        : 'You’ve reached the end of your recommendations.';
+                    if (!grid.children.length) status.textContent = 'No recommendations are available right now.';
                 } catch {
                     if (skeleton) skeleton.hidden = true;
-                    observer?.unobserve(sentinel);
                     status.textContent = 'Recommendations could not be loaded.';
                     retryButton.textContent = 'Try again';
                     retryButton.hidden = false;
+                    previousButton.disabled = page <= 1;
+                    nextButton.disabled = !hasMore;
                 } finally {
                     isLoading = false;
                     grid.setAttribute('aria-busy', 'false');
-                    if (hasMore && observerSupported && retryButton.hidden
-                        && sentinel.getBoundingClientRect().top <= window.innerHeight + prefetchMargin) {
-                        window.requestAnimationFrame(loadMore);
-                    }
                 }
             };
 
-            retryButton.addEventListener('click', async () => {
-                await loadMore();
-                if (observer && hasMore && retryButton.hidden) observer.observe(sentinel);
-            });
+            previousButton.addEventListener('click', () => loadPage(page - 1));
+            nextButton.addEventListener('click', () => loadPage(page + 1));
+            retryButton.addEventListener('click', () => loadPage(retryPage));
 
-            if (observerSupported) {
+            if ('IntersectionObserver' in window) {
                 observer = new IntersectionObserver((entries) => {
-                    if (entries.some((entry) => entry.isIntersecting)) loadMore();
-                }, { rootMargin: `${prefetchMargin}px 0px` });
+                    if (entries.some((entry) => entry.isIntersecting)) {
+                        observer?.disconnect();
+                        loadPage(1);
+                    }
+                }, { rootMargin: '500px 0px' });
                 observer.observe(sentinel);
             } else {
-                retryButton.hidden = false;
-            }
-
-            const prefetchRecommendations = () => {
-                if (!document.hidden) loadMore();
-            };
-            if ('requestIdleCallback' in window) {
-                window.requestIdleCallback(prefetchRecommendations, { timeout: 1200 });
-            } else {
-                window.setTimeout(prefetchRecommendations, 350);
+                loadPage(1);
             }
         });
 
