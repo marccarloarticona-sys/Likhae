@@ -556,6 +556,7 @@ class PhilippineAddressController extends Controller
     private function normalizePostalName(string $value): string
     {
         return (string) Str::of($value)
+            ->ascii()
             ->lower()
             ->replaceMatches('/[^a-z0-9]+/', ' ')
             ->replaceMatches('/\s+/', ' ')
