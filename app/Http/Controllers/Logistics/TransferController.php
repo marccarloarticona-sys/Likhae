@@ -417,6 +417,9 @@ class TransferController extends Controller
                 if (! $hasCapacity) {
                     $reasons[] = 'Approved parcel and weight capacities are incomplete.';
                 }
+                if (! $this->manifests->isAvailableForInterhubAssignment($driver)) {
+                    $reasons[] = 'The van driver must be online or clocked in for an inter-hub transfer.';
+                }
                 if ($reasons === []) {
                     $reasons[] = 'Currently unavailable for another transfer.';
                 }

@@ -49,6 +49,17 @@ final class InterhubTimekeepingService
             ->with(['manifest', 'logisticsCenter'])->latest('clock_in_at')->first();
     }
 
+    public function hasOpenShift(int $driverId, ?int $centerId = null): bool
+    {
+        if (! $this->ready()) {
+            return false;
+        }
+
+        return InterhubAttendanceSession::query()->where('rider_profile_id', $driverId)
+            ->when($centerId !== null, fn ($query) => $query->where('logistics_center_id', $centerId))
+            ->whereNull('clock_out_at')->exists();
+    }
+
     public function clock(User $actor, int $driverId, int $centerId, string $source): InterhubAttendanceSession
     {
         $this->assertReady();

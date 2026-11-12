@@ -49,6 +49,62 @@ class SellerOrderController extends Controller
             $candidate = SellerOrder::query()->where('seller_order_number', $orderNumber)->first();
             abort_unless($candidate, 404);
             abort_unless((int) $candidate->seller_profile_id === (int) $seller->id, 403);
+            $selectedRecord = $candidate;
+        }
+
+        $pickupBatchSchemaReady = $schema->sellerPickupBatchesReady();
+
+        if ($selectedRecord) {
+            $detailRelations = [
+                'order.buyer',
+                'order.address',
+                'order.payments',
+                'voucher',
+                'items.product.images',
+                'shipments.events',
+                'shipments.pickupRequests',
+                'shipments.riderAssignments.riderProfile.user',
+                'shipments.logisticsCenter',
+            ];
+            if (Schema::hasTable('seller_settlements')) {
+                $detailRelations[] = 'settlements';
+            }
+            if (Schema::hasTable('cod_collections')) {
+                $detailRelations[] = 'shipments.codCollection';
+            }
+            if ($pickupBatchSchemaReady) {
+                $detailRelations = [...$detailRelations,
+                    'shipments.riderAssignments.localTripItems.trip.logisticsCenter',
+                    'shipments.riderAssignments.localTripItems.trip.items.riderAssignment.shipment',
+                ];
+            }
+            if ($schema->sellerPickupCenterSelectionReady()) {
+                $detailRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.preferredLogisticsCenter';
+            }
+            if ($schema->sellerSelectedFallbackHubsReady() && $schema->sellerPickupCenterOffersReady()) {
+                $detailRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.centerOffers';
+            }
+
+            $selectedRecord->load($detailRelations);
+            $pickupAssignments = $selectedRecord->shipments
+                ->flatMap->riderAssignments
+                ->filter(fn ($assignment): bool => $assignment->assignment_type === 'PICKUP'
+                    && $assignment->relationLoaded('localTripItems')
+                    && $assignment->localTripItems->isNotEmpty())
+                ->unique('id')
+                ->values();
+            $successfulPickupScanKeys = $this->successfulPickupScanKeys($pickupAssignments);
+            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady, $successfulPickupScanKeys, $schema);
+
+            return view('seller.orders', [
+                'seller' => $seller,
+                'mode' => 'show',
+                'status' => $requestedStatus,
+                'search' => $search,
+                'fromDate' => $fromDate,
+                'toDate' => $toDate,
+                'selectedOrderView' => $selectedOrderView,
+            ]);
         }
 
         $orderRelations = ['order.buyer', 'order.address', 'order.payments', 'voucher', 'items.product.images', 'shipment.events', 'shipment.pickupRequests', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address', 'shipment.sellerOrder.sellerProfile.businessAddress'];
@@ -68,7 +124,6 @@ class SellerOrderController extends Controller
         if (Schema::hasTable('cod_collections')) {
             $orderRelations = [...$orderRelations, 'items.shipment.codCollection', 'shipments.codCollection'];
         }
-        $pickupBatchSchemaReady = $schema->sellerPickupBatchesReady();
         if ($pickupBatchSchemaReady) {
             $orderRelations = [...$orderRelations,
                 'shipments.riderAssignments.localTripItems.trip.seller',
@@ -84,6 +139,7 @@ class SellerOrderController extends Controller
             $orderRelations[] = 'shipments.sellerPickupMemberships.pickupRequest.centerOffers';
         }
         $ownedOrders = SellerOrder::query()->where('seller_profile_id', $seller->id);
+
         $ordersQuery = (clone $ownedOrders)
             ->with($orderRelations)
             ->latest();
@@ -124,11 +180,7 @@ class SellerOrderController extends Controller
         $orders = $ordersQuery->paginate(20)->withQueryString();
         $ordersPage = $orders->getCollection();
 
-        if ($request->query('mode') === 'show') {
-            $selectedRecord = (clone $ownedOrders)->where('seller_order_number', $orderNumber)->with($orderRelations)->firstOrFail();
-        }
-
-        $progressOrders = $selectedRecord ? $ordersPage->concat([$selectedRecord]) : $ordersPage;
+        $progressOrders = $ordersPage;
         $pickupAssignments = $progressOrders
             ->flatMap(fn (SellerOrder $order) => $order->shipments->flatMap->riderAssignments)
             ->filter(fn ($assignment): bool => $assignment->assignment_type === 'PICKUP'
@@ -137,10 +189,6 @@ class SellerOrderController extends Controller
             ->unique('id')
             ->values();
         $successfulPickupScanKeys = $this->successfulPickupScanKeys($pickupAssignments);
-        if ($selectedRecord) {
-            $selectedOrderView = $this->viewOrder($selectedRecord, $pickupBatchSchemaReady, $successfulPickupScanKeys, $schema);
-        }
-
         $refundSearch = $requestedStatus === 'returns' ? $search : '';
         $refundStatus = strtoupper((string) $request->query('refund_status', ''));
         $refundBaseQuery = SellerReturnRefundRequest::query()->where('seller_profile_id', $seller->id);

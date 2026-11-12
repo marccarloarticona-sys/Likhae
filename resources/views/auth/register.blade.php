@@ -1066,7 +1066,7 @@
                                 data-registration-address-pin
                                 @if(($preselectedRole ?? 'buyer') === 'rider') hidden @endif
                             >
-                                <x-shared.address-pin height="240px" :required="false" />
+                                <x-shared.address-pin height="240px" :required="false" :allow-approximate="false" />
                             </div>
 
                         </div>

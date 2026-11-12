@@ -19,6 +19,7 @@ use App\Services\AccountNotificationService;
 use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Support\LocalTripCapacityRules;
 use App\Support\RiderVehicleType;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -522,9 +523,6 @@ final class SellerPickupBatchService
         return DB::transaction(function () use ($actor, $trip, $code, $method): array {
             $trip = $this->lockedPickupTrip($trip);
             $this->assertTripRider($actor, $trip);
-            if ($trip->status !== RiderLocalTrip::IN_PROGRESS) {
-                throw new RuntimeException('The seller pickup batch must be in progress before scanning parcels.');
-            }
             $code = trim($code);
             $item = $trip->items->first(fn (RiderLocalTripItem $candidate): bool =>
                 $candidate->riderAssignment?->shipment
@@ -534,6 +532,21 @@ final class SellerPickupBatchService
             }
 
             $assignment = $item->riderAssignment;
+            if ($trip->status !== RiderLocalTrip::IN_PROGRESS) {
+                $alreadyCollected = in_array($trip->status, [RiderLocalTrip::EN_ROUTE_TO_HUB, RiderLocalTrip::COMPLETED], true)
+                    && $assignment?->status === 'COMPLETED'
+                    && $this->collectedAssignmentIds($trip)->contains((int) $assignment->id);
+                if ($alreadyCollected) {
+                    return [
+                        'already_verified' => true,
+                        'assignment' => $assignment->fresh('shipment'),
+                        'batch_status' => $trip->status,
+                    ];
+                }
+
+                throw new RuntimeException('The seller pickup batch must be in progress before scanning parcels.');
+            }
+
             if ($assignment->status === 'COMPLETED') {
                 $trip->load(['items.riderAssignment.shipment']);
                 $finished = $this->finishIfEveryParcelWasCollected($trip);
@@ -570,18 +583,32 @@ final class SellerPickupBatchService
      */
     public function reconcileFullyCollectedForCenter(int $logisticsCenterId): void
     {
-        RiderLocalTrip::query()
-            ->where('logistics_center_id', $logisticsCenterId)
+        $this->reconcileFullyCollectedTrips(
+            RiderLocalTrip::query()->where('logistics_center_id', $logisticsCenterId),
+        );
+    }
+
+    public function reconcileFullyCollectedBatches(): int
+    {
+        return $this->reconcileFullyCollectedTrips(RiderLocalTrip::query());
+    }
+
+    private function reconcileFullyCollectedTrips(Builder $trips): int
+    {
+        $reconciled = 0;
+        $trips
             ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
             ->whereNotNull('seller_profile_id')
             ->where('status', RiderLocalTrip::IN_PROGRESS)
             ->whereHas('items')
             ->orderBy('id')
-            ->chunkById(100, function ($trips): void {
+            ->chunkById(100, function ($trips) use (&$reconciled): void {
                 foreach ($trips as $trip) {
-                    $this->reconcileFullyCollectedBatch($trip);
+                    $reconciled += (int) $this->reconcileFullyCollectedBatch($trip);
                 }
             });
+
+        return $reconciled;
     }
 
     private function reconcileFullyCollectedBatch(?RiderLocalTrip $trip): bool
@@ -642,11 +669,19 @@ final class SellerPickupBatchService
         return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
             $trip = $this->lockedPickupTrip($trip);
             $this->assertTripRider($actor, $trip);
-            if ($trip->status !== RiderLocalTrip::IN_PROGRESS || $trip->items->isEmpty()) {
+            if ($trip->items->isEmpty()) {
                 throw new RuntimeException('Only an in-progress seller pickup batch can be completed at the seller.');
             }
-            if ($trip->items->contains(fn (RiderLocalTripItem $item): bool =>
-                ! in_array($item->riderAssignment?->status, self::RESOLVED_ASSIGNMENT_STATUSES, true))) {
+            $allParcelsResolved = $trip->items->every(fn (RiderLocalTripItem $item): bool =>
+                in_array($item->riderAssignment?->status, self::RESOLVED_ASSIGNMENT_STATUSES, true));
+            if ($trip->status !== RiderLocalTrip::IN_PROGRESS) {
+                if ($allParcelsResolved && in_array($trip->status, [RiderLocalTrip::EN_ROUTE_TO_HUB, RiderLocalTrip::COMPLETED], true)) {
+                    return $trip;
+                }
+
+                throw new RuntimeException('Only an in-progress seller pickup batch can be completed at the seller.');
+            }
+            if (! $allParcelsResolved) {
                 throw new RuntimeException('Scan or explicitly resolve every assigned parcel before completing the seller pickup.');
             }
 

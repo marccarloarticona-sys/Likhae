@@ -64,7 +64,7 @@ class ShipmentWorkflowService
                 ->with(['order.address', 'items.shipment'])
                 ->lockForUpdate()
                 ->firstOrFail();
-            $shipments = $this->ensureItemShipments($sellerOrder, $actor);
+            $shipments = $this->ensureItemShipments($sellerOrder, $actor, $action === 'pack');
 
             match ($action) {
                 'confirm' => $this->confirmSellerOrder($sellerOrder, $shipments, $actor),
@@ -246,12 +246,16 @@ class ShipmentWorkflowService
      *
      * @return Collection<int, Shipment>
      */
-    public function ensureItemShipments(SellerOrder $sellerOrder, ?User $actor = null): Collection
+    public function ensureItemShipments(SellerOrder $sellerOrder, ?User $actor = null, bool $forPackingTransition = false): Collection
     {
-        return DB::transaction(function () use ($sellerOrder, $actor): Collection {
+        return DB::transaction(function () use ($sellerOrder, $actor, $forPackingTransition): Collection {
             $sellerOrder = SellerOrder::query()
                 ->whereKey($sellerOrder->id)
-                ->with([
+                ->with($forPackingTransition ? [
+                    'order.address',
+                    'items.shipment',
+                    'shipments',
+                ] : [
                     'order.address',
                     'items.shipment',
                     'shipments.events',
@@ -1227,7 +1231,9 @@ class ShipmentWorkflowService
             'occurred_at' => now(),
         ]);
 
-        $shipment->loadMissing('riderAssignments');
+        if (in_array($shipment->current_status, ['PICKUP_ASSIGNED', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY'], true)) {
+            $shipment->loadMissing('riderAssignments');
+        }
         event(ShipmentTrackingUpdated::fromShipment($shipment));
 
         return $event;
@@ -1487,8 +1493,12 @@ class ShipmentWorkflowService
 
         $preparing = $shipments->where('current_status', 'PREPARING')->values();
         $selected = $shipmentIds === null
-            ? $preparing->filter(fn (Shipment $shipment): bool => ! $this->hasSellerPackedCheckpoint($shipment))->values()
+            ? $preparing
             : $preparing->whereIn('id', array_map('intval', $shipmentIds))->values();
+        $alreadyPackedShipmentIds = $this->packedCheckpointShipmentIds($selected);
+        $selected = $shipmentIds === null
+            ? $selected->reject(fn (Shipment $shipment): bool => isset($alreadyPackedShipmentIds[(int) $shipment->id]))->values()
+            : $selected;
         if ($selected->isEmpty() && $shipmentIds === null) {
             return;
         }
@@ -1504,7 +1514,7 @@ class ShipmentWorkflowService
         }
 
         foreach ($selected as $shipment) {
-            if (! $this->hasSellerPackedCheckpoint($shipment)) {
+            if (! isset($alreadyPackedShipmentIds[(int) $shipment->id])) {
                 $this->recordEvent($shipment, 'PREPARING', $actor, 'SELLER_PACKED_CHECKPOINT: Seller marked this item parcel packed.');
             }
         }
@@ -1526,7 +1536,10 @@ class ShipmentWorkflowService
         }
 
         $preparing = $shipments->where('current_status', 'PREPARING')->values();
-        $eligible = $preparing->filter(fn (Shipment $shipment): bool => $this->hasSellerPackedCheckpoint($shipment))->values();
+        $alreadyPackedShipmentIds = $this->packedCheckpointShipmentIds($preparing);
+        $eligible = $preparing
+            ->filter(fn (Shipment $shipment): bool => isset($alreadyPackedShipmentIds[(int) $shipment->id]))
+            ->values();
         $selected = $shipmentIds === null
             ? $eligible
             : $eligible->whereIn('id', array_map('intval', $shipmentIds))->values();
@@ -1888,6 +1901,22 @@ class ShipmentWorkflowService
     {
         return $shipment->events()->where('status', 'PREPARING')
             ->where('notes', 'like', 'SELLER_PACKED_CHECKPOINT:%')->exists();
+    }
+
+    /** @return array<int, true> */
+    private function packedCheckpointShipmentIds(Collection $shipments): array
+    {
+        if ($shipments->isEmpty()) {
+            return [];
+        }
+
+        return array_fill_keys(ShipmentEvent::query()
+            ->whereIn('shipment_id', $shipments->pluck('id'))
+            ->where('status', 'PREPARING')
+            ->where('notes', 'like', 'SELLER_PACKED_CHECKPOINT:%')
+            ->pluck('shipment_id')
+            ->map(fn ($id): int => (int) $id)
+            ->all(), true);
     }
 
     private function confirmSellerHandover(SellerOrder $sellerOrder, Collection $shipments, User $actor, ?array $shipmentIds = null): void

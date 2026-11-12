@@ -2101,7 +2101,7 @@ class LogisticsPortalController extends Controller
         $center = $request->user()->logisticsCenter?->load('address');
         abort_unless($center, 403);
 
-        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules());
+        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules(allowApproximate: false));
         PhilippineAddressValidator::assertValid($data);
         AddressCoordinateValidator::assertValid($data);
         AddressCoordinateValidator::assertFreshForAddress($center->address, $data);
@@ -2117,6 +2117,7 @@ class LogisticsPortalController extends Controller
             ...PhilippineAddressValidator::storageAttributes($data),
             'latitude' => $data['latitude'],
             'longitude' => $data['longitude'],
+            ...AddressCoordinateValidator::precisionAttributes($data, $center->address),
         ]);
         $address->save();
 

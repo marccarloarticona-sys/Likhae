@@ -35,7 +35,7 @@
                             <option value="">Select a saved pickup address</option>
                             @foreach($pickupAddresses as $address)
                                 <option value="{{ $address->id }}" data-lat="{{ $address->latitude }}" data-lng="{{ $address->longitude }}" data-local-center="{{ in_array((int) $address->id, $pickupAddressLocalCenterIds, true) ? '1' : '0' }}" @disabled(!is_numeric($address->latitude) || !is_numeric($address->longitude)) @selected((string)$pickupAddress?->id === (string)$address->id)>
-                                    {{ $address->label ?: 'Pickup address' }}{{ $address->is_default ? ' · Default' : '' }} — {{ $address->formatted() }}{{ !is_numeric($address->latitude) || !is_numeric($address->longitude) ? ' · Confirm map pin first' : '' }}
+                                    {{ $address->label ?: 'Pickup address' }}{{ $address->is_default ? ' · Default' : '' }} — {{ $address->formatted() }}{{ $address->coordinate_precision === 'APPROXIMATE' ? ' · Approximate area pin' : '' }}{{ !is_numeric($address->latitude) || !is_numeric($address->longitude) ? ' · Confirm map pin first' : '' }}
                                 </option>
                             @endforeach
                         </select>

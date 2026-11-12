@@ -1039,6 +1039,11 @@ class CheckoutService
                 'landmark' => $address->landmark,
                 'latitude' => $address->latitude,
                 'longitude' => $address->longitude,
+                ...\App\Support\AddressCoordinateValidator::precisionAttributes(
+                    ['latitude' => $address->latitude, 'longitude' => $address->longitude, 'coordinate_precision' => $address->coordinate_precision],
+                    $address,
+                    'order_addresses',
+                ),
             ];
             foreach (['region_code', 'region_name'] as $regionColumn) {
                 if (Schema::hasColumn('order_addresses', $regionColumn)) {

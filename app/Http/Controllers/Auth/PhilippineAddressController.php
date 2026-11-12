@@ -513,15 +513,21 @@ class PhilippineAddressController extends Controller
             return (string) $byName[$key];
         }
 
-        if ($municipalityCode !== '') {
+        foreach ($this->postalLookupCodes($municipalityCode) as $lookupCode) {
             try {
-                $cacheKey = 'psgc-cloud-v1-postal:'.$municipalityCode;
-                $postal = Cache::remember($cacheKey, now()->addMonth(), function () use ($municipalityCode) {
+                $cacheKey = 'psgc-cloud-v1-postal:'.$lookupCode;
+                $postal = Cache::remember($cacheKey, now()->addMonth(), function () use ($lookupCode) {
                     $response = Http::acceptJson()->timeout(10)->retry(1, 200)
-                        ->get(self::V1_URL.'/cities-municipalities/'.rawurlencode($municipalityCode));
-                    $response->throw();
+                        ->get(self::V1_URL.'/cities-municipalities/'.rawurlencode($lookupCode));
+
+                    if (! $response->successful()) return null;
+
                     $payload = $response->json('data') ?? $response->json() ?? [];
-                    return is_array($payload) ? ($payload['zip_code'] ?? null) : null;
+                    $postal = is_array($payload) ? ($payload['zip_code'] ?? $payload['postal_code'] ?? null) : null;
+
+                    return is_scalar($postal) && preg_match('/^\d{4}$/', trim((string) $postal))
+                        ? trim((string) $postal)
+                        : null;
                 });
 
                 if (filled($postal)) return (string) $postal;
@@ -531,6 +537,52 @@ class PhilippineAddressController extends Controller
         }
 
         return null;
+    }
+
+    /**
+     * PSGC Cloud v1 uses the legacy six-digit municipality code. The current
+     * PSGC selection is ten digits, so translate it through PSA's bundled
+     * correspondence codes before making the postal-code request.
+     *
+     * @return list<string>
+     */
+    private function postalLookupCodes(string $municipalityCode): array
+    {
+        $municipalityCode = trim($municipalityCode);
+        if ($municipalityCode === '') return [];
+
+        $codes = [];
+        if (preg_match('/^\d{10}$/', $municipalityCode)) {
+            $version = (string) config('services.psgc.version', 'Q2_2024');
+            $correspondenceCodes = Cache::rememberForever('psgc-postal-correspondence:'.$version, function () {
+                $path = storage_path('app/psgc/municipalities.json');
+                if (! is_file($path)) return [];
+
+                $records = json_decode((string) file_get_contents($path), true);
+                if (! is_array($records)) return [];
+
+                $codes = [];
+                foreach ($records as $record) {
+                    $code = trim((string) ($record['code'] ?? $record['psgc_code'] ?? ''));
+                    $correspondence = trim((string) ($record['correspondence_code'] ?? ''));
+                    if ($code !== '' && $correspondence !== '') $codes[$code] = $correspondence;
+                }
+
+                return $codes;
+            });
+
+            $correspondenceCode = (string) ($correspondenceCodes[$municipalityCode] ?? '');
+            if (preg_match('/^\d{9}$/', $correspondenceCode)) {
+                $codes[] = substr($correspondenceCode, 0, 6);
+            }
+        }
+
+        // Preserve compatibility for older callers that already send a
+        // legacy code, and try the original code if a current code has no
+        // correspondence entry in the bundled PSGC file.
+        $codes[] = $municipalityCode;
+
+        return array_values(array_unique(array_filter($codes)));
     }
 
     private function postalLocationCodeKey(string $provinceCode, string $municipalityCode): ?string

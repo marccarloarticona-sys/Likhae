@@ -18,11 +18,11 @@ class RequireMandatoryPolicyAcceptance
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user();
-        if (! $user instanceof User || ! $this->policies->schemaReady()) {
+        if (! $user instanceof User || $request->routeIs('logout')) {
             return $next($request);
         }
 
-        if ($request->routeIs('logout')) {
+        if (! $this->policies->schemaReady()) {
             return $next($request);
         }
 

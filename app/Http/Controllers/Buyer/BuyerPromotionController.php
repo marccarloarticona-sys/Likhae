@@ -25,7 +25,7 @@ class BuyerPromotionController extends Controller
         ]);
         $sets = max(1, (int) ($data['sets'] ?? 1));
 
-        DB::transaction(function () use ($request, $promotion, $sets, $cart, $data): void {
+        $checkoutCartItemIds = DB::transaction(function () use ($request, $promotion, $sets, $cart, $data): array {
             $offer = $this->currentPromotion($promotion, SellerPromotion::TYPE_BUNDLE)
                 ->load('components.productVariant.product');
             $componentGroups = $offer->components->groupBy(fn ($component): string => filled($component->choice_group)
@@ -55,6 +55,13 @@ class BuyerPromotionController extends Controller
             if (app(SellerPromotionUsageService::class)->remainingRedemptions($locked, $request->user()) < $sets) {
                 throw ValidationException::withMessages(['cart' => 'This offer has reached its redemption limit.']);
             }
+
+            return $cart->activeCart($request->user())
+                ->items()
+                ->whereIn('product_variant_id', array_keys($quantities))
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
         }, attempts: 3);
 
         $message = 'Bundle items were added to your cart. The bundle price is confirmed at checkout.';
@@ -64,6 +71,9 @@ class BuyerPromotionController extends Controller
         }
 
         if ($request->boolean('buy_now')) {
+            $request->session()->put('checkout_cart_item_ids', $checkoutCartItemIds);
+            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_seller_notes']);
+
             return redirect()->route('buyer.checkout');
         }
 
@@ -78,7 +88,7 @@ class BuyerPromotionController extends Controller
         ]);
         $sets = max(1, (int) ($data['sets'] ?? 1));
 
-        DB::transaction(function () use ($request, $promotion, $sets, $data, $cart): void {
+        $checkoutCartItemIds = DB::transaction(function () use ($request, $promotion, $sets, $data, $cart): array {
             $offer = $this->currentPromotion($promotion, SellerPromotion::TYPE_BUY_X_GET_Y)
                 ->load(['buyVariant.product', 'rewardVariant.product']);
             $buyVariant = $offer->buyVariant;
@@ -117,6 +127,13 @@ class BuyerPromotionController extends Controller
             if (app(SellerPromotionUsageService::class)->remainingRedemptions($locked, $request->user()) < $sets) {
                 throw ValidationException::withMessages(['cart' => 'This offer has reached its redemption limit.']);
             }
+
+            return $cart->activeCart($request->user())
+                ->items()
+                ->whereIn('product_variant_id', array_keys($quantities))
+                ->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->all();
         }, attempts: 3);
 
         $message = 'The qualifying item and reward were added to your cart. Your offer will be applied at checkout.';
@@ -126,6 +143,9 @@ class BuyerPromotionController extends Controller
         }
 
         if ($request->boolean('buy_now')) {
+            $request->session()->put('checkout_cart_item_ids', $checkoutCartItemIds);
+            $request->session()->forget(['checkout_voucher_code', 'checkout_voucher_codes', 'checkout_seller_notes']);
+
             return redirect()->route('buyer.checkout');
         }
 

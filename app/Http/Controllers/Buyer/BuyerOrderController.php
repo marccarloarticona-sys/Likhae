@@ -421,6 +421,7 @@ class BuyerOrderController extends Controller
             $orderAddress->update([
                 'latitude' => $data['latitude'],
                 'longitude' => $data['longitude'],
+                ...AddressCoordinateValidator::precisionAttributes($data, $orderAddress, 'order_addresses'),
             ]);
         });
 

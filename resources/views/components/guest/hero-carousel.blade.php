@@ -12,14 +12,19 @@
         @foreach($slides as $slide)
             <article id="hero-slide-{{ $loop->index }}" class="lk-carousel__slide {{ $loop->first ? 'is-active' : '' }} {{ !empty($slide['animated']) ? 'lk-carousel__slide--home-living' : '' }}" data-hero-slide role="group" aria-roledescription="slide" aria-label="{{ $loop->iteration }} of {{ count($slides) }}" aria-hidden="{{ $loop->first ? 'false' : 'true' }}" @if(!$loop->first) inert @endif>
                 <picture>
-                    @if(!empty($slide['webp']))<source srcset="{{ asset('images/'.preg_replace('/\\.png$/i', '.webp', $slide['image'])) }}" type="image/webp">@endif
+                    @if(!empty($slide['webp']))
+                        <source
+                            srcset="{{ asset('images/'.preg_replace('/\\.png$/i', '.webp', $slide['image'])) }}"
+                            type="image/webp"
+                        >
+                    @endif
                     <img
                     class="lk-carousel__image"
                     src="{{ asset('images/'.$slide['image']) }}"
                     alt="{{ $slide['alt'] }}"
                     width="1822"
                     height="863"
-                    loading="{{ $loop->first ? 'eager' : 'lazy' }}"
+                    loading="eager"
                     fetchpriority="{{ $loop->first ? 'high' : 'low' }}"
                     decoding="async"
                     >

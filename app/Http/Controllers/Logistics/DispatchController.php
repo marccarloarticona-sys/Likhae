@@ -23,7 +23,6 @@ use App\Services\Fulfillment\FinalMileDispatchService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\LocalRiderTripService;
-use App\Services\Fulfillment\RiderAssignmentOfferExpiryService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\SellerPickupAutoDispatchService;
 use App\Services\Fulfillment\SellerPickupMatchingService;
@@ -88,21 +87,10 @@ class DispatchController extends Controller
     public function pickups(
         Request $request,
         LogisticsSchemaReadiness $schema,
-        RiderAssignmentOfferExpiryService $offers,
-        SellerPickupAutoDispatchService $autoDispatch,
-        SellerPickupMatchingService $automaticMatching,
-        SellerPickupBatchService $pickupBatches,
     ): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
-        $automaticMatching->pausePendingWhenDisabled();
-        $offers->expireDuePickupOffers(logisticsCenterId: (int) $center->id);
-        $autoDispatch->retryForCenter($request->user(), $center);
-        $automaticMatching->expireDueOffers((int) $center->id);
-        if ($schema->sellerPickupBatchesReady()) {
-            $pickupBatches->reconcileFullyCollectedForCenter((int) $center->id);
-        }
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -127,7 +115,7 @@ class DispatchController extends Controller
                 $membership->where('active_slot', true));
         }
         $pickups = $pickupQuery
-            ->with(['shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.order.address', 'shipment.serviceArea', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address'])
+            ->with(['shipment.orderItem', 'shipment.sellerOrder.items', 'shipment.sellerOrder.sellerProfile.user', 'shipment.sellerOrder.sellerProfile.businessAddress', 'shipment.sellerOrder.order.address', 'shipment.serviceArea', 'shipment.riderAssignments.riderProfile.user', 'shipment.riderAssignments.liveLocation', 'shipment.logisticsCenter.address'])
             ->latest('id')
             ->get()
             ->unique('shipment_id')
@@ -190,6 +178,7 @@ class DispatchController extends Controller
             'sellerProfile.user',
             'pickupAddress',
             'riderLocalTrip.rider.user',
+            'riderLocalTrip.items.riderAssignment.shipment',
             'memberships.sellerOrder',
             'memberships.shipment.serviceArea',
             'memberships.shipment.orderItem',
@@ -307,7 +296,48 @@ class DispatchController extends Controller
                 })
                 ->values();
         }
-        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema): void {
+        $pickupProgressTrips = $sellerPickupRequests
+            ->map(function (SellerPickupRequest $pickupRequest): ?RiderLocalTrip {
+                $trip = $pickupRequest->riderLocalTrip;
+                if (! $trip) {
+                    return null;
+                }
+
+                $membershipShipmentIds = $pickupRequest->memberships
+                    ->pluck('shipment_id')
+                    ->map(fn ($id): int => (int) $id)
+                    ->all();
+                $progressTrip = clone $trip;
+                $progressTrip->setRelation('items', $trip->items
+                    ->filter(fn ($item): bool => $item->riderAssignment
+                        && in_array((int) $item->riderAssignment->shipment_id, $membershipShipmentIds, true))
+                    ->values());
+
+                return $progressTrip;
+            })
+            ->filter()
+            ->unique('id')
+            ->values();
+        $pickupBatchService = app(SellerPickupBatchService::class);
+        $collectedPickupAssignmentsByTrip = $pickupBatchService->collectedAssignmentIdsByTrip($pickupProgressTrips);
+
+        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema, $collectedPickupAssignmentsByTrip): void {
+            $trip = $pickupRequest->riderLocalTrip;
+            $assignmentsByShipment = $trip?->items
+                ->map(fn ($item) => $item->riderAssignment)
+                ->filter()
+                ->keyBy(fn ($assignment): int => (int) $assignment->shipment_id) ?? collect();
+            $progressMemberships = $pickupRequest->memberships->when(
+                $trip !== null,
+                fn ($memberships) => $memberships->filter(fn ($membership): bool => $assignmentsByShipment->has((int) $membership->shipment_id)),
+            );
+            $pickupRequest->setAttribute('progress_payload', [
+                'total' => $progressMemberships->count(),
+                'collected' => $trip
+                    ? $collectedPickupAssignmentsByTrip->get((int) $trip->id, collect())->count()
+                    : 0,
+            ]);
+
             $shipments = $pickupRequest->memberships->map(fn ($membership) => $membership->shipment)->filter();
             $hasActiveCenterOffer = $schema->sellerPickupCenterOffersReady()
                 && $pickupRequest->centerOffers->contains(fn ($offer): bool => $offer->status === 'OFFERED'
@@ -354,8 +384,6 @@ class DispatchController extends Controller
                     ->values()
                 : collect();
             $pickupRequest->setAttribute('eligible_riders', $eligibleRiders);
-            $pickupRequest->setAttribute('progress_payload', app(SellerPickupRequestService::class)
-                ->progress($pickupRequest, (int) $pickupRequest->seller_profile_id));
         });
 
         $activePickupBatches = $schema->sellerPickupBatchesReady()
@@ -368,7 +396,7 @@ class DispatchController extends Controller
                 ->latest()
                 ->get()
             : collect();
-        $collectedAssignmentIdsByTrip = app(SellerPickupBatchService::class)->collectedAssignmentIdsByTrip($activePickupBatches);
+        $collectedAssignmentIdsByTrip = $pickupBatchService->collectedAssignmentIdsByTrip($activePickupBatches);
         $activePickupBatches->each(function (RiderLocalTrip $batch) use ($collectedAssignmentIdsByTrip): void {
             $batch->setAttribute('collected_assignment_ids', $collectedAssignmentIdsByTrip->get((int) $batch->id, collect()));
         });
@@ -401,15 +429,12 @@ class DispatchController extends Controller
         ]);
     }
 
-    public function receive(Request $request, SellerPickupBatchService $pickupBatches): View
+    public function receive(Request $request): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
         $schema = app(LogisticsSchemaReadiness::class);
         $pickupBatchesReady = $schema->sellerPickupBatchesReady();
-        if ($pickupBatchesReady) {
-            $pickupBatches->reconcileFullyCollectedForCenter((int) $center->id);
-        }
         $tracking = trim((string) $request->query('tracking', ''));
 
         $shipments = Shipment::query()

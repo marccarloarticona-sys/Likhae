@@ -7,6 +7,12 @@ use Throwable;
 
 final class LogisticsSchemaReadiness
 {
+    /** @var array<string, bool> */
+    private array $tableExistence = [];
+
+    /** @var array<string, list<string>> */
+    private array $columnListings = [];
+
     public function riderAvailabilityReady(): bool
     {
         return $this->hasColumns('rider_profiles', [
@@ -207,20 +213,31 @@ final class LogisticsSchemaReadiness
 
     private function hasTable(string $table): bool
     {
+        if (array_key_exists($table, $this->tableExistence)) {
+            return $this->tableExistence[$table];
+        }
+
         try {
-            return Schema::hasTable($table);
+            return $this->tableExistence[$table] = Schema::hasTable($table);
         } catch (Throwable) {
-            return false;
+            return $this->tableExistence[$table] = false;
         }
     }
 
     private function hasColumn(string $table, string $column): bool
     {
-        try {
-            return Schema::hasColumn($table, $column);
-        } catch (Throwable) {
-            return false;
+        if (! array_key_exists($table, $this->columnListings)) {
+            try {
+                $this->columnListings[$table] = array_map(
+                    static fn (string $name): string => strtolower($name),
+                    Schema::getColumnListing($table),
+                );
+            } catch (Throwable) {
+                $this->columnListings[$table] = [];
+            }
         }
+
+        return in_array(strtolower($column), $this->columnListings[$table], true);
     }
 
     /** @param list<string> $columns */

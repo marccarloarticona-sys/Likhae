@@ -66,6 +66,22 @@ function addressQueryCandidates(form) {
     ].filter(Boolean))];
 }
 
+function approximateAreaQueryCandidates(form) {
+    const read = (names) => String(field(form, names)?.value ?? '').trim();
+    const barangay = read(['barangay_name', 'barangay']);
+    const municipality = read(['municipality_name', 'municipality']);
+    const province = read(['province_name', 'province']);
+    const format = (values) => {
+        const parts = values.map((value) => String(value ?? '').trim()).filter(Boolean);
+        return parts.length ? [...parts, 'Philippines'].join(', ') : '';
+    };
+
+    return [...new Set([
+        format([barangay, municipality, province]),
+        format([municipality, province]),
+    ].filter(Boolean))];
+}
+
 function coordinatesFromFeature(feature) {
     const center = feature?.geometry?.coordinates || feature?.center;
     const longitude = Number(feature?.properties?.lon ?? feature?.lon ?? center?.[0]);
@@ -111,11 +127,14 @@ function initialize(shell, maplibregl) {
     const canvas = shell.querySelector('[data-address-pin-canvas]');
     const pinRequired = shell.dataset.addressPinRequired !== 'false';
     const preserveAddressFields = shell.dataset.addressPinPreserveExisting === 'true';
+    const allowApproximate = shell.dataset.addressPinAllowApproximate === 'true';
     const searchInput = shell.querySelector('[data-address-search]');
     const apiKey = shell.dataset.geoapifyKey?.trim() || '';
     const mapToken = shell.dataset.mapToken?.trim() || '';
     const latitudeField = shell.querySelector('[data-address-latitude]');
     const longitudeField = shell.querySelector('[data-address-longitude]');
+    const precisionField = shell.querySelector('[data-address-coordinate-precision]');
+    const initialPrecision = precisionField?.value === 'APPROXIMATE' ? 'APPROXIMATE' : 'EXACT';
     const initialCoordinates = validCoordinates(latitudeField?.value, longitudeField?.value);
     const hasInitial = Boolean(initialCoordinates);
     let defaultCenter;
@@ -161,7 +180,10 @@ function initialize(shell, maplibregl) {
         shell.setAttribute('aria-busy', 'false');
 
         if (!hasInitial) return;
-        setPending(pending, 'Saved pin loaded. Drag it if the physical location needs correction.', { reliable: true });
+        const message = initialPrecision === 'APPROXIMATE'
+            ? 'Saved approximate area pin loaded. Drag the marker to the exact location to make it exact.'
+            : 'Saved pin loaded. Drag it if the physical location needs correction.';
+        setPending(pending, message, { reliable: true, precision: initialPrecision });
         confirmed = true;
         if (confirmButton) confirmButton.hidden = true;
     });
@@ -171,6 +193,7 @@ function initialize(shell, maplibregl) {
     let pending = hasInitial ? { ...initialCoordinates } : null;
     let pendingReliable = hasInitial;
     let pendingManuallyAdjusted = false;
+    let pendingPrecision = initialPrecision;
     let confirmed = hasInitial;
     const confirmButton = shell.querySelector('[data-address-confirm]');
     let searchRequestId = 0;
@@ -184,12 +207,13 @@ function initialize(shell, maplibregl) {
         reverseController = null;
     }
 
-    const setPending = (coordinates, message, { reliable = false, manual = false } = {}) => {
+    const setPending = (coordinates, message, { reliable = false, manual = false, precision = 'EXACT' } = {}) => {
         if (!validCoordinates(coordinates?.latitude, coordinates?.longitude)) return;
         cancelReverseGeocode();
         pending = coordinates;
         pendingReliable = reliable;
         pendingManuallyAdjusted = manual;
+        pendingPrecision = precision === 'APPROXIMATE' && allowApproximate ? 'APPROXIMATE' : 'EXACT';
         confirmed = false;
         if (!marker) {
             marker = new maplibregl.Marker({ draggable: true, color: '#800000' })
@@ -210,15 +234,21 @@ function initialize(shell, maplibregl) {
 
     confirmButton?.addEventListener('click', async () => {
         if (!pending) return;
-        if (!pendingReliable && !pendingManuallyAdjusted) {
+        if (pendingPrecision !== 'APPROXIMATE' && !pendingReliable && !pendingManuallyAdjusted) {
             updateStatus(shell, 'This result is area-level. Move the pin to the exact building or entrance before confirming.', true);
             return;
         }
         const confirmedCoordinates = { ...pending };
         latitudeField.value = confirmedCoordinates.latitude.toFixed(7);
         longitudeField.value = confirmedCoordinates.longitude.toFixed(7);
+        if (precisionField) precisionField.value = pendingPrecision;
         confirmed = true;
         confirmButton.hidden = true;
+
+        if (pendingPrecision === 'APPROXIMATE') {
+            updateStatus(shell, 'Approximate area pin saved. Your selected Region, Province, Municipality, and Barangay were left unchanged.');
+            return;
+        }
 
         if (preserveAddressFields || !apiKey || !form.querySelector('[data-postal-address]')) {
             const preservedCopy = preserveAddressFields ? ' Existing address fields were left unchanged.' : '';
@@ -275,13 +305,15 @@ function initialize(shell, maplibregl) {
         pending = null;
         pendingReliable = false;
         pendingManuallyAdjusted = false;
+        pendingPrecision = 'EXACT';
         confirmed = false;
         latitudeField.value = '';
         longitudeField.value = '';
+        if (precisionField) precisionField.value = '';
         marker?.remove();
         marker = null;
         if (confirmButton) confirmButton.hidden = true;
-        updateStatus(shell, 'Address changed. Search again or select the exact location on the map before saving.');
+        updateStatus(shell, 'Address changed. Search again or select the location on the map before saving.');
     };
 
     const addressInputs = ['region_name', 'region', 'province_name', 'province', 'municipality_name', 'municipality', 'barangay_name', 'barangay', 'house_number', 'street_address', 'street', 'landmark', 'postal_code']
@@ -328,7 +360,9 @@ function initialize(shell, maplibregl) {
         event.preventDefault();
         const hasPendingPin = Boolean(pending && validCoordinates(pending.latitude, pending.longitude));
         updateStatus(shell, hasPendingPin
-            ? 'Finish pinning your location: confirm the pin below. If the result is approximate, drag the marker to your exact location first.'
+            ? (pendingPrecision === 'APPROXIMATE'
+                ? 'Confirm the approximate area pin below, or drag the marker to your exact location first.'
+                : 'Confirm the location pin below. If the result is area-level, move the marker to the exact building or entrance first.')
             : 'Set and confirm your delivery pin before saving. Search for the address, use device location, or click the exact spot on the map.', true);
         shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
         if (hasPendingPin && confirmButton && !confirmButton.hidden) {
@@ -407,6 +441,77 @@ function initialize(shell, maplibregl) {
         }
     }
 
+    async function searchApproximateArea() {
+        if (!allowApproximate) {
+            updateStatus(shell, 'Approximate pins are unavailable until the coordinate precision database update is installed.', true);
+            return;
+        }
+
+        const queries = approximateAreaQueryCandidates(form);
+        if (!queries.length) {
+            updateStatus(shell, 'Select a barangay or municipality first to place an approximate area pin.', true);
+            return;
+        }
+        if (!apiKey) {
+            updateStatus(shell, 'Area search needs a Geoapify API key. You can still select the location on the map manually.', true);
+            return;
+        }
+
+        cancelSearch();
+        const requestId = searchRequestId;
+        const controller = new AbortController();
+        searchController = controller;
+        const timeout = window.setTimeout(() => controller.abort(), 10000);
+        updateStatus(shell, 'Finding an approximate pin for the selected barangay or municipality…');
+        try {
+            let feature = null;
+            let matchedQuery = '';
+            for (const query of queries) {
+                const url = new URL('https://api.geoapify.com/v1/geocode/search');
+                url.searchParams.set('text', query);
+                url.searchParams.set('filter', 'countrycode:ph');
+                url.searchParams.set('lang', 'en');
+                url.searchParams.set('limit', '1');
+                url.searchParams.set('format', 'json');
+                url.searchParams.set('apiKey', apiKey);
+                const response = await fetch(url, {
+                    headers: { Accept: 'application/json' },
+                    signal: controller.signal,
+                });
+                if (requestId !== searchRequestId) return;
+                if (!response.ok) throw new Error(await geoapifyErrorMessage(response));
+                const payload = await response.json();
+                if (requestId !== searchRequestId) return;
+                const result = payload.features?.[0] || payload.results?.[0];
+                if (coordinatesFromFeature(result)) {
+                    feature = result;
+                    matchedQuery = query;
+                    break;
+                }
+            }
+
+            const coordinates = coordinatesFromFeature(feature);
+            if (!coordinates) throw new Error('no-result');
+            setPending(coordinates, `Approximate area location found for ${matchedQuery}. Confirm to save it as approximate, or drag the marker to set an exact pin.`, {
+                precision: 'APPROXIMATE',
+            });
+        } catch (error) {
+            if (requestId !== searchRequestId) return;
+            if (error?.name === 'AbortError') {
+                updateStatus(shell, 'Area search timed out. Select a nearby place on the map or try again.', true);
+            } else if (error?.message === 'no-result') {
+                updateStatus(shell, 'No area location matched the selected barangay or municipality. Search a nearby landmark or place the pin manually.', true);
+            } else if (error instanceof TypeError) {
+                updateStatus(shell, 'Could not reach Geoapify. Check the connection and this site’s API-key restrictions.', true);
+            } else {
+                updateStatus(shell, error?.message || 'Area search failed. You can select the location on the map manually.', true);
+            }
+        } finally {
+            window.clearTimeout(timeout);
+            if (requestId === searchRequestId) searchController = null;
+        }
+    }
+
     shell.querySelector('[data-address-search-submit]')?.addEventListener('click', async () => {
         if (!searchInput?.value.trim() && !addressQueryCandidates(form).length) {
             updateStatus(shell, 'Enter an address or complete the address fields first.', true);
@@ -414,6 +519,8 @@ function initialize(shell, maplibregl) {
         }
         await searchAddress();
     });
+
+    shell.querySelector('[data-address-approximate-pin]')?.addEventListener('click', searchApproximateArea);
 
     shell.querySelector('[data-address-use-location]')?.addEventListener('click', () => {
         if (!navigator.geolocation) {

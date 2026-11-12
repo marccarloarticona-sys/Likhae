@@ -52,6 +52,8 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->scoped(LogisticsSchemaReadiness::class);
+
         $this->app->bind(ProductModerationProvider::class, function ($app): ProductModerationProvider {
             $primary = strtolower((string) config('product_moderation.provider')) === 'gemini'
                 ? $app->make(GeminiProductModerationProvider::class)
@@ -255,7 +257,7 @@ class AppServiceProvider extends ServiceProvider
             $view->with('adminMessagePreview', $messagePreview);
         });
 
-        View::composer(['components.seller.sidebar', 'components.seller.header'], function ($view) use ($unreadMessageCount, $unreadNotificationCount): void {
+        View::composer(['components.seller.sidebar', 'components.seller.header'], function ($view) use ($memo, $hasTable, $unreadMessageCount, $unreadNotificationCount): void {
             /** @var User|null $sellerUser */
             $sellerUser = auth()->user();
 
@@ -271,36 +273,38 @@ class AppServiceProvider extends ServiceProvider
                 'notifications' => 0,
             ];
 
-            if ($sellerUser?->isAccountType(User::TYPE_SELLER) && Schema::hasTable('seller_orders')) {
-                $sellerProfileId = $sellerUser->sellerProfile()->where('status', 'ACTIVE')->value('id');
+            if ($sellerUser?->isAccountType(User::TYPE_SELLER) && $hasTable('seller_orders')) {
+                $sellerProfileId = $memo('_likhae_active_seller_profile_'.$sellerUser->id, fn () => $sellerUser->sellerProfile()->where('status', 'ACTIVE')->value('id'));
 
                 if ($sellerProfileId) {
-                    if (Schema::hasTable('seller_settlements')) {
-                        $counts['payout_requests'] = SellerSettlement::query()
+                    if ($hasTable('seller_settlements')) {
+                        $counts['payout_requests'] = $memo('_likhae_seller_payout_requests_'.$sellerProfileId, fn (): int => SellerSettlement::query()
                             ->where('seller_profile_id', $sellerProfileId)
                             ->where('payout_status', 'PAYOUT_REQUESTED')
-                            ->count();
+                            ->count());
                     }
 
-                    SellerOrder::query()
+                    $ordersByStatus = $memo('_likhae_seller_orders_by_status_'.$sellerProfileId, fn (): array => SellerOrder::query()
                         ->where('seller_profile_id', $sellerProfileId)
                         ->selectRaw('status, COUNT(*) as total')
                         ->groupBy('status')
                         ->pluck('total', 'status')
-                        ->each(function ($total, string $status) use (&$counts): void {
-                            $key = match ($status) {
-                                'PLACED' => 'to_process',
-                                'CONFIRMED', 'PREPARING' => 'to_prepare',
-                                'READY_FOR_PICKUP' => 'ready_pickup',
-                                'PICKED_UP' => 'shipping',
-                                'COMPLETED' => 'completed',
-                                default => null,
-                            };
+                        ->all());
 
-                            if ($key !== null) {
-                                $counts[$key] += (int) $total;
-                            }
-                        });
+                    foreach ($ordersByStatus as $status => $total) {
+                        $key = match ($status) {
+                            'PLACED' => 'to_process',
+                            'CONFIRMED', 'PREPARING' => 'to_prepare',
+                            'READY_FOR_PICKUP' => 'ready_pickup',
+                            'PICKED_UP' => 'shipping',
+                            'COMPLETED' => 'completed',
+                            default => null,
+                        };
+
+                        if ($key !== null) {
+                            $counts[$key] += (int) $total;
+                        }
+                    }
                 }
 
                 $counts['messages'] = $unreadMessageCount($sellerUser);

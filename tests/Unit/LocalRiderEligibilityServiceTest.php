@@ -25,7 +25,7 @@ class LocalRiderEligibilityServiceTest extends TestCase
     {
         $service = new LocalRiderEligibilityService;
         $center = $this->center();
-        $area = $this->area([
+        $area = $this->area($center, [
             'province_code' => '0403400000',
             'municipality_code' => '0403419000',
             'barangay_code' => '0403419001',
@@ -44,7 +44,7 @@ class LocalRiderEligibilityServiceTest extends TestCase
         $rider = $this->rider('motorcycle');
 
         $this->expectException(RuntimeException::class);
-        $service->assertRiderCanCoverArea($center, $rider, $this->area([
+        $service->assertRiderCanCoverArea($center, $rider, $this->area($center, [
             'province_code' => '0403400000',
             'municipality_code' => '0403419000',
             'barangay_code' => '0403419001',
@@ -56,9 +56,10 @@ class LocalRiderEligibilityServiceTest extends TestCase
     public function test_local_assignment_rejects_inter_logistics_vehicle(): void
     {
         $service = new LocalRiderEligibilityService;
+        $center = $this->center();
 
         $this->expectException(RuntimeException::class);
-        $service->assertRiderCanCoverArea($this->center(), $this->rider('truck'), $this->area([
+        $service->assertRiderCanCoverArea($center, $this->rider('truck'), $this->area($center, [
             'province_code' => '0403400000',
             'municipality_code' => '0403419000',
             'barangay_code' => '0403419001',
@@ -85,11 +86,17 @@ class LocalRiderEligibilityServiceTest extends TestCase
         return $center;
     }
 
-    private function area(array $location, array $additional = []): ServiceArea
+    private function area(LogisticsCenter $center, array $location, array $additional = []): ServiceArea
     {
-        $area = (new ServiceArea)->forceFill(['id' => 20, 'logistics_center_id' => 10, 'is_active' => true]);
+        $area = (new ServiceArea)->forceFill(['id' => 20, 'logistics_center_id' => $center->id, 'is_active' => true]);
+        $area->setRelation('logisticsCenter', $center);
         $locations = collect(array_merge([$location], $additional))
-            ->map(fn (array $attributes) => (new ServiceAreaLocation)->forceFill($attributes));
+            ->map(function (array $attributes) use ($area): ServiceAreaLocation {
+                $serviceAreaLocation = (new ServiceAreaLocation)->forceFill($attributes);
+                $serviceAreaLocation->setRelation('serviceArea', $area);
+
+                return $serviceAreaLocation;
+            });
         $area->setRelation('locations', $locations);
 
         return $area;

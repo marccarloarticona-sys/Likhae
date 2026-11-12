@@ -8,7 +8,7 @@
 
 @if($availableOffers->isNotEmpty())
     <section class="mt-5 space-y-3" aria-label="{{ $heading }}">
-        <div><span class="lk-kicker">{{ $eyebrow }}</span><h2 class="text-lg font-bold text-stone-900">{{ $heading }}</h2><p class="text-sm text-stone-600">Offer prices are checked against available stock and confirmed at checkout.</p></div>
+        <div><span class="lk-kicker">{{ $eyebrow }}</span><h2 class="text-lg font-bold text-stone-900">{{ $heading }}</h2><p class="text-sm text-stone-600">These are optional seller offers. Nothing is added automatically; use an offer button to add its items. In your cart, you can select, change, or remove each item. The offer price applies only when its required items are selected for checkout.</p></div>
         @foreach($availableOffers as $offer)
             @php
                 $remainingOfferSets = $offer->buyer_redemptions_remaining

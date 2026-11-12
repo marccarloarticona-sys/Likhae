@@ -53,6 +53,7 @@ class SellerPickupAddressController extends Controller
                 ...PhilippineAddressValidator::storageAttributes($data),
                 'latitude' => $data['latitude'],
                 'longitude' => $data['longitude'],
+                ...AddressCoordinateValidator::precisionAttributes($data),
                 'is_default' => ! $existingDefault,
             ]);
             if (! $lockedSeller->business_address_id && ! $lockedSeller->sellerOrders()->exists()) {
@@ -97,6 +98,7 @@ class SellerPickupAddressController extends Controller
                 ...PhilippineAddressValidator::storageAttributes($data),
                 'latitude' => $data['latitude'],
                 'longitude' => $data['longitude'],
+                ...AddressCoordinateValidator::precisionAttributes($data, $lockedAddress),
             ])->save();
         });
 
@@ -138,6 +140,7 @@ class SellerPickupAddressController extends Controller
             $address->update([
                 'latitude' => $data['latitude'],
                 'longitude' => $data['longitude'],
+                ...AddressCoordinateValidator::precisionAttributes($data, $address),
             ]);
         });
 

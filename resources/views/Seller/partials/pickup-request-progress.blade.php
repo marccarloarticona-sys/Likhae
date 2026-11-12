@@ -44,7 +44,7 @@
             {{ $progress['return_message'] ?? 'Your parcels are available again. Choose a covered Logistics center above to request pickup again.' }}
         @endif
     </p>
-    <ol class="mt-4 grid gap-2 sm:grid-cols-2" data-progress-parcels>
+    <ol class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" data-progress-parcels>
         @foreach($progress['parcels'] as $parcel)
             <li class="flex items-center justify-between gap-3 border border-line px-3 py-2 text-sm">
                 <strong class="truncate text-ink">{{ $parcel['tracking_number'] }}</strong>

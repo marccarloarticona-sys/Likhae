@@ -22,9 +22,9 @@
     @if(request()->routeIs('seller.dashboard'))
         @vite(['resources/css/shared/dashboard-weather.css', 'resources/js/shared/dashboard-weather.js'])
     @endif
-    @unless(request()->routeIs('seller.messages'))
+    @if(request()->routeIs('seller.account'))
         @vite(['resources/css/shared/mapbox.css', 'resources/js/shared/mapbox.js', 'resources/js/shared/address-pin.js'])
-    @endunless
+    @endif
     @if($sellerAiEnabled) @vite(['resources/css/shared/likhae-workspace-ai.css', 'resources/js/shared/likhae-workspace-ai.js']) @endif
     @stack('head')
     <script>

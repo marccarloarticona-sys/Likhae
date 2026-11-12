@@ -382,6 +382,7 @@ class BuyerParityApiController extends Controller
                 ...PhilippineAddressValidator::storageAttributes($data),
                 'latitude' => $data['latitude'] ?? $locked->latitude,
                 'longitude' => $data['longitude'] ?? $locked->longitude,
+                ...AddressCoordinateValidator::precisionAttributes($data, $locked),
                 'is_default' => $makeDefault,
             ]);
 
@@ -402,6 +403,7 @@ class BuyerParityApiController extends Controller
             'landmark' => $saved->landmark,
             'latitude' => $saved->latitude,
             'longitude' => $saved->longitude,
+            'coordinate_precision' => $saved->coordinate_precision ?? (filled($saved->latitude) && filled($saved->longitude) ? 'EXACT' : null),
             'is_default' => (bool) $saved->is_default,
             'formatted_address' => $saved->formatted(),
         ]]);
@@ -599,7 +601,11 @@ class BuyerParityApiController extends Controller
                 'This order can no longer receive a delivery pin through this flow.');
             $lockedOrder->loadMissing('sellerOrders.shipments');
             abort_if($lockedOrder->sellerOrders->flatMap->shipments->contains(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED', 'CANCELLED', 'RETURNED'], true)), 409);
-            $snapshot->update(['latitude' => $data['latitude'], 'longitude' => $data['longitude']]);
+            $snapshot->update([
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+                ...AddressCoordinateValidator::precisionAttributes($data, $snapshot, 'order_addresses'),
+            ]);
         });
         return response()->json(['success' => true, 'message' => 'Delivery pin confirmed for this order.']);
     }

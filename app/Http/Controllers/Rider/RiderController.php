@@ -753,7 +753,7 @@ class RiderController extends Controller
     public function updateResidentialAddress(Request $request): RedirectResponse
     {
         $rider = $this->rider($request);
-        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules(false));
+        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules(false, false));
         PhilippineAddressValidator::assertValid($data);
         AddressCoordinateValidator::assertValid($data, false);
 
@@ -772,6 +772,7 @@ class RiderController extends Controller
             ...PhilippineAddressValidator::storageAttributes($data),
             'latitude' => $data['latitude'] ?? null,
             'longitude' => $data['longitude'] ?? null,
+            ...AddressCoordinateValidator::precisionAttributes($data, $address),
         ]);
         $address->save();
 

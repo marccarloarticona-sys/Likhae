@@ -23,6 +23,7 @@ final class TransferManifestService
         private readonly LogisticsSchemaReadiness $schema,
         private readonly ShipmentTransferService $transfers,
         private readonly TransferCapacityService $capacity,
+        private readonly InterhubTimekeepingService $timekeeping,
     ) {}
 
     public function create(
@@ -65,19 +66,31 @@ final class TransferManifestService
     /** @return Collection<int, RiderProfile> */
     public function eligibleDriversForCenter(int $centerId, ?int $manifestId = null): Collection
     {
+        $availabilityReady = $this->schema->riderAvailabilityReady();
+        $timekeepingReady = $this->timekeeping->ready();
+
         return RiderProfile::query()
             ->where('rider_profiles.logistics_center_id', $centerId)
             ->whereIn('rider_profiles.status', ['ACTIVE', 'WARNED'])
             ->whereNotNull('rider_profiles.approved_by_user_id')
             ->whereNotNull('rider_profiles.approved_at')
             ->whereIn('rider_profiles.vehicle_type', RiderVehicleType::interLogisticsValues())
-            ->when(
-                $this->schema->riderAvailabilityReady(),
-                fn ($query) => $query->where(fn ($query) => $query
-                    ->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN)
-                    ->orWhere('rider_profiles.is_online', true)),
-                fn ($query) => $query->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN),
-            )
+            ->where(function ($query) use ($availabilityReady, $timekeepingReady, $centerId): void {
+                if ($availabilityReady) {
+                    $query->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN)
+                        ->orWhere('rider_profiles.is_online', true);
+                } else {
+                    $query->where('rider_profiles.vehicle_type', '<>', RiderVehicleType::VAN);
+                }
+
+                if ($timekeepingReady) {
+                    $query->orWhereExists(fn ($shift) => $shift->selectRaw('1')
+                        ->from('interhub_attendance_sessions')
+                        ->whereColumn('interhub_attendance_sessions.rider_profile_id', 'rider_profiles.id')
+                        ->where('interhub_attendance_sessions.logistics_center_id', $centerId)
+                        ->whereNull('interhub_attendance_sessions.clock_out_at'));
+                }
+            })
             ->whereNotNull('rider_profiles.approved_parcel_capacity')
             ->where('rider_profiles.approved_parcel_capacity', '>', 0)
             ->whereNotNull('rider_profiles.approved_weight_capacity_kg')
@@ -97,6 +110,16 @@ final class TransferManifestService
             ->with('user')
             ->orderBy('rider_profiles.id')
             ->get();
+    }
+
+    public function isAvailableForInterhubAssignment(RiderProfile $driver): bool
+    {
+        if (! RiderVehicleType::isVan($driver->vehicle_type)) {
+            return true;
+        }
+
+        return ($this->schema->riderAvailabilityReady() && (bool) $driver->is_online)
+            || $this->timekeeping->hasOpenShift((int) $driver->id, (int) $driver->logistics_center_id);
     }
 
     public function addLeg(User $actor, TransferManifest $manifest, ShipmentTransferLeg $leg): TransferManifestItem
@@ -635,9 +658,8 @@ final class TransferManifestService
         $driver = RiderProfile::query()->with('user')->lockForUpdate()->findOrFail($requestedDriver->id);
         $this->assertEligibleDriver($driver, (int) $manifest->origin_logistics_center_id);
         $this->assertDriverAvailable($driver, (int) $manifest->id);
-        if (RiderVehicleType::isVan($driver->vehicle_type)
-            && (! $this->schema->riderAvailabilityReady() || ! $driver->is_online)) {
-            throw new RuntimeException('The van driver must be online before being assigned to a new transfer.');
+        if (! $this->isAvailableForInterhubAssignment($driver)) {
+            throw new RuntimeException('The van driver must be online or clocked in for an inter-hub transfer.');
         }
 
         $manifest->load('items.transferLeg.shipment.orderItem.productVariant');

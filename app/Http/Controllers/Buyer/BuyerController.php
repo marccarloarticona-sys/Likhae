@@ -3390,6 +3390,7 @@ class BuyerController extends Controller
             ...PhilippineAddressValidator::storageAttributes($data),
             'latitude' => $data['latitude'] ?? $existing?->latitude,
             'longitude' => $data['longitude'] ?? $existing?->longitude,
+            ...AddressCoordinateValidator::precisionAttributes($data, $existing),
         ];
     }
 

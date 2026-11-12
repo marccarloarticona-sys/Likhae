@@ -109,6 +109,10 @@ class RegistrationWorkflowService
                     ->where('label', 'Primary')
                     ->orderBy('id')
                     ->first();
+                $addressData += \App\Support\AddressCoordinateValidator::precisionAttributes([
+                    'latitude' => $addressData['latitude'],
+                    'longitude' => $addressData['longitude'],
+                ], $address);
                 if ($address) {
                     $address->fill($addressData)->save();
                 } else {

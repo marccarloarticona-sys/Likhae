@@ -511,7 +511,12 @@ class BuyerApiController extends Controller
                 $lockedBuyer->addresses()->update(['is_default' => false]);
             }
 
-            return $lockedBuyer->addresses()->create($data + ['is_default' => $makeDefault]);
+            $addressAttributes = $data;
+            unset($addressAttributes['coordinate_precision']);
+
+            return $lockedBuyer->addresses()->create($addressAttributes + AddressCoordinateValidator::precisionAttributes($data) + [
+                'is_default' => $makeDefault,
+            ]);
         });
 
         return response()->json(['success' => true, 'data' => $this->addressPayload($address)], 201);
@@ -1172,6 +1177,7 @@ class BuyerApiController extends Controller
             'landmark' => $address->landmark,
             'latitude' => $address->latitude !== null ? (float) $address->latitude : null,
             'longitude' => $address->longitude !== null ? (float) $address->longitude : null,
+            'coordinate_precision' => $address->coordinate_precision ?? (filled($address->latitude) && filled($address->longitude) ? 'EXACT' : null),
             'is_default' => (bool) $address->is_default,
             'formatted_address' => $address->formatted(),
         ];
@@ -1276,6 +1282,7 @@ class BuyerApiController extends Controller
                 'postal_code' => $order->address->postal_code,
                 'latitude' => $order->address->latitude !== null ? (float) $order->address->latitude : null,
                 'longitude' => $order->address->longitude !== null ? (float) $order->address->longitude : null,
+                'coordinate_precision' => $order->address->coordinate_precision ?? (filled($order->address->latitude) && filled($order->address->longitude) ? 'EXACT' : null),
                 'formatted_address' => $order->address->formatted(),
             ] : null,
             'tracking_number' => $shipment?->tracking_number,

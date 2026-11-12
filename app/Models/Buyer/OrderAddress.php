@@ -25,6 +25,7 @@ class OrderAddress extends Model
         'landmark',
         'latitude',
         'longitude',
+        'coordinate_precision',
     ];
 
     public function order(): BelongsTo

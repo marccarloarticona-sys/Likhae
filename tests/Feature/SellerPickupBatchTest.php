@@ -19,6 +19,8 @@ use App\Models\Seller\Category;
 use App\Models\Seller\Product;
 use App\Models\Seller\ProductVariant;
 use App\Models\Seller\SellerOrder;
+use App\Models\Seller\SellerPickupRequest as DurableSellerPickupRequest;
+use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
 use App\Services\Fulfillment\SellerPickupBatchService;
@@ -171,7 +173,7 @@ class SellerPickupBatchTest extends TestCase
             );
             $this->fail('A parcel already scanned into Rider custody cannot be reassigned without a custody handoff.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('before any parcel is scanned as collected', $exception->getMessage());
+            $this->assertStringContainsString('not-yet-collected pickup batch', $exception->getMessage());
         }
 
         $this->assertSame('PICKED_UP', $shipment->fresh()->current_status);
@@ -607,8 +609,9 @@ class SellerPickupBatchTest extends TestCase
 
     public function test_29_logistics_sees_one_request_with_all_parcels_and_reject_keeps_history(): void
     {
+        config(['likhae.automatic_seller_pickup_matching' => false]);
         $shipments = $this->requestReadyShipments($this->seller, 5);
-        $pickup = $this->createDurableRequest($this->seller, $shipments);
+        $pickup = $this->createDurableRequest($this->seller, $shipments, preferredLogisticsCenterId: (int) $this->center->id);
 
         $response = $this->actingAs($this->centerUser)->get(route('logistics.pickups'));
         $response->assertOk()->assertSee('Seller Pickup Requests')->assertSee($this->seller->business_name);
@@ -619,7 +622,7 @@ class SellerPickupBatchTest extends TestCase
 
         $this->actingAs($this->centerUser)->post(route('logistics.pickups.requests.reject', $pickup))
             ->assertRedirect();
-        $this->assertDatabaseHas('seller_pickup_requests', ['id' => $pickup->id, 'status' => 'REJECTED']);
+        $this->assertDatabaseHas('seller_pickup_requests', ['id' => $pickup->id, 'status' => 'RETURNED_TO_SELLER']);
         $this->assertSame(0, $pickup->memberships()->where('active_slot', true)->count());
         $this->assertSame(5, $pickup->memberships()->count());
     }
@@ -711,8 +714,9 @@ class SellerPickupBatchTest extends TestCase
 
     public function test_31_partial_pickup_preserves_uncollected_parcels_and_does_not_complete_request(): void
     {
+        config(['likhae.automatic_seller_pickup_matching' => false]);
         $shipments = $this->requestReadyShipments($this->seller, 3);
-        $pickup = $this->createDurableRequest($this->seller, $shipments);
+        $pickup = $this->createDurableRequest($this->seller, $shipments, preferredLogisticsCenterId: (int) $this->center->id);
         $trip = app(SellerPickupRequestService::class)->assign($this->centerUser, $this->center, $pickup->id, $this->rider->id)->riderLocalTrip;
         $service = app(SellerPickupBatchService::class);
         $service->accept($this->rider->user, $trip);
@@ -799,8 +803,9 @@ class SellerPickupBatchTest extends TestCase
 
     public function test_34_legacy_assignment_cannot_bypass_an_active_durable_pickup_request(): void
     {
+        config(['likhae.automatic_seller_pickup_matching' => false]);
         $shipment = $this->requestReadyShipments($this->seller, 1)[0];
-        $pickup = $this->createDurableRequest($this->seller, [$shipment]);
+        $pickup = $this->createDurableRequest($this->seller, [$shipment], preferredLogisticsCenterId: (int) $this->center->id);
 
         try {
             $this->createBatch([$shipment]);
@@ -941,23 +946,14 @@ class SellerPickupBatchTest extends TestCase
     {
         config(['likhae.automatic_seller_pickup_matching' => true]);
         $this->prepareAutomaticMatchingCapacity();
-        [$destinationOwner, $destinationCenter] = $this->additionalMatchingCenter(14.15, 121.40);
-        $destinationArea = ServiceArea::create([
-            'logistics_center_id' => $destinationCenter->id,
-            'code' => 'MATCH-DEST-AREA-'.uniqid(),
-            'name' => 'Approved Pagsanjan delivery area',
-            'is_active' => true,
-        ]);
-        $destinationLocation = ServiceAreaLocation::create([
-            'service_area_id' => $destinationArea->id,
-            'province_code' => '0403400000',
-            'province_name' => 'Laguna',
-            'municipality_code' => '0403419000',
-            'municipality_name' => 'Pagsanjan',
-            'barangay_code' => '0403419001',
-            'barangay_name' => 'Anibong',
-            'coverage_type' => 'EXTENDED',
-        ]);
+        [$destinationOwner, $destinationCenter] = $this->additionalMatchingCenter(
+            14.15,
+            121.40,
+            $this->pagsanjanGeo(),
+        );
+        $destinationArea = $destinationCenter->serviceAreas()->firstOrFail();
+        $destinationLocation = $destinationArea->locations()->firstOrFail();
+        $destinationLocation->update(['coverage_type' => 'EXTENDED']);
         $admin = User::factory()->create(['account_type' => User::TYPE_ADMIN, 'status' => User::STATUS_ACTIVE]);
         $route = \App\Models\Logistics\LogisticsCoverageRoute::query()->create([
             'origin_logistics_center_id' => $this->center->id,
@@ -977,21 +973,8 @@ class SellerPickupBatchTest extends TestCase
             'approved_at' => now(),
             'updated_by_user_id' => $admin->id,
         ]);
-        $destinationRider = RiderProfile::query()->where('logistics_center_id', $destinationCenter->id)->firstOrFail();
-        RiderAreaAssignment::create([
-            'rider_profile_id' => $destinationRider->id,
-            'service_area_id' => $destinationArea->id,
-            'assigned_by_user_id' => $destinationOwner->id,
-            'is_active' => true,
-            'assigned_at' => now(),
-        ]);
         $shipment = $this->requestReadyShipments($this->seller, 1)[0];
-        $shipment->sellerOrder->order->address()->update([
-            'municipality_code' => '0403419000',
-            'municipality_name' => 'Pagsanjan',
-            'barangay_code' => '0403419001',
-            'barangay_name' => 'Anibong',
-        ]);
+        $this->setBuyerAddressToPagsanjan($shipment);
         $request = $this->createDurableRequest($this->seller, [$shipment]);
         $matching = app(\App\Services\Fulfillment\SellerPickupMatchingService::class);
         $matching->startRequest((int) $request->id);
@@ -1052,13 +1035,8 @@ class SellerPickupBatchTest extends TestCase
         config(['likhae.automatic_seller_pickup_matching' => true]);
         $this->prepareAutomaticMatchingCapacity();
         $shipment = $this->requestReadyShipments($this->seller, 1)[0];
-        $shipment->sellerOrder->order->address()->update([
-            'municipality_code' => '0403419000',
-            'municipality_name' => 'Pagsanjan',
-            'barangay_code' => '0403419001',
-            'barangay_name' => 'Anibong',
-        ]);
-        $request = $this->createDurableRequest($this->seller, [$shipment]);
+        $this->setBuyerAddressToPagsanjan($shipment);
+        $request = $this->createLegacyUnroutedRequest($this->seller, [$shipment]);
 
         app(\App\Services\Fulfillment\SellerPickupMatchingService::class)->startRequest((int) $request->id);
 
@@ -1066,6 +1044,20 @@ class SellerPickupBatchTest extends TestCase
         $this->assertSame(0, $request->centerOffers()->count());
         $this->assertSame(1, $this->seller->user->notifications()->where('type', 'SELLER_PICKUP_PENDING')->count());
         $this->assertNull($request->fresh()->rider_local_trip_id);
+    }
+
+    public function test_approximate_pickup_pin_does_not_change_exact_barangay_coverage_matching(): void
+    {
+        config(['likhae.automatic_seller_pickup_matching' => true]);
+        $this->prepareAutomaticMatchingCapacity();
+        $this->seller->businessAddress()->update(['coordinate_precision' => 'APPROXIMATE']);
+        $shipment = $this->requestReadyShipments($this->seller, 1)[0];
+        $request = $this->createDurableRequest($this->seller, [$shipment]);
+
+        app(\App\Services\Fulfillment\SellerPickupMatchingService::class)->startRequest((int) $request->id);
+
+        $this->assertSame('WAITING_FOR_RESPONSE', $request->fresh()->status);
+        $this->assertSame($this->center->id, $request->centerOffers()->firstOrFail()->logistics_center_id);
     }
 
     public function test_disabling_automatic_matching_returns_open_requests_to_manual_queue_and_keeps_history(): void
@@ -1091,15 +1083,11 @@ class SellerPickupBatchTest extends TestCase
     {
         $this->assertTrue(app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class)->automaticSellerPickupMatchingReady());
         $this->seller->businessAddress()->update(['latitude' => 14.05, 'longitude' => 121.325]);
-        // The pickup area has no center in its municipality. This approved
-        // center has a deliberately configured exact service-area location.
+        // Seed coordinates for distance estimates while leaving canonical PSGC
+        // coverage aligned with this center's configured service-area row.
         $this->center->address()->update([
             'latitude' => 14.05,
             'longitude' => 121.325,
-            'municipality_code' => '0403419000',
-            'municipality_name' => 'Pagsanjan',
-            'barangay_code' => '0403419001',
-            'barangay_name' => 'Anibong',
         ]);
         $this->rider->update([
             'availability_latitude' => 14.05,
@@ -1121,12 +1109,34 @@ class SellerPickupBatchTest extends TestCase
         $this->assertNotEmpty($plans, 'The seeded exact PSGC coverage should resolve to a complete authorized route.');
     }
 
+    private function setBuyerAddressToPagsanjan(Shipment $shipment): void
+    {
+        $shipment->sellerOrder->order->address()->update([
+            ...$this->pagsanjanGeo(),
+            'latitude' => 14.275,
+            'longitude' => 121.455,
+            'coordinate_precision' => 'APPROXIMATE',
+        ]);
+    }
+
+    private function pagsanjanGeo(): array
+    {
+        return [
+            'province_code' => '0403400000',
+            'province_name' => 'Laguna',
+            'municipality_code' => '0403419000',
+            'municipality_name' => 'Pagsanjan',
+            'barangay_code' => '0403419001',
+            'barangay_name' => 'Anibong',
+        ];
+    }
+
     /** @return array{User,LogisticsCenter} */
-    private function additionalMatchingCenter(float $latitude, float $longitude): array
+    private function additionalMatchingCenter(float $latitude, float $longitude, ?array $geo = null): array
     {
         $user = User::factory()->create(['account_type' => User::TYPE_LOGISTICS]);
         $address = $this->address($user, 'Additional Matching Center');
-        $address->update(['latitude' => $latitude, 'longitude' => $longitude]);
+        $address->update(($geo ?? []) + ['latitude' => $latitude, 'longitude' => $longitude]);
         $center = LogisticsCenter::create([
             'owner_user_id' => $user->id,
             'address_id' => $address->id,
@@ -1142,7 +1152,7 @@ class SellerPickupBatchTest extends TestCase
             'name' => 'Additional matching exact area',
             'is_active' => true,
         ]);
-        ServiceAreaLocation::create(['service_area_id' => $area->id] + $this->geo());
+        ServiceAreaLocation::create(['service_area_id' => $area->id] + ($geo ?? $this->geo()));
         $riderUser = User::factory()->create(['account_type' => User::TYPE_RIDER]);
         $rider = RiderProfile::create([
             'user_id' => $riderUser->id,
@@ -1168,7 +1178,13 @@ class SellerPickupBatchTest extends TestCase
         return [$user, $center];
     }
 
-    private function createDurableRequest(SellerProfile $seller, array $shipments): \App\Models\Seller\SellerPickupRequest
+    private function createDurableRequest(
+        SellerProfile $seller,
+        array $shipments,
+        ?int $preferredLogisticsCenterId = null,
+        array $preferredDestinationCenterIds = [],
+        bool $sellerSelectedFallback = false,
+    ): \App\Models\Seller\SellerPickupRequest
     {
         return app(SellerPickupRequestService::class)->create(
             $seller->user,
@@ -1178,7 +1194,33 @@ class SellerPickupBatchTest extends TestCase
                 array_map(fn (Shipment $shipment): int => (int) $shipment->id, $shipments),
                 array_map(fn (Shipment $shipment): int => (int) $shipment->seller_order_id, $shipments),
             ) ?: [],
+            $preferredLogisticsCenterId,
+            $preferredDestinationCenterIds,
+            $sellerSelectedFallback,
         );
+    }
+
+    /** Seed a pre-fallback legacy request to verify automatic route retry behavior. */
+    private function createLegacyUnroutedRequest(SellerProfile $seller, array $shipments): DurableSellerPickupRequest
+    {
+        $request = DurableSellerPickupRequest::query()->create([
+            'seller_profile_id' => $seller->id,
+            'pickup_address_id' => $seller->business_address_id,
+            'status' => 'REQUESTED',
+            'seller_selected_fallback' => false,
+        ]);
+
+        foreach ($shipments as $shipment) {
+            SellerPickupRequestShipment::query()->create([
+                'seller_pickup_request_id' => $request->id,
+                'seller_profile_id' => $seller->id,
+                'seller_order_id' => $shipment->seller_order_id,
+                'shipment_id' => $shipment->id,
+                'active_slot' => true,
+            ]);
+        }
+
+        return $request;
     }
 
     private function requestReadyShipments(SellerProfile $seller, int $count): array
@@ -1250,6 +1292,9 @@ class SellerPickupBatchTest extends TestCase
             'recipient_name' => $buyer->name,
             'contact_number' => $buyer->contact_number,
             'street_address' => 'Buyer Delivery Street',
+            'latitude' => 14.05,
+            'longitude' => 121.325,
+            'coordinate_precision' => 'EXACT',
         ]);
         $sellerOrder = SellerOrder::create([
             'seller_order_number' => 'BATCH-SELLER-ORDER-'.uniqid(),
@@ -1334,6 +1379,9 @@ class SellerPickupBatchTest extends TestCase
             'contact_number' => $user->contact_number,
             ...$this->geo(),
             'street_address' => $street,
+            'latitude' => 14.05,
+            'longitude' => 121.325,
+            'coordinate_precision' => 'EXACT',
         ]);
     }
 

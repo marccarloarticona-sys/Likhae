@@ -9,6 +9,13 @@ document.querySelectorAll('[data-hero-carousel]').forEach((carousel) => {
     let paused = motion.matches;
     let timer;
     let touchStart = null;
+    const loadSlideImage = (slide, priority = 'low') => {
+        const image = slide.querySelector('.lk-carousel__image');
+        if (!image) return;
+
+        image.loading = 'eager';
+        image.fetchPriority = priority;
+    };
 
     const schedule = () => {
         window.clearTimeout(timer);
@@ -19,6 +26,7 @@ document.querySelectorAll('[data-hero-carousel]').forEach((carousel) => {
     };
     const show = (index, announce = false) => {
         current = (index + slides.length) % slides.length;
+        loadSlideImage(slides[current], 'high');
         slides.forEach((slide, i) => {
             slide.classList.toggle('is-active', i === current);
             slide.setAttribute('aria-hidden', String(i !== current));

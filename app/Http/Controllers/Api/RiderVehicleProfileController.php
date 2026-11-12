@@ -112,7 +112,7 @@ class RiderVehicleProfileController extends Controller
     public function updateResidentialAddress(Request $request): JsonResponse
     {
         $rider = $this->rider($request);
-        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules());
+        $data = $request->validate(PhilippineAddressValidator::rules() + AddressCoordinateValidator::rules(allowApproximate: false));
         PhilippineAddressValidator::assertValid($data);
         AddressCoordinateValidator::assertValid($data);
 
@@ -131,6 +131,7 @@ class RiderVehicleProfileController extends Controller
             ...PhilippineAddressValidator::storageAttributes($data),
             'latitude' => $data['latitude'],
             'longitude' => $data['longitude'],
+            ...AddressCoordinateValidator::precisionAttributes($data, $address),
         ]);
         $address->save();
 
@@ -154,6 +155,7 @@ class RiderVehicleProfileController extends Controller
                 'landmark' => $address->landmark,
                 'latitude' => $address->latitude !== null ? (float) $address->latitude : null,
                 'longitude' => $address->longitude !== null ? (float) $address->longitude : null,
+                'coordinate_precision' => $address->coordinate_precision ?? (filled($address->latitude) && filled($address->longitude) ? 'EXACT' : null),
                 'is_default' => (bool) $address->is_default,
                 'formatted_address' => $address->formatted(),
             ]],

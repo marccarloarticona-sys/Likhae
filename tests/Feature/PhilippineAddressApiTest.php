@@ -249,6 +249,26 @@ class PhilippineAddressApiTest extends TestCase
             ]);
     }
 
+    public function test_postal_code_lookup_converts_current_psgc_code_to_legacy_api_code(): void
+    {
+        Http::fake([
+            'psgc.cloud/api/v1/cities-municipalities/012811' => Http::response([
+                'data' => ['zip_code' => '2917'],
+            ]),
+        ]);
+
+        $this->getJson('/address/philippines/postal-code?province=0102800000&municipality=0102811000&province_name=Ilocos%20Norte&municipality_name=Banna')
+            ->assertOk()
+            ->assertJson(['postal_code' => '2917']);
+
+        Http::assertSent(fn (\Illuminate\Http\Client\Request $request): bool =>
+            str_ends_with($request->url(), '/cities-municipalities/012811')
+        );
+        Http::assertNotSent(fn (\Illuminate\Http\Client\Request $request): bool =>
+            str_ends_with($request->url(), '/cities-municipalities/0102811000')
+        );
+    }
+
     public function test_ncr_region_parent_loads_cities_and_pateros_without_submunicipalities(): void
     {
         config(['services.psgc.local_first' => true]);

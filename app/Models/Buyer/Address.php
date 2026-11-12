@@ -32,6 +32,7 @@ class Address extends Model
         'landmark',
         'latitude',
         'longitude',
+        'coordinate_precision',
         'is_default',
     ];
 

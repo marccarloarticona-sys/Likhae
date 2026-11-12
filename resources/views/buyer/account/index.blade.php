@@ -576,7 +576,7 @@
                                         <p class="mt-2 text-xs font-medium text-stone-600">{{ \App\Support\PhilippineMobileNumber::format((string) $address->contact_number) }}</p>
                                         <p class="mt-2 text-sm leading-6 text-stone-600">{{ $address->formatted() }}</p>
                                         @if(filled($address->latitude) && filled($address->longitude))
-                                            <p class="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700"><span aria-hidden="true">✓</span> Delivery pin confirmed</p>
+                                            <p class="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700"><span aria-hidden="true">✓</span> {{ $address->coordinate_precision === 'APPROXIMATE' ? 'Approximate delivery area pin' : 'Delivery pin confirmed' }}</p>
                                         @else
                                             <p class="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-700"><span aria-hidden="true">!</span> Confirm a map pin before checkout</p>
                                         @endif
