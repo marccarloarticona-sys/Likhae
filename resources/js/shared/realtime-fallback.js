@@ -5,7 +5,7 @@ const CONNECT_GRACE_MS = 2500;
 
 const connectionFor = () => window.Echo?.connector?.pusher?.connection || null;
 
-export const startRealtimeFallback = (poll) => {
+export const startRealtimeFallback = (poll, { intervalMs = FALLBACK_INTERVAL_MS } = {}) => {
     let timer = null;
     let graceTimer = null;
     let disposed = false;
@@ -20,12 +20,12 @@ export const startRealtimeFallback = (poll) => {
 
     const start = () => {
         if (disposed || timer !== null) return;
-        // Poll once immediately after the connection drops, then every five
-        // seconds only until Reverb is connected again.
+        // Poll once immediately after the connection drops, then at the
+        // configured fallback interval until Reverb is connected again.
         if (!document.hidden) poll();
         timer = window.setInterval(() => {
             if (!document.hidden) poll();
-        }, FALLBACK_INTERVAL_MS);
+        }, intervalMs);
     };
 
     const sync = () => {

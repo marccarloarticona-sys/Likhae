@@ -14,6 +14,11 @@
             @if($pickupRequest->preferredLogisticsCenter)
                 <p class="mt-1 text-sm text-muted">Preferred center (first choice): <strong data-progress-selected-center>{{ $pickupRequest->preferredLogisticsCenter->business_name }}</strong></p>
             @endif
+            <p class="mt-1 text-sm text-muted" data-progress-assigned-center @if(empty($progress['assigned_center'])) hidden @endif>
+                Assigned Logistics center:
+                <strong data-progress-assigned-center-name>{{ $progress['assigned_center']['name'] ?? '' }}</strong>
+                <span data-progress-assigned-center-address>{{ $progress['assigned_center']['address'] ?? 'Location unavailable' }}</span>
+            </p>
             @foreach($progress['destination_hubs'] ?? [] as $destinationHub)
                 <p class="mt-1 text-sm text-muted">Buyer destination Logistics center: <strong>{{ $destinationHub['name'] }}</strong>{{ filled($destinationHub['address']) ? ' — '.$destinationHub['address'] : '' }}</p>
             @endforeach
@@ -25,7 +30,9 @@
         @if($progress['requires_center_selection'] ?? false)
             This older request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.
         @elseif(!empty($progress['current_offer']))
-            Offer {{ $progress['current_offer']['attempt'] }}: {{ $progress['current_offer']['center'] }} · response due {{ \Illuminate\Support\Carbon::parse($progress['current_offer']['expires_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}@if($progress['automatic_matching'] ?? false) · If it declines or times out, LIKHAE tries the next eligible center.@endif
+            Offer {{ $progress['current_offer']['attempt'] }} sent to {{ $progress['current_offer']['center'] }}; awaiting acceptance (not assigned yet) · response due {{ \Illuminate\Support\Carbon::parse($progress['current_offer']['expires_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}@if($progress['automatic_matching'] ?? false) · If it declines or times out, LIKHAE tries the next eligible center.@endif
+        @elseif(($progress['automatic_matching'] ?? false) && in_array($pickupRequest->status, ['MATCHING', 'WAITING_FOR_RESPONSE'], true))
+            LIKHAE is matching eligible Logistics centers for this pickup address. No center is assigned until one accepts.
         @elseif($pickupRequest->status === 'PENDING')
             @if($progress['automatic_matching'] ?? false)
                 @if($progress['seller_selected_fallback'] ?? false)
@@ -81,6 +88,9 @@
                     const rider = panel.querySelector('[data-progress-rider]');
                     const offer = panel.querySelector('[data-progress-offer]');
                     const selectedCenter = panel.querySelector('[data-progress-selected-center]');
+                    const assignedCenter = panel.querySelector('[data-progress-assigned-center]');
+                    const assignedCenterName = panel.querySelector('[data-progress-assigned-center-name]');
+                    const assignedCenterAddress = panel.querySelector('[data-progress-assigned-center-address]');
                     const list = panel.querySelector('[data-progress-parcels]');
                     let timer = null;
                     let inFlight = false;
@@ -92,10 +102,15 @@
                         count.textContent = `${payload.collected} / ${payload.total} collected`;
                         rider.textContent = payload.rider || 'Waiting for assignment';
                         if (selectedCenter && payload.selected_center) selectedCenter.textContent = payload.selected_center;
+                        if (assignedCenter && assignedCenterName && assignedCenterAddress) {
+                            assignedCenter.hidden = !payload.assigned_center;
+                            assignedCenterName.textContent = payload.assigned_center?.name || '';
+                            assignedCenterAddress.textContent = payload.assigned_center?.address || 'Location unavailable';
+                        }
                         panel.querySelector('h3').textContent = payload.status_label || labels[payload.status] || payload.status;
                         const destinationHubs = (payload.destination_hubs || []).map((hub) => hub.name).filter(Boolean).join(', ');
                         offer.textContent = payload.current_offer
-                            ? `Offer ${payload.current_offer.attempt}: ${payload.current_offer.center} · response due ${new Date(payload.current_offer.expires_at).toLocaleString()}${payload.automatic_matching ? ' · If it declines or times out, LIKHAE tries the next eligible center.' : ''}`
+                            ? `Offer ${payload.current_offer.attempt} sent to ${payload.current_offer.center}; awaiting acceptance (not assigned yet) · response due ${new Date(payload.current_offer.expires_at).toLocaleString()}${payload.automatic_matching ? ' · If it declines or times out, LIKHAE tries the next eligible center.' : ''}`
                             : (payload.status === 'RETURNED_TO_SELLER'
                                 ? (payload.return_message || 'Your parcels are available again. Choose a covered Logistics center above to request pickup again.')
                                     : (payload.automatic_matching && payload.status === 'PENDING'
@@ -106,14 +121,16 @@
                                     ? (payload.status === 'REQUESTED'
                                         ? `Sent to ${payload.selected_center}. If it is not accepted by ${new Date(payload.response_due_at).toLocaleString()}, it will return to you automatically.`
                                         : `The selected center has not confirmed a route or Rider capacity. If it is still unresolved by ${new Date(payload.response_due_at).toLocaleString()}, it will return to you automatically.`)
-                                    : (payload.status === 'PENDING' || payload.requires_center_selection
+                                : (payload.automatic_matching && ['MATCHING', 'WAITING_FOR_RESPONSE'].includes(payload.status)
+                                ? 'LIKHAE is matching eligible Logistics centers for this pickup address. No center is assigned until one accepts.'
+                                : (payload.status === 'PENDING' || payload.requires_center_selection
                                 ? (payload.requires_center_selection
                                     ? 'This older request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.'
                                     : (payload.selected_center
                                     ? 'The selected Logistics center has no available route or Rider capacity yet. It will return to you if still unresolved after 15 minutes.'
                                     : 'No complete route or available center capacity is confirmed yet. Your request remains open for Logistics follow-up.')
                                 )
-                                : ''))));
+                                : '')))));
                         list.replaceChildren(...payload.parcels.map((parcel) => {
                             const row = document.createElement('li');
                             row.className = 'flex items-center justify-between gap-3 border border-line px-3 py-2 text-sm';

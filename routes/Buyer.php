@@ -82,6 +82,7 @@ Route::prefix('buyer')
         Route::post('/order', [CheckoutController::class, 'store'])->middleware('throttle:10,1')->name('order.store');
 
         Route::get('/orders/success', [BuyerOrderController::class, 'success'])->name('orders.success');
+        Route::get('/orders/counts', [BuyerOrderController::class, 'counts'])->name('orders.counts');
         Route::get('/orders', [BuyerOrderController::class, 'index'])->name('orders');
         Route::get('/orders/stream', [BuyerOrderController::class, 'stream'])->name('orders.stream');
         Route::post('/orders/{order}/seller-orders/{sellerOrder}/buy-again', [BuyerOrderController::class, 'buyAgain'])->name('orders.seller-orders.buy-again');

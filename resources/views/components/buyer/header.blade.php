@@ -104,8 +104,8 @@
 
             <div class="lk-header-actions">
                 <button id="themeToggle" type="button" class="lk-icon-btn lk-buyer-theme-toggle" aria-label="Toggle light or dark mode" title="Toggle light or dark mode" aria-pressed="false">
-                    <svg class="lk-theme-toggle-icon--light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
-                    <svg class="lk-theme-toggle-icon--dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.5 15.3A8.5 8.5 0 0 1 8.7 3.5 8.5 8.5 0 1 0 20.5 15.3Z"/></svg>
+                    <svg class="lk-theme-toggle-icon lk-theme-toggle-icon--dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.985 12.486A9 9 0 1 1 11.51 3.015a.75.75 0 0 0 9.475 9.47Z"/></svg>
+                    <svg class="lk-theme-toggle-icon lk-theme-toggle-icon--light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
                 </button>
                 <button type="button" class="lk-icon-btn lk-buyer-notification-toggle" aria-label="Open notifications" title="Notifications" aria-controls="notificationPopover" aria-expanded="false" data-notification-toggle>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>

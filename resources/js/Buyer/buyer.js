@@ -73,6 +73,37 @@ if (document.querySelector('[data-hero-carousel]')) {
 document.addEventListener('DOMContentLoaded', () => {
     const one = (selector, root = document) => root.querySelector(selector);
     const all = (selector, root = document) => [...root.querySelectorAll(selector)];
+    const orderCountsNav = one('[data-buyer-order-counts]');
+    if (orderCountsNav?.dataset.orderCountsUrl
+        && all('[data-order-status-count]', orderCountsNav).some((badge) => badge.dataset.orderCountPending === 'true')) {
+        fetch(orderCountsNav.dataset.orderCountsUrl, {
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+        })
+            .then(async (response) => {
+                if (!response.ok) return null;
+                return response.json();
+            })
+            .then((payload) => {
+                if (!payload?.counts) return;
+                all('[data-order-status-count]', orderCountsNav).forEach((badge) => {
+                    const count = Number(payload.counts[badge.dataset.orderStatusCount]);
+                    if (!Number.isFinite(count)) return;
+                    badge.textContent = String(count);
+                    badge.dataset.orderCountPending = 'false';
+                    badge.style.visibility = 'visible';
+                    const tab = badge.closest('a');
+                    const label = [...(tab?.childNodes || [])]
+                        .filter((node) => node.nodeType === Node.TEXT_NODE)
+                        .map((node) => node.textContent.trim())
+                        .join(' ')
+                        .trim();
+                    if (tab && label) tab.setAttribute('aria-label', `${label}: ${count} order${count === 1 ? '' : 's'}`);
+                });
+            })
+            .catch(() => {});
+    }
+
     const updateFlashSaleCountdown = (element) => {
         const endAt = Date.parse(element.dateTime || element.getAttribute('datetime') || '');
         if (!Number.isFinite(endAt)) return;
@@ -2121,7 +2152,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .listen('.shipment.tracking.updated', checkOrders);
         });
         const startOrderPollingWhenIdle = () => {
-            const start = () => startRealtimeFallback(checkOrders);
+            const start = () => startRealtimeFallback(checkOrders, { intervalMs: 30000 });
             if ('requestIdleCallback' in window) {
                 window.requestIdleCallback(start, { timeout: 1800 });
             } else {

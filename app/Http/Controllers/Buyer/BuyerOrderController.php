@@ -46,6 +46,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -83,13 +84,13 @@ class BuyerOrderController extends Controller
         $logisticsReadiness = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
         $shipmentReturnsReady = $logisticsReadiness->shipmentReturnsReady();
         $returnEnhancementsReady = $logisticsReadiness->shipmentReturnEnhancementsReady();
-        $buyerOrders = $request->user()->orders();
-        $orderStatusCounts = collect($tabs->counts(
-            clone $buyerOrders->getQuery(),
+        $countsCacheKey = $this->buyerOrderCountsCacheKey(
+            (int) $request->user()->id,
             $returnRefundReady,
             $shipmentReturnsReady,
             $returnEnhancementsReady,
-        ));
+        );
+        $orderStatusCounts = collect(Cache::get($countsCacheKey, []));
 
         $transferLegsWithArrival = fn ($query) => $this->withTransferArrivalScan($query);
         $orderQuery = $request->user()
@@ -97,12 +98,12 @@ class BuyerOrderController extends Controller
             ->getQuery()
             ->with([
                 'sellerOrders.sellerProfile',
-                'sellerOrders.items.shipment.transferLegs' => $transferLegsWithArrival,
                 'sellerOrders.items.product.images',
                 'sellerOrders.items.review',
                 'sellerOrders.shipments.orderItem',
-                'sellerOrders.shipments.events',
-                'sellerOrders.shipments.deliveryAttempts',
+                'sellerOrders.shipments.events' => fn ($query) => $query
+                    ->where('status', 'DELIVERED')
+                    ->select(['id', 'shipment_id', 'status', 'occurred_at']),
                 'sellerOrders.shipments.logisticsCenter',
                 'sellerOrders.shipments.transferLegs' => $transferLegsWithArrival,
                 'payments',
@@ -124,7 +125,7 @@ class BuyerOrderController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        if ($returnRefundReady) {
+        if ($returnRefundReady && $filter === 'RETURNS') {
             $ordersWithReturnRequests = $orders->getCollection()
                 ->filter(fn (Order $order): bool => $order->returnRefundRequests->isNotEmpty());
             if ($ordersWithReturnRequests->isNotEmpty()) {
@@ -179,12 +180,47 @@ class BuyerOrderController extends Controller
         ]);
     }
 
+    public function counts(Request $request, BuyerOrderTabService $tabs): JsonResponse
+    {
+        $returnRefundReady = $this->returnRefundStorageReady();
+        $logisticsReadiness = app(\App\Services\Fulfillment\LogisticsSchemaReadiness::class);
+        $shipmentReturnsReady = $logisticsReadiness->shipmentReturnsReady();
+        $returnEnhancementsReady = $logisticsReadiness->shipmentReturnEnhancementsReady();
+        $cacheKey = $this->buyerOrderCountsCacheKey(
+            (int) $request->user()->id,
+            $returnRefundReady,
+            $shipmentReturnsReady,
+            $returnEnhancementsReady,
+        );
+
+        $counts = Cache::remember(
+            $cacheKey,
+            now()->addSeconds(30),
+            fn (): array => $tabs->counts(
+                $request->user()->orders()->getQuery(),
+                $returnRefundReady,
+                $shipmentReturnsReady,
+                $returnEnhancementsReady,
+            ),
+        );
+
+        return response()->json(['counts' => $counts])
+            ->header('Cache-Control', 'private, no-store');
+    }
+
     public function stream(Request $request, BuyerOrderActionService $actions, BuyerOrderTabService $tabs): JsonResponse
     {
         $ids = collect($request->query('ids', []))
             ->map(fn ($id): int => (int) $id)
             ->filter()
             ->values();
+        if ($ids->isEmpty()) {
+            return response()->json([
+                'version' => sha1('[]'),
+                'orders' => [],
+            ]);
+        }
+
         $detailOrderId = $request->integer('detail_order_id');
         if (! $ids->contains($detailOrderId)) {
             $detailOrderId = 0;
@@ -1533,6 +1569,21 @@ class BuyerOrderController extends Controller
         }
 
         return back()->with('buyer_notice', 'Your ratings were saved.');
+    }
+
+    private function buyerOrderCountsCacheKey(
+        int $buyerId,
+        bool $returnRefundReady,
+        bool $shipmentReturnsReady,
+        bool $returnEnhancementsReady,
+    ): string {
+        return sprintf(
+            'buyer-order-counts:v1:%d:%d:%d:%d',
+            $buyerId,
+            (int) $returnRefundReady,
+            (int) $shipmentReturnsReady,
+            (int) $returnEnhancementsReady,
+        );
     }
 
     private function realtimeOrderSnapshot(

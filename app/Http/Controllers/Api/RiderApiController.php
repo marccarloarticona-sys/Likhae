@@ -244,6 +244,7 @@ class RiderApiController extends Controller
 
             return [
                 'id' => $assignment->id,
+                'assignment_type' => $assignment->assignment_type,
                 'tracking' => $shipment?->tracking_number ?? 'Tracking unavailable',
                 'buyer' => $buyer,
                 'status' => $status,

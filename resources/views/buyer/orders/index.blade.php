@@ -580,16 +580,17 @@
             $orderTabs = ['all' => 'All', 'to-pay' => 'To Pay', 'to-ship' => 'To Ship', 'to-receive' => 'To Receive', 'completed' => 'Completed', 'returns' => 'Return / Refund', 'cancelled' => 'Cancelled'];
             $activeTabKey = strtolower(str_replace('_', '-', $filter));
         @endphp
-        <nav class="lk-order-status-tabs mt-4" aria-label="Order status filters">
+        <nav class="lk-order-status-tabs mt-4" aria-label="Order status filters" data-buyer-order-counts data-order-counts-url="{{ route('buyer.orders.counts') }}">
             @foreach($orderTabs as $key => $label)
                 @php
                     $isActive = $activeTabKey === $key;
                     $countKey = strtoupper(str_replace('-', '_', $key));
-                    $count = (int) data_get($orderStatusCounts ?? [], $countKey, 0);
+                    $count = data_get($orderStatusCounts ?? [], $countKey);
+                    $count = is_numeric($count) ? (int) $count : null;
                 @endphp
-                <a href="{{ route('buyer.orders', ['status' => $key]) }}" class="lk-order-status-tab {{ $isActive ? 'is-active' : '' }}" aria-label="{{ $label }}: {{ $count }} order{{ $count === 1 ? '' : 's' }}" @if($isActive) aria-current="page" @endif>
+                <a href="{{ route('buyer.orders', ['status' => $key]) }}" class="lk-order-status-tab {{ $isActive ? 'is-active' : '' }}" aria-label="{{ $count === null ? $label.' orders' : $label.': '.$count.' order'.($count === 1 ? '' : 's') }}" @if($isActive) aria-current="page" @endif>
                     {{ $label }}
-                    <span class="lk-order-status-count" aria-hidden="true">{{ $count }}</span>
+                    <span class="lk-order-status-count" data-order-status-count="{{ $countKey }}" data-order-count-pending="{{ $count === null ? 'true' : 'false' }}" @if($count === null) style="visibility:hidden" @endif aria-hidden="true">{{ $count }}</span>
                 </a>
             @endforeach
         </nav>
@@ -970,12 +971,6 @@
                                                     <span class="text-[11px] font-semibold text-stone-700">Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }} · Qty {{ $shipmentForItem->parcel_quantity }} <span aria-hidden="true">&#183;</span> Tracking <span class="break-all">{{ $shipmentForItem->tracking_number }}</span></span>
                                                     <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
                                                         @include('buyer.orders.partials.purchase-shipment-summary', ['shipment' => $shipmentForItem, 'status' => $sellerDisplayStatus, 'orderId' => $order->id, 'showOrderStatus' => false, 'fullStatus' => true])
-                                                        @if(in_array($activeTabKey, ['all', 'to-receive'], true))
-                                                            <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $shipmentForItem]) }}" data-confirm-shipment-action="{{ $shipmentForItem->id }}" @if(! in_array((int) $shipmentForItem->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $shipmentParcelNumber }} of {{ $sellerShipments->count() }}? Only this parcel will move to Completed.');">
-                                                                @csrf<input type="hidden" name="confirm_receipt" value="1">
-                                                                <button class="lk-btn lk-btn-red px-3 py-1.5 text-xs" type="submit">Confirm received</button>
-                                                            </form>
-                                                        @endif
                                                     </div>
                                                 </div>
                                             @endforeach
@@ -1036,6 +1031,19 @@
                             @endif
                             @if($actionState['can_request_return'] ?? false)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders.return-refund.form', $order) }}">Return / Refund</a>@endif
                             @if($returnRequest)<a class="lk-btn lk-btn-light" href="{{ route('buyer.orders', ['status' => 'RETURNS']) }}">View Return/Refund Request &#183; {{ str($returnRequest->status)->headline() }}</a>@endif
+                            @if(in_array($activeTabKey, ['all', 'to-receive'], true))
+                                @foreach($order->sellerOrders as $confirmSellerOrder)
+                                    @foreach($confirmSellerOrder->shipments as $confirmShipment)
+                                        @php
+                                            $confirmParcelNumber = $confirmSellerOrder->shipments->search(fn ($candidate) => (int) $candidate->id === (int) $confirmShipment->id) + 1;
+                                        @endphp
+                                        <form method="POST" action="{{ route('buyer.orders.shipments.received', [$order, $confirmShipment]) }}" data-confirm-shipment-action="{{ $confirmShipment->id }}" @if(! in_array((int) $confirmShipment->id, $confirmableShipmentIds, true)) hidden @endif onsubmit="return window.confirm('Confirm receipt for Parcel {{ $confirmParcelNumber }} of {{ $confirmSellerOrder->shipments->count() }}? Only this parcel will move to Completed.');">
+                                            @csrf<input type="hidden" name="confirm_receipt" value="1">
+                                            <button class="lk-btn lk-btn-red px-3 py-1.5 text-xs" type="submit">Confirm received</button>
+                                        </form>
+                                    @endforeach
+                                @endforeach
+                            @endif
                             @if($actionState['can_confirm_received'])
                                 <div>
                                     @if(count($confirmableShipmentIds) > 1)

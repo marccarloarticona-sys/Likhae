@@ -3026,21 +3026,16 @@
             </div>
         </div>
 
-        <div class="lk-product-grid lk-home-recommendation-grid" role="region" aria-label="Recommended products" data-home-recommendation-grid data-recommendation-url="{{ route('buyer.home.recommendations') }}" data-next-page="1" data-exclude-product-ids="{{ implode(',', $recommendationExcludedProductIds ?? []) }}"></div>
+        <div class="lk-product-grid lk-home-recommendation-grid" role="region" aria-label="Recommended products" data-home-recommendation-grid data-recommendation-url="{{ route('buyer.home.recommendations') }}" data-cache-key="buyer-home-recommendations-{{ auth()->id() }}-{{ hash('sha256', session()->getId()) }}" data-next-offset="0" data-exclude-product-ids="{{ implode(',', $recommendationExcludedProductIds ?? []) }}"></div>
         <div class="lk-product-grid lk-home-recommendation-grid" data-recommendation-skeleton aria-hidden="true">
             @for($card = 0; $card < 3; $card++)
                 <article class="lk-home-skeleton-card"><div class="lk-home-skeleton-media"></div><div class="lk-home-skeleton-body"><span class="lk-home-skeleton-line is-short"></span><span class="lk-home-skeleton-line is-long"></span><span class="lk-home-skeleton-line"></span></div></article>
             @endfor
         </div>
         <div class="lk-home-recommendation-more" data-recommendation-sentinel>
-            <span data-recommendation-status role="status" aria-live="polite">Your recommendations are ready to load.</span>
-            <button type="button" data-recommendation-retry hidden>Load recommendations</button>
+            <span data-recommendation-status role="status" aria-live="polite">Recommendations load automatically as you scroll.</span>
+            <button type="button" data-recommendation-retry hidden>Try again</button>
         </div>
-        <nav class="lk-home-recommendation-pagination" data-recommendation-pagination aria-label="Recommended products pages" hidden>
-            <button type="button" data-recommendation-previous disabled>Previous</button>
-            <span data-recommendation-page aria-live="polite">Page 1</span>
-            <button type="button" data-recommendation-next>Next</button>
-        </nav>
         <div class="rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-10 text-center" data-recommendation-empty hidden>
             <h3 class="text-sm font-semibold text-stone-900">More recommendations will appear here</h3>
             <p class="mt-1 text-xs text-stone-500">Explore products to help us prepare recommendations for you.</p>
@@ -3309,33 +3304,113 @@
             const retryButton = sentinel?.querySelector('[data-recommendation-retry]');
             const skeleton = grid.parentElement?.querySelector('[data-recommendation-skeleton]');
             const emptyState = grid.parentElement?.querySelector('[data-recommendation-empty]');
-            const pagination = grid.parentElement?.querySelector('[data-recommendation-pagination]');
-            const previousButton = pagination?.querySelector('[data-recommendation-previous]');
-            const nextButton = pagination?.querySelector('[data-recommendation-next]');
-            const pageLabel = pagination?.querySelector('[data-recommendation-page]');
-            if (!sentinel || !status || !retryButton || !pagination || !previousButton || !nextButton || !pageLabel) return;
+            if (!sentinel || !status || !retryButton) return;
 
-            let page = 0;
+            let loadedCount = 0;
             let isLoading = false;
             let hasMore = true;
-            let retryPage = 1;
+            let retryOffset = Number(grid.dataset.nextOffset || 0);
+            let retryLimit = 6;
             let observer = null;
+            let checkBottom = () => {};
+            const cacheKey = grid.dataset.cacheKey || '';
+            let lastScrollY = window.scrollY;
+            let lastScrollAt = performance.now();
+            let recentScrollSpeed = 0;
 
-            const loadPage = async (targetPage) => {
-                if (isLoading || targetPage < 1 || (targetPage > page && !hasMore)) return;
+            const saveRecommendations = () => {
+                if (!cacheKey) return;
+                try {
+                    window.sessionStorage.setItem(cacheKey, JSON.stringify({
+                        version: 1,
+                        html: grid.innerHTML,
+                        loadedCount,
+                        nextOffset: retryOffset,
+                        hasMore,
+                    }));
+                } catch {}
+            };
+
+            const restoreRecommendations = () => {
+                if (!cacheKey) return false;
+                try {
+                    const saved = JSON.parse(window.sessionStorage.getItem(cacheKey) || 'null');
+                    if (!saved
+                        || saved.version !== 1
+                        || typeof saved.html !== 'string'
+                        || !Number.isInteger(saved.loadedCount)
+                        || saved.loadedCount < 0
+                        || !Number.isInteger(saved.nextOffset)
+                        || saved.nextOffset !== saved.loadedCount
+                        || typeof saved.hasMore !== 'boolean') {
+                        return false;
+                    }
+
+                    const template = document.createElement('template');
+                    template.innerHTML = saved.html;
+                    template.content.querySelectorAll('style').forEach((style) => style.remove());
+                    grid.append(template.content);
+
+                    loadedCount = saved.loadedCount;
+                    retryOffset = saved.nextOffset;
+                    hasMore = saved.hasMore;
+                    grid.dataset.loadedCount = String(loadedCount);
+                    grid.dataset.nextOffset = hasMore ? String(retryOffset) : '';
+                    if (skeleton) skeleton.hidden = true;
+                    if (emptyState) emptyState.hidden = grid.children.length > 0;
+                    status.textContent = hasMore
+                        ? 'Saved recommendations restored. More load automatically as you scroll.'
+                        : 'You’ve reached the end of your recommendations.';
+                    document.dispatchEvent(new CustomEvent('catalog:results-updated', {
+                        detail: { root: grid },
+                    }));
+                    return true;
+                } catch {
+                    try {
+                        window.sessionStorage.removeItem(cacheKey);
+                    } catch {}
+                    return false;
+                }
+            };
+
+            const currentScrollSpeed = () => recentScrollSpeed * Math.exp(-(performance.now() - lastScrollAt) / 600);
+            const batchSizeForSpeed = () => {
+                const speed = currentScrollSpeed();
+                if (speed >= 3200) return 36;
+                if (speed >= 2400) return 30;
+                if (speed >= 1600) return 24;
+                if (speed >= 900) return 18;
+                if (speed >= 350) return 12;
+                return 6;
+            };
+            const trackScrollSpeed = () => {
+                const now = performance.now();
+                const elapsed = Math.max(1, now - lastScrollAt);
+                const distance = Math.abs(window.scrollY - lastScrollY);
+                const decayedSpeed = currentScrollSpeed();
+                recentScrollSpeed = Math.max((distance / elapsed) * 1000, decayedSpeed);
+                lastScrollY = window.scrollY;
+                lastScrollAt = now;
+            };
+            window.addEventListener('scroll', trackScrollSpeed, { passive: true });
+
+            const loadPage = async (targetOffset, targetLimit = batchSizeForSpeed()) => {
+                if (isLoading || targetOffset !== loadedCount || !hasMore) return;
+                if (targetLimit < 6 || targetLimit > 36) return;
 
                 isLoading = true;
-                retryPage = targetPage;
-                status.textContent = `Loading recommendations page ${targetPage}…`;
+                let loaded = false;
+                retryOffset = targetOffset;
+                retryLimit = targetLimit;
+                status.textContent = 'Loading recommendations…';
                 retryButton.hidden = true;
-                previousButton.disabled = true;
-                nextButton.disabled = true;
                 grid.setAttribute('aria-busy', 'true');
-                if (page === 0 && skeleton) skeleton.hidden = false;
+                if (loadedCount === 0 && skeleton) skeleton.hidden = false;
 
                 try {
                     const url = new URL(grid.dataset.recommendationUrl, window.location.href);
-                    url.searchParams.set('recommendation_page', String(targetPage));
+                    url.searchParams.set('recommendation_offset', String(targetOffset));
+                    url.searchParams.set('recommendation_limit', String(targetLimit));
                     const excludedProductIds = grid.dataset.excludeProductIds || '';
                     if (excludedProductIds) url.searchParams.set('exclude', excludedProductIds);
 
@@ -3349,59 +3424,76 @@
                     if (!response.ok) throw new Error('Recommendations could not be loaded.');
 
                     const payload = await response.json();
-                    if (typeof payload.html !== 'string' || typeof payload.has_more !== 'boolean') {
+                    if (typeof payload.html !== 'string'
+                        || typeof payload.has_more !== 'boolean'
+                        || !Number.isInteger(payload.next_offset)
+                        || payload.next_offset < targetOffset
+                        || payload.next_offset > targetOffset + targetLimit
+                        || (payload.has_more && payload.next_offset === targetOffset)) {
                         throw new Error('Recommendations could not be loaded.');
                     }
+                    loaded = true;
 
                     const template = document.createElement('template');
                     template.innerHTML = payload.html;
                     template.content.querySelectorAll('style').forEach((style) => style.remove());
-                    grid.replaceChildren(template.content);
+                    grid.append(template.content);
                     document.dispatchEvent(new CustomEvent('catalog:results-updated', {
                         detail: { root: grid },
                     }));
 
-                    page = targetPage;
-                    grid.dataset.currentPage = String(page);
+                    const loadedThisBatch = payload.next_offset - targetOffset;
+                    loadedCount = payload.next_offset;
+                    grid.dataset.loadedCount = String(loadedCount);
                     hasMore = payload.has_more;
+                    retryOffset = loadedCount;
+                    retryLimit = batchSizeForSpeed();
+                    grid.dataset.nextOffset = hasMore ? String(retryOffset) : '';
+                    saveRecommendations();
                     if (skeleton) skeleton.hidden = true;
                     if (emptyState) emptyState.hidden = grid.children.length > 0;
 
-                    pagination.hidden = page === 1 && !hasMore;
-                    pageLabel.textContent = `Page ${page}`;
-                    previousButton.disabled = page <= 1;
-                    nextButton.disabled = !hasMore;
                     status.textContent = hasMore
-                        ? 'Choose Next to see more recommendations.'
+                        ? `Loaded ${loadedThisBatch} more. More load automatically as you scroll.`
                         : 'You’ve reached the end of your recommendations.';
                     if (!grid.children.length) status.textContent = 'No recommendations are available right now.';
+                    if (!hasMore) observer?.disconnect();
                 } catch {
                     if (skeleton) skeleton.hidden = true;
                     status.textContent = 'Recommendations could not be loaded.';
                     retryButton.textContent = 'Try again';
                     retryButton.hidden = false;
-                    previousButton.disabled = page <= 1;
-                    nextButton.disabled = !hasMore;
                 } finally {
                     isLoading = false;
                     grid.setAttribute('aria-busy', 'false');
+                    if (loaded && hasMore) {
+                        if (observer) {
+                            observer.unobserve(sentinel);
+                            observer.observe(sentinel);
+                        }
+                        window.requestAnimationFrame(checkBottom);
+                    }
                 }
             };
 
-            previousButton.addEventListener('click', () => loadPage(page - 1));
-            nextButton.addEventListener('click', () => loadPage(page + 1));
-            retryButton.addEventListener('click', () => loadPage(retryPage));
+            retryButton.addEventListener('click', () => loadPage(retryOffset, retryLimit));
+            checkBottom = () => {
+                if (hasMore && sentinel.getBoundingClientRect().top <= window.innerHeight + 250) {
+                    loadPage(retryOffset);
+                }
+            };
+            window.addEventListener('scroll', checkBottom, { passive: true });
+            window.addEventListener('resize', checkBottom);
+
+            restoreRecommendations();
 
             if ('IntersectionObserver' in window) {
                 observer = new IntersectionObserver((entries) => {
-                    if (entries.some((entry) => entry.isIntersecting)) {
-                        observer?.disconnect();
-                        loadPage(1);
-                    }
-                }, { rootMargin: '500px 0px' });
+                    if (entries.some((entry) => entry.isIntersecting)) loadPage(retryOffset);
+                }, { rootMargin: '250px 0px' });
                 observer.observe(sentinel);
             } else {
-                loadPage(1);
+                checkBottom();
             }
         });
 

@@ -418,6 +418,7 @@ final class SellerPickupRequestService
         abort_unless((int) $pickupRequest->seller_profile_id === $sellerProfileId, 404);
         $progressRelations = [
             'riderLocalTrip.rider.user',
+            'riderLocalTrip.logisticsCenter.address',
             'riderLocalTrip.items.riderAssignment.shipment',
             'memberships.shipment',
             'memberships.sellerOrder',
@@ -531,6 +532,10 @@ final class SellerPickupRequestService
             'seller_selected_fallback' => $sellerSelectedFallback,
             'destination_hubs' => $destinationHubs,
             'selected_center' => $selectedCenterName,
+            'assigned_center' => $trip?->logisticsCenter ? [
+                'name' => (string) $trip->logisticsCenter->business_name,
+                'address' => $trip->logisticsCenter->address?->formatted(),
+            ] : null,
             'requires_center_selection' => $requiresCenterSelection,
             'status_label' => $requiresCenterSelection ? 'Center choice required' : match ($pickupRequest->status) {
                 'REQUESTED' => 'Waiting for Logistics',

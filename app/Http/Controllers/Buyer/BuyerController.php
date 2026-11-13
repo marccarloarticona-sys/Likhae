@@ -166,6 +166,12 @@ class BuyerController extends Controller
 
     public function homeRecommendations(Request $request): JsonResponse
     {
+        $request->validate([
+            'recommendation_offset' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
+            'recommendation_limit' => ['sometimes', 'integer', 'min:6', 'max:36'],
+            'recommendation_page' => ['sometimes', 'integer', 'min:1', 'max:1000000'],
+        ]);
+
         $excludedProductIds = collect(explode(',', (string) $request->query('exclude', '')))
             ->filter(fn ($id): bool => preg_match('/^\d+$/', trim((string) $id)) === 1)
             ->map(fn ($id): int => (int) $id)
@@ -173,10 +179,14 @@ class BuyerController extends Controller
             ->take(12)
             ->values()
             ->all();
-        $pageNumber = max(1, (int) $request->query('recommendation_page', 1));
+        $limit = (int) $request->query('recommendation_limit', 6);
+        $offset = $request->query->has('recommendation_offset')
+            ? (int) $request->query('recommendation_offset')
+            : (((int) $request->query('recommendation_page', 1) - 1) * 6);
         $recommendationPage = $this->homepageRecommendationPage(
             $excludedProductIds,
-            $pageNumber,
+            $offset,
+            $limit,
             $request->user(),
             $request->session()->get('buyer_recently_viewed_product_ids', []),
         );
@@ -186,11 +196,12 @@ class BuyerController extends Controller
         return response()->json([
             'html' => view('buyer.home.partials.recommendation-cards', compact('recommendedProducts'))->render(),
             'has_more' => $recommendationPage['has_more'],
+            'next_offset' => $offset + $recommendedProducts->count(),
         ]);
     }
 
     /** @return array{products: Collection<int, Product>, has_more: bool} */
-    private function homepageRecommendationPage(array $excludedProductIds, int $page, User $buyer, array $recentlyViewedProductIds): array
+    private function homepageRecommendationPage(array $excludedProductIds, int $offset, int $limit, User $buyer, array $recentlyViewedProductIds): array
     {
         $cartProductIds = [];
         if (Schema::hasTable('cart_items') && Schema::hasTable('carts') && Schema::hasTable('product_variants')) {
@@ -318,14 +329,16 @@ class BuyerController extends Controller
             $query->orderByRaw('('.implode(' + ', $scoreParts).') DESC', $scoreBindings);
         }
 
+        $offset = max(0, $offset);
+        $limit = min(36, max(6, $limit));
         $rows = $this->catalog->applySort($query, 'best-selling')
-            ->offset((max(1, $page) - 1) * 6)
-            ->limit(7)
+            ->offset($offset)
+            ->limit($limit + 1)
             ->get();
 
         return [
-            'products' => $rows->take(6)->values(),
-            'has_more' => $rows->count() > 6,
+            'products' => $rows->take($limit)->values(),
+            'has_more' => $rows->count() > $limit,
         ];
     }
 
