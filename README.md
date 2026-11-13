@@ -38,13 +38,19 @@ php artisan reverb:start --host=0.0.0.0 --port=8080
 
 Set `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME`, and the `VITE_REVERB_*` values to the public WebSocket endpoint before running `npm run build`. When Laravel and Reverb share a host, set `REVERB_BROADCAST_HOST=127.0.0.1`, `REVERB_BROADCAST_PORT=8080`, and `REVERB_BROADCAST_SCHEME=http` so server-side broadcasts do not loop through Cloudflare. If Reverb runs as a separate service, use its private service hostname and port instead.
 
-The Windows/XAMPP production setup keeps Cloudflare Tunnel on port 8000 and uses [`deploy/apache/likhae-reverse-proxy.conf`](deploy/apache/likhae-reverse-proxy.conf) to route `/app/` and `/apps/` to Reverb while forwarding normal web requests to Laravel on port 8001. Start Laravel with the internal flag below so the development Vite/Reverb supervisor is not launched in production:
+The Windows/XAMPP production setup keeps the Cloudflare-facing origin on `http://127.0.0.1:8000`. Apache uses [`deploy/apache/likhae-reverse-proxy.conf`](deploy/apache/likhae-reverse-proxy.conf) to route `/app/` and `/apps/` to Reverb on port 8080 and forward normal web requests to Laravel on the private loopback port 8001. Keep Cloudflare pointed at port 8000; port 8001 is only an internal upstream.
 
 ```powershell
-C:\xampp\php\php.exe artisan serve --host=127.0.0.1 --port=8001 --no-reload --likhae-internal
-C:\xampp\php\php.exe artisan reverb:start --host=0.0.0.0 --port=8080
-php scripts/run-apache-proxy.php
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-likhae-production.ps1
 ```
+
+For automatic startup and recovery, register the Windows task once:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-likhae-startup-task.ps1
+```
+
+The supervisor checks the Laravel and Apache `/up` routes, starts missing processes, and restarts an unresponsive expected listener after three failed checks. It keeps Reverb on port 8080 available for the Apache WebSocket routes, and starts Vite on port 5173 only while the private Vite hot marker exists. For production builds, run `composer run deploy` to generate static assets and clear that marker. The task runs at sign-in under the current Windows account. The Cloudflared Windows service is configured to start automatically. Keep the account signed in and the computer powered on and awake for the local origin to serve requests.
 
 Registration sends a six-digit email verification code before an application can be submitted. For Gmail SMTP, configure these values in the local `.env` using a Google App Password (with two-step verification enabled):
 

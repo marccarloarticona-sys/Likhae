@@ -6,7 +6,7 @@
         "clean:hot": "node scripts/clean-vite-hot.mjs",
         "prebuild": "npm run clean:hot",
         "build": "npm run clean:hot && vite build",
-        "dev": "vite"
+        "dev": "node scripts/start-vite-if-needed.mjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "4.3.3",
