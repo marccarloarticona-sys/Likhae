@@ -60,10 +60,14 @@ final class SellerPickupMatchingService
                 if (! $request || ! in_array($request->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
                     return false;
                 }
+                $hasAcceptedPickupLeg = $request->seller_selected_fallback
+                    && $this->schema->sellerPickupLegOffersReady()
+                    && $request->centerOffers()->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)->exists();
                 $request->centerOffers()
                     ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
                     ->update(['status' => SellerPickupCenterOffer::STATUS_SUPERSEDED, 'responded_at' => now()]);
-                $request->update(['status' => 'REQUESTED']);
+                $request->update(['status' => $hasAcceptedPickupLeg ? 'PENDING' : 'REQUESTED']);
 
                 return true;
             });
@@ -118,8 +122,17 @@ final class SellerPickupMatchingService
             $this->notifySeller($request, 'FINDING');
         }
 
+        if ($request->seller_selected_fallback
+            && $request->centerOffers()->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)->exists()) {
+            $this->startDeliveryOffers((int) $request->id);
+
+            return;
+        }
+
         $active = $request->centerOffers()
             ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+            ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
             ->where('expires_at', '>', now())
             ->first();
         if ($active) {
@@ -153,6 +166,7 @@ final class SellerPickupMatchingService
             }
             $active = $locked->centerOffers()
                 ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
                 ->where('expires_at', '>', now())
                 ->first();
             if ($active) {
@@ -200,6 +214,7 @@ final class SellerPickupMatchingService
             $offer = SellerPickupCenterOffer::query()->create([
                 'seller_pickup_request_id' => $locked->id,
                 'logistics_center_id' => $origin->id,
+                'leg_type' => SellerPickupCenterOffer::LEG_PICKUP,
                 'attempt_number' => $attempt,
                 'status' => SellerPickupCenterOffer::STATUS_OFFERED,
                 'offered_at' => $now,
@@ -239,6 +254,14 @@ final class SellerPickupMatchingService
         SellerPickupAutoDispatchService $autoDispatch,
     ): bool {
         abort_unless($this->schema->automaticSellerPickupMatchingReady(), 503);
+
+        $offerLeg = SellerPickupCenterOffer::query()
+            ->where('seller_pickup_request_id', $requestId)
+            ->whereKey($offerId)
+            ->value('leg_type');
+        if ($offerLeg === SellerPickupCenterOffer::LEG_DELIVERY) {
+            return $this->acceptDeliveryOffer($actor, $center, $requestId, $offerId);
+        }
 
         try {
             return DB::transaction(function () use ($actor, $center, $requestId, $offerId, $autoDispatch): bool {
@@ -280,23 +303,30 @@ final class SellerPickupMatchingService
                 $plans = $this->routePlansForRequest($fresh, $center, true);
                 $plan = collect($plans)->first(fn (array $current): bool => $this->sameRoutePlan($offer->route_snapshot ?? [], $current));
                 $sellerSelectedFallback = (bool) ($plan['seller_selected_fallback'] ?? false);
+                $deliveryGroups = $sellerSelectedFallback ? $this->uncoveredDestinationGroups($fresh) : [];
                 if (! $plan || (! $sellerSelectedFallback && ! $this->originPickupCapacity($center, $fresh->pickupAddress, $count))) {
                     throw new RuntimeException('Pickup Rider or complete route capacity changed after this offer was sent.');
                 }
-                if (! $this->lockRouteCenters($plan) || ! $this->routeHasDestinationCapacity($plan, (int) $fresh->id)) {
+                $routeCanProceed = $sellerSelectedFallback && $deliveryGroups !== []
+                    ? $this->fallbackRouteHasInterhubCapacity($plan)
+                    : $this->routeHasDestinationCapacity($plan, (int) $fresh->id);
+                if (! $this->lockRouteCenters($plan) || ! $routeCanProceed) {
                     throw new RuntimeException(($plan['seller_selected_fallback'] ?? false) === true
                         ? 'Inter-hub vehicle or destination delivery capacity changed after this offer was sent.'
                         : 'Destination capacity changed after this offer was sent.');
                 }
 
                 $this->assertNoConflictingTransferLegs($fresh, $center, $plan);
-                $this->applyShipmentPlan($fresh, $center, $plan);
+                $waitingForDeliveryHub = $sellerSelectedFallback && $deliveryGroups !== [];
+                if (! $waitingForDeliveryHub) {
+                    $this->applyShipmentPlan($fresh, $center, $plan);
+                }
 
                 // SellerPickupRequestService::assign accepts only REQUESTED;
                 // this state transition is inside the same locked transaction.
-                $request->update(['status' => 'REQUESTED']);
+                $request->update(['status' => $waitingForDeliveryHub ? 'WAITING_FOR_RESPONSE' : 'REQUESTED']);
                 $request->refresh();
-                $trip = $sellerSelectedFallback
+                $trip = $sellerSelectedFallback || $waitingForDeliveryHub
                     ? null
                     : $autoDispatch->assignRequestToNearest($actor, $center, $request);
                 $offer->update([
@@ -309,6 +339,10 @@ final class SellerPickupMatchingService
                     'reserved_parcel_count' => $count,
                     'route_snapshot' => $plan['snapshot'],
                 ]);
+
+                if ($waitingForDeliveryHub) {
+                    DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+                }
 
                 return $sellerSelectedFallback || $trip !== null;
             });
@@ -324,6 +358,14 @@ final class SellerPickupMatchingService
     public function decline(User $actor, LogisticsCenter $center, int $requestId, int $offerId): bool
     {
         abort_unless($this->schema->automaticSellerPickupMatchingReady(), 503);
+
+        $offerLeg = SellerPickupCenterOffer::query()
+            ->where('seller_pickup_request_id', $requestId)
+            ->whereKey($offerId)
+            ->value('leg_type');
+        if ($offerLeg === SellerPickupCenterOffer::LEG_DELIVERY) {
+            return $this->declineDeliveryOffer($actor, $center, $requestId, $offerId);
+        }
 
         $declined = DB::transaction(function () use ($actor, $center, $requestId, $offerId): bool {
             $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->firstOrFail();
@@ -355,6 +397,146 @@ final class SellerPickupMatchingService
         return $declined;
     }
 
+    /** Accept the Buyer delivery leg after checking the selected uncovered destination hub. */
+    private function acceptDeliveryOffer(User $actor, LogisticsCenter $center, int $requestId, int $offerId): bool
+    {
+        try {
+            return DB::transaction(function () use ($actor, $center, $requestId, $offerId): bool {
+                $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->firstOrFail();
+                $offer = SellerPickupCenterOffer::query()->whereKey($offerId)->lockForUpdate()->firstOrFail();
+                $this->assertOfferActor($actor, $center, $request, $offer);
+                if ($offer->status !== SellerPickupCenterOffer::STATUS_OFFERED) {
+                    abort(409, 'This Buyer delivery hub offer is no longer available.');
+                }
+                if ($offer->expires_at?->isPast()) {
+                    $offer->update(['status' => SellerPickupCenterOffer::STATUS_EXPIRED, 'responded_at' => now()]);
+                    DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+
+                    return false;
+                }
+                if (! $request->seller_selected_fallback || $request->status !== 'WAITING_FOR_RESPONSE'
+                    || $request->rider_local_trip_id !== null) {
+                    abort(409, 'This Seller pickup request is no longer waiting for a Buyer delivery hub response.');
+                }
+
+                $groupKey = (string) data_get($offer->route_snapshot, 'delivery_group_key', '');
+                $shipmentIds = collect((array) data_get($offer->route_snapshot, 'delivery_shipment_ids', []))
+                    ->map(fn ($id): int => (int) $id)->sort()->values()->all();
+                if ($groupKey === '' || $shipmentIds === []) {
+                    abort(409, 'This Buyer delivery hub offer has no valid parcel group.');
+                }
+                $fresh = $this->loadRequest((int) $request->id);
+                $group = $fresh
+                    ? collect($this->uncoveredDestinationGroups($fresh))->first(fn (array $candidate): bool => $candidate['key'] === $groupKey)
+                    : null;
+                if (! $fresh || ! $group || $group['shipment_ids'] !== $shipmentIds
+                    || (int) $group['center_id'] !== (int) $center->id) {
+                    abort(409, 'The Buyer delivery destination changed after this offer was sent.');
+                }
+
+                $originOffer = $request->centerOffers()
+                    ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                    ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                    ->with('logisticsCenter.address')
+                    ->latest('attempt_number')
+                    ->first();
+                $origin = $originOffer?->logisticsCenter;
+                if (! $origin) {
+                    abort(409, 'The Seller pickup hub must accept its leg before the Buyer delivery hub can accept.');
+                }
+
+                $plan = collect($this->routePlansForRequest($fresh, $origin, true))
+                    ->first(fn (array $candidate): bool => ($candidate['seller_selected_fallback'] ?? false) === true);
+                $groupPlan = $plan ? $this->planForShipmentIds($plan, $shipmentIds) : null;
+                if (! $plan || ! $groupPlan
+                    || ! $this->sameRoutePlan($offer->route_snapshot ?? [], $groupPlan)
+                    || collect($groupPlan['routes'])->contains(fn (array $route): bool => (int) $route['destination_logistics_center_id'] !== (int) $center->id)
+                    || ! $this->lockRouteCenters($groupPlan)
+                    || ! $this->fallbackRouteHasDestinationCapacity($groupPlan, (int) $request->id)) {
+                    throw new RuntimeException('Online Rider, inter-hub vehicle, or destination capacity changed after this offer was sent.');
+                }
+
+                $acceptedSnapshot = $groupPlan['snapshot'];
+                $acceptedSnapshot['offer_leg'] = SellerPickupCenterOffer::LEG_DELIVERY;
+                $acceptedSnapshot['delivery_group_key'] = $groupKey;
+                $acceptedSnapshot['delivery_shipment_ids'] = $shipmentIds;
+                $acceptedSnapshot['delivery_address'] = (string) data_get($offer->route_snapshot, 'delivery_address', '');
+                $acceptedSnapshot['delivery_center_id'] = (int) $center->id;
+                $offer->update([
+                    'status' => SellerPickupCenterOffer::STATUS_ACCEPTED,
+                    'responded_at' => now(),
+                    'destination_logistics_center_id' => $center->id,
+                    'reserved_parcel_count' => count($shipmentIds),
+                    'route_snapshot' => $acceptedSnapshot,
+                ]);
+
+                $allDeliveryGroupsAccepted = collect($this->uncoveredDestinationGroups($fresh))->every(function (array $requiredGroup) use ($request): bool {
+                    return $request->centerOffers()
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                        ->get()
+                        ->contains(fn (SellerPickupCenterOffer $accepted): bool => data_get($accepted->route_snapshot, 'delivery_group_key') === $requiredGroup['key']
+                            && (int) data_get($accepted->route_snapshot, 'delivery_center_id') === (int) $requiredGroup['center_id']);
+                });
+
+                if ($allDeliveryGroupsAccepted) {
+                    $fresh = $this->loadRequest((int) $request->id);
+                    $finalPlan = $fresh
+                        ? collect($this->routePlansForRequest($fresh, $origin, true))
+                            ->first(fn (array $candidate): bool => ($candidate['seller_selected_fallback'] ?? false) === true)
+                        : null;
+                    if (! $fresh || ! $finalPlan || ! $this->lockRouteCenters($finalPlan)
+                        || ! $this->fallbackRouteHasDestinationCapacity($finalPlan, (int) $request->id)) {
+                        throw new RuntimeException('A confirmed Buyer delivery hub no longer has sufficient Rider or inter-hub capacity.');
+                    }
+                    $this->assertNoConflictingTransferLegs($fresh, $origin, $finalPlan);
+                    $this->applyShipmentPlan($fresh, $origin, $finalPlan);
+                    $request->centerOffers()
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                        ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                        ->update(['status' => SellerPickupCenterOffer::STATUS_SUPERSEDED, 'responded_at' => now()]);
+                    $request->update(['status' => 'REQUESTED']);
+                } else {
+                    $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+                    DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+                }
+
+                return true;
+            });
+        } catch (HttpExceptionInterface|ModelNotFoundException $exception) {
+            throw $exception;
+        } catch (RuntimeException|ValidationException $exception) {
+            $this->markOfferUnavailable($requestId, $offerId);
+
+            return false;
+        }
+    }
+
+    /** Decline or time out only this Buyer destination group, then try another hub. */
+    private function declineDeliveryOffer(User $actor, LogisticsCenter $center, int $requestId, int $offerId): bool
+    {
+        return DB::transaction(function () use ($actor, $center, $requestId, $offerId): bool {
+            $request = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->firstOrFail();
+            $offer = SellerPickupCenterOffer::query()->whereKey($offerId)->lockForUpdate()->firstOrFail();
+            $this->assertOfferActor($actor, $center, $request, $offer);
+            if ($offer->status !== SellerPickupCenterOffer::STATUS_OFFERED) {
+                abort(409, 'This Buyer delivery hub offer is no longer available.');
+            }
+            if ($request->status !== 'WAITING_FOR_RESPONSE') {
+                abort(409, 'This Seller pickup request is no longer waiting for a Buyer delivery hub response.');
+            }
+            $offer->update([
+                'status' => $offer->expires_at?->isPast()
+                    ? SellerPickupCenterOffer::STATUS_EXPIRED
+                    : SellerPickupCenterOffer::STATUS_DECLINED,
+                'responded_at' => now(),
+            ]);
+            DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+
+            return true;
+        });
+    }
+
     /** Accept a Seller-selected fallback request even when matching has not produced an offer row yet. */
     public function acceptFallbackRequest(
         User $actor,
@@ -371,6 +553,7 @@ final class SellerPickupMatchingService
 
             $activeOffer = $request->centerOffers()
                 ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
                 ->where('expires_at', '>', now())
                 ->lockForUpdate()
                 ->first();
@@ -426,6 +609,7 @@ final class SellerPickupMatchingService
             $offer = SellerPickupCenterOffer::query()->create([
                 'seller_pickup_request_id' => $request->id,
                 'logistics_center_id' => $center->id,
+                'leg_type' => SellerPickupCenterOffer::LEG_PICKUP,
                 'attempt_number' => (int) $request->centerOffers()->max('attempt_number') + 1,
                 'status' => SellerPickupCenterOffer::STATUS_OFFERED,
                 'offered_at' => $now,
@@ -456,6 +640,7 @@ final class SellerPickupMatchingService
 
         $activeOffer = SellerPickupCenterOffer::query()
             ->where('seller_pickup_request_id', $requestId)
+            ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
             ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
             ->where('expires_at', '>', now())
             ->first();
@@ -472,6 +657,7 @@ final class SellerPickupMatchingService
 
             $anotherActiveOffer = $request->centerOffers()
                 ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
                 ->where('expires_at', '>', now())
                 ->exists();
             if ($anotherActiveOffer) {
@@ -485,6 +671,7 @@ final class SellerPickupMatchingService
             SellerPickupCenterOffer::query()->create([
                 'seller_pickup_request_id' => $request->id,
                 'logistics_center_id' => $center->id,
+                'leg_type' => SellerPickupCenterOffer::LEG_PICKUP,
                 'attempt_number' => (int) $request->centerOffers()->max('attempt_number') + 1,
                 'status' => SellerPickupCenterOffer::STATUS_DECLINED,
                 'offered_at' => $now,
@@ -519,7 +706,7 @@ final class SellerPickupMatchingService
             if ($requestIdForOffer < 1) {
                 continue;
             }
-            $requestId = DB::transaction(function () use ($id, $requestIdForOffer): ?int {
+            $expiredOffer = DB::transaction(function () use ($id, $requestIdForOffer): ?array {
                 $request = SellerPickupRequest::query()->whereKey($requestIdForOffer)->lockForUpdate()->first();
                 $offer = SellerPickupCenterOffer::query()->whereKey($id)->lockForUpdate()->first();
                 if (! $request || ! $offer || $offer->status !== SellerPickupCenterOffer::STATUS_OFFERED || $offer->expires_at?->isFuture()) {
@@ -529,6 +716,12 @@ final class SellerPickupMatchingService
                 if (! $request || in_array($request->status, ['ASSIGNED', 'CANCELLED', 'COMPLETED', 'RETURNED_TO_SELLER'], true)) {
                     return null;
                 }
+                if ($offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY) {
+                    $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+                    DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+
+                    return ['request_id' => (int) $request->id, 'leg_type' => SellerPickupCenterOffer::LEG_DELIVERY];
+                }
                 if ($this->shouldReturnToSeller($request)) {
                     $this->returnToSellerLocked($request, 'TIMED_OUT');
                 } else {
@@ -536,9 +729,9 @@ final class SellerPickupMatchingService
                     DB::afterCommit(fn () => $this->startRequest((int) $request->id));
                 }
 
-                return (int) $request->id;
+                return ['request_id' => (int) $request->id, 'leg_type' => SellerPickupCenterOffer::LEG_PICKUP];
             });
-            if ($requestId !== null) {
+            if ($expiredOffer !== null) {
                 $expired++;
             }
         }
@@ -972,6 +1165,269 @@ final class SellerPickupMatchingService
         ]];
     }
 
+    /** Offer each uncovered Buyer delivery group to its selected destination hub. */
+    private function startDeliveryOffers(int $requestId): void
+    {
+        if (! $this->schema->automaticSellerPickupMatchingReady()) {
+            return;
+        }
+
+        $request = $this->loadRequest($requestId);
+        if (! $request || ! $request->seller_selected_fallback || $request->rider_local_trip_id !== null
+            || ! in_array($request->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)
+            || ! $request->centerOffers()->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)->exists()) {
+            return;
+        }
+
+        foreach ($this->uncoveredDestinationGroups($request) as $group) {
+            $accepted = $request->centerOffers()
+                ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                ->get()
+                ->contains(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key']);
+            if ($accepted) {
+                continue;
+            }
+
+            $active = $request->centerOffers()
+                ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('expires_at', '>', now())
+                ->get()
+                ->contains(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key']);
+            if ($active) {
+                continue;
+            }
+
+            $tried = $request->centerOffers()
+                ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                ->get()
+                ->filter(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key'])
+                ->filter(fn (SellerPickupCenterOffer $offer): bool => in_array($offer->status, [
+                    SellerPickupCenterOffer::STATUS_ACCEPTED,
+                    SellerPickupCenterOffer::STATUS_DECLINED,
+                    SellerPickupCenterOffer::STATUS_EXPIRED,
+                    SellerPickupCenterOffer::STATUS_SUPERSEDED,
+                ], true) || ($offer->status === SellerPickupCenterOffer::STATUS_NO_CAPACITY
+                    && $offer->responded_at?->gte(now()->subMinutes(self::NO_CAPACITY_RETRY_MINUTES))))
+                ->pluck('logistics_center_id')
+                ->map(fn ($id): int => (int) $id)
+                ->unique();
+            $buyerAddress = $group['address'];
+            $centers = LogisticsCenter::query()
+                ->approvedActive()
+                ->whereHas('owner', fn ($owner) => $owner
+                    ->where('account_type', User::TYPE_LOGISTICS)
+                    ->where('status', User::STATUS_ACTIVE))
+                ->with('address', 'owner')
+                ->orderBy('id')
+                ->get()
+                ->filter(fn (LogisticsCenter $candidate): bool => $candidate->address
+                    && is_numeric($candidate->address->latitude)
+                    && is_numeric($candidate->address->longitude)
+                    && ! $tried->contains((int) $candidate->id)
+                    && $this->availableDestinationCapacity($candidate) > 0)
+                ->sort(function (LogisticsCenter $left, LogisticsCenter $right) use ($buyerAddress, $group): int {
+                    $preferredId = (int) $group['center_id'];
+                    $leftPreferred = $preferredId > 0 && (int) $left->id === $preferredId;
+                    $rightPreferred = $preferredId > 0 && (int) $right->id === $preferredId;
+                    if ($leftPreferred !== $rightPreferred) {
+                        return $rightPreferred <=> $leftPreferred;
+                    }
+                    if (is_numeric($buyerAddress->latitude) && is_numeric($buyerAddress->longitude)) {
+                        $leftEstimate = $this->distance->between(
+                            (float) $buyerAddress->latitude,
+                            (float) $buyerAddress->longitude,
+                            (float) $left->address->latitude,
+                            (float) $left->address->longitude,
+                        );
+                        $rightEstimate = $this->distance->between(
+                            (float) $buyerAddress->latitude,
+                            (float) $buyerAddress->longitude,
+                            (float) $right->address->latitude,
+                            (float) $right->address->longitude,
+                        );
+                        $leftScore = $leftEstimate['travel_seconds'] ?? $leftEstimate['distance_meters'];
+                        $rightScore = $rightEstimate['travel_seconds'] ?? $rightEstimate['distance_meters'];
+
+                        return ($leftScore <=> $rightScore) ?: ((int) $left->id <=> (int) $right->id);
+                    }
+
+                    return (int) $left->id <=> (int) $right->id;
+                })
+                ->values();
+
+            $created = false;
+            foreach ($centers as $candidate) {
+                try {
+                    $created = DB::transaction(function () use ($requestId, $group, $candidate): bool {
+                    $locked = SellerPickupRequest::query()->whereKey($requestId)->lockForUpdate()->first();
+                    if (! $locked || ! $locked->seller_selected_fallback || $locked->rider_local_trip_id !== null
+                        || ! in_array($locked->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
+                        return true;
+                    }
+                    $fresh = $this->loadRequest($requestId);
+                    if (! $fresh) {
+                        return true;
+                    }
+                    $currentGroup = collect($this->uncoveredDestinationGroups($fresh))
+                        ->first(fn (array $current): bool => $current['key'] === $group['key']);
+                    if (! $currentGroup) {
+                        return true;
+                    }
+                    $groupOffers = $locked->centerOffers()
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                        ->get()
+                        ->filter(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key']);
+                    if ($groupOffers->contains(fn (SellerPickupCenterOffer $offer): bool => $offer->status === SellerPickupCenterOffer::STATUS_ACCEPTED)
+                        || $groupOffers->contains(fn (SellerPickupCenterOffer $offer): bool => $offer->status === SellerPickupCenterOffer::STATUS_OFFERED
+                            && $offer->expires_at?->isFuture())) {
+                        return true;
+                    }
+                    if ($groupOffers->contains(fn (SellerPickupCenterOffer $offer): bool => (int) $offer->logistics_center_id === (int) $candidate->id
+                        && (in_array($offer->status, [SellerPickupCenterOffer::STATUS_DECLINED, SellerPickupCenterOffer::STATUS_EXPIRED, SellerPickupCenterOffer::STATUS_SUPERSEDED], true)
+                            || ($offer->status === SellerPickupCenterOffer::STATUS_NO_CAPACITY
+                                && $offer->responded_at?->gte(now()->subMinutes(self::NO_CAPACITY_RETRY_MINUTES)))))) {
+                        return false;
+                    }
+
+                    $oldCenterId = (int) $currentGroup['center_id'];
+                    $locked->memberships()->whereIn('shipment_id', $currentGroup['shipment_ids'])
+                        ->update(['preferred_destination_logistics_center_id' => $candidate->id]);
+                    $fresh = $this->loadRequest($requestId);
+                    $originOffer = $locked->centerOffers()
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                        ->with('logisticsCenter.address')
+                        ->latest('attempt_number')
+                        ->first();
+                    $origin = $originOffer?->logisticsCenter;
+                    $plan = $fresh && $origin
+                        ? collect($this->routePlansForRequest($fresh, $origin, true))
+                            ->first(fn (array $routePlan): bool => ($routePlan['seller_selected_fallback'] ?? false) === true)
+                        : null;
+                    $groupPlan = $plan ? $this->planForShipmentIds($plan, $currentGroup['shipment_ids']) : null;
+                    if (! $fresh || ! $origin || ! $groupPlan
+                        || ! $this->lockRouteCenters($groupPlan)
+                        || ! $this->fallbackRouteHasDestinationCapacity($groupPlan, $requestId)) {
+                        $locked->memberships()->whereIn('shipment_id', $currentGroup['shipment_ids'])
+                            ->update(['preferred_destination_logistics_center_id' => $oldCenterId]);
+
+                        return false;
+                    }
+
+                    $buyerAddress = $currentGroup['address'];
+                    $estimate = is_numeric($buyerAddress->latitude) && is_numeric($buyerAddress->longitude)
+                        ? $this->distance->between(
+                            (float) $buyerAddress->latitude,
+                            (float) $buyerAddress->longitude,
+                            (float) $candidate->address->latitude,
+                            (float) $candidate->address->longitude,
+                        )
+                        : ['distance_meters' => null, 'travel_seconds' => null, 'method' => null];
+                    $snapshot = $groupPlan['snapshot'];
+                    $snapshot['offer_leg'] = SellerPickupCenterOffer::LEG_DELIVERY;
+                    $snapshot['delivery_group_key'] = $currentGroup['key'];
+                    $snapshot['delivery_shipment_ids'] = $currentGroup['shipment_ids'];
+                    $snapshot['delivery_address'] = $buyerAddress->formatted();
+                    $snapshot['delivery_center_id'] = (int) $candidate->id;
+                    $now = now();
+                    $offer = SellerPickupCenterOffer::query()->create([
+                        'seller_pickup_request_id' => $locked->id,
+                        'logistics_center_id' => $candidate->id,
+                        'leg_type' => SellerPickupCenterOffer::LEG_DELIVERY,
+                        'attempt_number' => (int) $locked->centerOffers()->max('attempt_number') + 1,
+                        'status' => SellerPickupCenterOffer::STATUS_OFFERED,
+                        'offered_at' => $now,
+                        'expires_at' => $now->copy()->addMinutes(self::OFFER_MINUTES),
+                        'estimated_distance_meters' => $estimate['distance_meters'],
+                        'estimated_travel_seconds' => $estimate['travel_seconds'],
+                        'estimate_method' => $estimate['method'],
+                        'destination_logistics_center_id' => $candidate->id,
+                        'reserved_parcel_count' => 0,
+                        'route_snapshot' => $snapshot,
+                    ]);
+                    $locked->update(['status' => 'WAITING_FOR_RESPONSE']);
+                    DB::afterCommit(fn () => $this->notifySeller($locked->fresh(), 'WAITING', $candidate));
+
+                    return true;
+                    });
+                } catch (RuntimeException|ValidationException) {
+                    $created = false;
+                }
+                if ($created) {
+                    break;
+                }
+            }
+        }
+
+        $this->markPending($requestId);
+    }
+
+    /** @return list<array{key:string,center_id:int,shipment_ids:list<int>,address:OrderAddress}> */
+    private function uncoveredDestinationGroups(SellerPickupRequest $request): array
+    {
+        $request->loadMissing('memberships.shipment.sellerOrder.order.address');
+        $groups = $request->memberships
+            ->filter(fn (SellerPickupRequestShipment $membership): bool => (int) $membership->preferred_destination_logistics_center_id > 0)
+            ->groupBy(function (SellerPickupRequestShipment $membership): string {
+                $address = $membership->shipment?->sellerOrder?->order?->address;
+
+                return implode('|', [
+                    trim((string) $address?->province_code),
+                    trim((string) $address?->municipality_code),
+                    trim((string) $address?->barangay_code),
+                    (string) ((int) $membership->preferred_destination_logistics_center_id),
+                ]);
+            });
+
+        return $groups->map(function (Collection $memberships): ?array {
+            /** @var SellerPickupRequestShipment|null $first */
+            $first = $memberships->first();
+            $address = $first?->shipment?->sellerOrder?->order?->address;
+            if (! $address) {
+                return null;
+            }
+            $shipmentIds = $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+            $psgc = implode('|', [
+                trim((string) $address->province_code),
+                trim((string) $address->municipality_code),
+                trim((string) $address->barangay_code),
+            ]);
+
+            return [
+                'key' => hash('sha256', $psgc.'|'.implode(',', $shipmentIds)),
+                'center_id' => (int) $first->preferred_destination_logistics_center_id,
+                'shipment_ids' => $shipmentIds,
+                'address' => $address,
+            ];
+        })->filter()->values()->all();
+    }
+
+    /** Keep only one Buyer group from a fully resolved fallback route plan. */
+    private function planForShipmentIds(array $plan, array $shipmentIds): ?array
+    {
+        $routes = collect($plan['routes'] ?? [])
+            ->filter(fn (array $route, $shipmentId): bool => in_array((int) $shipmentId, $shipmentIds, true));
+        if ($routes->count() !== count($shipmentIds)) {
+            return null;
+        }
+        $destinationIds = $routes->pluck('destination_logistics_center_id')->map(fn ($id): int => (int) $id)->unique()->values()->all();
+        $areas = $routes->pluck('destination_service_area_location_id')->filter()->map(fn ($id): int => (int) $id)->unique()->values();
+        $snapshot = $plan['snapshot'];
+        $snapshot['shipment_routes'] = $routes->all();
+
+        return array_merge($plan, [
+            'routes' => $routes->all(),
+            'snapshot' => $snapshot,
+            'destination_center_ids' => $destinationIds,
+            'destination_center_id' => count($destinationIds) === 1 ? $destinationIds[0] : null,
+            'destination_area_id' => $areas->count() === 1 ? (int) $areas->first() : null,
+            'shipment_ids' => array_map('intval', array_keys($routes->all())),
+        ]);
+    }
+
     /** @return array{center:LogisticsCenter,location:ServiceAreaLocation}|null */
     private function localDestinationForAddress(object $address): ?array
     {
@@ -1020,13 +1476,28 @@ final class SellerPickupMatchingService
 
             $acceptedOffers = SellerPickupCenterOffer::query()
                 ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
-                ->where('seller_pickup_request_id', '!=', $requestId)
+                ->where(function ($query) use ($requestId): void {
+                    $query->where('seller_pickup_request_id', '!=', $requestId)
+                        ->orWhere(fn ($sameRequest) => $sameRequest
+                            ->where('seller_pickup_request_id', $requestId)
+                            ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY));
+                })
                 ->whereHas('pickupRequest', fn ($request) => $request->whereNotIn('status', [
                     'CANCELLED', 'REJECTED', 'RETURNED_TO_SELLER',
                 ]))
                 ->whereNotNull('route_snapshot')
-                ->get(['route_snapshot']);
+                ->get(['seller_pickup_request_id', 'leg_type', 'route_snapshot']);
+            $acceptedDeliveryShipmentIdsAtCenter = $acceptedOffers
+                ->filter(fn (SellerPickupCenterOffer $offer): bool => (int) $offer->seller_pickup_request_id === $requestId
+                    && $offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY)
+                ->flatMap(fn (SellerPickupCenterOffer $offer): array => collect((array) data_get($offer->route_snapshot, 'shipment_routes', []))
+                    ->filter(fn (array $route): bool => (int) ($route['destination_logistics_center_id'] ?? 0) === (int) $destinationId)
+                    ->keys()->map(fn ($id): int => (int) $id)->all())
+                ->unique();
+            $required = max(0, $required - $acceptedDeliveryShipmentIdsAtCenter->count());
             $shipmentIds = $acceptedOffers
+                ->filter(fn (SellerPickupCenterOffer $offer): bool => $offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY
+                    || data_get($offer->route_snapshot, 'routing_mode') !== 'SELLER_SELECTED_UNCOVERED_FALLBACK')
                 ->flatMap(fn (SellerPickupCenterOffer $offer): array => array_map(
                     'intval',
                     array_keys((array) data_get($offer->route_snapshot, 'shipment_routes', [])),
@@ -1048,6 +1519,10 @@ final class SellerPickupMatchingService
 
             $reserved = 0;
             foreach ($acceptedOffers as $offer) {
+                if ($offer->leg_type !== SellerPickupCenterOffer::LEG_DELIVERY
+                    && data_get($offer->route_snapshot, 'routing_mode') === 'SELLER_SELECTED_UNCOVERED_FALLBACK') {
+                    continue;
+                }
                 foreach ((array) data_get($offer->route_snapshot, 'shipment_routes', []) as $shipmentId => $route) {
                     if ($activeShipmentIds->contains((int) $shipmentId)
                         && ! $assignedDeliveryShipmentIds->contains((int) $shipmentId)
@@ -1123,7 +1598,11 @@ final class SellerPickupMatchingService
     {
         return RiderProfile::query()
             ->where('logistics_center_id', $center->id)
-            ->whereIn('status', ['ACTIVE', 'WARNED'])
+            ->where('status', 'ACTIVE')
+            ->where('is_online', true)
+            ->whereNotNull('availability_latitude')
+            ->whereNotNull('availability_longitude')
+            ->where('availability_location_updated_at', '>=', now()->subMinutes(2))
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
@@ -1463,6 +1942,7 @@ final class SellerPickupMatchingService
     private function fallbackCenterWasAlreadyTried(SellerPickupRequest $request, int $centerId): bool
     {
         return $request->centerOffers()
+            ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
             ->where('logistics_center_id', $centerId)
             ->where(function ($query): void {
                 $query->whereIn('status', [
@@ -1491,7 +1971,10 @@ final class SellerPickupMatchingService
                 'status' => SellerPickupCenterOffer::STATUS_NO_CAPACITY,
                 'responded_at' => now(),
             ]);
-            if ($request->rider_local_trip_id === null
+            if ($offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY) {
+                $request->update(['status' => 'WAITING_FOR_RESPONSE']);
+                DB::afterCommit(fn () => $this->startDeliveryOffers((int) $request->id));
+            } elseif ($request->rider_local_trip_id === null
                 && ! in_array($request->status, ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'CANCELLED', 'COMPLETED'], true)) {
                 $request->update(['status' => 'MATCHING']);
                 DB::afterCommit(fn () => $this->startRequest((int) $request->id));
@@ -1543,6 +2026,7 @@ final class SellerPickupMatchingService
             }
             $locked->centerOffers()
                 ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
                 ->where('expires_at', '<=', now())
                 ->update(['status' => SellerPickupCenterOffer::STATUS_EXPIRED, 'responded_at' => now()]);
         });
@@ -1551,6 +2035,7 @@ final class SellerPickupMatchingService
     private function recentlyAttemptedCenterIds(SellerPickupRequest $request): Collection
     {
         return $request->centerOffers()
+            ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
             ->where(function ($query): void {
                 $query->whereIn('status', [
                     SellerPickupCenterOffer::STATUS_ACCEPTED,

@@ -26,8 +26,29 @@
         <strong class="text-sm text-ink" data-progress-count aria-live="polite">{{ $progress['collected'] }} / {{ $progress['total'] }} collected</strong>
     </header>
     <p class="mt-2 text-sm text-muted">Rider: <strong data-progress-rider>{{ $pickupRequest->riderLocalTrip?->rider?->user?->name ?? 'Waiting for assignment' }}</strong></p>
-    <p class="mt-1 text-sm text-muted" data-progress-offer>
-        @if($progress['requires_center_selection'] ?? false)
+    <div class="mt-1 space-y-1 text-sm text-muted" data-progress-offer>
+        @if(!empty($progress['route_offers']))
+            @foreach($progress['route_offers'] as $routeOffer)
+                <p>
+                    <strong>{{ $routeOffer['leg_label'] }} hub:</strong>
+                    @if($routeOffer['attempt'] > 0) Offer #{{ $routeOffer['attempt'] }} to @endif
+                    {{ $routeOffer['center'] ?: 'Hub unavailable' }}
+                    @if(filled($routeOffer['center_address'])) ({{ $routeOffer['center_address'] }})@endif
+                    @if($routeOffer['leg_type'] === 'DELIVERY')
+                        · for {{ $routeOffer['delivery_address'] }}
+                    @endif
+                    — {{ match($routeOffer['status']) {
+                        'OFFERED' => 'awaiting acceptance', 'ACCEPTED' => 'accepted', 'DECLINED' => 'declined',
+                        'EXPIRED' => 'timed out', 'NO_CAPACITY' => 'no available capacity', 'SUPERSEDED' => 'replaced by another offer',
+                        'MATCHING' => 'checking for an online Rider and eligible delivery hub',
+                        default => str($routeOffer['status'])->lower()->replace('_', ' '),
+                    } }}
+                    @if($routeOffer['active'] && $routeOffer['expires_at'])
+                        · response due {{ \Illuminate\Support\Carbon::parse($routeOffer['expires_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}
+                    @endif
+                </p>
+            @endforeach
+        @elseif($progress['requires_center_selection'] ?? false)
             This older request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.
         @elseif(!empty($progress['current_offer']))
             Offer {{ $progress['current_offer']['attempt'] }} sent to {{ $progress['current_offer']['center'] }}; awaiting acceptance (not assigned yet) · response due {{ \Illuminate\Support\Carbon::parse($progress['current_offer']['expires_at'])->timezone(config('app.timezone'))->format('M j, g:i A') }}@if($progress['automatic_matching'] ?? false) · If it declines or times out, LIKHAE tries the next eligible center.@endif
@@ -50,7 +71,7 @@
         @elseif($pickupRequest->status === 'RETURNED_TO_SELLER')
             {{ $progress['return_message'] ?? 'Your parcels are available again. Choose a covered Logistics center above to request pickup again.' }}
         @endif
-    </p>
+    </div>
     <ol class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" data-progress-parcels>
         @foreach($progress['parcels'] as $parcel)
             <li class="flex items-center justify-between gap-3 border border-line px-3 py-2 text-sm">
@@ -109,6 +130,19 @@
                         }
                         panel.querySelector('h3').textContent = payload.status_label || labels[payload.status] || payload.status;
                         const destinationHubs = (payload.destination_hubs || []).map((hub) => hub.name).filter(Boolean).join(', ');
+                        const routeOffers = payload.route_offers || [];
+                        if (routeOffers.length) {
+                            offer.replaceChildren(...routeOffers.map((routeOffer) => {
+                                const row = document.createElement('p');
+                                const leg = routeOffer.leg_type === 'DELIVERY' ? 'Buyer delivery hub' : 'Seller pickup hub';
+                                const status = ({ OFFERED: 'awaiting acceptance', ACCEPTED: 'accepted', DECLINED: 'declined', EXPIRED: 'timed out', NO_CAPACITY: 'no available capacity', SUPERSEDED: 'replaced by another offer', MATCHING: 'checking for an online Rider and eligible delivery hub' })[routeOffer.status] || routeOffer.status.toLowerCase().replaceAll('_', ' ');
+                                const hubAddress = routeOffer.center_address ? ` (${routeOffer.center_address})` : '';
+                                const buyerAddress = routeOffer.leg_type === 'DELIVERY' && routeOffer.delivery_address ? ` for ${routeOffer.delivery_address}` : '';
+                                const due = routeOffer.active && routeOffer.expires_at ? ` · response due ${new Date(routeOffer.expires_at).toLocaleString()}` : '';
+                                row.textContent = `${leg}: ${routeOffer.center || 'Hub unavailable'}${hubAddress}${buyerAddress} — ${status}${due}`;
+                                return row;
+                            }));
+                        } else {
                         offer.textContent = payload.current_offer
                             ? `Offer ${payload.current_offer.attempt} sent to ${payload.current_offer.center}; awaiting acceptance (not assigned yet) · response due ${new Date(payload.current_offer.expires_at).toLocaleString()}${payload.automatic_matching ? ' · If it declines or times out, LIKHAE tries the next eligible center.' : ''}`
                             : (payload.status === 'RETURNED_TO_SELLER'
@@ -131,6 +165,7 @@
                                     : 'No complete route or available center capacity is confirmed yet. Your request remains open for Logistics follow-up.')
                                 )
                                 : '')))));
+                        }
                         list.replaceChildren(...payload.parcels.map((parcel) => {
                             const row = document.createElement('li');
                             row.className = 'flex items-center justify-between gap-3 border border-line px-3 py-2 text-sm';

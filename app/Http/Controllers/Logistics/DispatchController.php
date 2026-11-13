@@ -348,17 +348,35 @@ class DispatchController extends Controller
                     && $offer->status === 'OFFERED'
                     && $offer->expires_at?->isFuture())
                 : null;
+            $currentCenterOffers = $schema->sellerPickupLegOffersReady()
+                ? $pickupRequest->centerOffers->filter(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && $offer->status === 'OFFERED'
+                    && $offer->expires_at?->isFuture())->values()
+                : collect($currentOffer ? [$currentOffer] : []);
+            $currentPickupOffer = $currentCenterOffers->first(fn ($offer): bool => $offer->leg_type !== 'DELIVERY');
+            $currentDeliveryOffers = $currentCenterOffers->filter(fn ($offer): bool => $offer->leg_type === 'DELIVERY')->values();
             $acceptedCenterOffer = $schema->sellerPickupCenterOffersReady()
                 ? $pickupRequest->centerOffers->first(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && $offer->leg_type !== 'DELIVERY'
                     && $offer->status === 'ACCEPTED')
                 : null;
+            $acceptedDeliveryOffers = $schema->sellerPickupLegOffersReady()
+                ? $pickupRequest->centerOffers->filter(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                    && $offer->leg_type === 'DELIVERY'
+                    && $offer->status === 'ACCEPTED')->values()
+                : collect();
             $pickupRequest->setAttribute('current_center_offer', $currentOffer);
+            $pickupRequest->setAttribute('current_center_offers', $currentCenterOffers);
+            $pickupRequest->setAttribute('current_pickup_center_offer', $currentPickupOffer);
+            $pickupRequest->setAttribute('current_delivery_center_offers', $currentDeliveryOffers);
             $pickupRequest->setAttribute('accepted_center_offer', $acceptedCenterOffer);
+            $pickupRequest->setAttribute('accepted_delivery_center_offers', $acceptedDeliveryOffers);
             $pickupRequest->setAttribute('fallback_route_accepted', (bool) $pickupRequest->seller_selected_fallback
                 && $pickupRequest->status === 'REQUESTED'
                 && $acceptedCenterOffer !== null);
             $fallbackCenterHasResponded = $schema->sellerPickupCenterOffersReady()
-                && $pickupRequest->centerOffers->contains(fn ($offer): bool => (int) $offer->logistics_center_id === (int) $center->id
+                && $pickupRequest->centerOffers->contains(fn ($offer): bool => $offer->leg_type !== 'DELIVERY'
+                    && (int) $offer->logistics_center_id === (int) $center->id
                     && (in_array($offer->status, ['ACCEPTED', 'DECLINED', 'EXPIRED', 'SUPERSEDED'], true)
                         || ($offer->status === 'NO_CAPACITY' && $offer->responded_at?->gte(now()->subMinutes(15)))));
             $pickupRequest->setAttribute('fallback_review_available', (bool) $pickupRequest->seller_selected_fallback
@@ -638,7 +656,8 @@ class DispatchController extends Controller
                             return false;
                         }
                         if ($uncoveredFallback) {
-                            return $rider->is_online
+                            return $rider->status === 'ACTIVE'
+                                && $rider->is_online
                                 && is_numeric($rider->availability_latitude)
                                 && is_numeric($rider->availability_longitude)
                                 && ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false);
@@ -840,7 +859,13 @@ class DispatchController extends Controller
         return view('logistics.parcels.show', compact('shipment', 'mapMarkers'));
     }
 
-    public function assign(Request $request, Shipment $shipment, LogisticsSchemaReadiness $schema, FinalMileDispatchService $dispatch): RedirectResponse
+    public function assign(
+        Request $request,
+        Shipment $shipment,
+        LogisticsSchemaReadiness $schema,
+        FinalMileDispatchService $dispatch,
+        ShipmentWorkflowService $workflow,
+    ): RedirectResponse
     {
         $center = $this->center($request);
         abort_unless($center, 403);
@@ -854,14 +879,63 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => 'Local rider trip schema is not installed; final-mile dispatch is disabled.'])->withInput();
         }
 
+        $sellerSelectedFallback = ! $shipment->serviceArea
+            && $workflow->sellerSelectedFallbackDestination($shipment, $center);
+        if ($sellerSelectedFallback && ! $schema->riderAvailabilityReady()) {
+            return back()
+                ->withErrors(['rider_profile_id' => 'Live rider availability is not installed, so uncovered-area delivery assignment is unavailable.'])
+                ->withInput();
+        }
+
         $autoGroup = (int) $data['local_trip_id'] === 0;
+        $rider = RiderProfile::query()->findOrFail((int) $data['rider_profile_id']);
+        if ($sellerSelectedFallback) {
+            $rider = RiderProfile::query()
+                ->whereKey($rider->id)
+                ->where('logistics_center_id', $center->id)
+                ->where('status', 'ACTIVE')
+                ->where('is_online', true)
+                ->whereIn('vehicle_type', RiderVehicleType::localValues())
+                ->whereNotNull('availability_latitude')
+                ->whereNotNull('availability_longitude')
+                ->where('availability_location_updated_at', '>=', now()->subMinutes(2))
+                ->whereNotNull('approved_parcel_capacity')
+                ->where('approved_parcel_capacity', '>', 0)
+                ->whereHas('user', fn ($query) => $query
+                    ->where('account_type', User::TYPE_RIDER)
+                    ->where('status', User::STATUS_ACTIVE))
+                ->withCount(['assignments as active_assignments_count' => fn ($query) => $query
+                    ->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])])
+                ->first();
+
+            if (! $rider) {
+                return back()
+                    ->withErrors(['rider_profile_id' => 'Choose an active online local Rider from this hub with a live location updated in the last 2 minutes and available capacity.'])
+                    ->withInput();
+            }
+
+            if (LocalTripCapacityRules::remainingCapacity(
+                (int) $rider->approved_parcel_capacity,
+                (int) $rider->active_assignments_count,
+            ) < 1) {
+                return back()
+                    ->withErrors(['rider_profile_id' => 'The selected Rider has no remaining parcel capacity.'])
+                    ->withInput();
+            }
+        }
         try {
             $trip = $dispatch->dispatch(
                 $request->user(),
                 $center,
                 $shipment,
-                RiderProfile::query()->findOrFail((int) $data['rider_profile_id']),
+                $rider,
                 $autoGroup ? null : (int) $data['local_trip_id'],
+                $sellerSelectedFallback,
+                $sellerSelectedFallback
+                    ? 'Seller-selected uncovered Buyer route: destination Logistics selected an online Rider from this hub.'
+                    : null,
+                false,
+                $sellerSelectedFallback,
             );
         } catch (\RuntimeException $exception) {
             return back()

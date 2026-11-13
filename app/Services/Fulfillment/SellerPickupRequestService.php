@@ -7,6 +7,7 @@ use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ParcelScan;
 use App\Models\Logistics\PickupRequest as LegacyPickupRequest;
 use App\Models\Logistics\Shipment;
+use App\Models\Seller\SellerPickupCenterOffer;
 use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Seller\SellerProfile;
@@ -300,6 +301,54 @@ final class SellerPickupRequestService
                     || ! $pickupRequest->hasAcceptedOriginCenter((int) $center->id))) {
                 throw new RuntimeException('This Logistics center must accept the Seller fallback route before assigning a pickup Rider.');
             }
+            if ((bool) $pickupRequest->seller_selected_fallback
+                && app(LogisticsSchemaReadiness::class)->sellerPickupLegOffersReady()) {
+                $pickupRequest->loadMissing('memberships.shipment.sellerOrder.order.address');
+                $requiredDeliveryGroups = $pickupRequest->memberships
+                    ->filter(fn (SellerPickupRequestShipment $membership): bool => (int) $membership->preferred_destination_logistics_center_id > 0)
+                    ->groupBy(function (SellerPickupRequestShipment $membership): string {
+                        $address = $membership->shipment?->sellerOrder?->order?->address;
+
+                        return implode('|', [
+                            trim((string) $address?->province_code),
+                            trim((string) $address?->municipality_code),
+                            trim((string) $address?->barangay_code),
+                            (string) ((int) $membership->preferred_destination_logistics_center_id),
+                        ]);
+                    })
+                    ->map(function (Collection $memberships): ?array {
+                        $first = $memberships->first();
+                        $address = $first?->shipment?->sellerOrder?->order?->address;
+                        if (! $first || ! $address) {
+                            return null;
+                        }
+                        $shipmentIds = $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+                        $psgc = implode('|', [
+                            trim((string) $address->province_code),
+                            trim((string) $address->municipality_code),
+                            trim((string) $address->barangay_code),
+                        ]);
+
+                        return [
+                            'key' => hash('sha256', $psgc.'|'.implode(',', $shipmentIds)),
+                            'center_id' => (int) $first->preferred_destination_logistics_center_id,
+                        ];
+                    })
+                    ->filter()
+                    ->values();
+                if ($requiredDeliveryGroups->isNotEmpty()) {
+                    $acceptedDeliveryOffers = $pickupRequest->centerOffers()
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                        ->get();
+                    $allDeliveryHubsAccepted = $requiredDeliveryGroups->every(fn (array $group): bool => $acceptedDeliveryOffers
+                        ->contains(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key']
+                            && (int) data_get($offer->route_snapshot, 'delivery_center_id') === $group['center_id']));
+                    if (! $allDeliveryHubsAccepted) {
+                        throw new RuntimeException('Every selected Buyer delivery hub must accept its offer before pickup Rider assignment.');
+                    }
+                }
+            }
 
             $memberships = $pickupRequest->memberships->sortBy('shipment_id')->values();
             $count = $memberships->count();
@@ -421,6 +470,7 @@ final class SellerPickupRequestService
             'riderLocalTrip.logisticsCenter.address',
             'riderLocalTrip.items.riderAssignment.shipment',
             'memberships.shipment',
+            'memberships.shipment.sellerOrder.order.address',
             'memberships.sellerOrder',
         ];
         $hasSelectedCenterColumn = Schema::hasColumn('seller_pickup_requests', 'preferred_logistics_center_id');
@@ -434,16 +484,91 @@ final class SellerPickupRequestService
         $pickupRequest->loadMissing($progressRelations);
 
         $trip = $pickupRequest->riderLocalTrip;
-        $currentOffer = Schema::hasTable('seller_pickup_center_offers')
-            ? $pickupRequest->centerOffers()
-                ->where('status', 'OFFERED')
-                ->with('logisticsCenter:id,business_name')
-                ->latest('attempt_number')
-                ->first()
-            : null;
-        $latestCenterOffer = Schema::hasTable('seller_pickup_center_offers')
-            ? $pickupRequest->centerOffers()->latest('attempt_number')->first()
-            : null;
+        $offersTableReady = Schema::hasTable('seller_pickup_center_offers');
+        $legOffersReady = $offersTableReady && Schema::hasColumn('seller_pickup_center_offers', 'leg_type');
+        $centerOffers = $offersTableReady
+            ? $pickupRequest->centerOffers()->with('logisticsCenter.address')->reorder('attempt_number', 'desc')->get()
+            : collect();
+        $currentOffer = $centerOffers->first(fn ($offer): bool => $offer->status === 'OFFERED' && $offer->expires_at?->isFuture());
+        $latestCenterOffer = $centerOffers->first();
+        $routeOffers = $legOffersReady
+            ? $centerOffers
+                ->groupBy(fn ($offer): string => $offer->leg_type === 'DELIVERY'
+                    ? 'DELIVERY:'.(string) data_get($offer->route_snapshot, 'delivery_group_key', $offer->id)
+                    : 'PICKUP')
+                ->map(function (Collection $offers) use ($pickupRequest): array {
+                    $offer = $offers->first();
+                    $delivery = $offer->leg_type === 'DELIVERY';
+                    $shipmentIds = array_map('intval', (array) data_get($offer->route_snapshot, 'delivery_shipment_ids', []));
+                    $membership = $delivery
+                        ? $pickupRequest->memberships->first(fn (SellerPickupRequestShipment $candidate): bool => in_array((int) $candidate->shipment_id, $shipmentIds, true))
+                        : null;
+                    $buyerAddress = $membership?->shipment?->sellerOrder?->order?->address;
+
+                    return [
+                        'leg_type' => (string) $offer->leg_type,
+                        'leg_label' => $delivery ? 'Buyer delivery' : 'Seller pickup',
+                        'group_key' => $delivery ? (string) data_get($offer->route_snapshot, 'delivery_group_key', '') : null,
+                        'center' => (string) $offer->logisticsCenter?->business_name,
+                        'center_address' => $offer->logisticsCenter?->address?->formatted(),
+                        'delivery_address' => $delivery
+                            ? (string) data_get($offer->route_snapshot, 'delivery_address', $buyerAddress?->formatted() ?? 'Buyer address')
+                            : null,
+                        'attempt' => (int) $offer->attempt_number,
+                        'status' => (string) $offer->status,
+                        'expires_at' => $offer->expires_at?->toIso8601String(),
+                        'active' => $offer->status === 'OFFERED' && $offer->expires_at?->isFuture(),
+                    ];
+                })
+                ->values()
+                ->all()
+            : [];
+        if ($legOffersReady && $pickupRequest->seller_selected_fallback
+            && in_array($pickupRequest->status, ['MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
+            $destinationGroups = $pickupRequest->memberships
+                ->filter(fn (SellerPickupRequestShipment $membership): bool => (int) $membership->preferred_destination_logistics_center_id > 0)
+                ->groupBy(function (SellerPickupRequestShipment $membership): string {
+                    $address = $membership->shipment?->sellerOrder?->order?->address;
+
+                    return implode('|', [
+                        trim((string) $address?->province_code),
+                        trim((string) $address?->municipality_code),
+                        trim((string) $address?->barangay_code),
+                        (string) ((int) $membership->preferred_destination_logistics_center_id),
+                    ]);
+                });
+            foreach ($destinationGroups as $memberships) {
+                $first = $memberships->first();
+                $address = $first?->shipment?->sellerOrder?->order?->address;
+                if (! $first || ! $address) {
+                    continue;
+                }
+                $shipmentIds = $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+                $psgc = implode('|', [
+                    trim((string) $address->province_code),
+                    trim((string) $address->municipality_code),
+                    trim((string) $address->barangay_code),
+                ]);
+                $groupKey = hash('sha256', $psgc.'|'.implode(',', $shipmentIds));
+                if (collect($routeOffers)->contains(fn (array $offer): bool => $offer['leg_type'] === SellerPickupCenterOffer::LEG_DELIVERY
+                    && ($offer['group_key'] ?? '') === $groupKey)) {
+                    continue;
+                }
+                $hub = $first->preferredDestinationLogisticsCenter;
+                $routeOffers[] = [
+                    'leg_type' => SellerPickupCenterOffer::LEG_DELIVERY,
+                    'leg_label' => 'Buyer delivery',
+                    'group_key' => $groupKey,
+                    'center' => (string) $hub?->business_name,
+                    'center_address' => $hub?->address?->formatted(),
+                    'delivery_address' => $address->formatted(),
+                    'attempt' => 0,
+                    'status' => 'MATCHING',
+                    'expires_at' => null,
+                    'active' => false,
+                ];
+            }
+        }
         $assignments = $trip?->items
             ->map(fn ($item) => $item->riderAssignment)
             ->filter()
@@ -550,8 +675,12 @@ final class SellerPickupRequestService
             'response_due_at' => ! $automaticMatching && $selectedCenterName && in_array($pickupRequest->status, ['REQUESTED', 'PENDING'], true)
                 ? $pickupRequest->updated_at?->copy()->addMinutes(15)->toIso8601String()
                 : null,
+            'route_offers' => $routeOffers,
             'current_offer' => $currentOffer ? [
                 'center' => (string) $currentOffer->logisticsCenter?->business_name,
+                'center_address' => $currentOffer->logisticsCenter?->address?->formatted(),
+                'leg_type' => (string) ($currentOffer->leg_type ?? SellerPickupCenterOffer::LEG_PICKUP),
+                'status' => (string) $currentOffer->status,
                 'expires_at' => $currentOffer->expires_at?->toIso8601String(),
                 'attempt' => (int) $currentOffer->attempt_number,
                 'estimate_method' => (string) $currentOffer->estimate_method,

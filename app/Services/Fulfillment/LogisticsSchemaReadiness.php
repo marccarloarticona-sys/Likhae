@@ -146,6 +146,12 @@ final class LogisticsSchemaReadiness
         ]);
     }
 
+    public function sellerPickupLegOffersReady(): bool
+    {
+        return $this->sellerPickupCenterOffersReady()
+            && $this->hasColumn('seller_pickup_center_offers', 'leg_type');
+    }
+
     public function sellerPickupCenterSelectionReady(): bool
     {
         return $this->sellerPickupRequestsReady()
@@ -165,6 +171,7 @@ final class LogisticsSchemaReadiness
             && $this->sellerPickupRequestsReady()
             && $this->sellerPickupCenterSelectionReady()
             && $this->sellerPickupCenterOffersReady()
+            && $this->sellerPickupLegOffersReady()
             && $this->automaticRoutingReady()
             && $this->manifestReady()
             && $this->coverageTypeReady()

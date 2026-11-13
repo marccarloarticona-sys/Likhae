@@ -8,6 +8,7 @@ use App\Models\Rider\RiderLocalTrip;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
 
 class SellerPickupRequest extends Model
 {
@@ -52,10 +53,14 @@ class SellerPickupRequest extends Model
 
     public function hasAcceptedOriginCenter(int $centerId): bool
     {
-        return $this->centerOffers()
+        $offers = $this->centerOffers()
             ->where('logistics_center_id', $centerId)
-            ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
-            ->exists();
+            ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED);
+        if (Schema::hasColumn('seller_pickup_center_offers', 'leg_type')) {
+            $offers->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP);
+        }
+
+        return $offers->exists();
     }
 
     protected function casts(): array

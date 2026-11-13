@@ -41,6 +41,21 @@
                     <p class="text-xs text-muted">Uses a recent rider location and remaining capacity. If no available rider covers this barangay, it records a temporary coverage exception.</p>
                 </form>
                 @else
+                <form method="POST" action="{{ route('logistics.assignments.assign', $shipment) }}" class="grid gap-2 border-t border-line pt-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    @csrf
+                    <input type="hidden" name="assignment_type" value="DELIVERY">
+                    <input type="hidden" name="local_trip_id" value="0">
+                    <select name="rider_profile_id" required class="border border-line bg-white px-3 py-2" data-dispatch-rider>
+                        <option value="">Select an available rider from this hub</option>
+                        @foreach($eligibleRiders as $rider)
+                            @if($rider->status === 'ACTIVE')
+                                <option value="{{ $rider->id }}">{{ $rider->user?->name }} - {{ $rider->vehicle_type }} - {{ min(10, (int) $rider->approved_parcel_capacity) - (int) $rider->active_assignments_count }} slot(s) available</option>
+                            @endif
+                        @endforeach
+                    </select>
+                    <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->where('status', 'ACTIVE')->isEmpty())>Assign selected rider</button>
+                    <p class="text-xs text-muted sm:col-span-2">For this uncovered Buyer route only, choose an active online local Rider assigned to this hub with a location updated in the last 2 minutes and available parcel capacity. The Buyer barangay coverage check is overridden and recorded for this assignment.</p>
+                </form>
                 <form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">
                     @csrf
                     <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->isEmpty())>Assign nearest live-location Rider</button>

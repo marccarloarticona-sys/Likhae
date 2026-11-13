@@ -579,11 +579,11 @@ class SellerOrderController extends Controller
                 ->filter(fn ($pickupRequest): bool => (bool) $pickupRequest?->seller_selected_fallback)
                 ->unique('id')
             : collect();
-        $pickupFallbackAcceptancePending = $fallbackPickupRequests->contains(function ($pickupRequest): bool {
-            $latestOffer = $pickupRequest->centerOffers->sortByDesc('attempt_number')->first();
-
-            return ! $latestOffer || $latestOffer->status !== 'ACCEPTED';
-        });
+        $pickupFallbackAcceptancePending = $fallbackPickupRequests->contains(fn ($pickupRequest): bool => ! in_array(
+            $pickupRequest->status,
+            ['REQUESTED', 'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED'],
+            true,
+        ));
 
         $itemSubtotalCents = FinancialRules::cents($order->item_subtotal);
         $voucherCents = FinancialRules::cents($order->voucher_discount);

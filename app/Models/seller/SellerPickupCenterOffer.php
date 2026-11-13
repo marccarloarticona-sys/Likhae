@@ -10,6 +10,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SellerPickupCenterOffer extends Model
 {
+    public const LEG_PICKUP = 'PICKUP';
+    public const LEG_DELIVERY = 'DELIVERY';
+
     public const STATUS_OFFERED = 'OFFERED';
     public const STATUS_ACCEPTED = 'ACCEPTED';
     public const STATUS_DECLINED = 'DECLINED';
@@ -20,6 +23,7 @@ class SellerPickupCenterOffer extends Model
     protected $fillable = [
         'seller_pickup_request_id',
         'logistics_center_id',
+        'leg_type',
         'attempt_number',
         'status',
         'offered_at',

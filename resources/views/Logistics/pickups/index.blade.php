@@ -7,7 +7,7 @@
     <header>
         <p class="text-xs font-bold uppercase text-primary">First-mile operations</p>
         <h1 class="mt-2 text-2xl font-bold text-ink">Seller Pickup Queue</h1>
-        <p class="mt-2 text-sm text-muted">Requests appear here when this center is selected by the Seller or receives an eligible pickup offer. Accept an offer within 15 minutes to confirm the route and assign an eligible local Rider. If declined or unanswered, LIKHAE tries the next eligible center when available.</p>
+        <p class="mt-2 text-sm text-muted">Requests appear here when this center is selected by the Seller or receives an offer. For uncovered locations, pickup and Buyer delivery hubs accept their legs separately; the pickup Rider is assigned after all required hubs accept. If a hub declines or times out, LIKHAE tries another eligible hub.</p>
     </header>
     @if(session('status'))<div class="border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
@@ -21,7 +21,7 @@
     @endif
 
     <section class="space-y-4" data-seller-pickup-requests>
-        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Seller-submitted requests follow the same Rider pickup flow as the ready parcels below. Fallback routes stay pending until Logistics accepts or rejects the origin request; accepted routes then wait for pickup Rider assignment.</p></div>
+        <div><h2 class="text-lg font-bold text-ink">Seller Pickup Requests</h2><p class="mt-1 text-sm text-muted">Covered routes keep the normal pickup flow. For an uncovered Seller or Buyer location, the requested pickup and delivery hubs must each accept their own leg before the pickup Rider can be assigned.</p></div>
         @forelse($sellerPickupRequests as $pickupRequest)
             @php
                 $requestParcels = $pickupRequest->memberships;
@@ -41,7 +41,7 @@
                         @endif
                         @if($pickupRequest->seller_selected_fallback)
                             @php
-                                $visibleCenterOffer = $pickupRequest->current_center_offer ?? $pickupRequest->accepted_center_offer;
+                                $visibleCenterOffer = $pickupRequest->current_pickup_center_offer ?? $pickupRequest->accepted_center_offer ?? $pickupRequest->current_center_offer;
                                 $routeSnapshot = $visibleCenterOffer?->route_snapshot;
                                 $shipmentRoutes = collect(data_get($routeSnapshot, 'shipment_routes', []));
                                 $requiresInterhubTransfer = $shipmentRoutes->contains(fn (array $route): bool => (int) ($route['transfer_hops'] ?? 0) > 0);
@@ -73,7 +73,18 @@
                             <p class="mt-1 text-xs text-muted">Seller-selected uncovered-location route. Review the destination hub and available transfer/delivery capacity before accepting.</p>
                         @endif
                         <p class="mt-1 text-sm text-muted">{{ $progress['total'] }} {{ str('parcel')->plural($progress['total']) }} · {{ $progress['collected'] }} / {{ $progress['total'] }} collected</p>
-                        @if($pickupRequest->current_center_offer)
+                        @if($pickupRequest->current_center_offers->isNotEmpty())
+                            @foreach($pickupRequest->current_center_offers as $legOffer)
+                                <p class="mt-2 text-sm font-semibold text-ink">
+                                    {{ $legOffer->leg_type === 'DELIVERY' ? 'Buyer delivery offer to' : 'Seller pickup offer to' }}
+                                    <strong>{{ $legOffer->logisticsCenter?->business_name ?? 'this center' }}</strong>
+                                    @if($legOffer->leg_type === 'DELIVERY' && data_get($legOffer->route_snapshot, 'delivery_address'))
+                                        for {{ data_get($legOffer->route_snapshot, 'delivery_address') }}
+                                    @endif
+                                    Â· {{ str($legOffer->status)->replace('_', ' ')->title() }}
+                                    Â· response due {{ $legOffer->expires_at?->timezone(config('app.timezone'))->format('M j, g:i A') }}
+                                </p>
+                            @endforeach
                             @php
                                 $currentOffer = $pickupRequest->current_center_offer;
                             @endphp
@@ -104,7 +115,7 @@
                             : ['Accept or assign this request within 15 minutes. If it remains unaccepted, it returns to the Seller.', 'Logistics'],
                         'MATCHING' => ['Check this request from the Seller; automatic matching checks route and Rider capacity at this center.', 'Logistics'],
                         'WAITING_FOR_RESPONSE' => $pickupRequest->seller_selected_fallback
-                            ? ['Review the Buyer destination and inter-hub capacity, then accept or reject this request within 15 minutes. If rejected or unanswered, LIKHAE tries the next eligible origin center.', 'Logistics']
+                            ? ['Review each offer shown above. Pickup and Buyer delivery hubs respond to their own leg; a declined or unanswered offer is retried at another eligible hub.', 'Logistics']
                             : ($automaticPickupMatchingReady
                                 ? ['Accept within 15 minutes to confirm the route and assign an eligible pickup Rider. If declined or unanswered, LIKHAE tries the next eligible origin center.', 'Logistics']
                                 : ['Accept within 15 minutes to confirm the saved route and assign an eligible pickup Rider. Declining returns the parcels to the Seller for another center choice.', 'Logistics']),
@@ -136,22 +147,25 @@
                         </li>
                     @endforeach
                 </ol>
-                @if($pickupRequest->current_center_offer && $automaticPickupMatchingReady)
+                @if($pickupRequest->current_center_offers->isNotEmpty() && $automaticPickupMatchingReady)
                     <div class="flex flex-wrap gap-3 border-t border-line pt-4">
-                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="{{ $pickupRequest->seller_selected_fallback ? 'Accept this Seller pickup request?' : 'Accept this Seller pickup offer?' }}" data-confirm-message="{{ $pickupRequest->seller_selected_fallback ? 'LIKHAE verifies the selected Buyer destination, inter-hub vehicle capacity, and delivery capacity. After accepting, Logistics assigns a pickup Rider.' : 'LIKHAE rechecks pickup Rider capacity, destination delivery capacity, and any required inter-hub vehicle capacity, then assigns the nearest eligible pickup Rider in this center.' }}" data-confirm-label="{{ $pickupRequest->seller_selected_fallback ? 'Accept request' : 'Accept offer' }}">
+                        @foreach($pickupRequest->current_center_offers as $currentOffer)
+                        @php($deliveryLeg = $currentOffer->leg_type === 'DELIVERY')
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $currentOffer->id]) }}" data-confirm-title="{{ $deliveryLeg ? 'Accept this Buyer delivery hub offer?' : ($pickupRequest->seller_selected_fallback ? 'Accept this Seller pickup hub offer?' : 'Accept this Seller pickup offer?') }}" data-confirm-message="{{ $deliveryLeg ? 'LIKHAE rechecks online Rider location, available parcel capacity, and any required inter-hub transfer. Accepting confirms this Buyer delivery hub for the parcels shown.' : ($pickupRequest->seller_selected_fallback ? 'Accepting confirms this Seller pickup hub. LIKHAE will separately ask each uncovered Buyer delivery hub to accept before a pickup Rider can be assigned.' : 'LIKHAE rechecks pickup Rider capacity, destination delivery capacity, and any required inter-hub vehicle capacity, then assigns the nearest eligible pickup Rider in this center.') }}" data-confirm-label="{{ $deliveryLeg ? 'Accept delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Accept pickup offer' : 'Accept offer') }}">
                             @csrf
-                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">{{ $pickupRequest->seller_selected_fallback ? 'Accept request' : 'Accept offer and assign Rider' }}</button>
+                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">{{ $deliveryLeg ? 'Accept Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Accept Seller pickup offer' : 'Accept offer and assign Rider') }}</button>
                         </form>
-                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $pickupRequest->current_center_offer->id]) }}" data-confirm-title="{{ $pickupRequest->seller_selected_fallback ? 'Reject this request for this hub?' : 'Decline this center offer?' }}" data-confirm-message="{{ $pickupRequest->seller_selected_fallback ? 'LIKHAE will try the next eligible origin hub and keep the selected Buyer destination hub.' : ($automaticPickupMatchingReady ? 'LIKHAE will send the request to the next eligible origin center and keep the selected Buyer destination hub.' : 'This immediately returns the parcels to the Seller so they can choose another covered center.') }}" data-confirm-label="{{ $pickupRequest->seller_selected_fallback ? 'Reject request' : 'Decline offer' }}">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $currentOffer->id]) }}" data-confirm-title="{{ $deliveryLeg ? 'Decline this Buyer delivery hub offer?' : ($pickupRequest->seller_selected_fallback ? 'Decline this Seller pickup hub offer?' : 'Decline this center offer?') }}" data-confirm-message="{{ $deliveryLeg ? 'LIKHAE will try another eligible Buyer delivery hub and keep the accepted Seller pickup hub and other accepted delivery hubs.' : ($pickupRequest->seller_selected_fallback ? 'LIKHAE will try the next eligible Seller pickup hub and keep the selected Buyer delivery hub.' : 'LIKHAE will send the request to the next eligible origin center.') }}" data-confirm-label="{{ $deliveryLeg ? 'Decline delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Decline pickup offer' : 'Decline offer') }}">
                             @csrf
-                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">{{ $pickupRequest->seller_selected_fallback ? 'Reject request' : 'Decline offer' }}</button>
+                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">{{ $deliveryLeg ? 'Decline Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Decline Seller pickup offer' : 'Decline offer') }}</button>
                         </form>
+                        @endforeach
                     </div>
                 @elseif($pickupRequest->fallback_review_available && $automaticPickupMatchingReady)
                     <div class="flex flex-wrap gap-3 border-t border-line pt-4">
-                        <form method="POST" action="{{ route('logistics.pickups.requests.fallback.accept', $pickupRequest) }}" data-confirm-title="Accept this Seller pickup request?" data-confirm-message="LIKHAE will recheck the selected Buyer destination, inter-hub capacity, and delivery capacity. If confirmed, assign a pickup Rider from this request." data-confirm-label="Accept request">
+                        <form method="POST" action="{{ route('logistics.pickups.requests.fallback.accept', $pickupRequest) }}" data-confirm-title="Accept this Seller pickup hub request?" data-confirm-message="LIKHAE will recheck the pickup route. After this pickup hub accepts, LIKHAE will separately request acceptance from each uncovered Buyer delivery hub. The pickup Rider can be assigned after all required hubs accept." data-confirm-label="Accept pickup request">
                             @csrf
-                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">Accept request</button>
+                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">Accept Seller pickup request</button>
                         </form>
                         <form method="POST" action="{{ route('logistics.pickups.requests.fallback.reject', $pickupRequest) }}" data-confirm-title="Reject this request for this hub?" data-confirm-message="LIKHAE will try the next eligible origin hub and keep the selected Buyer destination hub." data-confirm-label="Reject request">
                             @csrf

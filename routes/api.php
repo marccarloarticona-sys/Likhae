@@ -202,6 +202,22 @@ Route::prefix('v1')->group(function (): void {
             ->whereNumber('conversation')->middleware('throttle:20,1')->name('api.v1.rider.messages.smart-help.handoff');
         Route::get('/logistics/dashboard', [LogisticsApiController::class, 'dashboard'])->name('api.v1.logistics.dashboard');
         Route::post('/logistics/scan-receive', [LogisticsApiController::class, 'receiveScan'])->name('api.v1.logistics.scan-receive');
+        Route::get('/logistics/outgoing-transfers', [LogisticsApiController::class, 'outgoingTransfers'])->name('api.v1.logistics.outgoing-transfers.index');
+        Route::get('/logistics/outgoing-transfers/{manifest}', [LogisticsApiController::class, 'outgoingTransfer'])
+            ->whereNumber('manifest')
+            ->name('api.v1.logistics.outgoing-transfers.show');
+        Route::post('/logistics/outgoing-transfers/{manifest}/items/{item}/release', [LogisticsApiController::class, 'releaseTransferItem'])
+            ->whereNumber('manifest')
+            ->whereNumber('item')
+            ->name('api.v1.logistics.outgoing-transfers.items.release');
+        Route::get('/logistics/incoming-transfers', [LogisticsApiController::class, 'incomingTransfers'])->name('api.v1.logistics.incoming-transfers.index');
+        Route::get('/logistics/incoming-transfers/{manifest}', [LogisticsApiController::class, 'incomingTransfer'])
+            ->whereNumber('manifest')
+            ->name('api.v1.logistics.incoming-transfers.show');
+        Route::post('/logistics/incoming-transfers/{manifest}/items/{item}/receive', [LogisticsApiController::class, 'receiveTransferItem'])
+            ->whereNumber('manifest')
+            ->whereNumber('item')
+            ->name('api.v1.logistics.incoming-transfers.items.receive');
         Route::patch('/seller/orders/{sellerOrder}', [WorkflowApiController::class, 'sellerOrder'])->name('api.v1.seller.orders.transition');
         Route::patch('/rider/assignments/{assignment}', [WorkflowApiController::class, 'riderAssignment'])->name('api.v1.rider.assignments.transition');
         Route::post('/logistics/shipments/{shipment}/receive', [WorkflowApiController::class, 'receiveParcel'])->name('api.v1.logistics.shipments.receive');
