@@ -17,6 +17,7 @@ use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\User;
 use App\Services\AccountNotificationService;
 use App\Support\ParcelWeightEstimator;
+use App\Support\ParcelVolumeEstimator;
 use App\Support\RiderVehicleType;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -1487,6 +1488,11 @@ final class SellerPickupMatchingService
                 ]))
                 ->whereNotNull('route_snapshot')
                 ->get(['seller_pickup_request_id', 'leg_type', 'route_snapshot']);
+            $plannedShipmentIdsAtCenter = collect($plan['routes'] ?? [])
+                ->filter(fn (array $route): bool => (int) $route['destination_logistics_center_id'] === (int) $destinationId)
+                ->keys()
+                ->map(fn ($id): int => (int) $id)
+                ->unique();
             $acceptedDeliveryShipmentIdsAtCenter = $acceptedOffers
                 ->filter(fn (SellerPickupCenterOffer $offer): bool => (int) $offer->seller_pickup_request_id === $requestId
                     && $offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY)
@@ -1494,7 +1500,10 @@ final class SellerPickupMatchingService
                     ->filter(fn (array $route): bool => (int) ($route['destination_logistics_center_id'] ?? 0) === (int) $destinationId)
                     ->keys()->map(fn ($id): int => (int) $id)->all())
                 ->unique();
-            $required = max(0, $required - $acceptedDeliveryShipmentIdsAtCenter->count());
+            // Only subtract parcels in this plan. When validating one Buyer
+            // group, accepted offers for other groups remain reservations and
+            // must not erase the current group's capacity requirement.
+            $required = max(0, $required - $acceptedDeliveryShipmentIdsAtCenter->intersect($plannedShipmentIdsAtCenter)->count());
             $shipmentIds = $acceptedOffers
                 ->filter(fn (SellerPickupCenterOffer $offer): bool => $offer->leg_type === SellerPickupCenterOffer::LEG_DELIVERY
                     || data_get($offer->route_snapshot, 'routing_mode') !== 'SELLER_SELECTED_UNCOVERED_FALLBACK')
@@ -1571,15 +1580,16 @@ final class SellerPickupMatchingService
             if ($shipments->count() !== $shipmentIds->count()) {
                 return false;
             }
-            $parcelWeights = $shipments->map(fn (Shipment $shipment): array => [
+            $parcelMeasurements = $shipments->map(fn (Shipment $shipment): array => [
                 'weight_kg' => ParcelWeightEstimator::recordedWeight($shipment)
                     ?? ParcelWeightEstimator::productEstimate($shipment),
+                'volume_liters' => ParcelVolumeEstimator::estimate($shipment),
             ])->values();
 
             $drivers = app(TransferManifestService::class)->eligibleDriversForCenter($originId);
-            $hasTransferCapacity = $drivers->contains(function (RiderProfile $driver) use ($parcelWeights): bool {
+            $hasTransferCapacity = $drivers->contains(function (RiderProfile $driver) use ($parcelMeasurements): bool {
                 try {
-                    app(TransferCapacityService::class)->assertCapacity($driver, $parcelWeights);
+                    app(TransferCapacityService::class)->assertCapacity($driver, $parcelMeasurements);
 
                     return true;
                 } catch (RuntimeException) {

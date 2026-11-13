@@ -27,7 +27,7 @@
                 $requestParcels = $pickupRequest->memberships;
                 $progress = $pickupRequest->progress_payload;
             @endphp
-            <article class="border border-line bg-surface p-5" data-pickup-request="{{ $pickupRequest->id }}">
+            <article class="rounded-xl border border-line bg-surface p-5 shadow-sm" data-pickup-request="{{ $pickupRequest->id }}">
                 <header class="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <p class="text-xs font-bold uppercase text-primary">Request #{{ $pickupRequest->id }}</p>
@@ -81,8 +81,8 @@
                                     @if($legOffer->leg_type === 'DELIVERY' && data_get($legOffer->route_snapshot, 'delivery_address'))
                                         for {{ data_get($legOffer->route_snapshot, 'delivery_address') }}
                                     @endif
-                                    Â· {{ str($legOffer->status)->replace('_', ' ')->title() }}
-                                    Â· response due {{ $legOffer->expires_at?->timezone(config('app.timezone'))->format('M j, g:i A') }}
+                                    · {{ str($legOffer->status)->replace('_', ' ')->title() }}
+                                    · response due {{ $legOffer->expires_at?->timezone(config('app.timezone'))->format('M j, g:i A') }}
                                 </p>
                             @endforeach
                             @php
@@ -153,11 +153,11 @@
                         @php($deliveryLeg = $currentOffer->leg_type === 'DELIVERY')
                         <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$pickupRequest, $currentOffer->id]) }}" data-confirm-title="{{ $deliveryLeg ? 'Accept this Buyer delivery hub offer?' : ($pickupRequest->seller_selected_fallback ? 'Accept this Seller pickup hub offer?' : 'Accept this Seller pickup offer?') }}" data-confirm-message="{{ $deliveryLeg ? 'LIKHAE rechecks online Rider location, available parcel capacity, and any required inter-hub transfer. Accepting confirms this Buyer delivery hub for the parcels shown.' : ($pickupRequest->seller_selected_fallback ? 'Accepting confirms this Seller pickup hub. LIKHAE will separately ask each uncovered Buyer delivery hub to accept before a pickup Rider can be assigned.' : 'LIKHAE rechecks pickup Rider capacity, destination delivery capacity, and any required inter-hub vehicle capacity, then assigns the nearest eligible pickup Rider in this center.') }}" data-confirm-label="{{ $deliveryLeg ? 'Accept delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Accept pickup offer' : 'Accept offer') }}">
                             @csrf
-                            <button class="min-h-11 bg-primary px-5 py-3 text-sm font-semibold text-white">{{ $deliveryLeg ? 'Accept Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Accept Seller pickup offer' : 'Accept offer and assign Rider') }}</button>
+                            <button class="min-h-11 rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/30">{{ $deliveryLeg ? 'Accept Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Accept Seller pickup offer' : 'Accept offer and assign Rider') }}</button>
                         </form>
                         <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$pickupRequest, $currentOffer->id]) }}" data-confirm-title="{{ $deliveryLeg ? 'Decline this Buyer delivery hub offer?' : ($pickupRequest->seller_selected_fallback ? 'Decline this Seller pickup hub offer?' : 'Decline this center offer?') }}" data-confirm-message="{{ $deliveryLeg ? 'LIKHAE will try another eligible Buyer delivery hub and keep the accepted Seller pickup hub and other accepted delivery hubs.' : ($pickupRequest->seller_selected_fallback ? 'LIKHAE will try the next eligible Seller pickup hub and keep the selected Buyer delivery hub.' : 'LIKHAE will send the request to the next eligible origin center.') }}" data-confirm-label="{{ $deliveryLeg ? 'Decline delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Decline pickup offer' : 'Decline offer') }}">
                             @csrf
-                            <button class="min-h-11 border border-line px-5 py-3 text-sm font-semibold text-muted">{{ $deliveryLeg ? 'Decline Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Decline Seller pickup offer' : 'Decline offer') }}</button>
+                            <button class="min-h-11 rounded-lg border border-line px-5 py-3 text-sm font-semibold text-muted transition hover:bg-page-secondary focus:outline-none focus:ring-2 focus:ring-primary/20">{{ $deliveryLeg ? 'Decline Buyer delivery offer' : ($pickupRequest->seller_selected_fallback ? 'Decline Seller pickup offer' : 'Decline offer') }}</button>
                         </form>
                         @endforeach
                     </div>
@@ -217,7 +217,7 @@
                 <summary class="cursor-pointer list-none border-b border-line px-5 py-4">
                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div><h3 class="font-bold text-ink">{{ $seller?->business_name ?? 'Seller unavailable' }}</h3><p class="mt-1 text-sm text-muted">{{ $address?->formatted() ?? 'Pickup address unavailable' }}</p></div>
-                        <span class="text-sm font-semibold text-ink">{{ $shipments->count() }} ready {{ str('parcel')->plural($shipments->count()) }} Â· {{ $center->business_name }}</span>
+                        <span class="text-sm font-semibold text-ink">{{ $shipments->count() }} ready {{ str('parcel')->plural($shipments->count()) }} · {{ $center->business_name }}</span>
                     </div>
                 </summary>
                 <div class="p-5">
@@ -232,7 +232,7 @@
                                     <span class="min-w-0 flex-1">
                                         <span class="block font-semibold text-primary">{{ $shipment->tracking_number }}</span>
                                         @if(filled($pickupRequest?->notes))<span class="mt-1 block text-xs text-muted">Seller handover: {{ str($pickupRequest->notes)->after(':') }}</span>@endif
-                                        <span class="mt-1 block text-xs text-muted">{{ $shipment->sellerOrder?->seller_order_number }} Â· {{ ($shipment->orderItem?->product_name ?? $shipment->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</span>
+                                        <span class="mt-1 block text-xs text-muted">{{ $shipment->sellerOrder?->seller_order_number }} · {{ ($shipment->orderItem?->product_name ?? $shipment->sellerOrder?->items?->pluck('product_name')->filter()->join(', ')) }}</span>
                                     </span>
                                     <span class="text-xs font-semibold text-muted">READY_FOR_PICKUP</span>
                                 </label>
@@ -276,13 +276,13 @@
                   @php($collectedItems = $batch->items->filter(fn ($item) => $collectedAssignmentIds->contains($item->rider_assignment_id)))
                 @php($collected = $collectedItems->count())
                 @php($received = $collectedItems->filter(fn ($item) => $item->riderAssignment?->shipment?->current_status === 'AT_SORTING_CENTER')->count())
-                @php($phase = match($batch->status) { 'LOADING' => 'Waiting for rider acceptance', 'READY' => 'Accepted Â· waiting for pickup start', 'EN_ROUTE_TO_HUB' => 'In transit to hub', default => 'In progress at seller' })
+                @php($phase = match($batch->status) { 'LOADING' => 'Waiting for rider acceptance', 'READY' => 'Accepted · waiting for pickup start', 'EN_ROUTE_TO_HUB' => 'In transit to hub', default => 'In progress at seller' })
                 <article class="border border-line bg-surface p-5">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div><p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup Batch #P-{{ $batch->id }}</p><h3 class="mt-1 font-bold text-ink">{{ $batch->seller?->business_name }}</h3><p class="mt-1 text-sm text-muted">{{ $batch->sellerPickupRequest?->pickupAddress?->formatted() ?? $batch->seller?->businessAddress?->formatted() }}</p><p class="mt-1 text-sm text-muted">Rider: {{ $batch->rider?->user?->name }}</p></div>
                         <span class="font-semibold text-ink">{{ $phase }}</span>
                     </div>
-                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned Â· {{ $collected }}/{{ $total }} seller scans complete @if($collected > 0) Â· {{ $received }}/{{ $collected }} received at hub @endif</p>
+                    <p class="mt-4 text-sm font-semibold text-ink">{{ $total }} assigned · {{ $collected }}/{{ $total }} seller scans complete @if($collected > 0) · {{ $received }}/{{ $collected }} received at hub @endif</p>
                     @if($batch->reassignable_riders->isNotEmpty())
                         <form method="POST" action="{{ route('logistics.pickups.batches.reassign', $batch) }}" class="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-end" data-confirm-title="Reassign pickup batch?" data-confirm-message="Every parcel in this batch is still uncollected. The current rider's jobs will be cancelled and the selected online rider will need to accept the batch." data-confirm-label="Reassign batch">
                             @csrf

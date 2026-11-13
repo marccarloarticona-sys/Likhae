@@ -9,7 +9,7 @@ use RuntimeException;
 
 final class TransferCapacityService
 {
-    /** @param Collection<int, array{weight_kg: mixed}>|array<int, array{weight_kg: mixed}> $parcels */
+    /** @param Collection<int, array{weight_kg: mixed, volume_liters?: mixed}>|array<int, array{weight_kg: mixed, volume_liters?: mixed}> $parcels */
     public function assertCapacity(RiderProfile $driver, Collection|array $parcels, bool $allowMissingWeights = false): void
     {
         if (! RiderVehicleType::isInterLogistics($driver->vehicle_type)) {
@@ -24,9 +24,10 @@ final class TransferCapacityService
         $parcelRows = $parcels instanceof Collection ? $parcels->values()->all() : array_values($parcels);
         $parcelCapacity = $driver->approved_parcel_capacity;
         $weightCapacity = $driver->approved_weight_capacity_kg;
-        if ($parcelCapacity === null || $weightCapacity === null
-            || (int) $parcelCapacity < 1 || (float) $weightCapacity <= 0) {
-            throw new RuntimeException('The driver has no complete approved parcel and weight capacity.');
+        $volumeCapacity = $driver->approved_volume_capacity_liters;
+        if ($parcelCapacity === null || $weightCapacity === null || $volumeCapacity === null
+            || (int) $parcelCapacity < 1 || (float) $weightCapacity <= 0 || (float) $volumeCapacity <= 0) {
+            throw new RuntimeException('The driver has no complete approved parcel, weight, and volume capacity.');
         }
         $vehicleParcelLimit = RiderVehicleType::interLogisticsParcelLimit($driver->vehicle_type);
         $approvedParcelLimit = min((int) $parcelCapacity, $vehicleParcelLimit);
@@ -35,8 +36,10 @@ final class TransferCapacityService
         }
 
         $weight = 0;
+        $volume = 0;
         foreach ($parcelRows as $parcel) {
             $weightValue = $parcel['weight_kg'] ?? null;
+            $volumeValue = $parcel['volume_liters'] ?? null;
             if ($weightValue === null || trim((string) $weightValue) === '') {
                 if (! $allowMissingWeights) {
                     throw new RuntimeException('The manifest cannot be sealed because a parcel weight is missing.');
@@ -48,9 +51,21 @@ final class TransferCapacityService
                 }
                 $weight += $parcelWeight;
             }
+            if ($volumeValue === null || trim((string) $volumeValue) === '') {
+                if (! $allowMissingWeights) {
+                    throw new RuntimeException('The manifest cannot be sealed because a parcel volume is missing.');
+                }
+            } else {
+                $parcelVolume = $this->thousandths($volumeValue);
+                if ($parcelVolume <= 0) {
+                    throw new RuntimeException('Parcel volume must be positive.');
+                }
+                $volume += $parcelVolume;
+            }
         }
-        if ($weight > $this->thousandths($weightCapacity)) {
-            throw new RuntimeException('The manifest exceeds the driver\'s approved weight capacity.');
+        if ($weight > $this->thousandths($weightCapacity)
+            || $volume > $this->thousandths($volumeCapacity)) {
+            throw new RuntimeException('The manifest exceeds the driver\'s approved weight or volume capacity.');
         }
     }
 

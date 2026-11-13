@@ -11,6 +11,7 @@ use App\Models\Logistics\TransferManifestItem;
 use App\Models\Rider\RiderProfile;
 use App\Models\User;
 use App\Support\ParcelWeightEstimator;
+use App\Support\ParcelVolumeEstimator;
 use App\Support\RiderVehicleType;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
@@ -95,6 +96,8 @@ final class TransferManifestService
             ->where('rider_profiles.approved_parcel_capacity', '>', 0)
             ->whereNotNull('rider_profiles.approved_weight_capacity_kg')
             ->where('rider_profiles.approved_weight_capacity_kg', '>', 0)
+            ->whereNotNull('rider_profiles.approved_volume_capacity_liters')
+            ->where('rider_profiles.approved_volume_capacity_liters', '>', 0)
             ->whereHas('user', fn ($query) => $query
                 ->where('account_type', User::TYPE_RIDER)
                 ->where('status', User::STATUS_ACTIVE))
@@ -643,6 +646,7 @@ final class TransferManifestService
             return [
                 'weight_kg' => ParcelWeightEstimator::recordedWeight($shipment)
                     ?? ParcelWeightEstimator::productEstimate($shipment),
+                'volume_liters' => ParcelVolumeEstimator::estimate($shipment),
             ];
         });
         $this->capacity->assertCapacity($driver, $rows, $allowMissingWeights);
