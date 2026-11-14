@@ -96,13 +96,11 @@
             </section>
         @endif
 
-        @if($hasUnavailableStock)
-            <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm" role="alert">
+        <section class="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 shadow-sm" role="alert" aria-live="polite" tabindex="-1" data-live-stock-warning @unless($hasUnavailableStock) hidden @endunless>
                 <p class="font-semibold">One or more selected products no longer have enough stock.</p>
                 <p class="mt-1 text-xs">Return to your cart, remove the unavailable item or adjust its quantity, then try again.</p>
                 <a class="mt-3 inline-flex text-xs font-semibold underline" href="{{ route('buyer.cart') }}">Return to cart</a>
-            </section>
-        @endif
+        </section>
 
         <form method="POST" action="{{ route('buyer.order.store') }}" class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]" data-checkout-form data-shipping-quote-url="{{ route('buyer.checkout.shipping-quote') }}" data-confirm-title="Place this order?" data-confirm-message="Review the items, delivery address, and total before placing your order." data-confirm-label="Place order">
             @csrf
@@ -186,13 +184,14 @@
                                     $promotionDiscount = (float) ($item->getAttribute('checkout_promotion_discount_amount') ?? 0);
                                     $lineTotal = max(0, $unitPrice * (int) $item->quantity - $promotionDiscount);
                                 @endphp
-                                <article class="rounded-xl border border-stone-200 p-3 sm:p-4">
+                                <article class="rounded-xl border border-stone-200 p-3 sm:p-4" data-checkout-stock-item data-stock-watch-product-id="{{ (int) $product->id }}" data-stock-watch-variant-id="{{ (int) $variant->id }}" data-live-stock="{{ max(0, (int) $variant->stock) }}" data-stock-quantity="{{ (int) $item->quantity }}" data-stock-active="{{ $variant->is_active ? '1' : '0' }}">
                                     <div class="flex gap-3">
                                         <img class="h-16 w-16 shrink-0 rounded-lg border border-stone-100 bg-stone-50 object-cover" src="{{ $imageUrl($product, $variant) }}" alt="{{ $product->name }}" width="64" height="64" decoding="async">
                                         <div class="min-w-0 flex-1">
                                             <strong class="block text-sm font-semibold text-stone-900">{{ $product->name }}</strong>
                                             <span class="mt-1 block text-xs text-stone-500">{{ $variant->description ?: 'Standard' }}</span>
                                             <span class="mt-2 block text-xs text-stone-600">&#8369;{{ number_format($unitPrice, 2) }} × {{ $item->quantity }}</span>
+                                            <span class="mt-1 block text-[10px] text-stone-500" data-stock-count>{{ max(0, (int) $variant->stock) }} available</span>
                                             @if((int) ($item->getAttribute('checkout_flash_sale_units') ?? 0) > 0)
                                                 <span class="mt-1 block text-[10px] font-semibold text-rose-800">Flash Sale · {{ number_format((int) $variant->flash_sale_remaining) }} promotional units left</span>
                                                 @if($product->flash_sale_limit_per_buyer)<span class="block text-[10px] text-rose-700">Limit {{ number_format((int) $product->flash_sale_limit_per_buyer) }} per Buyer</span>@endif
@@ -595,10 +594,11 @@
             const shippingQuoteToken = checkoutForm?.querySelector('[data-shipping-quote-token]');
             const deliveryAvailability = @json($deliveryAvailability);
             const automaticRouting = @json($automaticRouting);
-            const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $hasUnavailableStock || $checkoutBlocked);
+            const checkoutBlocked = @json((!$automaticRouting && $logisticsProviders->isEmpty()) || $checkoutBlocked);
             const newBuyerCodOrderLimitReached = @json($newBuyerCodOrderLimitReached);
             const availabilityMessage = 'Delivery is not available for this address yet. Choose another saved address or update its delivery details.';
             let shippingQuoteFresh = Boolean(shippingQuoteToken?.value && shippingQuoteToken.value.length === 64);
+            let liveStockUnavailable = @json($hasUnavailableStock);
             let quoteRequestSequence = 0;
             const maximumRewardPoints = Number(@json($maxRedeemablePoints));
             const money = (value) => `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -749,14 +749,39 @@
                     deliveryStatus.classList.toggle('text-red-800', !availability.available);
                 }
                 if (placeOrderButton && !placeOrderButton.textContent.includes('Placing order')) {
-                    placeOrderButton.disabled = checkoutBlocked || newBuyerCodOrderLimitReached || !availability.available || !shippingQuoteFresh;
-                    placeOrderButton.textContent = checkoutBlocked
+                    placeOrderButton.disabled = checkoutBlocked || liveStockUnavailable || newBuyerCodOrderLimitReached || !availability.available || !shippingQuoteFresh;
+                    placeOrderButton.textContent = checkoutBlocked || liveStockUnavailable
                         ? 'Review checkout'
                         : (newBuyerCodOrderLimitReached
                             ? 'COD order limit reached'
                             : (!shippingQuoteFresh ? 'Updating shipping…' : (availability.available ? 'Place Order' : 'Delivery unavailable')));
                 }
             };
+            const refreshLiveStock = () => {
+                const checkoutItems = [...document.querySelectorAll('[data-checkout-stock-item]')];
+                liveStockUnavailable = checkoutItems.some((item) =>
+                    item.dataset.stockActive !== '1'
+                    || Number(item.dataset.liveStock || 0) < Number(item.dataset.stockQuantity || 0)
+                );
+                const warning = document.querySelector('[data-live-stock-warning]');
+                warning?.toggleAttribute('hidden', !liveStockUnavailable);
+                updateDeliveryAvailability();
+            };
+            document.addEventListener('buyer:stock-updated', (event) => {
+                const productId = String(event.detail?.product_id || '');
+                const variants = event.detail?.variants || {};
+                let changed = false;
+
+                document.querySelectorAll('[data-checkout-stock-item]').forEach((item) => {
+                    if (item.dataset.stockWatchProductId !== productId) return;
+                    const variant = variants[item.dataset.stockWatchVariantId];
+                    item.dataset.stockActive = event.detail.visible && !event.detail.seller_on_vacation && variant?.is_active ? '1' : '0';
+                    item.dataset.liveStock = item.dataset.stockActive === '1' ? String(Math.max(0, Number(variant.stock) || 0)) : '0';
+                    changed = true;
+                });
+
+                if (changed) refreshLiveStock();
+            });
             const refreshShippingQuote = async () => {
                 const addressId = document.querySelector('input[name="address_id"]:checked')?.value || '';
                 if (!addressId || !checkoutForm) return;
@@ -822,6 +847,11 @@
             checkoutForm?.addEventListener('submit', (event) => {
                 if (!event.submitter?.matches('[data-place-order-submit]')) return;
                 if (!placeOrderButton) return;
+                if (liveStockUnavailable) {
+                    event.preventDefault();
+                    document.querySelector('[data-live-stock-warning]')?.focus({preventScroll: false});
+                    return;
+                }
                 if (!shippingQuoteFresh) {
                     event.preventDefault();
                     quoteStatus?.focus();

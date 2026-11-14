@@ -2,6 +2,7 @@
 
 namespace App\Models\Seller;
 
+use App\Events\ProductStockUpdated;
 use App\Services\Marketplace\ProductPriceResolver;
 use App\Models\Buyer\CartItem;
 use App\Models\Buyer\OrderItem;
@@ -15,6 +16,23 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class ProductVariant extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::created(function (self $variant): void {
+            ProductStockUpdated::dispatch((int) $variant->product_id);
+        });
+
+        static::updated(function (self $variant): void {
+            if ($variant->wasChanged(['stock', 'is_active'])) {
+                ProductStockUpdated::dispatch((int) $variant->product_id);
+            }
+        });
+
+        static::deleted(function (self $variant): void {
+            ProductStockUpdated::dispatch((int) $variant->product_id);
+        });
+    }
 
     protected $hidden = ['reserve_stock'];
 

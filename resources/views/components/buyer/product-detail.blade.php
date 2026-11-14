@@ -1411,6 +1411,7 @@
             @if(! $guest && $remainingPurchaseAllowance !== null) data-purchase-limit-remaining="{{ (int) $remainingPurchaseAllowance }}" @endif
             @if($variantStock)
                 data-variant-stock-product
+                data-stock-watch-product-id="{{ (int) $productId }}"
                 data-variant-stocks='@json($variantStock)'
                 data-variation-flash-sales='@json($variationFlashSales)'
             @endif

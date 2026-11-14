@@ -67,6 +67,9 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/events', [PlatformEventApiController::class, 'index'])->name('api.v1.events.index');
 
     Route::get('/products', [ProductApiController::class, 'index'])->name('api.v1.products.index');
+    Route::get('/products/stock', [ProductApiController::class, 'stock'])
+        ->middleware('throttle:30,1')
+        ->name('api.v1.products.stock');
     Route::get('/products/{slug}', [ProductApiController::class, 'show'])
         ->middleware(AuthenticateApiToken::class.':optional')
         ->name('api.v1.products.show');

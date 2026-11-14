@@ -1657,6 +1657,11 @@ document.addEventListener('DOMContentLoaded', () => {
             all('[data-product-purchase]', product).forEach((control) => { control.disabled = purchaseBlocked; control.setAttribute('aria-disabled', String(purchaseBlocked)); });
         };
         all('[data-variation-option]', product).forEach((button) => button.addEventListener('click', sync));
+        document.addEventListener('buyer:stock-updated', (event) => {
+            if (Number(event.detail?.product_id) !== Number(product.dataset.stockWatchProductId)) return;
+            try { stocks = JSON.parse(product.dataset.variantStocks || '{}'); } catch (_) { stocks = {}; }
+            sync();
+        });
         sync();
         syncVariantGallery(one('[data-variation-option][aria-pressed="true"]', product));
     });

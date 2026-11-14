@@ -594,6 +594,14 @@
         font-weight: 700 !important;
     }
 
+    .lk-product-card--palette .lk-product-stock-count {
+        margin: 4px 0 0 !important;
+        color: var(--lk-muted) !important;
+        font-size: 10px !important;
+        font-weight: 750 !important;
+        line-height: 1.2 !important;
+    }
+
     .lk-product-card--palette .lk-card-actions {
         display: grid !important;
         grid-template-columns: 0.82fr 1.18fr !important;
@@ -770,6 +778,7 @@
     html.dark .lk-product-card--palette .lk-product-category,
     html.dark .lk-product-card--palette .lk-product-seller,
     html.dark .lk-product-card--palette .lk-product-sold,
+    html.dark .lk-product-card--palette .lk-product-stock-count,
     html.dark .lk-product-card--palette .lk-stars small {
         color: #C8B7AD !important;
     }
@@ -809,6 +818,10 @@
     class="lk-product-card lk-product-card--palette {{ $compact ? 'is-compact' : '' }} {{ $guest ? 'is-guest' : '' }}"
     data-product-card
     data-product-id="{{ $id ?? $slug }}"
+    @if($productId > 0)
+        data-stock-watch-product-id="{{ $productId }}"
+        data-stock-single-variant-id="{{ data_get($singleVariant, 'id', '') }}"
+    @endif
     data-category="{{ \Illuminate\Support\Str::slug($category) }}"
     data-price="{{ $price }}"
     data-rating="{{ $rating }}"
@@ -946,6 +959,12 @@
             @endif
             @endif
         </div>
+
+        @if(! $availabilityRestricted)
+            <p class="lk-product-stock-count" data-stock-count role="status">
+                {{ $catalogStock > 0 ? number_format($catalogStock).' available' : 'Out of stock' }}
+            </p>
+        @endif
 
         @if($flashSaleSoldOut)
             <div class="mt-2 rounded-lg border border-[#EADCCC] bg-[#F6EFE7] px-3 py-2 text-xs font-bold text-[#6C4936]" role="status">Flash Sale allocation sold out</div>

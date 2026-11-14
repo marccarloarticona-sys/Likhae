@@ -18,7 +18,7 @@
     @if (request()->routeIs('home'))
         <link rel="preload" as="image" href="{{ asset('images/Warm Mediterranean Still Life with Terracotta Accents.webp') }}" type="image/webp" fetchpriority="high">
     @endif
-    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/modal-refresh.css', 'resources/js/Buyer/buyer.js'])
+    @vite(['resources/css/Buyer/buyer.css', 'resources/css/shared/modal-refresh.css', 'resources/js/Buyer/buyer.js', 'resources/js/Buyer/stock-realtime.js'])
     @stack('head')
     <script>
         (function () { var theme = localStorage.getItem('likhae-theme'); if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) document.documentElement.classList.add('dark'); })();

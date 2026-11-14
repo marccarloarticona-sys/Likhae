@@ -7,6 +7,7 @@ use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\Product;
 use App\Models\User;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductStockPayloadService;
 use App\Services\Marketplace\ProductViewService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -32,6 +33,19 @@ class ProductApiController extends Controller
                 'total' => $products->total(),
             ],
         ]);
+    }
+
+    public function stock(Request $request, ProductStockPayloadService $stockPayloads): JsonResponse
+    {
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:80'],
+            'ids.*' => ['required', 'integer', 'min:1', 'distinct'],
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => array_values($stockPayloads->forProducts($validated['ids'])),
+        ])->header('Cache-Control', 'no-store, private');
     }
 
     public function show(string $slug, Request $request, ProductViewService $productViews): JsonResponse

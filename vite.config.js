@@ -60,6 +60,7 @@ export default defineConfig(({ mode }) => {
                     'resources/js/shared/interhub-attendance.js',
                     'resources/js/Buyer/buyer.js',
                     'resources/js/Buyer/realtime.js',
+                    'resources/js/Buyer/stock-realtime.js',
                     'resources/js/Buyer/likhae-buyer-ai.js',
                     'resources/js/admin/admin.js',
                     'resources/js/seller/seller.js',

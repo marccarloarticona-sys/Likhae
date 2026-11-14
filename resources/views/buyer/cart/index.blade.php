@@ -66,6 +66,9 @@
                 ? (int) $sellerId
                 : 'unknown-'.(string) (data_get($item, 'id') ?? data_get($product, 'id')),
 
+            'product_id' => $restricted ? null : (int) data_get($product, 'id', 0),
+            'variant_id' => $restricted ? null : (int) data_get($item, 'product_variant_id', data_get($variant, 'id', 0)),
+
             'seller_shop_url' => $sellerShopUrl,
             'available' => (bool) data_get($availability, 'available', false),
             'restricted' => $restricted,
@@ -326,6 +329,10 @@
                             class="p-4 sm:p-5"
                             data-cart-item
                             data-item-id="{{ $item['id'] ?? '' }}"
+                            @if($item['product_id'] && $item['variant_id'])
+                                data-stock-watch-product-id="{{ $item['product_id'] }}"
+                                data-stock-watch-variant-id="{{ $item['variant_id'] }}"
+                            @endif
                             data-seller-id="{{ $item['seller_id'] }}"
                             data-item-price="{{ $item['price'] }}"
                             data-item-stock="{{ $item['stock'] }}"
@@ -1508,6 +1515,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     getItems().forEach((item) => {
         updateLineTotal(item);
+    });
+
+    document.addEventListener('buyer:stock-updated', (event) => {
+        const productId = String(event.detail?.product_id || '');
+        let changed = false;
+
+        getItems().forEach((item) => {
+            if (item.dataset.stockWatchProductId !== productId) return;
+
+            updateLineTotal(item);
+            changed = true;
+        });
+
+        if (changed) {
+            updateSummary();
+            requestCartPreview();
+        }
     });
 
     updateSummary();

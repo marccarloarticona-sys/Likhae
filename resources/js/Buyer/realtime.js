@@ -4,3 +4,4 @@
 import '../shared/echo.js';
 import '../shared/messages.js';
 import '../shared/notification-sounds.js';
+import './stock-realtime.js';
