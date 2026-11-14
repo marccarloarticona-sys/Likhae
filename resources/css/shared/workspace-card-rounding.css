@@ -1,0 +1,5 @@
+/* Give square, bordered workspace cards the same soft corners in both roles. */
+body.logistics-shell main :is(section, article, form, details, fieldset, div, label, li)[class~="border"]:not([class*="rounded-"]):not([class~="rounded"]),
+body.rider-shell main :is(section, article, form, details, fieldset, div, label, li)[class~="border"]:not([class*="rounded-"]):not([class~="rounded"]) {
+    border-radius: 0.875rem;
+}
