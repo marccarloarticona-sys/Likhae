@@ -2067,18 +2067,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     return 'Tracking status updated';
                 };
                 (payload.orders || []).forEach((order) => {
-                    const currentTabKey = (orderPage.dataset.orderTabKey || 'all').toUpperCase().replaceAll('-', '_');
-                    if (['TO_RECEIVE', 'COMPLETED', 'RETURNS'].includes(currentTabKey)) {
-                        const tabChangedOnPage = (order.shipments || []).some((shipment) => {
-                            const row = orderPage.querySelector(`[data-shipment-tab-key-id="${shipment.id}"]`);
-                            return row && row.dataset.shipmentTabKey !== shipment.tab_key;
-                        });
-                        if (tabChangedOnPage) {
-                            window.location.reload();
-                            return;
-                        }
-                    }
-
                     const confirmableShipmentIds = new Set((order.confirmable_shipment_ids || []).map(Number));
                     if (detailOrderId === Number(order.id) && order.actions?.confirmable_shipment_ids) {
                         order.actions.confirmable_shipment_ids.forEach((id) => confirmableShipmentIds.add(Number(id)));

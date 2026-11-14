@@ -12,7 +12,9 @@ use App\Models\Seller\SellerReturnRefundRequest;
 use App\Models\Seller\SellerOrder;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\ShipmentWorkflowService;
+use App\Services\Marketplace\ProductCancellationWarningService;
 use App\Support\FinancialRules;
+use App\Support\OrderItemParcelGroups;
 use App\Support\ParcelWeightEstimator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
@@ -327,7 +329,50 @@ class SellerOrderController extends Controller
         ]);
     }
 
-    public function transition(Request $request, SellerOrder $sellerOrder, ShipmentWorkflowService $workflow): RedirectResponse
+    public function decideItem(
+        Request $request,
+        SellerOrder $sellerOrder,
+        OrderItem $orderItem,
+        ShipmentWorkflowService $workflow,
+        ProductCancellationWarningService $cancellationWarnings,
+    ): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+
+        $data = $request->validate([
+            'decision' => ['required', 'string', 'in:accept,cancel'],
+            'cancellation_reason' => ['required_if:decision,cancel', 'nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $workflow->sellerItemDecision(
+                $sellerOrder,
+                $orderItem,
+                $data['decision'],
+                $request->user(),
+                $data['cancellation_reason'] ?? null,
+            );
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['item_decision' => $exception->getMessage()]);
+        }
+
+        if ($data['decision'] === 'cancel') {
+            $cancellationWarnings->checkThreshold($request->user());
+        }
+
+        return back()->with('status', $data['decision'] === 'accept'
+            ? 'Product accepted. The remaining products in this checkout are still managed separately.'
+            : 'Product cancelled. The remaining products stay in the same seller order.');
+    }
+
+    public function transition(
+        Request $request,
+        SellerOrder $sellerOrder,
+        ShipmentWorkflowService $workflow,
+        ProductCancellationWarningService $cancellationWarnings,
+    ): RedirectResponse
     {
         $seller = $request->user()->sellerProfile;
         abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
@@ -360,6 +405,10 @@ class SellerOrderController extends Controller
             return back()->withErrors(['parcels' => $exception->getMessage()]);
         }
 
+        if ($data['action'] === 'cancel') {
+            $cancellationWarnings->checkThreshold($request->user());
+        }
+
         return back()->with('status', 'Seller order updated successfully.');
     }
 
@@ -385,6 +434,39 @@ class SellerOrderController extends Controller
 
         return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
             ->with('status', 'Parcel split saved. Every parcel is listed on the single order waybill with its own scan code. The existing order shipping fee remains unchanged.');
+    }
+
+    public function combineParcels(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+        $data = $request->validate(['group_key' => ['required', 'string', 'max:100']]);
+
+        try {
+            $workflow->combineOrderItemsIntoParcel($sellerOrder, $orderItem, $request->user(), $data['group_key']);
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['parcels' => $exception->getMessage()]);
+        }
+
+        return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
+            ->with('status', 'Eligible items are combined into one parcel. The original parcel histories are retained for recovery.');
+    }
+
+    public function separateCombinedParcel(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): RedirectResponse
+    {
+        $seller = $request->user()->sellerProfile;
+        abort_unless($seller && (int) $sellerOrder->seller_profile_id === (int) $seller->id, 403);
+        abort_unless((int) $orderItem->seller_order_id === (int) $sellerOrder->id, 404);
+
+        try {
+            $workflow->separateCombinedOrderParcel($sellerOrder, $orderItem, $request->user());
+        } catch (RuntimeException $exception) {
+            return back()->withErrors(['parcels' => $exception->getMessage()]);
+        }
+
+        return redirect()->route('seller.orders', ['mode' => 'show', 'order' => $sellerOrder->seller_order_number])
+            ->with('status', 'The combined package was separated back into its original product parcels.');
     }
 
     public function saveParcelDimensions(Request $request, SellerOrder $sellerOrder, Shipment $shipment, ShipmentWorkflowService $workflow): RedirectResponse
@@ -493,12 +575,30 @@ class SellerOrderController extends Controller
         $parcelRows = $shipments->filter(fn ($shipment): bool => $shipment->order_item_id !== null)
             ->map(fn ($shipment): array => [
                 'item' => $items->firstWhere('id', (int) $shipment->order_item_id),
+                'label' => $items->firstWhere('id', (int) $shipment->order_item_id)?->product_name ?? 'Product parcel',
                 'shipment' => $shipment,
                 'packed' => $packedCheckpoint($shipment),
                 'can_mark_packed' => ! $parcelDimensionsReady || ($shipment->parcel_length_cm !== null && $shipment->parcel_width_cm !== null && $shipment->parcel_height_cm !== null),
             ])
             ->filter(fn (array $parcel): bool => $parcel['item'] !== null)
             ->values();
+        $combinedParcels = $shipments->filter(fn ($shipment): bool => (bool) $shipment->combined_order_items)->values();
+        $combinedParcelsByItem = collect();
+        $combinedItemsByShipment = collect();
+        foreach ($combinedParcels as $combinedParcel) {
+            $combinedItems = $items->whereIn('id', array_map('intval', $combinedParcel->combined_order_item_ids ?? []))->values();
+            $combinedItemsByShipment->put((int) $combinedParcel->id, $combinedItems);
+            foreach ($combinedItems as $combinedItem) {
+                $combinedParcelsByItem->put((int) $combinedItem->id, $combinedParcel);
+            }
+            $parcelRows->push([
+                'item' => $combinedItems->first(),
+                'label' => $this->combinedParcelLabel($combinedItems),
+                'shipment' => $combinedParcel,
+                'packed' => $packedCheckpoint($combinedParcel),
+                'can_mark_packed' => ! $parcelDimensionsReady || ($combinedParcel->parcel_length_cm !== null && $combinedParcel->parcel_width_cm !== null && $combinedParcel->parcel_height_cm !== null),
+            ]);
+        }
         $assignments = $shipments->flatMap->riderAssignments;
         $assignment = $assignments
             ?->whereIn('status', ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS'])
@@ -595,11 +695,12 @@ class SellerOrderController extends Controller
         $codCollections = $shipments
             ->filter(fn ($shipment): bool => $shipment->relationLoaded('codCollection'))
             ->map(fn ($shipment) => $shipment->getRelation('codCollection'))
-            ->filter();
+            ->filter()
+            ->reject(fn ($collection): bool => $collection->status === 'VOID');
         $codAmountCents = $codCollections->isNotEmpty()
             ? $codCollections->sum(fn ($collection): int => FinancialRules::cents($collection->expected_amount))
-            : ($shipments->contains(fn ($shipment): bool => $shipment->order_item_id !== null)
-                ? $shipments->sum(fn ($shipment): int => $shipment->order_item_id !== null
+            : ($shipments->reject(fn ($shipment): bool => $shipment->current_status === 'CANCELLED')->contains(fn ($shipment): bool => $shipment->order_item_id !== null || $shipment->combined_order_items)
+                ? $shipments->reject(fn ($shipment): bool => $shipment->current_status === 'CANCELLED')->sum(fn ($shipment): int => $shipment->order_item_id !== null || $shipment->combined_order_items
                     ? (int) \App\Support\OrderItemParcelAmount::forShipment($order, $shipment)['total_cents']
                     : 0)
                 : $items->sum(fn ($item): int => FinancialRules::cents(\App\Support\OrderItemParcelAmount::forItem($order, $item)['total'])));
@@ -611,6 +712,63 @@ class SellerOrderController extends Controller
             && $shipments->every(fn ($shipment): bool => in_array($shipment->current_status, ['DELIVERED', 'COMPLETED'], true));
         $allParcelsReceived = $shipments->isNotEmpty()
             && $shipments->every(fn ($shipment): bool => $shipment->current_status === 'COMPLETED');
+        $groupingSchemaReady = Schema::hasColumns('shipments', [
+            'combined_order_items', 'combined_source_shipment_ids', 'combined_order_item_ids', 'superseded_at', 'superseded_by_shipment_id', 'parcel_quantity',
+        ]);
+        $legacyShipments = $shipments->whereNull('order_item_id')
+            ->reject(fn ($shipment): bool => (bool) $shipment->combined_order_items)
+            ->values();
+        $alreadyCombinedItemIds = $combinedParcels->flatMap(fn ($shipment) => collect($shipment->combined_order_item_ids ?? [])->map(fn ($id): int => (int) $id))
+            ->unique()->values();
+        $eligibleProductGroups = $groupingSchemaReady && $order->status === 'PREPARING'
+            ? OrderItemParcelGroups::forItems($items)
+                ->map(function (array $group) use ($shipments, $alreadyCombinedItemIds, $packedCheckpoint): ?array {
+                    $groupItems = $group['items'];
+                    if ($groupItems->contains(fn ($item): bool => $alreadyCombinedItemIds->contains((int) $item->id))) {
+                        return null;
+                    }
+                    $groupShipments = $groupItems->map(function ($item) use ($shipments) {
+                        $matches = $shipments->where('order_item_id', $item->id);
+                        return $matches->count() === 1 ? $matches->first() : null;
+                    });
+                    if ($groupShipments->contains(null) || $groupShipments->contains(fn ($shipment): bool => $shipment->current_status !== 'PREPARING'
+                        || $packedCheckpoint($shipment)
+                        || $shipment->parcel_weight_kg !== null
+                        || $shipment->parcel_volume_liters !== null
+                        || $shipment->parcel_length_cm !== null
+                        || $shipment->parcel_width_cm !== null
+                        || $shipment->parcel_height_cm !== null)) {
+                        return null;
+                    }
+                    foreach ($groupShipments as $shipment) {
+                        if ($shipment->scans()->exists() || $shipment->waybills()->exists() || $shipment->riderAssignments()->exists() || $shipment->pickupRequests()->exists()) {
+                            return null;
+                        }
+                    }
+
+                    return $group;
+                })
+                ->filter()
+                ->values()
+            : collect();
+        $separableCombinedParcels = $groupingSchemaReady && $order->status === 'PREPARING'
+            ? $combinedParcels->filter(function ($shipment) use ($packedCheckpoint): bool {
+                if ($shipment->current_status !== 'PREPARING'
+                    || $packedCheckpoint($shipment)
+                    || $shipment->parcel_weight_kg !== null
+                    || $shipment->parcel_volume_liters !== null
+                    || $shipment->parcel_length_cm !== null
+                    || $shipment->parcel_width_cm !== null
+                    || $shipment->parcel_height_cm !== null) {
+                    return false;
+                }
+
+                return ! $shipment->scans()->exists()
+                    && ! $shipment->waybills()->exists()
+                    && ! $shipment->riderAssignments()->exists()
+                    && ! $shipment->pickupRequests()->exists();
+            })->values()
+            : collect();
         $buyerReceiptPending = $allParcelsDelivered
             && ! $allParcelsReceived
             && $order->status !== 'COMPLETED';
@@ -619,6 +777,75 @@ class SellerOrderController extends Controller
             : ($allParcelsReceived
                 ? 'Completed'
                 : ($sellerDropoffPending ? 'Waiting for Intake' : str($order->status)->replace('_', ' ')->title()->toString()));
+        if (in_array($order->status, ['PLACED', 'CONFIRMED'], true)) {
+            $lineStatuses = $shipments->whereNotNull('order_item_id')->pluck('current_status');
+            $hasWaitingLine = $lineStatuses->contains('PLACED');
+            $hasAcceptedLine = $lineStatuses->contains('CONFIRMED');
+            $hasCancelledLine = $lineStatuses->contains('CANCELLED');
+            if ($hasWaitingLine && $hasAcceptedLine) {
+                $orderDisplayStatus = 'Partially accepted';
+            } elseif ($hasCancelledLine && $hasAcceptedLine) {
+                $orderDisplayStatus = 'Partially cancelled';
+            } elseif ($hasCancelledLine && $hasWaitingLine) {
+                $orderDisplayStatus = 'Product decisions pending';
+            }
+        }
+        $hasOrderDiscounts = FinancialRules::cents($order->voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->seller_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->platform_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->platform_shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->reward_points_discount ?? 0) > 0
+            || FinancialRules::cents($order->promotion_discount_total ?? 0) > 0
+            || FinancialRules::cents($order->order?->discount_total ?? 0) > 0
+            || FinancialRules::cents($order->order?->platform_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->order?->shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order->order?->reward_points_discount ?? 0) > 0;
+        $codOrder = $order->order?->payments?->contains(fn ($payment): bool => $payment->method === 'COD') ?? false;
+        $itemDecisions = $items->mapWithKeys(function (OrderItem $item) use ($shipments, $order, $paidOnline, $hasOrderDiscounts, $codOrder, $combinedParcelsByItem): array {
+            $lineShipments = $shipments->where('order_item_id', $item->id)->values();
+            $combined = $combinedParcelsByItem->has((int) $item->id);
+            $statuses = $lineShipments->pluck('current_status');
+            $collections = $lineShipments->map(fn ($shipment) => $shipment->relationLoaded('codCollection') ? $shipment->getRelation('codCollection') : null)->filter();
+            $lineAssignments = $lineShipments->flatMap->riderAssignments;
+            $hasPickupRequest = $lineShipments->contains(fn ($shipment): bool => $shipment->pickupRequests->contains(fn ($pickup): bool => in_array($pickup->status, ['PENDING', 'APPROVED'], true)));
+            $lineCancelled = $statuses->isNotEmpty() && $statuses->every(fn (string $status): bool => $status === 'CANCELLED');
+            $itemHasDiscounts = FinancialRules::cents($item->discount_amount ?? 0) > 0
+                || FinancialRules::cents($item->promotion_discount_amount ?? 0) > 0
+                || FinancialRules::cents($item->seller_voucher_discount ?? 0) > 0
+                || FinancialRules::cents($item->platform_voucher_discount ?? 0) > 0
+                || FinancialRules::cents($item->platform_shipping_voucher_discount ?? 0) > 0
+                || FinancialRules::cents($item->reward_points_discount ?? 0) > 0
+                || ! empty($item->promotion_snapshot);
+            $label = $lineCancelled
+                ? 'Cancelled'
+                : ($statuses->isNotEmpty() && $statuses->every(fn (string $status): bool => $status === 'PLACED')
+                    ? 'Awaiting decision'
+                    : ($statuses->isNotEmpty() && $statuses->every(fn (string $status): bool => $status === 'CONFIRMED')
+                        ? 'Accepted'
+                        : ($statuses->isEmpty() ? 'Parcel setup needed' : str($statuses->first())->replace('_', ' ')->title()->toString())));
+            $canAccept = ! $combined
+                && $lineShipments->isNotEmpty()
+                && in_array($order->status, ['PLACED', 'CONFIRMED'], true)
+                && $statuses->every(fn (string $status): bool => $status === 'PLACED');
+            $canCancel = ! $combined
+                && $codOrder
+                && ! $paidOnline
+                && ! $hasOrderDiscounts
+                && ! $itemHasDiscounts
+                && $lineShipments->isNotEmpty()
+                && in_array($order->status, ['PLACED', 'CONFIRMED'], true)
+                && $statuses->every(fn (string $status): bool => in_array($status, ['PLACED', 'CONFIRMED'], true))
+                && ! $hasPickupRequest
+                && ! $lineAssignments->contains(fn ($assignment): bool => in_array($assignment->status, ['IN_PROGRESS', 'COMPLETED'], true))
+                && ! $collections->contains(fn ($collection): bool => in_array($collection->status, ['COLLECTED', 'REMITTED', 'REMITTED_RIDER_TOPUP', 'DISCREPANCY'], true));
+
+            return [(int) $item->id => [
+                'status' => $label,
+                'can_accept' => $canAccept,
+                'can_cancel' => $canCancel,
+            ]];
+        });
 
         return [
             'id' => $order->seller_order_number,
@@ -629,7 +856,14 @@ class SellerOrderController extends Controller
             'buyer' => $order->order?->buyer?->name ?? 'Buyer',
             'buyer_note' => $order->buyer_note,
             'items' => $items->values(),
+            'item_decisions' => $itemDecisions,
             'parcels' => $parcelRows,
+            'combined_parcels' => $combinedParcels,
+            'combined_parcels_by_item' => $combinedParcelsByItem,
+            'combined_items_by_shipment' => $combinedItemsByShipment,
+            'eligible_product_groups' => $eligibleProductGroups,
+            'separable_combined_parcels' => $separableCombinedParcels,
+            'parcel_grouping_ready' => $groupingSchemaReady,
             'shipments_by_item' => $shipmentsByItem,
             'parcel_splitting_ready' => Schema::hasColumn('shipments', 'parcel_quantity'),
             'parcel_dimensions_ready' => $parcelDimensionsReady,
@@ -639,11 +873,12 @@ class SellerOrderController extends Controller
             'unpacked_parcels' => $parcelRows->filter(fn (array $parcel): bool => ! $parcel['packed']
                 && $parcel['shipment']?->current_status === 'PREPARING')->values(),
             'ready_parcel_count' => $shipments->whereIn('current_status', ['READY_FOR_PICKUP', 'PICKUP_ASSIGNED'])->count(),
-            'unresolved_legacy_shipments' => $shipments->whereNull('order_item_id')->values(),
+            'unresolved_legacy_shipments' => $legacyShipments,
             'has_unresolved_legacy_shipment' => $items->count() > 1
-                && $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
-            'parcels_need_setup' => $items->contains(fn ($item): bool => ! $shipments->contains(fn ($shipment): bool => (int) $shipment->order_item_id === (int) $item->id))
-                || $shipments->contains(fn ($shipment): bool => $shipment->order_item_id === null),
+                && $legacyShipments->isNotEmpty(),
+            'parcels_need_setup' => $items->contains(fn ($item): bool => ! $shipments->contains(fn ($shipment): bool => (int) $shipment->order_item_id === (int) $item->id)
+                    && ! $alreadyCombinedItemIds->contains((int) $item->id))
+                || $legacyShipments->isNotEmpty(),
             'can_print_waybills' => $order->canPrintWaybills(),
             'packed' => $shipments->isNotEmpty() && $shipments->every($packedCheckpoint),
             'product_search' => $items->pluck('product_name')->filter()->implode(' '),
@@ -669,7 +904,8 @@ class SellerOrderController extends Controller
             'cod_amount' => $order->order?->payments?->first()?->method === 'COD' ? $codAmountCents / 100 : null,
             'financial_reconciles' => $itemSubtotalCents - $voucherCents - $rewardPointsDiscountCents + $shippingCents - $shippingVoucherDiscountCents + $protectionCents === $grandTotalCents,
             'can_cancel' => in_array($order->status, ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'], true)
-                && ! $paidOnline && ! $pickupIrreversible && ! $codCollected,
+                && ! $paidOnline && ! $pickupIrreversible && ! $codCollected
+                && ! $shipments->contains(fn ($shipment): bool => $shipment->current_status === 'CANCELLED'),
             'payment' => str($order->order?->payments?->first()?->method ?? 'PENDING')->headline()->toString(),
             'logistics_provider' => $logisticsProvider,
             'has_selected_logistics_center' => $selectedPickupCenterNames->isNotEmpty(),
@@ -704,6 +940,83 @@ class SellerOrderController extends Controller
     }
 
     /** @param Collection<int, \App\Models\Rider\RiderAssignment> $assignments */
+    private function combinedParcelLabel(Collection $items): string
+    {
+        $promotionRows = $items->flatMap(function (OrderItem $item): Collection {
+            return collect((array) $item->promotion_snapshot)
+                ->filter(fn ($snapshot): bool => is_array($snapshot)
+                    && strtoupper((string) ($snapshot['promotion_type'] ?? '')) === 'BUY_X_GET_Y')
+                ->map(function (array $snapshot) use ($item): array {
+                    $discountedQuantity = max(0, (int) ($snapshot['discounted_quantity'] ?? 0));
+                    $unitPriceCents = FinancialRules::cents($item->unit_price ?? 0);
+                    $discountCents = FinancialRules::cents($snapshot['discount_amount'] ?? 0);
+
+                    return [
+                        'promotion_id' => (int) ($snapshot['promotion_id'] ?? 0),
+                        'promotion_name' => (string) ($snapshot['name'] ?? ''),
+                        'buy_product_name' => trim((string) ($snapshot['buy_product_name'] ?? '')),
+                        'buy_quantity' => max(0, (int) ($snapshot['buy_quantity'] ?? 0)),
+                        'reward_product_name' => trim((string) ($snapshot['reward_product_name'] ?? '')),
+                        'reward_quantity' => max(0, (int) ($snapshot['reward_quantity'] ?? 0)),
+                        'discounted_quantity' => $discountedQuantity,
+                        'free_quantity' => $discountedQuantity > 0
+                            && $unitPriceCents > 0
+                            && $discountCents >= $unitPriceCents * $discountedQuantity
+                            ? $discountedQuantity
+                            : 0,
+                    ];
+                });
+        });
+
+        $promotionSummaries = $promotionRows
+            ->groupBy(fn (array $row): string => $row['promotion_id'] > 0
+                ? 'promotion:'.$row['promotion_id']
+                : 'name:'.$row['promotion_name'])
+            ->map(function (Collection $rows): ?string {
+                $promotion = $rows->first();
+                $buyQuantity = (int) $promotion['buy_quantity'];
+                $rewardQuantity = (int) $promotion['reward_quantity'];
+                if ($buyQuantity < 1 || $rewardQuantity < 1) {
+                    return null;
+                }
+
+                $discountedQuantity = min($rewardQuantity, $rows->sum('discounted_quantity'));
+                $freeQuantity = min($discountedQuantity, $rows->sum('free_quantity'));
+                $rewardParts = [];
+                if ($freeQuantity > 0) {
+                    $rewardParts[] = $freeQuantity.' free';
+                }
+                $discountedQuantityNotFree = $discountedQuantity - $freeQuantity;
+                if ($discountedQuantityNotFree > 0) {
+                    $rewardParts[] = $discountedQuantityNotFree.' discounted';
+                }
+                $otherRewardQuantity = $rewardQuantity - $discountedQuantity;
+                if ($otherRewardQuantity > 0) {
+                    $rewardParts[] = $otherRewardQuantity.' reward'.($otherRewardQuantity === 1 ? '' : 's');
+                }
+                if ($rewardParts === []) {
+                    $rewardParts[] = $rewardQuantity.' reward'.($rewardQuantity === 1 ? '' : 's');
+                }
+
+                $buyProductName = $promotion['buy_product_name'];
+                $rewardProductName = $promotion['reward_product_name'];
+                if ($buyProductName !== '' && $rewardProductName !== '' && strcasecmp($buyProductName, $rewardProductName) !== 0) {
+                    return 'Buy '.$buyQuantity.' '.$buyProductName.', get '.implode(' + ', $rewardParts).' '.$rewardProductName;
+                }
+
+                return $buyQuantity.' bought + '.implode(' + ', $rewardParts);
+            })
+            ->filter()
+            ->values();
+
+        $productName = $items->first()?->product_name ?? 'Combined product';
+        if ($promotionSummaries->isNotEmpty()) {
+            return $productName.' - '.$promotionSummaries->implode('; ');
+        }
+
+        return $productName.' - '.$items->count().' product lines';
+    }
+
     private function successfulPickupScanKeys(Collection $assignments): array
     {
         $assignmentIds = $assignments

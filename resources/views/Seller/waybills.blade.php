@@ -21,6 +21,7 @@
         .package-product,.package-specs{border:1px solid #a8a29e;padding:7px;line-height:1.25;min-width:0}
         .package-product h2,.package-specs h2{font-size:8px;text-transform:uppercase;margin:0 0 4px;color:#57534e}
         .package-title{font-weight:800;font-size:12px;overflow-wrap:anywhere}
+        .package-line+.package-line{border-top:1px solid #d6d3d1;margin-top:5px;padding-top:5px}
         .package-meta{font-size:9px;line-height:1.3;color:#44403c;margin-top:2px;overflow-wrap:anywhere}
         .package-specs>div+div{border-top:1px solid #d6d3d1;margin-top:5px;padding-top:5px}
         .package-specs small{display:block;color:#57534e;font-size:8px;font-weight:700;text-transform:uppercase}
@@ -59,6 +60,9 @@
 @foreach($shipments as $index => $shipment)
     @php
         $item = $shipment->orderItem;
+        $parcelItems = $shipment->combined_order_items
+            ? $sellerOrder->items->whereIn('id', $shipment->combined_order_item_ids ?? [])->values()
+            : collect([$item])->filter();
     @endphp
     <main class="waybill {{ $loop->last ? '' : 'page-break' }}">
         <header class="head">
@@ -70,18 +74,30 @@
         </header>
 
         <section class="grid">
-            <div class="box"><h2>From</h2><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><br>{{ $sellerOrder->sellerProfile?->businessAddress?->formatted() }}</div>
+            <div class="box"><h2>From store</h2><strong>{{ $sellerOrder->sellerProfile?->business_name }}</strong><br>{{ $sellerOrder->sellerProfile?->businessAddress?->formatted() }}</div>
             <div class="box"><h2>Deliver to</h2><strong>{{ $address?->recipient_name }}</strong><br>{{ $address?->contact_number }}<br>{{ $address?->formatted() }}</div>
         </section>
 
         @php($weight = \App\Support\ParcelWeightEstimator::recordedWeight($shipment) ?? ($item ? \App\Support\ParcelWeightEstimator::productEstimate($shipment) : null))
         <section class="package-info">
             <div class="package-product">
-                <h2>Parcel {{ $index + 1 }} of {{ $totalParcelCount }} · Product</h2>
-                <strong class="package-title">{{ $item?->product_name ?? 'Order parcel' }}</strong>
-                @if($item)<div class="package-meta">{{ $item->variant_description ?: 'Standard' }}@if($item->sku) · SKU {{ $item->sku }}@endif</div>@endif
-                <div class="package-meta"><strong>Quantity: {{ $shipment->parcel_quantity }}</strong></div>
-                @if($item?->hasAdditionalCare())<div class="package-meta"><strong>FRAGILE / HANDLE WITH CARE</strong></div>@endif
+                <h2>Parcel {{ $index + 1 }} of {{ $totalParcelCount }} · Contents</h2>
+                @forelse($parcelItems as $parcelItem)
+                    <div class="package-line">
+                        <strong class="package-title">{{ $parcelItem->product_name ?: 'Order item' }}</strong>
+                        <div class="package-meta">
+                            {{ $parcelItem->variant_description ?: 'Standard' }}@if($parcelItem->sku) &middot; SKU {{ $parcelItem->sku }}@endif
+                            &middot; Qty {{ $shipment->combined_order_items ? $parcelItem->quantity : $shipment->parcel_quantity }}
+                        </div>
+                    </div>
+                @empty
+                    <strong class="package-title">{{ $item?->product_name ?? 'Order parcel' }}</strong>
+                    <div class="package-meta">Qty {{ $shipment->parcel_quantity }}</div>
+                @endforelse
+                @if($parcelItems->isNotEmpty())
+                    <div class="package-meta"><strong>Total quantity: {{ $shipment->combined_order_items ? $parcelItems->sum('quantity') : $shipment->parcel_quantity }}</strong></div>
+                @endif
+                @if($parcelItems->contains(fn ($parcelItem) => $parcelItem->hasAdditionalCare()))<div class="package-meta"><strong>FRAGILE / HANDLE WITH CARE</strong></div>@endif
             </div>
             <div class="package-specs">
                 <div><small>Weight</small><strong>@if($weight !== null){{ number_format($weight, 3) }} kg @else Not recorded @endif</strong></div>

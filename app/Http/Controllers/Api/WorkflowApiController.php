@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin\CommissionTransaction;
 use App\Models\Admin\PlatformSetting;
 use App\Models\Buyer\Order;
+use App\Models\Buyer\OrderItem;
 use App\Models\Logistics\LogisticsCenter;
 use App\Models\Logistics\ServiceArea;
 use App\Models\Logistics\Shipment;
@@ -42,10 +43,63 @@ class WorkflowApiController extends Controller
             'action' => ['required', Rule::in(['confirm', 'prepare', 'ready', 'handover_confirm', 'cancel'])],
             'shipment_ids' => ['sometimes', 'array', 'min:1', 'max:'.\App\Support\LocalTripCapacityRules::MAX_PARCELS_PER_TRIP],
             'shipment_ids.*' => ['integer', 'distinct', 'min:1'],
+            'cancellation_reason' => ['required_if:action,cancel', 'nullable', 'string', 'max:500'],
         ]);
-        $result = $workflow->sellerTransition($sellerOrder, $data['action'], $user, null, $data['shipment_ids'] ?? null);
+        try {
+            $result = $workflow->sellerTransition(
+                $sellerOrder,
+                $data['action'],
+                $user,
+                $data['cancellation_reason'] ?? null,
+                $data['shipment_ids'] ?? null,
+            );
+        } catch (\RuntimeException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
 
         return response()->json(['success' => true, 'seller_order' => $result->only(['id', 'seller_order_number', 'status'])]);
+    }
+
+    public function sellerOrderItem(Request $request, SellerOrder $sellerOrder, OrderItem $orderItem, ShipmentWorkflowService $workflow): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($user->isAccountType(User::TYPE_SELLER), 403);
+        abort_unless(
+            $user->sellerProfile
+                && $user->sellerProfile->status === 'ACTIVE'
+                && (int) $sellerOrder->seller_profile_id === (int) $user->sellerProfile->id
+                && (int) $orderItem->seller_order_id === (int) $sellerOrder->id,
+            403,
+            'An active seller profile that owns this product line is required.',
+        );
+        $data = $request->validate([
+            'decision' => ['required', Rule::in(['accept', 'cancel'])],
+            'cancellation_reason' => ['required_if:decision,cancel', 'nullable', 'string', 'max:500'],
+        ]);
+        try {
+            $result = $workflow->sellerItemDecision(
+                $sellerOrder,
+                $orderItem,
+                $data['decision'],
+                $user,
+                $data['cancellation_reason'] ?? null,
+            );
+        } catch (\RuntimeException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'seller_order' => $result->only(['id', 'seller_order_number', 'status', 'grand_total']),
+            'order_item_id' => (int) $orderItem->id,
+            'decision' => $data['decision'],
+        ]);
     }
 
     public function riderAssignment(Request $request, RiderAssignment $assignment, ShipmentWorkflowService $workflow, ImageOptimizationService $images, LocalRiderTripService $localTrips): JsonResponse

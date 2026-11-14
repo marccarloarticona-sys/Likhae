@@ -30,7 +30,7 @@ class CodCollectionService
             throw new RuntimeException('A COD collection requires an order and seller-order reference.');
         }
 
-        $expectedAmount = $shipment->orderItem
+        $expectedAmount = ($shipment->orderItem || $shipment->combined_order_items)
             ? OrderItemParcelAmount::forShipment($sellerOrder, $shipment)['total']
             : (float) $sellerOrder->grand_total;
 
@@ -170,13 +170,18 @@ class CodCollectionService
                 );
             }
             $shipment->loadMissing('sellerOrder.order', 'sellerOrder.items', 'orderItem');
-            if ($status === CodCollection::COLLECTED && $shipment->orderItem) {
+            if ($status === CodCollection::COLLECTED && ($shipment->orderItem || $shipment->combined_order_items)) {
                 $campaignBudgets = app(PlatformCampaignBudgetService::class);
-                $campaignBudgets->consumeForOrderItem($shipment->orderItem, $actor);
-                app(SellerVoucherBudgetService::class)->consumeForOrderItem($shipment->orderItem, $actor);
-                $campaignBudgets->recordRewardPointsExpense($shipment->orderItem, $actor);
+                $items = $shipment->combined_order_items
+                    ? ($shipment->sellerOrder?->items ?? collect())->whereIn('id', array_map('intval', $shipment->combined_order_item_ids ?? []))
+                    : collect([$shipment->orderItem]);
+                foreach ($items as $item) {
+                    $campaignBudgets->consumeForOrderItem($item, $actor);
+                    app(SellerVoucherBudgetService::class)->consumeForOrderItem($item, $actor);
+                    $campaignBudgets->recordRewardPointsExpense($item, $actor);
+                }
             }
-            $parcelAmount = $shipment->orderItem
+            $parcelAmount = ($shipment->orderItem || $shipment->combined_order_items)
                 ? OrderItemParcelAmount::forShipment($shipment->sellerOrder, $shipment)
                 : null;
             $productAmountCents = $parcelAmount

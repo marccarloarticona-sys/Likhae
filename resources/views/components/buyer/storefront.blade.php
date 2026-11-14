@@ -15,6 +15,8 @@
     $maximumPrice = $storeFilterValues['max_price'] ?? '';
     $minimumRating = (float) ($storeFilterValues['rating'] ?? 0);
     $activeSort = $storeFilterValues['sort'] ?? 'latest';
+    $selectedCategoryId = (int) ($storeFilterValues['category_id'] ?? 0);
+    $selectedSubcategoryId = (int) ($storeFilterValues['subcategory_id'] ?? 0);
     $searchAction = $guest ? route('shops.show', ['seller' => $sellerSlug]) : route('buyer.shop', ['seller' => $sellerSlug]);
     $isFollowing = (bool) data_get($seller, 'is_following', false);
     $followerCount = max(0, (int) data_get($seller, 'followers', 0));
@@ -137,8 +139,29 @@
                 </div>
             </div>
 
-            <div class="lk-store-filter-grid mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <x-buyer.price-range-filter prefix="store" :minimum="$minimumPrice" :maximum="$maximumPrice" :price-range="$storePriceRange" :errors="$storeErrors" class="sm:col-span-2 lg:col-span-2" />
+            <div class="lk-store-filter-grid mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <x-buyer.price-range-filter prefix="store" :minimum="$minimumPrice" :maximum="$maximumPrice" :price-range="$storePriceRange" :errors="$storeErrors" class="sm:col-span-2 xl:col-span-1" />
+                @if($storeSubcategories->isNotEmpty())
+                    <div class="lk-filter-card lk-store-filter-field">
+                        <label class="lk-field-label" for="storeCategory">Category</label>
+                        <select id="storeCategory" name="subcategory_id" class="lk-filter-select">
+                            <option value="">All Categories</option>
+                            @foreach($storeSubcategories as $subcategory)
+                                <option value="{{ $subcategory->id }}" @selected($selectedSubcategoryId === (int) $subcategory->id)>{{ $subcategory->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @elseif($storeCategories->isNotEmpty())
+                    <div class="lk-filter-card lk-store-filter-field">
+                        <label class="lk-field-label" for="storeCategory">Category</label>
+                        <select id="storeCategory" name="category_id" class="lk-filter-select">
+                            <option value="">All Categories</option>
+                            @foreach($storeCategories as $category)
+                                <option value="{{ $category->id }}" @selected($selectedCategoryId === (int) $category->id)>{{ $category->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @endif
                 <div class="lk-filter-card lk-store-filter-field">
                     <label class="lk-field-label" for="storeRating">Minimum rating</label>
                     <select id="storeRating" name="rating" class="lk-filter-select">
@@ -159,10 +182,10 @@
                     </select>
                 </div>
                 @if($storeErrors?->has('min_price') || $storeErrors?->has('max_price'))
-                    <p class="lk-filter-error sm:col-span-2 lg:col-span-4" role="alert">{{ $storeErrors->first('min_price') ?: $storeErrors->first('max_price') }}</p>
+                    <p class="lk-filter-error sm:col-span-2 xl:col-span-4" role="alert">{{ $storeErrors->first('min_price') ?: $storeErrors->first('max_price') }}</p>
                 @endif
                 @if($storeErrors?->has('q') || $storeErrors?->has('rating') || $storeErrors?->has('sort') || $storeErrors?->has('page'))
-                    <p class="lk-filter-error sm:col-span-2 lg:col-span-4" role="alert">{{ $storeErrors->first('q') ?: $storeErrors->first('rating') ?: $storeErrors->first('sort') ?: $storeErrors->first('page') }}</p>
+                    <p class="lk-filter-error sm:col-span-2 xl:col-span-4" role="alert">{{ $storeErrors->first('q') ?: $storeErrors->first('rating') ?: $storeErrors->first('sort') ?: $storeErrors->first('page') }}</p>
                 @endif
             </div>
         </form>
@@ -172,9 +195,9 @@
             <p class="text-xs text-stone-500" aria-live="polite"><strong>{{ $paginator?->total() ?? $storeProducts->count() }}</strong> products found</p>
         </div>
         @if($storeProducts->isNotEmpty())
-            <div class="lk-product-grid mt-3">@foreach($storeProducts as $product)<x-buyer.product-card :product="$product" :guest="$guest" :store-vouchers="$storeVouchers" />@endforeach</div>
+            <div class="lk-product-grid mt-3">@foreach($storeProducts as $product)<x-buyer.product-card :product="$product" :guest="$guest" :storefront-listing="! $guest" :store-vouchers="$storeVouchers" />@endforeach</div>
         @else
-            <div class="mt-5"><x-buyer.empty-state title="No store products found" message="Try another keyword or adjust the price or rating filters." /></div>
+            <div class="mt-5"><x-buyer.empty-state title="No store products found" message="Try another keyword or adjust the category, price, or rating filters." /></div>
         @endif
         @if($paginator && $paginator->hasPages())<div class="mt-5">{{ $paginator->links() }}</div>@endif
     </section>

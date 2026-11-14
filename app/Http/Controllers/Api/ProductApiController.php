@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Buyer\SellerFollower;
 use App\Models\Seller\Product;
+use App\Models\User;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductViewService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,7 +18,7 @@ class ProductApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         $dealsMode = $request->boolean('deals') || $request->query('focus') === 'deals';
-        $products = $this->catalog->paginated($request, (int) min(max($request->integer('per_page', 20), 1), 50));
+        $products = $this->catalog->paginated($request, (int) min(max($request->integer('per_page', 24), 1), 50));
 
         return response()->json([
             'success' => true,
@@ -32,11 +34,30 @@ class ProductApiController extends Controller
         ]);
     }
 
-    public function show(string $slug): JsonResponse
+    public function show(string $slug, Request $request, ProductViewService $productViews): JsonResponse
     {
+        $product = $this->catalog->findVisibleBySlug($slug);
+        $buyer = $request->user();
+        if ($buyer instanceof User && $buyer->isAccountType(User::TYPE_BUYER)) {
+            $productViews->record($buyer, $product);
+        }
+
+        $payload = $this->catalog->productPayload($product, true);
+        $seller = $product->sellerProfile;
+        if ($seller) {
+            $seller->loadMissing('businessAddress');
+            $payload['seller_rating'] = $this->catalog->sellerRating($seller);
+            $payload['seller_product_count'] = Product::visible()
+                ->where('seller_profile_id', $seller->id)
+                ->count();
+            $payload['seller_location'] = $seller->businessAddress?->formatted()
+                ?: $seller->location;
+            $payload['seller_verified'] = $seller->status === 'ACTIVE';
+        }
+
         return response()->json([
             'success' => true,
-            'data' => $this->catalog->productPayload($this->catalog->findVisibleBySlug($slug), true),
+            'data' => $payload,
         ]);
     }
 

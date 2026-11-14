@@ -115,6 +115,8 @@ Route::prefix('logistics')->name('logistics.')->group(function (): void {
             ->whereNumber('pickupRequest')->whereNumber('offer')->name('pickups.requests.offers.accept');
         Route::post('/pickups/requests/{pickupRequest}/offers/{offer}/decline', [DispatchController::class, 'declineSellerPickupCenterOffer'])
             ->whereNumber('pickupRequest')->whereNumber('offer')->name('pickups.requests.offers.decline');
+        Route::post('/pickups/requests/{pickupRequest}/delivery-offers/retry', [DispatchController::class, 'retrySellerPickupDeliveryOffers'])
+            ->whereNumber('pickupRequest')->middleware('throttle:3,1')->name('pickups.requests.delivery-offers.retry');
         Route::post('/pickups/assignments', [DispatchController::class, 'assignPickupBatch'])->name('pickups.assignments.store');
         Route::patch('/pickups/batches/{trip}/reassign', [DispatchController::class, 'reassignPickupBatch'])->name('pickups.batches.reassign');
         Route::post('/pickups/{pickupRequest}/approve', [DispatchController::class, 'approvePickup'])->name('pickups.approve');

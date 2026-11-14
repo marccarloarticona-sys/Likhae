@@ -4,6 +4,7 @@
     'guest' => false,
     'deal' => false,
     'catalogListing' => false,
+    'storefrontListing' => false,
     'home' => false,
     'unavailable' => false,
     'storeVouchers' => collect(),
@@ -114,12 +115,12 @@
     $flashSaleRemaining = max(0, (int) data_get($displayVariant, 'flash_sale_remaining', 0));
     $flashSaleEndsAt = data_get($displayVariant, 'flash_sale_ends_at');
     $flashSaleLimit = data_get($displayVariant, 'flash_sale_limit_per_buyer');
-    $sellerOnVacation = ($catalogListing || $home) && (bool) data_get($product, 'seller.vacation_mode', false);
+    $sellerOnVacation = ($catalogListing || $storefrontListing || $home) && (bool) data_get($product, 'seller.vacation_mode', false);
     $catalogStock = max(0, (int) data_get($product, 'stock', $variants->sum('stock')));
     $catalogMaxQuantity = $flashSaleActive && $flashSaleRemaining > 0
         ? max(1, min($catalogStock, $flashSaleRemaining, $flashSaleLimit ? (int) $flashSaleLimit : $flashSaleRemaining))
         : max(1, $catalogStock);
-    $outOfStock = ($catalogListing || $home) && $catalogStock < 1;
+    $outOfStock = ($catalogListing || $storefrontListing || $home) && $catalogStock < 1;
     $canAddToCart = ! $unavailable && ! $availabilityRestricted && ! $sellerOnVacation && data_get($singleVariant, 'id') && (int) data_get($singleVariant, 'stock', 0) > 0;
     $isWishlistSaved = false;
     if (! $guest && auth()->check() && $id !== null) {
@@ -670,6 +671,19 @@
         color: #FFFFFF !important;
     }
 
+    .lk-product-card--palette .lk-card-actions--storefront .lk-catalog-add-cart {
+        border-color: var(--lk-tan) !important;
+        background: var(--lk-bg-soft) !important;
+        color: var(--lk-maroon) !important;
+        box-shadow: none !important;
+    }
+
+    .lk-product-card--palette .lk-card-actions--storefront .lk-catalog-add-cart:hover:not(:disabled) {
+        border-color: var(--lk-maroon) !important;
+        background: var(--lk-maroon) !important;
+        color: #FFFFFF !important;
+    }
+
     .lk-product-card--palette .lk-add-cart svg {
         width: 14px !important;
         height: 14px !important;
@@ -774,14 +788,16 @@
     }
 
     html.dark .lk-product-card--palette .lk-btn-view,
-    html.dark .lk-product-card--palette.is-guest .lk-add-cart {
+    html.dark .lk-product-card--palette.is-guest .lk-add-cart,
+    html.dark .lk-product-card--palette .lk-card-actions--storefront .lk-catalog-add-cart {
         background: #2A1E1A !important;
         border-color: #60463A !important;
         color: #EBA99D !important;
     }
 
     html.dark .lk-product-card--palette .lk-btn-view:hover,
-    html.dark .lk-product-card--palette.is-guest .lk-add-cart:hover {
+    html.dark .lk-product-card--palette.is-guest .lk-add-cart:hover,
+    html.dark .lk-product-card--palette .lk-card-actions--storefront .lk-catalog-add-cart:hover:not(:disabled) {
         background: #8A3A2F !important;
         border-color: #8A3A2F !important;
         color: #FFFFFF !important;
@@ -942,7 +958,7 @@
             </div>
         @endif
 
-        <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : ($home ? 'lk-card-actions--home' : '')) }}">
+        <div class="lk-card-actions {{ $guest ? 'lk-card-actions--guest-view' : ($catalogListing ? 'lk-card-actions--catalog' : ($storefrontListing ? 'lk-card-actions--storefront' : ($home ? 'lk-card-actions--home' : ''))) }}">
             @if($guest)
                 @if($detailsUrl)
                     <a href="{{ $detailsUrl }}" class="lk-btn-view">{{ $catalogListing ? 'View Details' : 'View' }}</a>
@@ -955,7 +971,7 @@
                 @else
                     <button type="button" class="lk-btn-view" disabled aria-disabled="true">Unavailable</button>
                 @endif
-            @elseif($catalogListing || $home)
+            @elseif($catalogListing || $storefrontListing || $home)
                 @if($availabilityRestricted || $unavailable || $sellerOnVacation || $outOfStock)
                     <button type="button" class="lk-catalog-buy-now" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Unavailable' }}</button>
                     <button type="button" class="lk-add-cart lk-catalog-add-cart" disabled aria-disabled="true">{{ $sellerOnVacation ? 'Seller on Vacation' : 'Out of Stock' }}</button>

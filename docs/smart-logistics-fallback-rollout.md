@@ -17,7 +17,7 @@ The Admin **Smart Coverage Routes** and **PSGC Routing Review** pages and routes
 
 ## Enable or disable
 
-The feature defaults to `LIKHAE_AUTOMATIC_SELLER_PICKUP_MATCHING=true`. Confirm the preflight items before production rollout. For an existing deployment, set the variable to `true` and refresh cached configuration. The existing `likhae:expire-rider-assignment-offers` scheduler runs every minute to expire offers and retry pending requests at the Seller-selected center. Offers expire after 15 minutes. Declines and timeouts do not switch the request to another Logistics center.
+The feature defaults to `LIKHAE_AUTOMATIC_SELLER_PICKUP_MATCHING=true`. Confirm the preflight items before production rollout. For an existing deployment, set the variable to `true` and refresh cached configuration. The existing `likhae:expire-rider-assignment-offers` scheduler runs every minute to expire offers and retry pending requests at the Seller-selected center. Logistics offers expire after 30 minutes. Declines and timeouts do not switch the request to another Logistics center.
 
 ## Roll back
 

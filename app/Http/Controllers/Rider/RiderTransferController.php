@@ -119,7 +119,7 @@ class RiderTransferController extends Controller
         $data = $request->validate([
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'accuracy' => ['required', 'numeric', 'min:0', 'max:1500'],
+            'accuracy' => ['required', 'numeric', 'min:0', 'max:2500'],
             'recorded_at' => ['required', 'date'],
         ]);
 

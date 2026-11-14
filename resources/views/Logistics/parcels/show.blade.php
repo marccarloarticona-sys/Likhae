@@ -31,7 +31,7 @@
     <section class="grid gap-4 xl:grid-cols-2">
         <article class="rounded-xl border border-line bg-surface p-5">
             <h2 class="font-semibold">Manual status override</h2>
-            <p class="mt-1 text-sm text-muted">Use only when an operational correction is needed. The old status, new status, reason, staff member, and time are recorded in the audit log.</p>
+            <p class="mt-1 text-sm text-muted">Use only for an operational correction, and move one fulfillment step at a time. The Seller must accept, prepare, and pack each product before marking it ready for pickup. The old status, new status, reason, staff member, and time are recorded in the audit log.</p>
             <form method="POST" action="{{ route('logistics.parcels.status-override', $shipment) }}" class="mt-4 space-y-3" data-confirm-title="Override shipment status?" data-confirm-message="This changes the parcel's current status and creates a permanent audit record with your reason." data-confirm-label="Record override">
                 @csrf
                 <label class="block text-sm font-medium">New status<select name="status" required class="mt-1 block min-h-10 w-full rounded-lg border border-line bg-white px-3">@foreach(\App\Http\Controllers\Logistics\DispatchController::MANUAL_OVERRIDE_STATUSES as $status)<option value="{{ $status }}" @selected($status === $shipment->current_status)>{{ str($status)->headline() }}</option>@endforeach</select></label>

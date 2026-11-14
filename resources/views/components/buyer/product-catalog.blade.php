@@ -140,6 +140,7 @@
                             @if($key !== 'sort')<input type="hidden" name="{{ $key }}" value="{{ $value }}">@endif
                         @endforeach
                         <select name="sort" onchange="this.form.requestSubmit()">
+                            <option value="shuffle" @selected($activeSort === 'shuffle')>Shuffled</option>
                             <option value="latest" @selected($activeSort === 'latest')>Latest</option>
                             <option value="price-low" @selected($activeSort === 'price-low')>Price: Low to High</option>
                             <option value="price-high" @selected($activeSort === 'price-high')>Price: High to Low</option>

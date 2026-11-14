@@ -44,7 +44,10 @@ use Illuminate\View\View;
 
 class RiderController extends Controller
 {
-    public function updateAvailability(Request $request, LogisticsSchemaReadiness $schema): RedirectResponse
+    public function updateAvailability(
+        Request $request,
+        LogisticsSchemaReadiness $schema,
+    ): RedirectResponse
     {
         abort_unless($schema->riderAvailabilityReady(), 503, 'Rider availability controls are temporarily unavailable until the Rider availability schema is installed.');
         $data = $request->validate([

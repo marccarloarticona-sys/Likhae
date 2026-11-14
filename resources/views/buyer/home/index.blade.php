@@ -2665,7 +2665,7 @@
         $products = collect($buyerProducts ?? []);
     }
 
-    $featuredProducts = $products->take(6);
+    $featuredProducts = $products->take(12);
 
     /*
     |--------------------------------------------------------------------------
@@ -2954,7 +2954,7 @@
                 href="{{ route('buyer.products') }}"
                 class="lk-text-link"
             >
-                See All
+                Explore
                 <span aria-hidden="true">â†’</span>
             </a>
         </div>
@@ -3020,7 +3020,7 @@
                     href="{{ route('buyer.products', ['sort' => 'best-rated']) }}"
                     class="lk-text-link"
                 >
-                    See All
+                    Explore
                     <span aria-hidden="true">â†’</span>
                 </a>
             </div>

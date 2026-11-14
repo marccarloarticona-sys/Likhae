@@ -250,11 +250,12 @@ class AccountNotificationService
             $request->loadMissing('preferredLogisticsCenter');
         }
         $selectedCenterName = $hasSelectedCenterColumn ? $request->preferredLogisticsCenter?->business_name : null;
+        $responseMinutes = max(1, (int) config('likhae.seller_pickup_offer_response_minutes', 30));
         [$type, $title, $message] = match ($state) {
             'TIMED_OUT' => [
                 'SELLER_PICKUP_RETURNED',
                 'Pickup request returned to you',
-                'No response from '.($selectedCenterName ?: 'the selected Logistics center').' within 15 minutes. Your parcels are available again; choose another covered center to try again.',
+                'No response from '.($center?->business_name ?: $selectedCenterName ?: 'the selected Logistics center').' within '.$responseMinutes.' minutes. Your parcels are available again; choose another covered center to try again.',
             ],
             'DECLINED' => [
                 'SELLER_PICKUP_RETURNED',
@@ -264,7 +265,7 @@ class AccountNotificationService
             'NO_CAPACITY' => [
                 'SELLER_PICKUP_RETURNED',
                 'Pickup request returned to you',
-                'The selected center could not confirm route and Rider capacity within 15 minutes. Your parcels are available again; choose another covered center to try again.',
+                'The selected center could not confirm route and Rider capacity within '.$responseMinutes.' minutes. Your parcels are available again; choose another covered center to try again.',
             ],
             'WAITING' => [
                 'SELLER_PICKUP_WAITING',
@@ -278,7 +279,7 @@ class AccountNotificationService
                 $hasSelectedCenterColumn && ! $selectedCenterName
                     ? 'This older pickup request has no Seller-selected Logistics center. Cancel it and create a new request to choose one.'
                     : ($selectedCenterName
-                        ? 'Your pickup request is with '.$selectedCenterName.'. If its route or Rider capacity is not confirmed within 15 minutes, the request returns to you so you can choose another center.'
+                        ? 'Your pickup request is with '.$selectedCenterName.'. If its route or Rider capacity is not confirmed within '.$responseMinutes.' minutes, the request returns to you so you can choose another center.'
                         : 'Your pickup request remains open. We could not confirm a complete route and available capacity yet; Logistics will retry when service is available.'),
             ],
             default => [
@@ -302,6 +303,27 @@ class AccountNotificationService
             'SELLER_PICKUP_REQUEST',
             (int) $request->id,
             '/seller/logistics',
+        );
+    }
+
+    public function sellerPickupDeliveryOffer(
+        SellerPickupRequest $request,
+        LogisticsCenter $center,
+        int $offerId,
+        int $parcelCount,
+    ): void {
+        $request->loadMissing('sellerProfile');
+        $center->loadMissing('owner');
+        $sellerName = $request->sellerProfile?->business_name ?: 'A Seller';
+
+        $this->record(
+            $center->owner,
+            'LOGISTICS_INCOMING_SELLER_PICKUP',
+            'Incoming parcel route request',
+            $sellerName.' selected '.$center->business_name.' to receive '.$parcelCount.' parcel'.($parcelCount === 1 ? '' : 's').' for Buyer delivery from pickup request #'.$request->id.'. Review the proposed incoming route.',
+            'SELLER_PICKUP_DELIVERY_OFFER',
+            $offerId,
+            '/logistics/parcels/receive#incoming-seller-routes',
         );
     }
 

@@ -17,6 +17,7 @@ use App\Models\Buyer\SellerFollower;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\LogisticsSchemaReadiness;
 use App\Services\Fulfillment\SellerPickupRequestService;
+use App\Services\Maps\ApproximateAddressCoordinates;
 use App\Services\Finance\FinanceSchemaReadiness;
 use App\Services\Reports\SellerSalesSummaryService;
 use App\Services\Reports\SellerReportTrendService;
@@ -241,6 +242,10 @@ class SellerOperationsController extends Controller
             ->orderByDesc('is_default')
             ->orderBy('id')
             ->get();
+        $approximateCoordinates = app(ApproximateAddressCoordinates::class);
+        if ($pickupCenterSelectionReady) {
+            $pickupAddresses->each(fn (Address $address) => $approximateCoordinates->resolve($address));
+        }
         $businessPickupAddress = $pickupAddresses->firstWhere('id', (int) $seller->business_address_id);
         $pickupAddress = $pickupAddresses->first(fn (Address $address): bool => $address->is_default
                 && is_numeric($address->latitude)
@@ -273,8 +278,7 @@ class SellerOperationsController extends Controller
                 ->orderBy('business_name')
                 ->get()
                 ->filter(fn (LogisticsCenter $center): bool => $center->address
-                    && is_numeric($center->address->latitude)
-                    && is_numeric($center->address->longitude))
+                    && $approximateCoordinates->resolve($center->address) !== null)
                 ->values();
             $pickupCenterOptions = $localCenterCandidates;
             if ($automaticPickupMatchingReady && $pickupAddress
@@ -290,22 +294,23 @@ class SellerOperationsController extends Controller
                     return 6371 * 2 * atan2(sqrt($a), sqrt(max(0.0, 1 - $a)));
                 })->values();
             }
-            if (! $automaticPickupMatchingReady) {
-                $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
-                $pickupCenterOptions = $pickupCenterOptions
-                    ->map(function (LogisticsCenter $center) use ($pickupAddresses, $areaEligibility): LogisticsCenter {
-                        $authorizedAddressIds = $pickupAddresses
-                            ->filter(fn (Address $address): bool => is_numeric($address->latitude)
-                                && is_numeric($address->longitude)
-                                && $areaEligibility->centerAuthorizesAddress($center, $address))
-                            ->pluck('id')
-                            ->map(fn ($id): int => (int) $id)
-                            ->values()
-                            ->all();
-                        $center->setAttribute('authorized_pickup_address_ids', $authorizedAddressIds);
+            $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
+            $pickupCenterOptions = $pickupCenterOptions
+                ->map(function (LogisticsCenter $center) use ($pickupAddresses, $areaEligibility): LogisticsCenter {
+                    $authorizedAddressIds = $pickupAddresses
+                        ->filter(fn (Address $address): bool => is_numeric($address->latitude)
+                            && is_numeric($address->longitude)
+                            && $areaEligibility->centerAuthorizesAddress($center, $address))
+                        ->pluck('id')
+                        ->map(fn ($id): int => (int) $id)
+                        ->values()
+                        ->all();
+                    $center->setAttribute('authorized_pickup_address_ids', $authorizedAddressIds);
 
-                        return $center;
-                    })
+                    return $center;
+                });
+            if (! $automaticPickupMatchingReady) {
+                $pickupCenterOptions = $pickupCenterOptions
                     ->filter(fn (LogisticsCenter $center): bool => $center->authorized_pickup_address_ids !== [])
                     ->values();
             }
@@ -328,6 +333,14 @@ class SellerOperationsController extends Controller
                 ->orderBy('seller_order_id')
                 ->orderBy('id')
                 ->get();
+            if ($automaticPickupMatchingReady) {
+                $readyPickupParcels->each(function (Shipment $parcel) use ($approximateCoordinates): void {
+                    $buyerAddress = $parcel->sellerOrder?->order?->address;
+                    if ($buyerAddress) {
+                        $approximateCoordinates->resolve($buyerAddress);
+                    }
+                });
+            }
 
             $pickupRequestRelations = [
                 'pickupAddress',
@@ -340,6 +353,7 @@ class SellerOperationsController extends Controller
             }
             $pickupRequests = SellerPickupRequest::query()
                 ->where('seller_profile_id', $seller->id)
+                ->whereHas('memberships.shipment', fn ($shipment) => $shipment->where('current_status', '!=', 'DELIVERED'))
                 ->with($pickupRequestRelations)
                 ->latest('id')
                 ->limit(20)
@@ -429,6 +443,7 @@ class SellerOperationsController extends Controller
             'pickupAddressLocalCenterIds' => $pickupAddressLocalCenterIds,
             'anyReadyBuyerNeedsCenterChoice' => $anyReadyBuyerNeedsCenterChoice,
             'readyPickupParcels' => $readyPickupParcels,
+            'readyPickupParcelIds' => $readyPickupParcels->pluck('id')->map(fn ($id): int => (int) $id)->all(),
             'pickupRequests' => $pickupRequests,
             'pickupRequestSchemaReady' => $pickupRequestSchemaReady,
             'automaticPickupMatchingReady' => $automaticPickupMatchingReady,

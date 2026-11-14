@@ -17,6 +17,7 @@ use App\Models\Rider\RiderProfile;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerPickupRequestShipment;
+use App\Models\Seller\SellerPickupCenterOffer;
 use App\Models\User;
 use App\Services\Fulfillment\SellerPickupRequestService;
 use App\Services\Fulfillment\FinalMileDispatchService;
@@ -25,7 +26,9 @@ use App\Services\Fulfillment\LogisticsShipmentQuery;
 use App\Services\Fulfillment\LocalRiderTripService;
 use App\Services\Fulfillment\SellerPickupBatchService;
 use App\Services\Fulfillment\SellerPickupAutoDispatchService;
+use App\Services\Fulfillment\SellerPickupDestinationAcceptanceService;
 use App\Services\Fulfillment\SellerPickupMatchingService;
+use App\Services\Fulfillment\SellerPickupRequestProgressBroadcaster;
 use App\Services\Fulfillment\ShipmentWorkflowService;
 use App\Services\Fulfillment\TransferManifestService;
 use App\Services\Maps\MapDataService;
@@ -43,8 +46,17 @@ use Illuminate\View\View;
 class DispatchController extends Controller
 {
     public const MANUAL_OVERRIDE_STATUSES = [
-        'READY_FOR_PICKUP', 'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED',
+        'PICKED_UP', 'AT_SORTING_CENTER', 'SORTED',
         'ASSIGNED_TO_RIDER', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED',
+    ];
+
+    private const MANUAL_OVERRIDE_PREVIOUS_STATUSES = [
+        'PICKED_UP' => ['PICKUP_ASSIGNED'],
+        'AT_SORTING_CENTER' => ['PICKED_UP', 'READY_FOR_PICKUP'],
+        'SORTED' => ['AT_SORTING_CENTER'],
+        'ASSIGNED_TO_RIDER' => ['SORTED'],
+        'OUT_FOR_DELIVERY' => ['ASSIGNED_TO_RIDER'],
+        'DELIVERY_FAILED' => ['OUT_FOR_DELIVERY'],
     ];
 
     public function index(Request $request): View
@@ -87,10 +99,15 @@ class DispatchController extends Controller
     public function pickups(
         Request $request,
         LogisticsSchemaReadiness $schema,
+        SellerPickupMatchingService $matching,
+        SellerPickupDestinationAcceptanceService $destinationAcceptance,
     ): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
+        if ($schema->automaticSellerPickupMatchingReady()) {
+            $matching->expireDueOffers((int) $center->id);
+        }
         $tracking = trim((string) $request->query('tracking', ''));
 
         $pickupQuery = PickupRequest::query()
@@ -125,9 +142,6 @@ class DispatchController extends Controller
             ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->where('is_online', true)
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
-            ->whereNotNull('availability_latitude')
-            ->whereNotNull('availability_longitude')
-            ->where('availability_location_updated_at', '>=', now()->subMinutes(15))
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
             ->whereHas('user', fn ($query) => $query
@@ -147,15 +161,26 @@ class DispatchController extends Controller
                 $firstShipment = $sellerRequests->first()?->shipment;
                 $area = $firstShipment ? $workflow->sellerPickupServiceArea($firstShipment, $center) : null;
                 $address = $seller?->businessAddress;
-                $eligibleRiders = $address && is_numeric($address->latitude) && is_numeric($address->longitude)
+                $eligibleRiders = $address
                     ? $riders->filter(fn (RiderProfile $rider) => (int) $rider->active_assignments_count === 0)
-                        ->map(function (RiderProfile $rider) use ($address): RiderProfile {
-                            $rider->setAttribute('seller_distance_km', $this->distanceKm(
-                                (float) $address->latitude,
-                                (float) $address->longitude,
-                                (float) $rider->availability_latitude,
-                                (float) $rider->availability_longitude,
-                            ));
+                        ->map(function (RiderProfile $rider) use ($address, $center): RiderProfile {
+                            $targetLatitude = $address->latitude;
+                            $targetLongitude = $address->longitude;
+                            if (! is_numeric($targetLatitude) || ! is_numeric($targetLongitude)) {
+                                $targetLatitude = $center->address?->latitude;
+                                $targetLongitude = $center->address?->longitude;
+                            }
+                            $rider->setAttribute('seller_distance_km', is_numeric($targetLatitude)
+                                && is_numeric($targetLongitude)
+                                && is_numeric($rider->availability_latitude)
+                                && is_numeric($rider->availability_longitude)
+                                ? $this->distanceKm(
+                                    (float) $targetLatitude,
+                                    (float) $targetLongitude,
+                                    (float) $rider->availability_latitude,
+                                    (float) $rider->availability_longitude,
+                                )
+                                : PHP_FLOAT_MAX);
 
                             return $rider;
                         })
@@ -197,7 +222,7 @@ class DispatchController extends Controller
             ? SellerPickupRequest::query()
                 ->whereIn('status', [
                     'REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING',
-                    'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS',
+                    'ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COLLECTED',
                 ])
                 ->whereHas('memberships.shipment')
                 ->where(function ($query) use ($center, $schema): void {
@@ -272,6 +297,9 @@ class DispatchController extends Controller
                 ->get()
             : collect();
         if ($sellerPickupRequests->isNotEmpty()) {
+            if ($sellerPickupRequests->contains(fn (SellerPickupRequest $pickupRequest): bool => (bool) $pickupRequest->seller_selected_fallback)) {
+                $sellerPickupRequests->loadMissing('memberships.shipment.sellerOrder.order.address');
+            }
             $areaEligibility = app(\App\Services\Fulfillment\LocalRiderEligibilityService::class);
             $sellerPickupRequests = $sellerPickupRequests
                 ->reject(function (SellerPickupRequest $pickupRequest) use ($center, $areaEligibility, $schema): bool {
@@ -321,7 +349,7 @@ class DispatchController extends Controller
         $pickupBatchService = app(SellerPickupBatchService::class);
         $collectedPickupAssignmentsByTrip = $pickupBatchService->collectedAssignmentIdsByTrip($pickupProgressTrips);
 
-        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema, $collectedPickupAssignmentsByTrip): void {
+        $sellerPickupRequests->each(function (SellerPickupRequest $pickupRequest) use ($riders, $center, $schema, $collectedPickupAssignmentsByTrip, $destinationAcceptance): void {
             $trip = $pickupRequest->riderLocalTrip;
             $assignmentsByShipment = $trip?->items
                 ->map(fn ($item) => $item->riderAssignment)
@@ -371,9 +399,14 @@ class DispatchController extends Controller
             $pickupRequest->setAttribute('current_delivery_center_offers', $currentDeliveryOffers);
             $pickupRequest->setAttribute('accepted_center_offer', $acceptedCenterOffer);
             $pickupRequest->setAttribute('accepted_delivery_center_offers', $acceptedDeliveryOffers);
+            $pickupRequest->setAttribute('route_accepted', $pickupRequest->status === 'REQUESTED'
+                && $pickupRequest->rider_local_trip_id === null
+                && $acceptedCenterOffer !== null);
             $pickupRequest->setAttribute('fallback_route_accepted', (bool) $pickupRequest->seller_selected_fallback
                 && $pickupRequest->status === 'REQUESTED'
                 && $acceptedCenterOffer !== null);
+            $pickupRequest->setAttribute('fallback_destination_hubs_accepted', ! (bool) $pickupRequest->seller_selected_fallback
+                || $destinationAcceptance->allRequiredHubsAccepted($pickupRequest));
             $fallbackCenterHasResponded = $schema->sellerPickupCenterOffersReady()
                 && $pickupRequest->centerOffers->contains(fn ($offer): bool => $offer->leg_type !== 'DELIVERY'
                     && (int) $offer->logistics_center_id === (int) $center->id
@@ -386,15 +419,26 @@ class DispatchController extends Controller
                 && ! $fallbackCenterHasResponded);
             $count = $shipments->count();
             $address = $pickupRequest->pickupAddress;
-            $eligibleRiders = $count > 0 && $address && is_numeric($address->latitude) && is_numeric($address->longitude)
+            $eligibleRiders = $count > 0 && $address
                 ? $riders->filter(fn (RiderProfile $rider): bool => (int) $rider->active_assignments_count === 0)
-                    ->map(function (RiderProfile $rider) use ($address): RiderProfile {
-                        $rider->setAttribute('seller_distance_km', $this->distanceKm(
-                            (float) $address->latitude,
-                            (float) $address->longitude,
-                            (float) $rider->availability_latitude,
-                            (float) $rider->availability_longitude,
-                        ));
+                    ->map(function (RiderProfile $rider) use ($address, $center): RiderProfile {
+                        $targetLatitude = $address->latitude;
+                        $targetLongitude = $address->longitude;
+                        if (! is_numeric($targetLatitude) || ! is_numeric($targetLongitude)) {
+                            $targetLatitude = $center->address?->latitude;
+                            $targetLongitude = $center->address?->longitude;
+                        }
+                        $rider->setAttribute('seller_distance_km', is_numeric($targetLatitude)
+                            && is_numeric($targetLongitude)
+                            && is_numeric($rider->availability_latitude)
+                            && is_numeric($rider->availability_longitude)
+                            ? $this->distanceKm(
+                                (float) $targetLatitude,
+                                (float) $targetLongitude,
+                                (float) $rider->availability_latitude,
+                                (float) $rider->availability_longitude,
+                            )
+                            : PHP_FLOAT_MAX);
 
                         return $rider;
                     })
@@ -447,22 +491,34 @@ class DispatchController extends Controller
         ]);
     }
 
-    public function receive(Request $request): View
+    public function receive(
+        Request $request,
+        LogisticsSchemaReadiness $schema,
+        SellerPickupMatchingService $matching,
+    ): View
     {
         $center = $this->center($request);
         abort_unless($center, 403);
-        $schema = app(LogisticsSchemaReadiness::class);
+        if ($schema->automaticSellerPickupMatchingReady()) {
+            $matching->expireDueOffers((int) $center->id);
+        }
         $pickupBatchesReady = $schema->sellerPickupBatchesReady();
+        $pickupRequestsReady = $schema->sellerPickupRequestsReady();
         $tracking = trim((string) $request->query('tracking', ''));
 
         $shipments = Shipment::query()
-            ->where(function ($query): void {
+            ->where(function ($query) use ($pickupRequestsReady): void {
                 $query->where('current_status', 'PICKED_UP')
-                    ->orWhere(fn ($dropoffs) => $dropoffs
-                        ->where('current_status', 'READY_FOR_PICKUP')
-                        ->whereHas('pickupRequests', fn ($pickup) => $pickup
-                            ->whereIn('status', ['PENDING', 'APPROVED'])
-                            ->where('notes', 'like', 'SELLER_DROPOFF:%')));
+                    ->orWhere(function ($dropoffs) use ($pickupRequestsReady): void {
+                        $dropoffs->where('current_status', 'READY_FOR_PICKUP')
+                            ->whereHas('pickupRequests', fn ($pickup) => $pickup
+                                ->whereIn('status', ['PENDING', 'APPROVED'])
+                                ->where('notes', 'like', 'SELLER_DROPOFF:%'));
+                        if ($pickupRequestsReady) {
+                            $dropoffs->whereDoesntHave('sellerPickupMemberships', fn ($membership) =>
+                                $membership->where('active_slot', true));
+                        }
+                    });
             })
             ->whereDoesntHave('riderAssignments.localTripItems.trip', fn ($trip) => $trip
                 ->where('trip_type', RiderLocalTrip::TYPE_PICKUP)
@@ -499,7 +555,35 @@ class DispatchController extends Controller
                 ->get()
             : collect();
 
-        return view('logistics.parcels.receive', compact('shipments', 'center', 'receivedBatches', 'incomingTransferItems'));
+        $incomingSellerDeliveryOffers = $schema->automaticSellerPickupMatchingReady()
+            ? SellerPickupCenterOffer::query()
+                ->where('logistics_center_id', $center->id)
+                ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
+                ->where('status', SellerPickupCenterOffer::STATUS_OFFERED)
+                ->where('expires_at', '>', now())
+                ->whereHas('pickupRequest', fn ($query) => $query
+                    ->where('seller_selected_fallback', true)
+                    ->whereNotIn('status', ['CANCELLED', 'REJECTED', 'RETURNED_TO_SELLER', 'NOT_COLLECTED'])
+                    ->whereHas('centerOffers', fn ($originOffer) => $originOffer
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)))
+                ->with([
+                    'pickupRequest.sellerProfile',
+                    'pickupRequest.pickupAddress',
+                    'pickupRequest.memberships.shipment.sellerOrder.order.address',
+                    'pickupRequest.centerOffers.logisticsCenter',
+                ])
+                ->oldest('offered_at')
+                ->get()
+            : collect();
+
+        return view('logistics.parcels.receive', compact(
+            'shipments',
+            'center',
+            'receivedBatches',
+            'incomingTransferItems',
+            'incomingSellerDeliveryOffers',
+        ));
     }
 
     public function sorting(Request $request): View
@@ -657,13 +741,69 @@ class DispatchController extends Controller
                         }
                         if ($uncoveredFallback) {
                             return $rider->status === 'ACTIVE'
-                                && $rider->is_online
-                                && is_numeric($rider->availability_latitude)
-                                && is_numeric($rider->availability_longitude)
-                                && ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false);
+                                && $rider->is_online;
                         }
 
                         return $workflow->riderCoversShipmentDestinationArea($shipment, $rider);
+                    })
+                    ->values()];
+            })
+            ->all();
+        $manualRiderAvailabilityNoticeByShipment = $shipments->getCollection()
+            ->mapWithKeys(function (Shipment $shipment) use ($riders, $eligibleRidersByShipment, $workflow, $center): array {
+                $isUncoveredFallback = ! $shipment->serviceArea && $workflow->sellerSelectedFallbackDestination($shipment, $center);
+                $eligible = $eligibleRidersByShipment[$shipment->id] ?? collect();
+                if (! $isUncoveredFallback || $eligible->isNotEmpty()) {
+                    return [$shipment->id => null];
+                }
+
+                $activeOnlineRiders = $riders->where('status', 'ACTIVE')->values();
+                if ($activeOnlineRiders->isEmpty()) {
+                    return [$shipment->id => [
+                        'message' => 'No ACTIVE online local Rider is assigned to this hub. Check the Rider’s hub assignment and status.',
+                        'rider' => $riders->first(),
+                    ]];
+                }
+
+                $capacityReadyRiders = $activeOnlineRiders->filter(fn (RiderProfile $rider): bool =>
+                    LocalTripCapacityRules::remainingCapacity(
+                        $rider->approved_parcel_capacity === null ? null : (int) $rider->approved_parcel_capacity,
+                        (int) $rider->active_assignments_count,
+                    ) > 0);
+                if ($capacityReadyRiders->isEmpty()) {
+                    $hasApprovedCapacity = $activeOnlineRiders->contains(fn (RiderProfile $rider): bool =>
+                        (int) $rider->approved_parcel_capacity > 0);
+
+                    return [$shipment->id => [
+                        'message' => $hasApprovedCapacity
+                            ? 'Online Riders with approved capacity have no parcel slots remaining. They will appear again when capacity is available.'
+                            : 'Online Riders are hidden because this hub has not approved their local parcel capacity yet.',
+                        'rider' => $hasApprovedCapacity ? null : $activeOnlineRiders->first(),
+                    ]];
+                }
+
+                return [$shipment->id => [
+                    'message' => 'No online local Rider at this hub currently has available parcel capacity.',
+                    'rider' => null,
+                ]];
+            })
+            ->all();
+        $liveEligibleRidersByShipment = $shipments->getCollection()
+            ->mapWithKeys(function (Shipment $shipment) use ($riders, $workflow, $center): array {
+                $uncoveredFallback = ! $shipment->serviceArea && $workflow->sellerSelectedFallbackDestination($shipment, $center);
+
+                return [$shipment->id => $riders
+                    ->filter(function (RiderProfile $rider) use ($shipment, $workflow, $uncoveredFallback): bool {
+                        if (LocalTripCapacityRules::remainingCapacity((int) $rider->approved_parcel_capacity, (int) $rider->active_assignments_count) < 1) {
+                            return false;
+                        }
+
+                        return $rider->status === 'ACTIVE'
+                            && $rider->is_online
+                            && is_numeric($rider->availability_latitude)
+                            && is_numeric($rider->availability_longitude)
+                            && ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false)
+                            && ($uncoveredFallback || $workflow->riderCoversShipmentDestinationArea($shipment, $rider));
                     })
                     ->values()];
             })
@@ -680,7 +820,7 @@ class DispatchController extends Controller
         }
 
         $localTripDispatchReady = $schema->localTripsReady();
-        return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'localTripsByRider', 'localTripDispatchReady'));
+        return view('logistics.assignments.index', compact('shipments', 'riders', 'center', 'eligibleRidersByShipment', 'liveEligibleRidersByShipment', 'manualRiderAvailabilityNoticeByShipment', 'localTripsByRider', 'localTripDispatchReady'));
     }
 
     public function overrideShipmentStatus(Request $request, Shipment $shipment, LogisticsShipmentQuery $shipmentQuery): RedirectResponse
@@ -688,6 +828,12 @@ class DispatchController extends Controller
         $center = $this->center($request);
         abort_unless($center, 403);
         abort_unless($shipmentQuery->operationalFor($center)->whereKey($shipment->id)->exists(), 403);
+
+        abort_if(
+            strtoupper(trim((string) $request->input('status'))) === 'READY_FOR_PICKUP',
+            409,
+            'The Seller must accept the product, prepare it, and mark the packed parcel ready for pickup.',
+        );
 
         $data = $request->validate([
             'status' => ['required', 'string', Rule::in(self::MANUAL_OVERRIDE_STATUSES)],
@@ -705,6 +851,21 @@ class DispatchController extends Controller
             abort_if(in_array($oldStatus, ['DELIVERED', 'COMPLETED', 'RETURNED', 'CANCELLED', 'LOST', 'DAMAGED'], true), 409, 'A closed or exception shipment cannot be manually overridden.');
             abort_if(app(\App\Services\Fulfillment\ShipmentReturnWorkflowService::class)->hasOpenWorkflow($locked), 409, 'An active return-to-seller workflow controls this parcel status until seller receipt is confirmed.');
             abort_if($oldStatus === $newStatus, 422, 'The shipment already has that status.');
+
+            $allowedPreviousStatuses = self::MANUAL_OVERRIDE_PREVIOUS_STATUSES[$newStatus] ?? [];
+            abort_unless(
+                in_array($oldStatus, $allowedPreviousStatuses, true),
+                409,
+                'Manual status overrides must follow the fulfillment steps in order. The Seller must accept, prepare, and pack the product before Logistics advances its parcel.',
+            );
+            if ($newStatus === 'AT_SORTING_CENTER' && $oldStatus === 'READY_FOR_PICKUP') {
+                $sellerDropoffExists = PickupRequest::query()
+                    ->where('shipment_id', $locked->id)
+                    ->whereIn('status', ['PENDING', 'APPROVED', 'FULFILLED'])
+                    ->where('notes', 'like', 'SELLER_DROPOFF:%')
+                    ->exists();
+                abort_unless($sellerDropoffExists, 409, 'Only a Seller drop-off parcel can move from Ready for Pickup to the sorting center.');
+            }
 
             $locked->update(['current_status' => $newStatus]);
             app(ShipmentWorkflowService::class)->recordEvent(
@@ -896,9 +1057,6 @@ class DispatchController extends Controller
                 ->where('status', 'ACTIVE')
                 ->where('is_online', true)
                 ->whereIn('vehicle_type', RiderVehicleType::localValues())
-                ->whereNotNull('availability_latitude')
-                ->whereNotNull('availability_longitude')
-                ->where('availability_location_updated_at', '>=', now()->subMinutes(2))
                 ->whereNotNull('approved_parcel_capacity')
                 ->where('approved_parcel_capacity', '>', 0)
                 ->whereHas('user', fn ($query) => $query
@@ -910,7 +1068,7 @@ class DispatchController extends Controller
 
             if (! $rider) {
                 return back()
-                    ->withErrors(['rider_profile_id' => 'Choose an active online local Rider from this hub with a live location updated in the last 2 minutes and available capacity.'])
+                    ->withErrors(['rider_profile_id' => 'Choose an active online local Rider from this hub with available parcel capacity.'])
                     ->withInput();
             }
 
@@ -935,7 +1093,7 @@ class DispatchController extends Controller
                     ? 'Seller-selected uncovered Buyer route: destination Logistics selected an online Rider from this hub.'
                     : null,
                 false,
-                $sellerSelectedFallback,
+                false,
             );
         } catch (\RuntimeException $exception) {
             return back()
@@ -1172,6 +1330,8 @@ class DispatchController extends Controller
             return back()->withErrors(['rider_profile_id' => $exception->getMessage()])->withInput();
         }
 
+        $this->broadcastSellerPickupRequestProgress($assigned);
+
         $message = 'Seller pickup request #'.$assigned->id.' assigned to pickup batch #P-'.$assigned->rider_local_trip_id.'.';
         if ((int) $assigned->skipped_count > 0) {
             $message .= ' '.$assigned->skipped_count.' parcel(s) were left in a new request because they exceed the rider\'s remaining approved capacity.';
@@ -1192,6 +1352,7 @@ class DispatchController extends Controller
         }
 
         $pickupRequest->refresh();
+        $this->broadcastSellerPickupRequestProgress($pickupRequest);
 
         return back()->with('status', $pickupRequest->status === 'RETURNED_TO_SELLER'
             ? 'Seller pickup request #'.$pickupRequest->id.' declined. The parcels were returned to the Seller for another center choice.'
@@ -1203,49 +1364,57 @@ class DispatchController extends Controller
         SellerPickupRequest $pickupRequest,
         int $offer,
         SellerPickupMatchingService $matching,
-        SellerPickupAutoDispatchService $autoDispatch,
     ): RedirectResponse {
         $center = $this->center($request);
         abort_unless($center, 403);
+        $offerLeg = SellerPickupCenterOffer::query()
+            ->where('seller_pickup_request_id', $pickupRequest->id)
+            ->whereKey($offer)
+            ->value('leg_type');
 
         try {
-            $accepted = $matching->accept($request->user(), $center, (int) $pickupRequest->id, $offer, $autoDispatch);
+            $accepted = $matching->accept($request->user(), $center, (int) $pickupRequest->id, $offer);
         } catch (RuntimeException $exception) {
             return back()->withErrors(['pickup_request' => $exception->getMessage()]);
         }
 
         $pickupRequest->refresh();
+        $this->broadcastSellerPickupRequestProgress($pickupRequest);
 
         return back()->with('status', $accepted
-            ? ((bool) $pickupRequest->seller_selected_fallback
-                ? 'Seller pickup request #'.$pickupRequest->id.' route accepted. Assign an available pickup Rider from this request.'
-                : 'Seller pickup request #'.$pickupRequest->id.' accepted, routed, and assigned to the nearest eligible local Rider at the Seller-selected center.')
+            ? ($offerLeg === SellerPickupCenterOffer::LEG_DELIVERY
+                ? 'Buyer destination route accepted for Seller pickup request #'.$pickupRequest->id.'. The Seller pickup hub can assign a Rider after every selected destination hub accepts.'
+                : ((bool) $pickupRequest->seller_selected_fallback
+                    ? 'Seller pickup request #'.$pickupRequest->id.' pickup hub accepted. The selected Buyer destination hub must accept its incoming route before a pickup Rider can be assigned.'
+                    : 'Seller pickup request #'.$pickupRequest->id.' route accepted. Select a local pickup Rider from this request.'))
             : ($pickupRequest->status === 'RETURNED_TO_SELLER'
                 ? 'This offer expired. The pickup request has been returned to the Seller for another Logistics center choice.'
-                : ((bool) $pickupRequest->seller_selected_fallback
-                    ? 'This center could not confirm the selected destination route or capacity. LIKHAE is trying the next eligible origin center.'
-                    : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.')));
+                : ($offerLeg === SellerPickupCenterOffer::LEG_DELIVERY
+                    ? 'This Buyer destination offer expired or its selected route changed. The destination stays saved; retry the offer if it is still awaiting acceptance.'
+                    : ((bool) $pickupRequest->seller_selected_fallback
+                        ? 'This center could not confirm the selected pickup route or capacity. LIKHAE is trying the next eligible origin center.'
+                        : 'Capacity or route eligibility changed. The request remains with the selected center for follow-up.'))));
     }
 
     public function acceptFallbackSellerPickupRequest(
         Request $request,
         SellerPickupRequest $pickupRequest,
         SellerPickupMatchingService $matching,
-        SellerPickupAutoDispatchService $autoDispatch,
     ): RedirectResponse {
         $center = $this->center($request);
         abort_unless($center, 403);
 
         try {
-            $accepted = $matching->acceptFallbackRequest($request->user(), $center, (int) $pickupRequest->id, $autoDispatch);
+            $accepted = $matching->acceptFallbackRequest($request->user(), $center, (int) $pickupRequest->id);
         } catch (\RuntimeException $exception) {
             return back()->withErrors(['pickup_request' => $exception->getMessage()]);
         }
 
         $pickupRequest->refresh();
+        $this->broadcastSellerPickupRequestProgress($pickupRequest);
 
         return $accepted
-            ? back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' accepted. The route was confirmed; assign an available pickup Rider from this request.')
+            ? back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' pickup hub accepted. The selected Buyer destination hub must accept its incoming route before a pickup Rider can be assigned.')
             : back()->withErrors(['pickup_request' => 'The selected route or capacity could not be confirmed. LIKHAE is checking the next eligible origin Logistics center.']);
     }
 
@@ -1263,6 +1432,8 @@ class DispatchController extends Controller
             return back()->withErrors(['pickup_request' => $exception->getMessage()]);
         }
 
+        $this->broadcastSellerPickupRequestProgress($pickupRequest);
+
         return back()->with('status', 'Seller pickup request #'.$pickupRequest->id.' rejected by this center. LIKHAE will try the next eligible origin center and keep the selected Buyer destination.');
     }
 
@@ -1274,6 +1445,10 @@ class DispatchController extends Controller
     ): RedirectResponse {
         $center = $this->center($request);
         abort_unless($center, 403);
+        $offerLeg = SellerPickupCenterOffer::query()
+            ->where('seller_pickup_request_id', $pickupRequest->id)
+            ->whereKey($offer)
+            ->value('leg_type');
 
         try {
             $matching->decline($request->user(), $center, (int) $pickupRequest->id, $offer);
@@ -1281,7 +1456,34 @@ class DispatchController extends Controller
             return back()->withErrors(['pickup_request' => $exception->getMessage()]);
         }
 
-        return back()->with('status', 'Offer declined. The pickup request has been returned to the Seller for another Logistics center choice.');
+        $this->broadcastSellerPickupRequestProgress($pickupRequest);
+
+        return back()->with('status', $offerLeg === SellerPickupCenterOffer::LEG_DELIVERY
+            ? 'Incoming Buyer destination route declined. The Seller-selected destination stays saved and may be offered again after the retry window.'
+            : ((bool) $pickupRequest->seller_selected_fallback
+                ? 'Pickup offer declined. LIKHAE will try the next eligible Seller pickup hub.'
+                : 'Pickup offer declined. The request was returned to the Seller for another Logistics center choice.'));
+    }
+
+    public function retrySellerPickupDeliveryOffers(
+        Request $request,
+        SellerPickupRequest $pickupRequest,
+        SellerPickupMatchingService $matching,
+    ): RedirectResponse {
+        $center = $this->center($request);
+        abort_unless($center, 403);
+
+        try {
+            $createdOffers = $matching->retryDestinationOffersNow(
+                $request->user(),
+                $center,
+                (int) $pickupRequest->id,
+            );
+        } catch (\RuntimeException $exception) {
+            return back()->withErrors(['pickup_request' => $exception->getMessage()]);
+        }
+
+        return back()->with('status', 'Sent '.$createdOffers.' fresh Buyer destination hub offer'.($createdOffers === 1 ? '' : 's').'. The selected Logistics hub has been notified and can accept the route.');
     }
 
     public function autoAssignPickup(Request $request, Shipment $shipment, SellerPickupAutoDispatchService $autoDispatch): RedirectResponse
@@ -1586,6 +1788,11 @@ class DispatchController extends Controller
     private function center(Request $request): mixed
     {
         return $request->user()->logisticsCenter;
+    }
+
+    private function broadcastSellerPickupRequestProgress(SellerPickupRequest $pickupRequest): void
+    {
+        app(SellerPickupRequestProgressBroadcaster::class)->broadcast((int) $pickupRequest->id);
     }
 
     private function ensureShipmentBelongsToCenter(Shipment $shipment, LogisticsCenter $center): void

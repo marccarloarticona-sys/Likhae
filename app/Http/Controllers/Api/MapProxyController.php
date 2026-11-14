@@ -95,7 +95,7 @@ class MapProxyController extends Controller
                 continue;
             }
             foreach ($line as $point) {
-                if (!is_array($point) || count($point) < 2) {
+                if (! is_array($point) || count($point) < 2) {
                     continue;
                 }
                 $last = $coordinates[count($coordinates) - 1] ?? null;
@@ -151,10 +151,15 @@ class MapProxyController extends Controller
 
     private function geoapifyGet(string $url, array $parameters): array
     {
-        $apiKey = (string) config('geoapify.api_key', '');
+        // Keep the proxy working when a production release has the shared
+        // services config but is missing the newer dedicated geoapify config.
+        $apiKey = trim((string) config('geoapify.api_key', ''));
+        if ($apiKey === '') {
+            $apiKey = trim((string) config('services.geoapify.key', ''));
+        }
         if (trim($apiKey) === '') {
             throw new HttpResponseException(response()->json([
-                'message' => 'Address and routing services are not configured.',
+                'message' => 'Map search and routing are unavailable right now. You can still tap the map to pin the location.',
             ], 503));
         }
 

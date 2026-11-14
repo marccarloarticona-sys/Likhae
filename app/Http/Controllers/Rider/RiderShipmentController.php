@@ -26,7 +26,7 @@ class RiderShipmentController extends Controller
         $data = $request->validate([
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'accuracy' => ['required', 'numeric', 'min:0', 'max:1500'],
+            'accuracy' => ['required', 'numeric', 'min:0', 'max:2500'],
             'recorded_at' => ['required', 'date'],
         ]);
         abort_unless(is_finite((float) $data['latitude']) && is_finite((float) $data['longitude']), 422, 'Coordinates must be finite numeric values.');
@@ -112,11 +112,11 @@ class RiderShipmentController extends Controller
             'collected_amount' => ['required_if:action,delivery_success', 'nullable', 'numeric', 'decimal:0,2', 'min:0'],
             'collection_reference' => ['nullable', 'string', 'max:100'],
             'notes' => ['nullable', 'string', 'max:1000'],
-            // Keep below the active PHP upload_max_filesize (2 MB) so a
-            // validation message is returned instead of PHP discarding it.
-            'proof_file' => ['required_if:action,delivery_success', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:1536'],
+            // The app's PHP upload configuration allows much larger files;
+            // keep this rider proof capped at 10 MB after browser compression.
+            'proof_file' => ['required_if:action,delivery_success', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
         ], [
-            'proof_file.max' => 'The proof photo must be 1.5 MB or smaller.',
+            'proof_file.max' => 'The proof photo must be 10 MB or smaller.',
         ]);
 
         $proofPath = null;

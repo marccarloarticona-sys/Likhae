@@ -39,6 +39,7 @@ class SellerPromotionBuyerService
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', now()))
             ->where(fn ($query) => $query->whereNull('max_redemptions')->orWhereColumn('redemptions_used', '<', 'max_redemptions'))
             ->with([
+                'components.productVariant.productImage',
                 'components.productVariant.product',
                 'buyVariant.product',
                 'rewardVariant.product',
@@ -105,6 +106,7 @@ class SellerPromotionBuyerService
                     ->where('status', User::STATUS_ACTIVE)))
             ->with([
                 'sellerProfile',
+                'components.productVariant.productImage',
                 'components.productVariant.product.images',
                 'buyVariant.product.images',
                 'rewardVariant.product.images',

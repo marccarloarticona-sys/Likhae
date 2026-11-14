@@ -12,6 +12,8 @@
         @php($activeAssignment = $shipment->riderAssignments->where('assignment_type','DELIVERY')->whereIn('status',['ASSIGNED','ACCEPTED','IN_PROGRESS'])->sortByDesc('id')->first())
         @php($assignedRiderUnavailable = $activeAssignment && $activeAssignment->status === 'ASSIGNED' && (! $activeAssignment->riderProfile?->is_online || ! ($activeAssignment->riderProfile?->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false)))
         @php($eligibleRiders = $eligibleRidersByShipment[$shipment->id] ?? collect())
+        @php($liveEligibleRiders = $liveEligibleRidersByShipment[$shipment->id] ?? collect())
+        @php($riderAvailabilityNotice = $manualRiderAvailabilityNoticeByShipment[$shipment->id] ?? null)
         <article class="border border-line bg-surface p-5"><div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div><a class="text-lg font-bold text-primary" href="{{ route('logistics.parcels.show',$shipment) }}">{{ $shipment->tracking_number }}</a><p class="mt-1 text-sm text-muted">{{ $shipment->sellerOrder?->order?->address?->formatted() }}</p><span class="text-xs font-semibold">{{ $shipment->serviceArea?->name ?? 'No delivery area' }} · {{ str($shipment->current_status)->headline() }}</span></div>
             @if($activeAssignment)<div class="grid gap-3"><div><strong>{{ $activeAssignment->riderProfile?->user?->name }}</strong><small class="block text-muted">{{ str($activeAssignment->status)->headline() }}</small></div>@if($assignedRiderUnavailable)<form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">@csrf<button class="border border-primary px-4 py-2 font-semibold text-primary">Auto-match replacement rider</button><p class="text-xs text-muted">Available before the assigned rider accepts, when they are offline or their location is stale.</p></form>@endif</div>
@@ -54,12 +56,20 @@
                         @endforeach
                     </select>
                     <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->where('status', 'ACTIVE')->isEmpty())>Assign selected rider</button>
-                    <p class="text-xs text-muted sm:col-span-2">For this uncovered Buyer route only, choose an active online local Rider assigned to this hub with a location updated in the last 2 minutes and available parcel capacity. The Buyer barangay coverage check is overridden and recorded for this assignment.</p>
+                    <p class="text-xs text-muted sm:col-span-2">For this uncovered Buyer route, choose an active online local Rider from this hub with available parcel capacity. Manual assignment does not require a fresh GPS update; the Buyer barangay coverage override is recorded.</p>
                 </form>
+                @if($riderAvailabilityNotice)
+                    <div class="border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                        {{ $riderAvailabilityNotice['message'] }}
+                        @if($riderAvailabilityNotice['rider'])
+                            <a class="ml-1 font-semibold underline" href="{{ route('logistics.riders.show', $riderAvailabilityNotice['rider']) }}">Review Rider status and capacity</a>
+                        @endif
+                    </div>
+                @endif
                 <form method="POST" action="{{ route('logistics.assignments.auto-match',$shipment) }}" class="flex flex-wrap items-center gap-3 border-t border-line pt-3">
                     @csrf
-                    <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($eligibleRiders->isEmpty())>Assign nearest live-location Rider</button>
-                    <p class="text-xs text-muted">The Seller selected this destination hub for an uncovered Buyer location. Choose a Rider from this hub with a live location and available parcel capacity.</p>
+                    <button class="bg-primary px-4 py-2 font-semibold text-white" @disabled($liveEligibleRiders->isEmpty())>Assign nearest live-location Rider</button>
+                    <p class="text-xs text-muted">The Seller selected this destination hub for an uncovered Buyer location. Nearest-rider assignment needs a location update from the last 2 minutes and available parcel capacity.</p>
                 </form>
                 @endif
                 </div>

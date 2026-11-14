@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\Schema;
 
 class Shipment extends Model
 {
@@ -56,6 +57,11 @@ class Shipment extends Model
         'seller_order_id',
         'order_item_id',
         'parcel_quantity',
+        'combined_order_items',
+        'combined_source_shipment_ids',
+        'combined_order_item_ids',
+        'superseded_at',
+        'superseded_by_shipment_id',
         'tracking_number',
         'logistics_center_id',
         'origin_logistics_center_id',
@@ -87,6 +93,11 @@ class Shipment extends Model
     {
         return [
             'parcel_quantity' => 'integer',
+            'combined_order_items' => 'boolean',
+            'combined_source_shipment_ids' => 'array',
+            'combined_order_item_ids' => 'array',
+            'superseded_at' => 'datetime',
+            'superseded_by_shipment_id' => 'integer',
             'parcel_weight_kg' => 'decimal:3',
             'parcel_volume_liters' => 'decimal:3',
             'parcel_length_cm' => 'decimal:2',
@@ -94,6 +105,20 @@ class Shipment extends Model
             'parcel_height_cm' => 'decimal:2',
             'smart_coverage_service_date' => 'date',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope('active_parcels', function (Builder $builder): void {
+            if (Schema::hasColumn('shipments', 'superseded_at')) {
+                $builder->whereNull('shipments.superseded_at');
+            }
+        });
+    }
+
+    public function scopeWithSuperseded(Builder $query): Builder
+    {
+        return $query->withoutGlobalScope('active_parcels');
     }
 
     public function sellerOrder(): BelongsTo

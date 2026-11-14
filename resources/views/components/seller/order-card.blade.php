@@ -21,10 +21,34 @@
             <strong>Products in this seller order</strong>
             <ul class="mt-2 divide-y divide-stone-200">
                 @foreach(data_get($order, 'items', collect()) as $item)
-                    <li class="flex items-center gap-3 py-3 first:pt-1 last:pb-1">
+                    <li class="flex flex-wrap items-center gap-3 py-3 first:pt-1 last:pb-1">
                         <x-shared.product-thumbnail :item="$item" size="56" class="sl-order-thumb"/>
                         <div class="min-w-0 flex-1"><strong class="block">{{ $item->product_name }}</strong><small class="block">Variant: {{ $item->variant_description ?: 'Standard' }} · Qty: {{ $item->quantity }} · Unit price: ₱{{ number_format((float) $item->unit_price, 2) }}</small></div>
                         <strong class="shrink-0">₱{{ number_format((float) $item->line_total, 2) }}</strong>
+                        @php
+                            $itemDecision = data_get($order, 'item_decisions.'.$item->id, ['status' => 'Decision unavailable', 'can_accept' => false, 'can_cancel' => false]);
+                        @endphp
+                        <div class="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
+                            <span class="sl-status is-neutral">{{ $itemDecision['status'] }}</span>
+                            @if($itemDecision['can_accept'])
+                                <form method="POST" action="{{ route('seller.orders.items.decision', [$dbId, $item->id]) }}">
+                                    @csrf
+                                    <input type="hidden" name="decision" value="accept">
+                                    <button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Accept product</button>
+                                </form>
+                            @endif
+                            @if($itemDecision['can_cancel'])
+                                <details class="sl-item-cancel-details">
+                                    <summary class="sl-btn sl-btn-ghost sl-btn-sm">Cancel</summary>
+                                    <form method="POST" action="{{ route('seller.orders.items.decision', [$dbId, $item->id]) }}" class="mt-2 grid min-w-56 gap-2">
+                                        @csrf
+                                        <input type="hidden" name="decision" value="cancel">
+                                        <label class="sl-field"><span>Cancellation reason</span><textarea name="cancellation_reason" maxlength="500" required rows="2" placeholder="Explain why you are cancelling this product"></textarea></label>
+                                        <button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">Confirm cancellation</button>
+                                    </form>
+                                </details>
+                            @endif
+                        </div>
                     </li>
                 @endforeach
             </ul>
@@ -43,9 +67,7 @@
     @endif
     <footer class="sl-order-card-actions">
         <a href="{{ route('seller.orders',['mode'=>'show','order'=>$id]) }}" class="sl-btn sl-btn-ghost sl-btn-sm">View Details</a>
-        @if ($statusKey === 'placed')
-            <form method="POST" action="{{ route('seller.orders.status',$dbId) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="confirm"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Accept Order</button></form>
-        @elseif ($statusKey === 'confirmed')
+        @if ($statusKey === 'confirmed')
             <form method="POST" action="{{ route('seller.orders.status',$dbId) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="prepare"><button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Begin Preparation</button></form>
         @elseif ($statusKey === 'preparing')
             <a target="_blank" href="{{ route('seller.orders.waybill',$dbId) }}" class="sl-btn sl-btn-ghost sl-btn-sm">Print Waybill</a>

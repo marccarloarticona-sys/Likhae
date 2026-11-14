@@ -3,12 +3,11 @@
 @php
     $availableOffers = collect($promotions)->filter(fn ($offer) => data_get($offer, 'state') === 'ACTIVE')->values();
     $primaryActionClasses = 'inline-flex items-center justify-center rounded-xl bg-[#7b2c23] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#5b201a] hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7b2c23]';
-    $secondaryActionClasses = 'inline-flex items-center justify-center rounded-xl border border-[#7b2c23] bg-transparent px-4 py-2.5 text-sm font-semibold text-[#7b2c23] transition hover:bg-[#f4e6df] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7b2c23] dark:border-[#905147] dark:text-[#f5efe8] dark:hover:bg-[#3b2722]';
 @endphp
 
 @if($availableOffers->isNotEmpty())
     <section class="mt-5 space-y-3" aria-label="{{ $heading }}">
-        <div><span class="lk-kicker">{{ $eyebrow }}</span><h2 class="text-lg font-bold text-stone-900">{{ $heading }}</h2><p class="text-sm text-stone-600">These are optional seller offers. Nothing is added automatically; use an offer button to add its items. In your cart, you can select, change, or remove each item. The offer price applies only when its required items are selected for checkout.</p></div>
+        <div><span class="lk-kicker">{{ $eyebrow }}</span><h2 class="text-lg font-bold text-stone-900">{{ $heading }}</h2><p class="text-sm text-stone-600">Choose any required variations, then select Buy Now to continue directly to checkout. The offer price is applied to eligible items there.</p></div>
         @foreach($availableOffers as $offer)
             @php
                 $remainingOfferSets = $offer->buyer_redemptions_remaining
@@ -58,7 +57,6 @@
                     </div>
                     @if($guest)
                         <div class="mt-4 flex flex-wrap gap-3">
-                            <a class="{{ $secondaryActionClasses }}" href="{{ route('login') }}">Sign in to add this bundle</a>
                             <a class="{{ $primaryActionClasses }}" href="{{ route('login') }}">Sign in to buy now</a>
                         </div>
                     @else
@@ -81,7 +79,6 @@
                                 @endif
                             @endforeach
                             <label class="text-xs font-semibold text-stone-700">Bundle sets <input class="mt-1 block w-24 rounded-lg border border-stone-300 px-3 py-2" type="number" name="sets" min="1" max="{{ $maximumOfferSets }}" value="1"></label>
-                            <button class="{{ $secondaryActionClasses }}" type="submit">Add Bundle to Cart</button>
                             <button class="{{ $primaryActionClasses }}" type="submit" name="buy_now" value="1">Buy Now</button>
                         </form>
                     @endif
@@ -112,7 +109,6 @@
                     </div>
                     @if($guest)
                         <div class="mt-4 flex flex-wrap gap-3">
-                            <a class="{{ $secondaryActionClasses }}" href="{{ route('login') }}">Sign in to claim this offer</a>
                             <a class="{{ $primaryActionClasses }}" href="{{ route('login') }}">Sign in to buy now</a>
                         </div>
                     @else
@@ -130,7 +126,6 @@
                                 </label>
                             @endif
                             <label class="text-xs font-semibold text-stone-700">Offer sets <input class="mt-1 block w-24 rounded-lg border border-stone-300 px-3 py-2" type="number" name="sets" min="1" max="{{ $maximumOfferSets }}" value="1"></label>
-                            <button class="{{ $secondaryActionClasses }}" type="submit">Add Items &amp; Claim</button>
                             <button class="{{ $primaryActionClasses }}" type="submit" name="buy_now" value="1">Buy Now</button>
                         </form>
                     @endif

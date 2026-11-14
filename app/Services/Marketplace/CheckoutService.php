@@ -85,7 +85,7 @@ class CheckoutService
 
     private function assertNewBuyerOpenCodOrderCapacity(User $buyer): void
     {
-        $limit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 1));
+        $limit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 3));
         $openOrders = $this->newBuyerOpenCodOrderCount($buyer);
 
         if ($openOrders !== null && $openOrders >= $limit) {
@@ -218,7 +218,9 @@ class CheckoutService
             return [
                 'available' => true,
                 'requires_review' => $requiresReview,
-                'message' => $requiresReview ? 'Delivery details may need confirmation after your order is placed.' : null,
+                'message' => $requiresReview
+                    ? 'There isn’t a local Logistics hub serving one or more locations in this order yet. You can still place your order, but processing may take a little longer while the Seller arranges the best available route.'
+                    : null,
             ];
         } catch (ValidationException $exception) {
             $message = collect($exception->errors())->flatten()->filter()->first()
@@ -280,15 +282,16 @@ class CheckoutService
                 $this->assertCrossHubCustodyReady($route);
             } catch (ValidationException $exception) {
                 $reason = (string) (collect($exception->errors())->flatten()->filter()->first() ?? '');
-                if ($this->isUnserviceableBuyerAddress($reason) || str_contains(mb_strtolower($reason), 'cross-hub fulfillment')) {
+                if (str_contains(mb_strtolower($reason), 'cross-hub fulfillment')) {
                     throw ValidationException::withMessages([
                         'address_id' => $this->buyerFacingDeliveryError($reason),
                     ]);
                 }
 
-                // Ambiguous or incomplete seller-side routing remains a
-                // logistics review state. Buyer-address coverage failures
-                // are blocked before order creation below.
+                // A valid but locally uncovered Seller or Buyer location is
+                // handled by the Seller's fallback pickup flow after the
+                // order is created. Keep malformed PSGC addresses and other
+                // non-reviewable routing errors blocked here.
                 if (! $this->routingReviewReason($exception)) {
                     throw ValidationException::withMessages([
                         'address_id' => $this->buyerFacingDeliveryError($reason),
@@ -300,17 +303,6 @@ class CheckoutService
         }
 
         return $requiresReview;
-    }
-
-    private function isUnserviceableBuyerAddress(string $reason): bool
-    {
-        $message = mb_strtolower($reason);
-
-        return str_contains($message, 'buyer delivery')
-            && (str_contains($message, 'no active logistics hub')
-                || str_contains($message, 'not covered')
-                || str_contains($message, 'missing a canonical')
-                || str_contains($message, 'missing or does not belong'));
     }
 
     private function buyerFacingDeliveryError(string $reason): string
@@ -1411,15 +1403,31 @@ class CheckoutService
             }
 
             if ($promotion->promotion_type !== SellerPromotion::TYPE_BUY_X_GET_Y
-                || ! $promotion->buy_variant_id || ! $promotion->reward_variant_id
-                || ! $promotion->buyVariant || ! $promotion->rewardVariant) {
+                || ! $promotion->buy_variant_id || ! $promotion->buyVariant) {
                 continue;
             }
 
             $buyVariantId = (int) $promotion->buy_variant_id;
-            $rewardVariantId = (int) $promotion->reward_variant_id;
             $buyQuantity = max(1, (int) $promotion->buy_quantity);
             $rewardQuantity = max(1, (int) $promotion->reward_quantity);
+            $rewardVariant = $promotion->rewardVariant;
+            $rewardVariantId = (int) ($promotion->reward_variant_id ?? 0);
+            if ($rewardVariantId < 1 && $promotion->reward_product_id) {
+                $rewardItem = $items->first(function (CartItem $item) use ($items, $promotion, $rewardQuantity, $reservedQuantities): bool {
+                    $variant = $item->productVariant;
+
+                    return $variant
+                        && (int) $variant->product_id === (int) $promotion->reward_product_id
+                        && (bool) $variant->is_active
+                        && $this->availableCartQuantity($items, (int) $variant->id, $reservedQuantities) >= $rewardQuantity;
+                });
+                $rewardVariant = $rewardItem?->productVariant;
+                $rewardVariantId = (int) ($rewardVariant?->id ?? 0);
+            }
+            if ($rewardVariantId < 1 || ! $rewardVariant) {
+                continue;
+            }
+            $rewardVariant->loadMissing('product');
             $buyAvailable = $this->availableCartQuantity($items, $buyVariantId, $reservedQuantities);
             $rewardAvailable = $this->availableCartQuantity($items, $rewardVariantId, $reservedQuantities);
 
@@ -1449,7 +1457,9 @@ class CheckoutService
                 continue;
             }
 
-            $discount = round(array_sum(array_map(fn (array $row): float => $row['unit_price'] * $row['quantity'], $rewardAllocations)), 2);
+            $rewardSubtotal = array_sum(array_map(fn (array $row): float => $row['unit_price'] * $row['quantity'], $rewardAllocations));
+            $discountPercent = min(100.0, max(0.0, (float) ($promotion->reward_discount_percent ?? 100)));
+            $discount = round($rewardSubtotal * $discountPercent / 100, 2);
             if ($discount <= 0) {
                 continue;
             }
@@ -1460,9 +1470,10 @@ class CheckoutService
                 'buy_sku' => $promotion->buyVariant->sku,
                 'buy_quantity' => $buyQuantity * $sets,
                 'reward_variant_id' => $rewardVariantId,
-                'reward_product_name' => $promotion->rewardVariant->product?->name,
-                'reward_sku' => $promotion->rewardVariant->sku,
+                'reward_product_name' => $rewardVariant->product?->name,
+                'reward_sku' => $rewardVariant->sku,
                 'reward_quantity' => $rewardQuantity * $sets,
+                'reward_discount_percent' => $discountPercent,
             ]);
             $groups[$sellerId]['promotion_discount_total'] += $discount;
             $totalDiscount += $discount;
@@ -1516,6 +1527,13 @@ class CheckoutService
     /** @param array<int, array{item: CartItem, quantity: int, unit_price: float}> $allocations */
     private function applyPromotionDiscountToAllocations(array $allocations, SellerPromotion $promotion, float $discount, array $snapshot): void
     {
+        $participantVariantIds = collect($allocations)
+            ->map(fn (array $row): int => (int) $row['item']->product_variant_id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+        $snapshot['participant_variant_ids'] = $participantVariantIds;
         $baseCents = array_map(fn (array $row): int => FinancialRules::cents($row['unit_price'] * $row['quantity']), $allocations);
         $totalBaseCents = array_sum($baseCents);
         $discountCents = min($totalBaseCents, FinancialRules::cents($discount));
@@ -1802,6 +1820,8 @@ class CheckoutService
         return str_contains($message, 'ambiguous')
             || str_contains($message, 'no active logistics hub')
             || str_contains($message, 'barangay psgc is not covered')
+            || str_contains($message, 'no approved delivery route currently serves this destination')
+            || str_contains($message, 'no approved secondary or extended delivery route')
             ? $reason
             : null;
     }

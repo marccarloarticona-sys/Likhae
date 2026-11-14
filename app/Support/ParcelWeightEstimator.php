@@ -19,6 +19,28 @@ final class ParcelWeightEstimator
 
     public static function productEstimate(?Shipment $shipment): ?float
     {
+        if ($shipment?->combined_order_items) {
+            $shipment->loadMissing('sellerOrder.items.productVariant');
+            $itemIds = array_map('intval', $shipment->combined_order_item_ids ?? []);
+            $items = ($shipment->sellerOrder?->items ?? collect())->whereIn('id', $itemIds);
+            if ($items->isEmpty()) {
+                return null;
+            }
+
+            $estimate = 0.0;
+            foreach ($items as $item) {
+                $unitWeight = $item->productVariant?->weight_kg;
+                if (! is_numeric($unitWeight) || ! is_finite((float) $unitWeight) || (float) $unitWeight <= 0 || (int) $item->quantity <= 0) {
+                    return null;
+                }
+                $estimate += (float) $unitWeight * (int) $item->quantity;
+            }
+
+            $estimate = round($estimate, 3, PHP_ROUND_HALF_UP);
+
+            return $estimate > 0 && $estimate <= self::MAX_WEIGHT_KG ? $estimate : null;
+        }
+
         $unitWeight = $shipment?->orderItem?->productVariant?->weight_kg;
         $quantity = (int) ($shipment?->parcel_quantity ?? $shipment?->orderItem?->quantity ?? 0);
 

@@ -1,5 +1,5 @@
 const DEFAULT_MAX_AGE_MS = 120000;
-const MAX_LIVE_LOCATION_ACCURACY_METERS = 1500;
+export const MAX_LIVE_LOCATION_ACCURACY_METERS = 2500;
 
 let lastDevicePosition = null;
 

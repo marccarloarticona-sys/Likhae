@@ -20,7 +20,9 @@
 			<div class="box"><strong>Seller</strong><p>{{ $order?->sellerProfile?->business_name }}<br>{{ $order?->sellerProfile?->businessAddress?->formatted() }}</p></div>
 			<div class="box"><strong>Recipient</strong><p>{{ $order?->order?->address?->recipient_name }}<br>{{ $order?->order?->address?->formatted() }}</p></div>
 		</section>
-		@php($weightItems = $shipment->orderItem ? collect([$shipment->orderItem]) : ($order?->items ?? collect()))
+		@php($weightItems = $shipment->combined_order_items
+			? ($order?->items ?? collect())->whereIn('id', array_map('intval', $shipment->combined_order_item_ids ?? []))
+			: ($shipment->orderItem ? collect([$shipment->orderItem]) : ($order?->items ?? collect())))
 		<section class="grid" style="margin-top:16px">
 			<x-shared.waybill-weight :shipment="$shipment" :items="$weightItems" />
 			<x-shared.waybill-dimensions :shipment="$shipment" />
@@ -30,6 +32,15 @@
 			<thead><tr><th>Item</th><th>Variant</th><th>Qty</th></tr></thead>
 			<tbody>
 				<tr><td>{{ $shipment->orderItem->product_name }}<br><small>SKU: {{ $shipment->orderItem->sku ?: 'Not provided' }}</small></td><td>{{ $shipment->orderItem->variant_description ?: 'Standard' }}</td><td>{{ $shipment->parcel_quantity }}</td></tr>
+			</tbody>
+		</table>
+		@elseif($shipment->combined_order_items)
+		<table class="items">
+			<thead><tr><th>Item</th><th>Variant</th><th>Qty</th></tr></thead>
+			<tbody>
+				@foreach($weightItems as $item)
+					<tr><td>{{ $item->product_name }}<br><small>SKU: {{ $item->sku ?: 'Not provided' }}</small></td><td>{{ $item->variant_description ?: 'Standard' }}</td><td>{{ $item->quantity }}</td></tr>
+				@endforeach
 			</tbody>
 		</table>
 		@else

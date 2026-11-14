@@ -34,6 +34,7 @@ use App\Services\Marketplace\FlashSaleReminderService;
 use App\Services\Marketplace\PlatformCampaignCatalog;
 use App\Services\Marketplace\PurchaseLimitService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductViewService;
 use App\Services\Marketplace\ProductPriceResolver;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Marketplace\SellerPromotionBuyerService;
@@ -75,20 +76,47 @@ class BuyerController extends Controller
         private readonly PlatformCampaignCatalog $platformCampaigns,
         private readonly PurchaseLimitService $purchaseLimits,
         private readonly SellerPromotionBuyerService $sellerPromotions,
+        private readonly ProductViewService $productViews,
     ) {}
 
     public function home(Request $request): View
     {
-        $products = $this->catalog->applySort(
-            $this->catalog->applyFilters($this->catalog->visibleQuery(), $request),
-            $request->query('sort')
-        )->limit(6)->get();
-        $featuredProductIds = $products
-            ->take(6)
-            ->pluck('id')
+        $rankedFeaturedProducts = $this->catalog->visibleQuery()
+            ->setEagerLoads([])
+            ->get()
+            ->sort(function (Product $left, Product $right): int {
+                return ((float) ($right->reviews_avg_rating ?? 0) <=> (float) ($left->reviews_avg_rating ?? 0))
+                    ?: ((int) $right->reviews_count <=> (int) $left->reviews_count)
+                    ?: ((int) ($right->order_items_sum_quantity ?? 0) <=> (int) ($left->order_items_sum_quantity ?? 0))
+                    ?: (($right->created_at?->getTimestamp() ?? 0) <=> ($left->created_at?->getTimestamp() ?? 0))
+                    ?: ((int) $right->id <=> (int) $left->id);
+            });
+        $storeLeaders = $rankedFeaturedProducts
+            ->unique('seller_profile_id')
+            ->take(12);
+        $featuredProductIds = $storeLeaders
+            ->pluck('id');
+        if ($featuredProductIds->count() < 12) {
+            $featuredProductIds = $featuredProductIds->concat(
+                $rankedFeaturedProducts
+                    ->reject(fn (Product $product): bool => $featuredProductIds->contains((int) $product->id))
+                    ->take(12 - $featuredProductIds->count())
+                    ->pluck('id')
+            );
+        }
+        $featuredProductIds = $featuredProductIds
+            ->shuffle()
             ->map(fn ($id): int => (int) $id)
             ->values()
             ->all();
+        $featuredOrder = collect($featuredProductIds)->flip();
+        $products = $featuredOrder->isEmpty()
+            ? collect()
+            : $this->catalog->visibleQuery()
+                ->whereIn('products.id', $featuredProductIds)
+                ->get()
+                ->sortBy(fn (Product $product): int => (int) $featuredOrder->get((int) $product->id, PHP_INT_MAX))
+                ->values();
 
         $homeCarouselEvents = $this->platformCampaigns->homepageCarousel()
             ->filter(fn ($campaign): bool => Storage::disk('public')->exists((string) $campaign->homepage_carousel_desktop_image_path))
@@ -183,12 +211,14 @@ class BuyerController extends Controller
         $offset = $request->query->has('recommendation_offset')
             ? (int) $request->query('recommendation_offset')
             : (((int) $request->query('recommendation_page', 1) - 1) * 6);
+        $buyer = $request->user();
+        $this->importLegacyRecentProductViews($request, $buyer);
         $recommendationPage = $this->homepageRecommendationPage(
             $excludedProductIds,
             $offset,
             $limit,
-            $request->user(),
-            $request->session()->get('buyer_recently_viewed_product_ids', []),
+            $buyer,
+            $this->productViews->recentProductIds($buyer)->all(),
         );
         $recommendedProducts = $recommendationPage['products']
             ->map(fn (Product $product): array => $this->catalog->recommendationCardPayload($product));
@@ -746,7 +776,7 @@ class BuyerController extends Controller
         if ($invalidPriceRange) {
             $query->whereRaw('1 = 0');
         }
-        $paginator = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest')
+        $paginator = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest', $request)
             ->paginate(24, ['*'], 'page', max(1, (int) ($filters['page'] ?? 1)))
             ->appends($this->catalogQueryParameters($filters));
         $searchSuggestions = ! $invalidPriceRange && $paginator->total() === 0 && $filters['q'] !== ''
@@ -789,7 +819,7 @@ class BuyerController extends Controller
         }
 
         $page = max(1, (int) ($filters['page'] ?? 1));
-        $products = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest')
+        $products = $this->sortBuyerCatalog($query, $filters['sort'] ?? 'latest', $request)
             ->simplePaginate(24, ['*'], 'page', $page)
             ->appends($this->catalogQueryParameters($filters));
         $cardProducts = $products->getCollection()
@@ -931,7 +961,7 @@ class BuyerController extends Controller
             'rating' => ['nullable', 'numeric', 'between:0,5'],
             'province' => ['nullable', 'string', 'max:150'],
             'municipality' => ['nullable', 'string', 'max:150'],
-            'sort' => ['nullable', 'string', Rule::in(['latest', 'price-low', 'price-high', 'best-rated', 'best-selling', 'oldest', 'name', 'featured'])],
+            'sort' => ['nullable', 'string', Rule::in(['shuffle', 'latest', 'price-low', 'price-high', 'best-rated', 'best-selling', 'oldest', 'name', 'featured'])],
             'view' => ['nullable', 'string', Rule::in(['grid', 'list'])],
             'page' => ['nullable', 'integer', 'min:1', 'max:1000000'],
         ]);
@@ -957,7 +987,10 @@ class BuyerController extends Controller
         $filters['category'] = strtolower(trim((string) ($filters['category'] ?? '')));
         $filters['province'] = trim((string) ($filters['province'] ?? ''));
         $filters['municipality'] = trim((string) ($filters['municipality'] ?? ''));
-        $filters['sort'] = strtolower(trim((string) ($filters['sort'] ?? 'latest')));
+        $defaultSort = in_array($filters['category'], ['', 'all'], true) && $filters['q'] === ''
+            ? 'shuffle'
+            : 'latest';
+        $filters['sort'] = strtolower(trim((string) ($filters['sort'] ?? $defaultSort)));
         if ($filters['sort'] === 'featured') {
             $filters['sort'] = 'latest';
         }
@@ -967,6 +1000,9 @@ class BuyerController extends Controller
         foreach (['q', 'category', 'min_price', 'max_price', 'rating', 'province', 'municipality', 'sort', 'view'] as $key) {
             $value = $query[$key] ?? '';
             $filterValues[$key] = is_scalar($value) ? trim((string) $value) : '';
+        }
+        if ($filterValues['sort'] === '') {
+            $filterValues['sort'] = $filters['sort'];
         }
         $errors = new ViewErrorBag;
         $errors->put('default', $validator->errors());
@@ -1094,8 +1130,29 @@ class BuyerController extends Controller
         return ['min' => $minimum, 'max' => $maximum, 'step' => $step, 'available' => true];
     }
 
-    private function sortBuyerCatalog(Builder $query, string $sort): Builder
+    private function sortBuyerCatalog(Builder $query, string $sort, ?Request $request = null): Builder
     {
+        if ($sort === 'shuffle' && $request) {
+            $shuffle = $request->session()->get('buyer_catalog_shuffle');
+            $today = now()->toDateString();
+            if (! is_array($shuffle) || ($shuffle['date'] ?? null) !== $today) {
+                $shuffle = [
+                    'date' => $today,
+                    'multiplier' => random_int(1, 2_147_483_646),
+                    'offset' => random_int(0, 2_147_483_646),
+                ];
+                $request->session()->put('buyer_catalog_shuffle', $shuffle);
+            }
+
+            return $query
+                ->orderByRaw('((products.id * ? + ?) % ?)', [
+                    (int) $shuffle['multiplier'],
+                    (int) $shuffle['offset'],
+                    2_147_483_647,
+                ])
+                ->orderBy('products.id');
+        }
+
         return match ($sort) {
             'price-low' => $query->orderBy($this->variantSellingPriceSubquery())->orderBy('products.id'),
             'price-high' => $query->orderByDesc($this->variantSellingPriceSubquery())->orderBy('products.id'),
@@ -1158,12 +1215,14 @@ class BuyerController extends Controller
     private function catalogQueryParameters(array $filters): array
     {
         $parameters = [];
+        $allProductsWithoutSearch = trim((string) ($filters['q'] ?? '')) === ''
+            && in_array((string) ($filters['category'] ?? ''), ['', 'all'], true);
         foreach (['q', 'category', 'min_price', 'max_price', 'rating', 'province', 'municipality', 'sort', 'view'] as $key) {
             $value = $filters[$key] ?? null;
             if ($value !== null && $value !== ''
                 && ! ($key === 'category' && $value === 'all')
                 && ! ($key === 'rating' && (string) $value === '0')
-                && ! ($key === 'sort' && $value === 'latest')
+                && ! ($key === 'sort' && $value === 'latest' && ! $allProductsWithoutSearch)
                 && ! ($key === 'view' && $value === 'grid')) {
                 $parameters[$key] = $value;
             }
@@ -1284,28 +1343,23 @@ class BuyerController extends Controller
             'product' => $productPayload,
             'sellerPromotions' => $this->sellerPromotions->forProduct($product, $request->user()),
             'productVouchers' => $productVouchers,
-            'relatedProducts' => $this->catalog->visibleQuery()
-                ->whereKeyNot($product->id)
-                ->where('category_id', $product->category_id)
-                ->limit(4)
-                ->get()
-                ->map(fn (Product $item) => $this->catalog->productPayload($item)),
+            'relatedProducts' => $this->catalog->relatedProducts($product),
         ]);
     }
 
     private function rememberRecentProductView(Request $request, Product $product): void
     {
-        $recentProductIds = collect($request->session()->get('buyer_recently_viewed_product_ids', []))
-            ->filter(fn ($id): bool => is_numeric($id) && (int) $id > 0)
-            ->map(fn ($id): int => (int) $id)
-            ->reject(fn (int $id): bool => $id === (int) $product->id)
-            ->prepend((int) $product->id)
-            ->unique()
-            ->take(30)
-            ->values()
-            ->all();
+        $buyer = $request->user();
+        if ($buyer instanceof User && $buyer->isAccountType(User::TYPE_BUYER)) {
+            $this->importLegacyRecentProductViews($request, $buyer);
+            $this->productViews->record($buyer, $product);
+        }
+    }
 
-        $request->session()->put('buyer_recently_viewed_product_ids', $recentProductIds);
+    private function importLegacyRecentProductViews(Request $request, User $buyer): void
+    {
+        $legacyIds = $request->session()->pull('buyer_recently_viewed_product_ids', []);
+        $this->productViews->importLegacySessionViews($buyer, is_array($legacyIds) ? $legacyIds : []);
     }
 
     public function shop(string $seller, Request $request): View
@@ -2719,12 +2773,8 @@ class BuyerController extends Controller
 
         $recentlyViewedProducts = collect();
         if ($request->query('tab') === 'recently_viewed') {
-            $recentlyViewedIds = collect($request->session()->get('buyer_recently_viewed_product_ids', []))
-                ->filter(fn ($id): bool => is_numeric($id) && (int) $id > 0)
-                ->map(fn ($id): int => (int) $id)
-                ->unique()
-                ->take(30)
-                ->values();
+            $this->importLegacyRecentProductViews($request, $buyer);
+            $recentlyViewedIds = $this->productViews->recentProductIds($buyer);
 
             if ($recentlyViewedIds->isNotEmpty()) {
                 $productsById = Product::query()

@@ -35,6 +35,7 @@ final class SellerPickupBatchService
         private readonly LocalRiderTripService $trips,
         private readonly AccountNotificationService $notifications,
         private readonly RiderAssignmentOfferExpiryService $offers,
+        private readonly SellerPickupDestinationAcceptanceService $destinationAcceptance,
     ) {}
 
     /** @param list<int> $shipmentIds */
@@ -73,6 +74,11 @@ final class SellerPickupBatchService
             if ($linkedPickupRequest && $linkedPickupRequest->status !== 'REQUESTED'
                 && ! ($automaticDispatch && $linkedPickupRequest->status === 'PENDING')) {
                 throw new RuntimeException('Only a requested Seller pickup can be assigned.');
+            }
+            if ($linkedPickupRequest
+                && (bool) $linkedPickupRequest->seller_selected_fallback
+                && ! $this->destinationAcceptance->allRequiredHubsAccepted($linkedPickupRequest)) {
+                throw new RuntimeException('Wait for every selected Buyer destination Logistics hub to accept its incoming route before assigning a pickup Rider.');
             }
             $rider = RiderProfile::query()
                 ->with(['user', 'logisticsCenter', 'areaAssignments.serviceArea.locations'])
@@ -458,6 +464,7 @@ final class SellerPickupBatchService
             return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
                 $trip = $this->lockedPickupTrip($trip);
                 $this->assertTripRider($actor, $trip);
+                $this->assertDestinationRouteAccepted($trip);
                 if ($trip->status !== RiderLocalTrip::LOADING || $trip->items->isEmpty()) {
                     throw new RuntimeException('Only an assigned seller pickup batch can be accepted.');
                 }
@@ -494,6 +501,7 @@ final class SellerPickupBatchService
         return DB::transaction(function () use ($actor, $trip): RiderLocalTrip {
             $trip = $this->lockedPickupTrip($trip);
             $this->assertTripRider($actor, $trip);
+            $this->assertDestinationRouteAccepted($trip);
             if ($trip->status !== RiderLocalTrip::READY || $trip->items->isEmpty()) {
                 throw new RuntimeException('Accept the seller pickup batch before starting it.');
             }
@@ -557,6 +565,7 @@ final class SellerPickupBatchService
                     'batch_status' => $finished ? RiderLocalTrip::EN_ROUTE_TO_HUB : $trip->fresh()->status,
                 ];
             }
+            $this->assertDestinationRouteAccepted($trip);
             if ($assignment->status !== 'IN_PROGRESS') {
                 throw new RuntimeException('This parcel is not awaiting a seller pickup scan.');
             }
@@ -880,6 +889,17 @@ final class SellerPickupBatchService
         }
         if (! RiderVehicleType::isLocalBarangay($trip->rider?->vehicle_type)) {
             throw new RuntimeException('Only a motorcycle or tricycle barangay rider can operate a seller pickup batch.');
+        }
+    }
+
+    private function assertDestinationRouteAccepted(RiderLocalTrip $trip): void
+    {
+        $trip->loadMissing('sellerPickupRequest');
+        $pickupRequest = $trip->sellerPickupRequest;
+        if ($pickupRequest
+            && (bool) $pickupRequest->seller_selected_fallback
+            && ! $this->destinationAcceptance->allRequiredHubsAccepted($pickupRequest)) {
+            throw new RuntimeException('The selected Buyer destination Logistics hub has not accepted this incoming route yet. Pickup work will continue after every destination hub accepts.');
         }
     }
 

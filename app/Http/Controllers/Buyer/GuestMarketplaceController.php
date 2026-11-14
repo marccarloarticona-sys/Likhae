@@ -139,12 +139,7 @@ class GuestMarketplaceController extends Controller
             'productModel' => $product,
             'product' => $productPayload,
             'sellerPromotions' => $this->sellerPromotions->forProduct($product),
-            'relatedProducts' => $this->catalog->visibleQuery()
-                ->whereKeyNot($product->id)
-                ->where('category_id', $product->category_id)
-                ->limit(4)
-                ->get()
-                ->map(fn (Product $item) => $this->catalog->productPayload($item)),
+            'relatedProducts' => $this->catalog->relatedProducts($product),
         ]);
     }
 }

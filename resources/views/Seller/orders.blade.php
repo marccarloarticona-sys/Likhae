@@ -16,6 +16,12 @@
     @if($errors->any() && ! session('parcel_split_message'))<div class="sl-card mb-4 border border-red-200 bg-red-50 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
     @if ($currentMode === 'show')
         @if($order)
+            @php
+                $parcelCount = $order['parcels']->count();
+                $showBulkWaybill = ! $order['has_unresolved_legacy_shipment']
+                    && ! $order['parcels_need_setup']
+                    && $order['can_print_waybills'];
+            @endphp
             <div class="sl-page-toolbar"><div><span class="sl-eyebrow">Order Details</span><h2>Order #{{ $order['id'] }}</h2><p>Placed {{ $order['date'] }}</p></div><a href="{{ route('seller.orders',['status'=>$order['status_key'],'q'=>$search ?? null,'from_date'=>$fromDate ?? null,'to_date'=>$toDate ?? null]) }}" class="sl-btn sl-btn-ghost">Back to Orders</a></div>
             @if(filled($order['buyer_note'] ?? null))
                 <section class="sl-card" data-buyer-note><h3>Buyer Note</h3><p class="whitespace-pre-line">{{ $order['buyer_note'] }}</p></section>
@@ -28,14 +34,16 @@
                             @if($order['has_unresolved_legacy_shipment'])
                                 <p>This order still has a legacy parcel whose item mapping needs review.</p>
                             @else
-                                <p>Each parcel has its own scan code and packed dimensions. One order waybill lists all parcels.</p>
+                                <p>Each parcel has its own scan code and waybill. Print labels one at a time or print all parcel waybills together.</p>
                             @endif
                         </div>
                         <div class="sl-order-heading-actions">
-                            @if(! $order['has_unresolved_legacy_shipment'] && ! $order['parcels_need_setup'] && $order['can_print_waybills'])
-                                <a class="sl-btn sl-btn-primary" href="{{ route('seller.orders.waybill', $order['db_id']) }}">Print order waybill</a>
+                            @if($showBulkWaybill)
+                                <a class="sl-btn sl-btn-primary" href="{{ route('seller.orders.waybill', $order['db_id']) }}">{{ $parcelCount === 1 ? 'Print parcel waybill' : 'Print all '.$parcelCount.' parcel waybills' }}</a>
                             @endif
-                            <span class="sl-status is-warning">{{ $order['status'] }}</span>
+                            @if($parcelCount === 0)
+                                <span class="sl-status is-warning">{{ $order['status'] }}</span>
+                            @endif
                         </div>
                     </header>
 
@@ -55,8 +63,78 @@
                         </form>
                     @endif
 
+                    @foreach($order['eligible_product_groups'] as $productGroup)
+                        <div class="sl-parcel-setup">
+                            @if($productGroup['type'] === 'promotion')
+                                <p>Items in the <strong>{{ $productGroup['name'] }}</strong> offer can share one parcel, even when they are different products. You can also keep them separate.</p>
+                            @else
+                                <p><strong>{{ $productGroup['name'] }}</strong> has multiple product lines in this order. Combine those lines into one parcel, or keep them separate.</p>
+                            @endif
+                            <form method="POST" action="{{ route('seller.orders.parcels.combine', [$order['db_id'], $productGroup['target_item']->id]) }}">
+                                @csrf
+                                <input type="hidden" name="group_key" value="{{ $productGroup['key'] }}">
+                                <button class="sl-btn sl-btn-primary" type="submit">{{ $productGroup['type'] === 'promotion' ? 'Combine offer items into one parcel' : 'Combine this product into one parcel' }}</button>
+                            </form>
+                        </div>
+                    @endforeach
+
+                    @foreach($order['combined_parcels'] as $combinedShipment)
+                        @php
+                            $combinedItems = $order['combined_items_by_shipment']->get((int) $combinedShipment->id, collect());
+                            $combinedWeight = \App\Support\ParcelWeightEstimator::recordedWeight($combinedShipment)
+                                ?? \App\Support\ParcelWeightEstimator::productEstimate($combinedShipment);
+                            $combinedPacked = $combinedShipment->events->contains(fn ($event) => $event->status === 'PREPARING'
+                                && str_starts_with((string) $event->notes, 'SELLER_PACKED_CHECKPOINT:'));
+                            $combinedDimensionsSaved = is_numeric($combinedShipment->parcel_length_cm)
+                                && is_numeric($combinedShipment->parcel_width_cm)
+                                && is_numeric($combinedShipment->parcel_height_cm);
+                            $canSeparateCombined = $order['separable_combined_parcels']->contains(fn ($parcel) => (int) $parcel->id === (int) $combinedShipment->id);
+                        @endphp
+                        <article class="sl-parcel-card sl-combined-parcel-card">
+                            <div class="sl-parcel-card-header">
+                                <strong>{{ $combinedItems->first()?->product_name ?? 'Combined product parcel' }} &middot; {{ $combinedItems->count() }} product lines</strong>
+                                <span class="sl-parcel-status">{{ str($combinedShipment->current_status)->replace('_', ' ')->title() }}</span>
+                            </div>
+                            <p class="sl-parcel-tracking">Tracking code <strong>{{ $combinedShipment->tracking_number }}</strong></p>
+                            @if(! ($showBulkWaybill && $parcelCount === 1))
+                                <a class="sl-btn sl-btn-ghost" target="_blank" rel="noopener" href="{{ route('seller.orders.waybill', [$order['db_id'], 'shipment_id' => $combinedShipment->id]) }}">Print this parcel waybill</a>
+                            @endif
+                            <ul class="sl-combined-parcel-items">
+                                @foreach($combinedItems as $combinedItem)
+                                    <li><strong>{{ $combinedItem->product_name }}</strong> &middot; {{ $combinedItem->variant_description ?: 'Standard' }} &middot; Qty {{ $combinedItem->quantity }}</li>
+                                @endforeach
+                            </ul>
+                            <dl class="sl-parcel-facts">
+                                <div><dt>Total quantity</dt><dd>{{ $combinedShipment->parcel_quantity }}</dd></div>
+                                <div><dt>Estimated weight</dt><dd>{{ $combinedWeight !== null ? number_format($combinedWeight, 3).' kg' : 'Not available' }}</dd></div>
+                                <div><dt>Packed size</dt><dd>@if($combinedDimensionsSaved){{ number_format((float) $combinedShipment->parcel_length_cm, 2) }} &times; {{ number_format((float) $combinedShipment->parcel_width_cm, 2) }} &times; {{ number_format((float) $combinedShipment->parcel_height_cm, 2) }} cm @else Not entered @endif</dd></div>
+                            </dl>
+                            @if($order['parcel_dimensions_ready'] && in_array($order['status_key'], ['preparing', 'ready-for-pickup'], true) && $combinedShipment->current_status === 'PREPARING' && ! $combinedPacked)
+                                <form method="POST" action="{{ route('seller.orders.parcels.dimensions', [$order['db_id'], $combinedShipment->id]) }}" class="sl-parcel-dimensions-form">
+                                    @csrf
+                                    <strong>Actual packed parcel dimensions</strong>
+                                    <p>Measure the outside of this parcel after packing.</p>
+                                    <div class="sl-parcel-dimension-fields">
+                                        <label>Length (cm)<input class="sl-input" type="number" name="length_cm" min="0.01" max="99999999.99" step="0.01" value="{{ $combinedShipment->parcel_length_cm }}" required></label>
+                                        <label>Width (cm)<input class="sl-input" type="number" name="width_cm" min="0.01" max="99999999.99" step="0.01" value="{{ $combinedShipment->parcel_width_cm }}" required></label>
+                                        <label>Height (cm)<input class="sl-input" type="number" name="height_cm" min="0.01" max="99999999.99" step="0.01" value="{{ $combinedShipment->parcel_height_cm }}" required></label>
+                                    </div>
+                                    <button class="sl-btn sl-btn-ghost" type="submit">Save packed dimensions</button>
+                                </form>
+                            @endif
+                            @if($canSeparateCombined && $combinedItems->isNotEmpty())
+                                <form method="POST" action="{{ route('seller.orders.parcels.separate', [$order['db_id'], $combinedItems->first()->id]) }}" class="sl-parcel-setup">
+                                    @csrf
+                                    <button class="sl-btn sl-btn-ghost" type="submit">Separate this parcel back into its original parcels</button>
+                                </form>
+                            @endif
+                        </article>
+                    @endforeach
                     <div class="sl-parcel-item-list">
                         @foreach($order['items'] as $item)
+                            @php
+                                $itemParcels = $order['shipments_by_item']->get($item->id, collect());
+                            @endphp
                             <article class="sl-parcel-item">
                                 <div class="sl-parcel-item-head">
                                     <x-shared.product-thumbnail :item="$item" size="72" class="sl-order-thumb"/>
@@ -84,8 +162,29 @@
                                 </div>
 
                                 @php
-                                    $itemParcels = $order['shipments_by_item']->get($item->id, collect());
+                                    $itemDecision = $order['item_decisions'][$item->id] ?? ['status' => 'Decision unavailable', 'can_accept' => false, 'can_cancel' => false];
                                 @endphp
+                                <div class="mt-3 flex flex-wrap items-center gap-2">
+                                    <span class="sl-parcel-status">{{ $itemDecision['status'] }}</span>
+                                    @if($itemDecision['can_accept'])
+                                        <form method="POST" action="{{ route('seller.orders.items.decision', [$order['db_id'], $item->id]) }}">
+                                            @csrf
+                                            <input type="hidden" name="decision" value="accept">
+                                            <button class="sl-btn sl-btn-primary sl-btn-sm" type="submit">Accept product</button>
+                                        </form>
+                                    @endif
+                                    @if($itemDecision['can_cancel'])
+                                        <details class="sl-item-cancel-details">
+                                            <summary class="sl-btn sl-btn-ghost sl-btn-sm">Cancel product</summary>
+                                            <form method="POST" action="{{ route('seller.orders.items.decision', [$order['db_id'], $item->id]) }}" class="mt-2 grid gap-2">
+                                                @csrf
+                                                <input type="hidden" name="decision" value="cancel">
+                                                <label class="sl-field"><span>Cancellation reason</span><textarea name="cancellation_reason" maxlength="500" required rows="2" placeholder="Explain why you are cancelling this product"></textarea></label>
+                                                <button class="sl-btn sl-btn-ghost sl-btn-sm" type="submit">Confirm product cancellation</button>
+                                            </form>
+                                        </details>
+                                    @endif
+                                </div>
 
                                 @if($itemParcels->isNotEmpty())
                                     <div class="sl-parcel-grid">
@@ -110,6 +209,9 @@
                                                     <span class="sl-parcel-status">{{ $parcelStatus }}</span>
                                                 </div>
                                                 <p class="sl-parcel-tracking">Tracking code <strong>{{ $parcel->tracking_number }}</strong></p>
+                                                @if(! ($showBulkWaybill && $parcelCount === 1))
+                                                    <a class="sl-btn sl-btn-ghost" target="_blank" rel="noopener" href="{{ route('seller.orders.waybill', [$order['db_id'], 'shipment_id' => $parcel->id]) }}">Print this parcel waybill</a>
+                                                @endif
                                                 <dl class="sl-parcel-facts">
                                                     <div><dt>Quantity</dt><dd>{{ $parcel->parcel_quantity }}</dd></div>
                                                     <div>
@@ -153,7 +255,14 @@
                                         @endforeach
                                     </div>
                                 @else
-                                    <p class="sl-parcel-empty">Parcel label not created yet.</p>
+                                    @php
+                                        $combinedForItem = $order['combined_parcels_by_item']->get((int) $item->id);
+                                    @endphp
+                                    @if($combinedForItem)
+                                        <p class="sl-parcel-empty">Included in {{ $item->product_name }} combined parcel {{ $combinedForItem->tracking_number }}.</p>
+                                    @else
+                                        <p class="sl-parcel-empty">Parcel label not created yet.</p>
+                                    @endif
                                 @endif
 
                                 @if($item->quantity > 1 && $itemParcels->count() === 1 && in_array($order['status_key'], ['placed', 'confirmed', 'preparing', 'ready-for-pickup'], true) && in_array($itemParcels->first()->current_status, ['PLACED', 'CONFIRMED', 'PREPARING'], true) && $itemParcels->first()->parcel_weight_kg === null && $itemParcels->first()->parcel_length_cm === null && $itemParcels->first()->parcel_width_cm === null && $itemParcels->first()->parcel_height_cm === null && ! $itemParcels->first()->events->contains(fn ($event) => $event->status === 'PREPARING' && str_starts_with((string) $event->notes, 'SELLER_PACKED_CHECKPOINT:')))
@@ -234,8 +343,8 @@
                         </p>
                     </div>
                     <div class="sl-action-controls">
-                        @if($order['status_key']==='placed')
-                            <form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="confirm"><button class="sl-btn sl-btn-primary" type="submit">Accept Order</button></form>
+                        @if($order['status_key']==='placed' && $order['items']->contains(fn ($productLine) => data_get($order, 'item_decisions.'.$productLine->id.'.can_accept')))
+                            <p class="text-sm text-muted">Accept or cancel each product above. They stay together under this checkout order.</p>
                         @endif
                         @if($order['status_key']==='confirmed')
                             <form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="prepare"><button class="sl-btn sl-btn-primary" type="submit">Begin Preparation</button></form>
@@ -244,7 +353,7 @@
                             @if($order['unpacked_parcels']->isNotEmpty())
                                 <form method="POST" action="{{ route('seller.orders.status',$order['db_id']) }}" class="w-full space-y-2">@csrf @method('PATCH')<input type="hidden" name="action" value="pack"><strong class="block">Pack parcels</strong>
                                     @foreach($order['unpacked_parcels'] as $parcel)
-                                        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @disabled(! $parcel['can_mark_packed']) @if($parcel['can_mark_packed']) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}@if(! $parcel['can_mark_packed']) <small class="block text-amber-800">Save packed parcel dimensions above first.</small>@endif</span></label>
+                                        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @disabled(! $parcel['can_mark_packed']) @if($parcel['can_mark_packed']) checked @endif><span>{{ $parcel['label'] }} &middot; {{ $parcel['shipment']->tracking_number }}@if(! $parcel['can_mark_packed']) <small class="block text-amber-800">Save packed parcel dimensions above first.</small>@endif</span></label>
                                     @endforeach
                                     <button class="sl-btn sl-btn-primary" type="submit" @disabled($order['unpacked_parcels']->where('can_mark_packed', true)->isEmpty())>Mark selected parcels packed</button>
                                 </form>
@@ -256,7 +365,7 @@
                                         <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-3 text-sm"><input type="radio" name="handover_method" value="seller_dropoff"><span><strong class="block">Seller drop-off</strong><small class="text-muted">Print the order waybill and bring the selected parcels to your assigned center for intake scanning.</small></span></label>
                                     </div>
                                     @foreach($order['ready_parcels']->take(10) as $parcel)
-                                        <label class="flex flex-wrap items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['item']->product_name }} &middot; {{ $parcel['shipment']->tracking_number }}</span></label>
+                                        <label class="flex flex-wrap items-center gap-2 text-sm"><input type="checkbox" name="shipment_ids[]" value="{{ $parcel['shipment']->id }}" @if($loop->first) checked @endif><span>{{ $parcel['label'] }} &middot; {{ $parcel['shipment']->tracking_number }}</span></label>
                                     @endforeach
                                     <p class="text-xs text-stone-600">Select 1 to 10 parcels from this order. Remaining parcels can go in another pickup batch.</p>
                                     <button class="sl-btn sl-btn-primary" type="submit">Confirm handover method</button>

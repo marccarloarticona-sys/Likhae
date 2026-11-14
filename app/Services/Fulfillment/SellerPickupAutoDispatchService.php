@@ -8,6 +8,7 @@ use App\Models\Logistics\Shipment;
 use App\Models\Rider\RiderAssignment;
 use App\Models\Rider\RiderLocalTrip;
 use App\Models\Rider\RiderProfile;
+use App\Models\Seller\SellerPickupCenterOffer;
 use App\Models\Seller\SellerPickupRequest;
 use App\Models\User;
 use App\Support\LocalTripCapacityRules;
@@ -19,7 +20,6 @@ final class SellerPickupAutoDispatchService
 {
     public function __construct(
         private readonly SellerPickupBatchService $batches,
-        private readonly SellerPickupRequestService $pickupRequests,
     ) {}
 
     public function assignNearest(User $actor, LogisticsCenter $center, Shipment $shipment): RiderLocalTrip
@@ -33,8 +33,8 @@ final class SellerPickupAutoDispatchService
         }
 
         $address = $shipment->sellerOrder?->sellerProfile?->businessAddress;
-        if (! $address || ! is_numeric($address->latitude) || ! is_numeric($address->longitude)) {
-            throw new RuntimeException('Nearest-rider matching needs a confirmed map pin for the seller pickup address.');
+        if (! $address) {
+            throw new RuntimeException('Nearest-rider matching needs a saved seller pickup address.');
         }
 
         $excludedRiders = $this->previouslyTriedRiderIds([(int) $shipment->id]);
@@ -42,8 +42,8 @@ final class SellerPickupAutoDispatchService
         if (! $candidate) {
             $available = $this->nearestAvailableRiders($center, $address, collect())->isNotEmpty();
             throw new RuntimeException($available
-                ? 'Every nearby idle online rider with a recent location has already declined or timed out on this pickup.'
-                : 'No idle online local rider has a recent GPS location. Riders with active assignments are not offered another pickup.');
+                ? 'Every eligible idle online Rider has already declined or timed out on this pickup.'
+                : 'No idle online local Rider with approved capacity is available at this center. Riders with active assignments are not offered another pickup.');
         }
 
         return $this->batches->createAutomatically($actor, $center, (int) $candidate->id, [(int) $shipment->id]);
@@ -55,38 +55,11 @@ final class SellerPickupAutoDispatchService
         return $this->nearestAvailableRiders($center, $address, collect(), max(1, $parcelCount))->isNotEmpty();
     }
 
-    /** Assign the full Seller request to the nearest idle Rider in the accepted center. */
-    public function assignRequestToNearest(User $actor, LogisticsCenter $center, SellerPickupRequest $request): RiderLocalTrip
-    {
-        $request->loadMissing('pickupAddress', 'memberships.shipment');
-        $shipmentIds = $request->memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
-        $count = count($shipmentIds);
-        $address = $request->pickupAddress;
-        if ($count < 1 || $count > 10 || ! $address
-            || ! is_numeric($address->latitude) || ! is_numeric($address->longitude)) {
-            throw new RuntimeException('This pickup request is missing parcels or a confirmed Seller pickup map pin.');
-        }
-
-        $excluded = $this->previouslyTriedRiderIds($shipmentIds);
-        $candidate = $this->nearestAvailableRiders($center, $address, $excluded, $count)->first();
-        if (! $candidate) {
-            throw new RuntimeException('No idle online local Rider has enough approved capacity and a recent GPS location for every parcel in this request.');
-        }
-
-        return $this->pickupRequests->assign(
-            $actor,
-            $center,
-            (int) $request->id,
-            (int) $candidate->id,
-            true,
-            'The center accepted this automatic Seller pickup offer and assigned its nearest eligible local Rider.',
-        )->riderLocalTrip;
-    }
-
     /** Retry declined and expired offers with the next nearest rider at each center. */
     public function retryFailedOffers(): int
     {
         $assigned = 0;
+        $this->retryAcceptedFallbackDeliveryOffers();
         $centers = LogisticsCenter::query()->where('status', 'ACTIVE')->with('owner')->get();
 
         foreach ($centers as $center) {
@@ -111,52 +84,28 @@ final class SellerPickupAutoDispatchService
             return 0;
         }
 
-        return $this->retrySellerPickupRequests($actor, $center)
-            + $this->retryLegacyPickups($actor, $center);
+        return $this->retryLegacyPickups($actor, $center);
     }
 
-    private function retrySellerPickupRequests(User $actor, LogisticsCenter $center): int
+    /** Retry Buyer-hub offers after pickup acceptance while destination approval is pending. */
+    private function retryAcceptedFallbackDeliveryOffers(): void
     {
-        $requests = SellerPickupRequest::query()
-            ->where('status', 'REQUESTED')
-            ->whereNull('rider_local_trip_id')
-            ->whereHas('memberships.shipment', fn ($shipment) => $shipment
-                ->where('current_status', 'READY_FOR_PICKUP')
-                ->where(fn ($centerQuery) => $centerQuery->where('logistics_center_id', $center->id)
-                    ->orWhere(fn ($unassigned) => $unassigned->whereNull('logistics_center_id')
-                        ->whereHas('serviceArea', fn ($area) => $area->where('logistics_center_id', $center->id))))
-                ->whereHas('riderAssignments', fn ($assignment) => $this->failedOfferScope($assignment)))
-            ->with(['pickupAddress', 'memberships.shipment.sellerOrder.sellerProfile.businessAddress'])
-            ->orderBy('id')
-            ->get();
-
-        $assigned = 0;
-        foreach ($requests as $request) {
-            $shipments = $request->memberships->map(fn ($membership) => $membership->shipment)->filter();
-            $address = $request->pickupAddress;
-            if ($shipments->isEmpty()
-                || $shipments->contains(fn (Shipment $shipment): bool => $shipment->current_status !== 'READY_FOR_PICKUP')
-                || ! $address
-                || ! is_numeric($address->latitude)
-                || ! is_numeric($address->longitude)) {
-                continue;
-            }
-
-            $excluded = $this->previouslyTriedRiderIds($shipments->map(fn (Shipment $shipment): int => (int) $shipment->id)->all());
-            $candidate = $this->nearestAvailableRiders($center, $address, $excluded)->first();
-            if (! $candidate) {
-                continue;
-            }
-
-            try {
-                $this->pickupRequests->assign($actor, $center, (int) $request->id, (int) $candidate->id, true);
-                $assigned++;
-            } catch (RuntimeException) {
-                // Keep the request queued if capacity or parcel state changed during matching.
-            }
+        $schema = app(LogisticsSchemaReadiness::class);
+        if (! $schema->sellerPickupLegOffersReady() || ! $schema->sellerSelectedFallbackHubsReady()) {
+            return;
         }
 
-        return $assigned;
+        SellerPickupRequest::query()
+            ->where('seller_selected_fallback', true)
+            ->whereNotIn('status', ['CANCELLED', 'REJECTED', 'RETURNED_TO_SELLER', 'NOT_COLLECTED'])
+            ->whereHas('centerOffers', fn ($offer) => $offer
+                ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED))
+            ->orderBy('id')
+            ->limit(100)
+            ->get()
+            ->each(fn (SellerPickupRequest $request) => app(SellerPickupMatchingService::class)
+                ->retryDeliveryOffersForAcceptedPickup((int) $request->id));
     }
 
     private function retryLegacyPickups(User $actor, LogisticsCenter $center): int
@@ -220,9 +169,6 @@ final class SellerPickupAutoDispatchService
             ->where('logistics_center_id', $center->id)
             ->whereIn('status', ['ACTIVE', 'WARNED'])
             ->where('is_online', true)
-            ->whereNotNull('availability_latitude')
-            ->whereNotNull('availability_longitude')
-            ->where('availability_location_updated_at', '>=', now()->subMinutes(15))
             ->whereIn('vehicle_type', RiderVehicleType::localValues())
             ->whereNotNull('approved_parcel_capacity')
             ->where('approved_parcel_capacity', '>', 0)
@@ -239,13 +185,29 @@ final class SellerPickupAutoDispatchService
             // how many parcels fit into this one batch, but an existing job
             // makes a rider ineligible for another pickup offer.
             ->filter(fn (RiderProfile $rider): bool => (int) $rider->active_assignments_count === 0)
-            ->map(function (RiderProfile $rider) use ($address): RiderProfile {
-                $rider->setAttribute('seller_distance_km', $this->distanceKm(
-                    (float) $address->latitude,
-                    (float) $address->longitude,
-                    (float) $rider->availability_latitude,
-                    (float) $rider->availability_longitude,
-                ));
+            ->map(function (RiderProfile $rider) use ($address, $center): RiderProfile {
+                $riderLatitude = $rider->availability_latitude;
+                $riderLongitude = $rider->availability_longitude;
+                $targetLatitude = $address->latitude ?? null;
+                $targetLongitude = $address->longitude ?? null;
+
+                if ((! is_numeric($targetLatitude) || ! is_numeric($targetLongitude))
+                    && (is_numeric($center->address?->latitude) && is_numeric($center->address?->longitude))) {
+                    $targetLatitude = $center->address->latitude;
+                    $targetLongitude = $center->address->longitude;
+                }
+
+                $rider->setAttribute('seller_distance_km', is_numeric($targetLatitude)
+                    && is_numeric($targetLongitude)
+                    && is_numeric($riderLatitude)
+                    && is_numeric($riderLongitude)
+                    ? $this->distanceKm(
+                        (float) $targetLatitude,
+                        (float) $targetLongitude,
+                        (float) $riderLatitude,
+                        (float) $riderLongitude,
+                    )
+                    : PHP_FLOAT_MAX);
 
                 return $rider;
             });

@@ -1,4 +1,4 @@
-import { getDevicePosition, rememberDevicePosition } from './device-location';
+import { getDevicePosition, MAX_LIVE_LOCATION_ACCURACY_METERS, rememberDevicePosition } from './device-location';
 
 const MAPLIBRE_SCRIPT = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.js';
 const MAPLIBRE_CSS = 'https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.css';
@@ -1040,7 +1040,7 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
             updateStatus(shell, 'Device GPS returned an invalid location. Waiting for a fresh reading.', true);
             return;
         }
-        if (!Number.isFinite(accuracy) || accuracy > 1500) {
+        if (!Number.isFinite(accuracy) || accuracy > MAX_LIVE_LOCATION_ACCURACY_METERS) {
             updateStatus(shell, `Device location accuracy is too low (${Number.isFinite(accuracy) ? `±${Math.round(accuracy)} m` : 'unknown'}). Waiting for a clearer fix.`, true);
             return;
         }
@@ -1127,7 +1127,7 @@ function startLiveDeviceNavigation(shell, map, maplibregl, markers) {
         if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
         watchId = navigator.geolocation.watchPosition((position) => {
             const accuracy = Number(position.coords?.accuracy);
-            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > 1500)) {
+            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > MAX_LIVE_LOCATION_ACCURACY_METERS)) {
                 const message = `Approximate location received (${Number.isFinite(accuracy) ? `${Math.round(accuracy)} m` : 'unknown'} accuracy). Requesting precise live GPS…`;
                 updateNavigationPanel(shell, { rider, target, route: activeRoute, status: message });
                 updateStatus(shell, message, true);

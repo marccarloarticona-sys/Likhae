@@ -181,7 +181,7 @@ class CheckoutController extends Controller
         }
 
         $newBuyerOpenCodOrderCount = $this->checkoutService->newBuyerOpenCodOrderCount($request->user());
-        $newBuyerOpenCodOrderLimit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 1));
+        $newBuyerOpenCodOrderLimit = max(1, (int) config('buyer_risk.new_buyer_max_open_cod_orders', 3));
         $newBuyerCodOrderLimitReached = $newBuyerOpenCodOrderCount !== null
             && $newBuyerOpenCodOrderCount >= $newBuyerOpenCodOrderLimit;
 

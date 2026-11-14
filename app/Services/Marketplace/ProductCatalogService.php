@@ -118,6 +118,19 @@ class ProductCatalogService
             });
         }
 
+        $province = trim((string) $request->query('province', ''));
+        $municipality = trim((string) $request->query('municipality', ''));
+        if ($province !== '' || $municipality !== '') {
+            $query->whereHas('sellerProfile.businessAddress', function (Builder $address) use ($province, $municipality): void {
+                if ($province !== '') {
+                    $address->whereRaw("LOWER(TRIM(COALESCE(addresses.province_name, ''))) = ?", [mb_strtolower($province)]);
+                }
+                if ($municipality !== '') {
+                    $address->whereRaw("LOWER(TRIM(COALESCE(addresses.municipality_name, ''))) = ?", [mb_strtolower($municipality)]);
+                }
+            });
+        }
+
         if ($request->boolean('deals') || $request->query('focus') === 'deals') {
             $query->whereHas('sellerProfile', fn (Builder $seller) => $seller->where('vacation_mode', false));
             $query->whereHas('variants', function (Builder $variant): void {
@@ -160,7 +173,7 @@ class ProductCatalogService
             ->where('stock', '>', 0);
     }
 
-    public function applySort(Builder $query, ?string $sort): Builder
+    public function applySort(Builder $query, ?string $sort, ?string $shuffleSeed = null): Builder
     {
         return match ($sort) {
             'name' => $query->orderBy('name'),
@@ -169,15 +182,83 @@ class ProductCatalogService
             'best-rated' => $query->orderByDesc('reviews_avg_rating')->orderByDesc('products.id'),
             'best-selling' => $query->orderByDesc('order_items_sum_quantity')->orderByDesc('products.id'),
             'oldest' => $query->oldest(),
+            'shuffle' => $this->applyShuffle($query, $shuffleSeed ?? ''),
             default => $query->latest(),
         };
     }
 
-    public function paginated(Request $request, int $perPage = 20): LengthAwarePaginator
+    private function applyShuffle(Builder $query, string $seed): Builder
     {
+        $seed = hash('sha256', $seed !== '' ? $seed : now()->toDateString());
+        $driver = $query->getQuery()->getConnection()->getDriverName();
+
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            return $query
+                ->orderByRaw("MD5(CONCAT(CAST(products.id AS CHAR), ':', ?))", [$seed])
+                ->orderBy('products.id');
+        }
+
+        if ($driver === 'pgsql') {
+            return $query
+                ->orderByRaw("MD5(CAST(products.id AS TEXT) || ':' || ?)", [$seed])
+                ->orderBy('products.id');
+        }
+
+        // SQLite and other drivers without a portable hash function use a
+        // seeded modular rank, which remains deterministic between pages.
+        $prime = 2147483647;
+        $multiplier = (hexdec(substr($seed, 0, 8)) % ($prime - 1)) + 1;
+        $offset = hexdec(substr($seed, 8, 8)) % $prime;
+
+        return $query
+            ->orderByRaw("((products.id * {$multiplier} + {$offset}) % {$prime})")
+            ->orderBy('products.id');
+    }
+
+    private function hasCatalogFilters(Request $request): bool
+    {
+        $category = trim((string) $request->query('category', ''));
+        $search = trim((string) $request->query('q', $request->query('search', '')));
+
+        return $search !== ''
+            || ($category !== '' && strtolower($category) !== 'all')
+            || $request->filled('category_id')
+            || $request->filled('seller_profile_id')
+            || $request->boolean('available')
+            || $request->filled('min_price')
+            || $request->filled('max_price')
+            || trim((string) $request->query('location', '')) !== ''
+            || trim((string) $request->query('province', '')) !== ''
+            || trim((string) $request->query('municipality', '')) !== ''
+            || $request->boolean('deals')
+            || $request->query('focus') === 'deals'
+            || (float) $request->query('rating', 0) > 0;
+    }
+
+    private function shuffleSeed(Request $request): string
+    {
+        $providedSeed = trim((string) $request->query('shuffle_seed', ''));
+        if ($providedSeed !== '') {
+            return substr($providedSeed, 0, 128);
+        }
+
+        $identity = (string) ($request->user()?->getAuthIdentifier() ?? 'guest');
+        $session = $request->hasSession() ? $request->session()->getId() : '';
+
+        return hash('sha256', implode('|', [$identity, $session, now()->toDateString()]));
+    }
+
+    public function paginated(Request $request, int $perPage = 24): LengthAwarePaginator
+    {
+        $sort = trim((string) $request->query('sort', ''));
+        if ($sort === '') {
+            $sort = $this->hasCatalogFilters($request) ? 'latest' : 'shuffle';
+        }
+
         $query = $this->applySort(
             $this->applyFilters($this->visibleQuery(), $request),
-            $request->query('sort')
+            $sort,
+            $sort === 'shuffle' ? $this->shuffleSeed($request) : null,
         );
 
         return $query->paginate($perPage)->withQueryString();
@@ -186,6 +267,87 @@ class ProductCatalogService
     public function findVisibleBySlug(string $slug): Product
     {
         return $this->visibleQuery()->where('slug', $slug)->firstOrFail();
+    }
+
+    /** @return Collection<int, array<string, mixed>> */
+    public function relatedProducts(Product $product, int $limit = 4): Collection
+    {
+        $limit = max(1, min(12, $limit));
+        $categoryId = (int) $product->category_id;
+        $categoryIds = collect($categoryId > 0 ? [$categoryId] : []);
+        $category = $product->relationLoaded('category')
+            ? $product->category
+            : $product->category()->first();
+
+        if ($category) {
+            $neighborCategoryIds = Category::query()
+                ->where('is_active', true)
+                ->where(function (Builder $query) use ($category): void {
+                    if ($category->parent_id) {
+                        $query->where('parent_id', $category->parent_id);
+                    } else {
+                        $query->where('parent_id', $category->getKey());
+                    }
+                })
+                ->pluck('id');
+
+            if ($category->parent_id) {
+                $neighborCategoryIds->push((int) $category->parent_id);
+            }
+
+            $categoryIds = $categoryIds->merge($neighborCategoryIds)->unique()->values();
+        }
+
+        $recommendations = collect();
+
+        if ($categoryIds->isNotEmpty()) {
+            $recommendations = $this->visibleQuery()
+                ->whereKeyNot($product->getKey())
+                ->whereIn('category_id', $categoryIds)
+                ->when($categoryId > 0, fn (Builder $query) => $query->orderByRaw(
+                    'CASE WHEN products.category_id = ? THEN 0 ELSE 1 END',
+                    [$categoryId],
+                ))
+                ->orderByDesc('order_items_sum_quantity')
+                ->orderByDesc('reviews_avg_rating')
+                ->orderByDesc('products.created_at')
+                ->limit($limit)
+                ->get();
+        }
+
+        if ($recommendations->count() < $limit && $product->seller_profile_id) {
+            $excludedIds = $recommendations->pluck('id')->push($product->getKey())->unique()->all();
+
+            $recommendations = $recommendations->concat(
+                $this->visibleQuery()
+                    ->where('seller_profile_id', $product->seller_profile_id)
+                    ->whereNotIn('products.id', $excludedIds)
+                    ->orderByDesc('order_items_sum_quantity')
+                    ->orderByDesc('reviews_avg_rating')
+                    ->orderByDesc('products.created_at')
+                    ->limit($limit - $recommendations->count())
+                    ->get()
+            );
+        }
+
+        if ($recommendations->count() < $limit) {
+            $excludedIds = $recommendations->pluck('id')->push($product->getKey())->unique()->all();
+
+            $recommendations = $recommendations->concat(
+                $this->visibleQuery()
+                    ->whereNotIn('products.id', $excludedIds)
+                    ->orderByDesc('order_items_sum_quantity')
+                    ->orderByDesc('reviews_avg_rating')
+                    ->orderByDesc('products.created_at')
+                    ->limit($limit - $recommendations->count())
+                    ->get()
+            );
+        }
+
+        return $recommendations
+            ->take($limit)
+            ->map(fn (Product $item): array => $this->productPayload($item))
+            ->values();
     }
 
     /** @return array<string, mixed> */
@@ -242,6 +404,7 @@ class ProductCatalogService
             'category_id' => $product->category_id,
             'name' => $product->name,
             'slug' => $product->slug,
+            'created_at' => $product->created_at?->toIso8601String(),
             'description' => $includeDetails ? $product->description : str($product->description ?? '')->limit(180)->toString(),
             'status' => $product->status,
             'is_active' => $product->status === 'ACTIVE',

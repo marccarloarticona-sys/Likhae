@@ -15,8 +15,25 @@
 }
 
 .rider-main .rider-dashboard-heading__copy { min-width: 0; }
-.rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > * {
+.rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > .lk-dashboard-overline {
+    font-family: var(--font-sans, Poppins, system-ui, sans-serif);
+}
+.rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > h1 {
+    margin: 7px 0 0;
+    color: inherit;
     font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(30px, 3.2vw, 44px);
+    font-weight: 500;
+    letter-spacing: -.035em;
+    line-height: 1.05;
+}
+.rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > p {
+    max-width: 58ch;
+    margin: 8px 0 0;
+    color: var(--ra-muted, #987865);
+    font-family: var(--font-sans, Poppins, system-ui, sans-serif);
+    font-size: 12px;
+    line-height: 1.6;
 }
 .rider-main .rider-dashboard-heading > .lk-dashboard-weather {
     justify-self: stretch;
@@ -50,6 +67,18 @@ html.dark .rider-main .rider-dashboard-heading {
     background:
         radial-gradient(ellipse at 94% 12%, rgb(193 151 113 / 10%), transparent 34%),
         linear-gradient(112deg, #211A17, #1A1513);
+}
+
+html.dark .rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > .lk-dashboard-overline {
+    color: #E0B1A4;
+}
+
+html.dark .rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > .lk-dashboard-overline::before {
+    background-color: #E0B1A4;
+}
+
+html.dark .rider-main .rider-dashboard-heading--operations .rider-dashboard-heading__copy > p {
+    color: #C0A99A;
 }
 
 html.dark .rider-main .rider-dashboard-heading .lk-dashboard-weather__metrics > div,

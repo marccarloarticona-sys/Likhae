@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Middleware\RequireApiPolicyAcceptance;
 use App\Models\Buyer\Order;
 use App\Models\Buyer\OrderItem;
 use App\Models\Buyer\Review;
@@ -203,6 +204,32 @@ class BuyerReviewSubmissionTest extends TestCase
             ->assertSee('data-review-comment', escape: false)
             ->assertSee('data-review-comment-count', escape: false)
             ->assertSee('0 / 500');
+    }
+
+    public function test_mobile_review_history_endpoint_returns_the_buyers_reviews(): void
+    {
+        [$buyer, , $item] = $this->makeReviewableItem();
+        $item->review()->create([
+            'buyer_user_id' => $buyer->id,
+            'rating' => 5,
+            'comment' => 'Beautiful handmade product.',
+            'status' => 'PUBLISHED',
+        ]);
+
+        $token = Str::random(64);
+        $buyer->forceFill([
+            'api_token_hash' => hash('sha256', $token),
+            'api_token_expires_at' => now()->addHour(),
+        ])->save();
+
+        $this->withoutMiddleware(RequireApiPolicyAcceptance::class)
+            ->withToken($token)
+            ->getJson(route('api.v1.buyer.account.reviews'))
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.0.rating', 5)
+            ->assertJsonPath('data.0.comment', 'Beautiful handmade product.')
+            ->assertJsonPath('data.0.product_name', $item->product_name);
     }
 
     public function test_up_to_five_valid_review_photos_are_stored_in_upload_order_and_the_sixth_is_rejected(): void

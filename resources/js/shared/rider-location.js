@@ -1,8 +1,7 @@
-import { getDevicePosition, rememberDevicePosition } from './device-location';
+import { getDevicePosition, MAX_LIVE_LOCATION_ACCURACY_METERS, rememberDevicePosition } from './device-location';
 
 const LOCATION_UPDATE_INTERVAL_MS = 10000;
 const LOCATION_MOVEMENT_THRESHOLD_METERS = 25;
-const MAX_ACCURACY_METERS = 1500;
 const MAX_TIMESTAMP_SKEW_MS = 120000;
 
 function distanceMeters(first, second) {
@@ -152,7 +151,7 @@ function initializeRiderLocationTracker() {
             return;
         }
 
-        if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > MAX_ACCURACY_METERS) {
+        if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > MAX_LIVE_LOCATION_ACCURACY_METERS) {
             setStatus(`Device location accuracy is too low (${Number.isFinite(accuracy) ? `±${Math.round(accuracy)}m` : 'unknown'}). Keep Location Services on; the map will update when the device gets a clearer fix.`, 'poor-accuracy');
             return;
         }
@@ -218,7 +217,7 @@ function initializeRiderLocationTracker() {
         }
         watchId = navigator.geolocation.watchPosition((position) => {
             const accuracy = Number(position.coords?.accuracy);
-            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > MAX_ACCURACY_METERS)) {
+            if (!highAccuracy && (!Number.isFinite(accuracy) || accuracy > MAX_LIVE_LOCATION_ACCURACY_METERS)) {
                 setStatus(`Approximate location received (${Number.isFinite(accuracy) ? `${Math.round(accuracy)}m` : 'unknown'} accuracy). Requesting a more precise Rider GPS fix…`, 'poor-accuracy');
                 startWatch(true);
                 return;

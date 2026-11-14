@@ -58,10 +58,15 @@ class FinancialAllocationService
         );
         $sellerOrder = $shipment->sellerOrder;
         $item = $shipment->orderItem;
+        $items = $shipment->combined_order_items
+            ? $sellerOrder?->items?->whereIn('id', array_map('intval', $shipment->combined_order_item_ids ?? []))
+            : collect($item ? [$item] : []);
         if (! $item && $sellerOrder?->items?->count() === 1 && $sellerOrder->shipments->count() === 1) {
             $item = $sellerOrder->items->first();
+            $items = collect([$item]);
         }
-        if (! $sellerOrder?->order || ! $item || (int) $item->seller_order_id !== (int) $sellerOrder->id || $item->original_unit_price === null) {
+        if (! $sellerOrder?->order || $items->isEmpty()
+            || $items->contains(fn ($parcelItem): bool => (int) $parcelItem->seller_order_id !== (int) $sellerOrder->id || $parcelItem->original_unit_price === null)) {
             return null;
         }
 
@@ -72,11 +77,11 @@ class FinancialAllocationService
             return null;
         }
 
-        $allocation = DB::transaction(function () use ($shipment, $sellerOrder, $item, $collection): ShipmentFinancialAllocation {
+        $allocation = DB::transaction(function () use ($shipment, $sellerOrder, $items, $collection): ShipmentFinancialAllocation {
             $allocation = ShipmentFinancialAllocation::query()->firstOrCreate(
                 ['shipment_id' => $shipment->id],
                 ['seller_order_id' => $sellerOrder->id, 'order_id' => $sellerOrder->order_id]
-                    + $this->parcelAttributes($shipment, $sellerOrder, $item),
+                    + $this->parcelAttributes($shipment, $sellerOrder, $items),
             );
             if (! $allocation->wasRecentlyCreated) {
                 $savedCenters = $allocation->logisticsPools()->pluck('logistics_center_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
@@ -255,10 +260,11 @@ class FinancialAllocationService
         ];
     }
 
-    private function fundingSnapshotForShipment($sellerOrder, $item, array $parcelAmounts): ?array
+    private function fundingSnapshotForShipment($sellerOrder, $items, array $parcelAmounts): ?array
     {
         if ((int) ($sellerOrder->funding_snapshot_version ?? 0) !== 1
-            || (int) ($item->funding_snapshot_version ?? 0) !== 1) {
+            || $items->isEmpty()
+            || $items->contains(fn ($item): bool => (int) ($item->funding_snapshot_version ?? 0) !== 1)) {
             return null;
         }
 
@@ -271,21 +277,21 @@ class FinancialAllocationService
     }
 
     /** @return array<string, string|null> */
-    private function parcelAttributes(Shipment $shipment, $sellerOrder, $item): array
+    private function parcelAttributes(Shipment $shipment, $sellerOrder, $items): array
     {
         $parcelAmounts = OrderItemParcelAmount::forShipment($sellerOrder, $shipment);
         $riderPoolPercentage = FinancialRules::DEFAULT_RIDER_POOL_PERCENTAGE;
         $calculation = FinancialRules::allocation(
-            [[
+            $items->map(fn ($item): array => [
                 'original_unit_price' => $item->original_unit_price,
                 'charged_unit_price' => $item->unit_price,
-                'quantity' => $shipment->parcel_quantity,
-            ]],
+                'quantity' => $item->quantity,
+            ])->all(),
             $parcelAmounts['discount_amount'],
             FinancialRules::amount($parcelAmounts['shipping_fee_cents']),
             $riderPoolPercentage,
             FinancialRules::amount($parcelAmounts['shipping_discount_cents']),
-            $this->fundingSnapshotForShipment($sellerOrder, $item, $parcelAmounts),
+            $this->fundingSnapshotForShipment($sellerOrder, $items, $parcelAmounts),
             $this->commissionRateFor($sellerOrder),
             FinancialRules::amount($parcelAmounts['protection_amount_cents']),
         );

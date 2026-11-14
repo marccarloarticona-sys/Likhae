@@ -56,8 +56,8 @@ final class FinalMileDispatchService
             }
             $sellerSelectedFallback = $this->workflow->sellerSelectedFallbackDestination($shipment, $center)
                 && ! $shipment->serviceArea;
-            if ($sellerSelectedFallback && (! $allowDeliveryAreaOverride || ! $requireFreshRiderLocation)) {
-                throw new RuntimeException('This Seller-selected uncovered route requires nearest-Rider dispatch using a live location at the destination hub.');
+            if ($sellerSelectedFallback && ! $allowDeliveryAreaOverride) {
+                throw new RuntimeException('This Seller-selected uncovered route requires a destination-hub coverage override.');
             }
             if (filled($shipment->smart_coverage_route_id)) {
                 if (! $shipment->smart_coverage_service_date) {
@@ -115,8 +115,11 @@ final class FinalMileDispatchService
                 }
                 if (! $this->schema->riderAvailabilityReady()
                     || ! $rider->is_online
-                    || ! ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false)) {
-                    throw new RuntimeException('A temporary coverage exception requires an online rider with a location updated in the last two minutes.');
+                    || ($requireFreshRiderLocation
+                        && ! ($rider->availability_location_updated_at?->greaterThanOrEqualTo(now()->subMinutes(2)) ?? false))) {
+                    throw new RuntimeException($requireFreshRiderLocation
+                        ? 'A nearest-rider coverage exception requires an online rider with a location updated in the last two minutes.'
+                        : 'A manual coverage override requires an active online rider.');
                 }
                 if ($this->workflow->riderCoversShipmentDestinationArea($shipment, $rider)) {
                     throw new RuntimeException('Use the normal area assignment when the selected rider covers this destination.');

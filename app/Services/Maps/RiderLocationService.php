@@ -13,7 +13,7 @@ use Throwable;
 
 class RiderLocationService
 {
-    private const MAX_ACCURACY_METERS = 1500;
+    private const MAX_ACCURACY_METERS = 2500;
 
     private const MAX_TIMESTAMP_SKEW_SECONDS = 120;
 

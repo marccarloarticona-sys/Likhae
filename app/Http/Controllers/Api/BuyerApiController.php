@@ -26,6 +26,7 @@ use App\Services\Marketplace\CartService;
 use App\Services\Marketplace\CheckoutService;
 use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\ProductCatalogService;
+use App\Services\Marketplace\ProductViewService;
 use App\Services\Marketplace\RewardPointsService;
 use App\Services\Media\ImageOptimizationService;
 use App\Support\AddressCoordinateValidator;
@@ -46,6 +47,33 @@ use Illuminate\Validation\ValidationException;
 
 class BuyerApiController extends Controller
 {
+    public function recentlyViewed(Request $request, ProductViewService $productViews, ProductCatalogService $catalog): JsonResponse
+    {
+        $this->authorizeBuyer($request);
+
+        $recentProductIds = $productViews->recentProductIds($request->user());
+        $productsById = $recentProductIds->isEmpty()
+            ? collect()
+            : $catalog->visibleQuery()
+                ->whereIn('products.id', $recentProductIds)
+                ->whereHas('sellerProfile', fn ($seller) => $seller->where('vacation_mode', false))
+                ->whereHas('variants', fn ($variant) => $variant->where('is_active', true)->where('stock', '>', 0))
+                ->get()
+                ->keyBy(fn (Product $product): int => (int) $product->id);
+
+        $products = $recentProductIds
+            ->map(fn (int $id) => $productsById->get($id))
+            ->filter()
+            ->map(fn (Product $product): array => $catalog->productPayload($product, false))
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $products,
+            'meta' => ['count' => $products->count()],
+        ]);
+    }
+
     public function followingStores(Request $request): JsonResponse
     {
         $this->authorizeBuyer($request);
@@ -572,7 +600,7 @@ class BuyerApiController extends Controller
             'contact_number' => ['required', 'string', 'max:30'],
             'birthday' => ['sometimes', 'nullable', 'date', 'before_or_equal:today'],
             'sex' => ['sometimes', 'nullable', Rule::in(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'])],
-            'profile_photo' => ['sometimes', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            'profile_photo' => ['sometimes', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
             'mobile_change_code' => ['sometimes', 'nullable', 'digits:6'],
         ]);
         $user = $request->user();

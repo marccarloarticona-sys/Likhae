@@ -32,7 +32,9 @@ use App\Services\Finance\FinancialAllocationService;
 use App\Services\Marketplace\SellerPromotionUsageService;
 use App\Models\User;
 use App\Support\RiderVehicleType;
+use App\Support\FinancialRules;
 use App\Support\OrderItemParcelAmount;
+use App\Support\OrderItemParcelGroups;
 use App\Support\ParcelWeightEstimator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -65,6 +67,9 @@ class ShipmentWorkflowService
                 ->lockForUpdate()
                 ->firstOrFail();
             $shipments = $this->ensureItemShipments($sellerOrder, $actor, $action === 'pack');
+            if ($action !== 'cancel') {
+                $shipments = $shipments->reject(fn (Shipment $shipment): bool => $shipment->current_status === 'CANCELLED')->values();
+            }
 
             match ($action) {
                 'confirm' => $this->confirmSellerOrder($sellerOrder, $shipments, $actor),
@@ -78,6 +83,68 @@ class ShipmentWorkflowService
 
             return $sellerOrder->refresh();
         });
+    }
+
+    public function sellerItemDecision(
+        SellerOrder $sellerOrder,
+        OrderItem $orderItem,
+        string $decision,
+        User $actor,
+        ?string $cancellationReason = null,
+    ): SellerOrder {
+        return DB::transaction(function () use ($sellerOrder, $orderItem, $decision, $actor, $cancellationReason): SellerOrder {
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['order.payments', 'items.shipment', 'shipments.riderAssignments', 'shipments.pickupRequests'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            $item = OrderItem::query()->whereKey($orderItem->id)->lockForUpdate()->firstOrFail();
+            $actor->loadMissing('sellerProfile');
+
+            if ($actor->account_type !== User::TYPE_SELLER
+                || $actor->status !== User::STATUS_ACTIVE
+                || (int) $sellerOrder->seller_profile_id !== (int) $actor->sellerProfile?->id
+                || (int) $item->seller_order_id !== (int) $sellerOrder->id) {
+                throw new RuntimeException('Only the active seller who owns this product line may update it.');
+            }
+
+            $shipments = $this->ensureItemShipments($sellerOrder, $actor);
+            $itemShipments = $shipments->where('order_item_id', $item->id)->values();
+            if ($itemShipments->isEmpty() || $shipments->contains(fn (Shipment $shipment): bool => $shipment->combined_order_items
+                && in_array((int) $item->id, array_map('intval', $shipment->combined_order_item_ids ?? []), true))) {
+                throw new RuntimeException('This product line does not have separate parcels for an individual decision.');
+            }
+
+            if ($decision === 'accept') {
+                if (! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED'], true)
+                    || $itemShipments->contains(fn (Shipment $shipment): bool => $shipment->current_status !== 'PLACED')) {
+                    throw new RuntimeException('This product line is no longer waiting for acceptance.');
+                }
+                foreach ($itemShipments as $shipment) {
+                    $shipment->update(['current_status' => 'CONFIRMED']);
+                    $this->recordEvent($shipment, 'CONFIRMED', $actor, 'Seller accepted this product line.');
+                }
+
+                $remainingShipments = $shipments->reject(fn (Shipment $shipment): bool => $shipment->current_status === 'CANCELLED');
+                $sellerOrder->update([
+                    'status' => $remainingShipments->isNotEmpty()
+                        && $remainingShipments->every(fn (Shipment $shipment): bool => $shipment->current_status === 'CONFIRMED')
+                            ? 'CONFIRMED'
+                            : 'PLACED',
+                ]);
+                $this->syncParentOrderProgress($sellerOrder->order);
+
+                return $sellerOrder->refresh();
+            }
+
+            if ($decision !== 'cancel') {
+                throw new RuntimeException('Choose accept or cancel for this product line.');
+            }
+
+            $this->cancelSellerOrderItem($sellerOrder, $item, $itemShipments, $shipments, $actor, (string) $cancellationReason);
+
+            return $sellerOrder->refresh();
+        }, attempts: 3);
     }
 
     public function recordPackedMeasurements(Shipment $shipment, User $actor, string $weightKg, string $volumeLiters): Shipment
@@ -158,7 +225,7 @@ class ShipmentWorkflowService
             }
             if (! in_array($sellerOrder->status, ['PREPARING', 'READY_FOR_PICKUP'], true)
                 || $locked->current_status !== 'PREPARING'
-                || $locked->order_item_id === null
+                || ($locked->order_item_id === null && ! $locked->combined_order_items)
                 || $this->hasSellerPackedCheckpoint($locked)) {
                 throw new RuntimeException('Packed dimensions can only be saved for an unpacked seller parcel that is still being prepared.');
             }
@@ -274,11 +341,13 @@ class ShipmentWorkflowService
             }
 
             $unmappedShipments = $sellerOrder->shipments->whereNull('order_item_id')->values();
-            if ($unmappedShipments->count() > 1) {
+            $combinedShipments = $unmappedShipments->filter(fn (Shipment $shipment): bool => (bool) $shipment->combined_order_items);
+            $legacyUnmappedShipments = $unmappedShipments->reject(fn (Shipment $shipment): bool => (bool) $shipment->combined_order_items);
+            if ($legacyUnmappedShipments->count() > 1) {
                 throw new RuntimeException('This seller order has multiple legacy parcels without item mappings. Logistics must reconcile them before new labels can be issued.');
             }
 
-            if ($unmappedShipments->isNotEmpty()) {
+            if ($legacyUnmappedShipments->isNotEmpty()) {
                 if ($items->count() !== 1 || $sellerOrder->shipments->count() !== 1) {
                     throw new RuntimeException('This legacy shipment has no safe item mapping. Its tracking and history were preserved; Logistics must reconcile it before item-specific labels can be issued.');
                 }
@@ -286,20 +355,25 @@ class ShipmentWorkflowService
                 // A single item is deterministic, even when the shipment has
                 // history. Never choose an item by position for multi-line
                 // legacy shipments.
-                $source = $unmappedShipments->first();
+                $source = $legacyUnmappedShipments->first();
                 $item = $items->first();
                 $source->update(['order_item_id' => $item->id]);
                 $item->setRelation('shipment', $source);
                 $this->refreshPendingCodAmount($source, $sellerOrder, $item);
             }
 
-            $unmappedItems = $items->filter(fn (OrderItem $item): bool => ! $item->shipment)->values();
+            $coveredItemIds = $sellerOrder->shipments->whereNotNull('order_item_id')->pluck('order_item_id')->map(fn ($id): int => (int) $id);
+            foreach ($combinedShipments as $combinedShipment) {
+                $coveredItemIds = $coveredItemIds->concat(collect($combinedShipment->combined_order_item_ids ?? [])->map(fn ($id): int => (int) $id));
+            }
+            $coveredItemIds = $coveredItemIds->unique()->values();
+            $unmappedItems = $items->filter(fn (OrderItem $item): bool => ! $coveredItemIds->contains((int) $item->id))->values();
             if ($sellerOrder->shipments->isNotEmpty() && $unmappedItems->isNotEmpty()) {
                 throw new RuntimeException('This seller order has an incomplete parcel-to-item mapping. Logistics must reconcile the existing shipment set before new labels can be issued.');
             }
 
             foreach ($items as $item) {
-                if ($item->shipment) {
+                if ($coveredItemIds->contains((int) $item->id)) {
                     continue;
                 }
 
@@ -310,6 +384,252 @@ class ShipmentWorkflowService
 
             return $sellerOrder->shipments->sortBy('id')->values();
         });
+    }
+
+    public function combineOrderItemsIntoParcel(SellerOrder $sellerOrder, OrderItem $targetItem, User $actor, ?string $groupKey = null): Shipment
+    {
+        $this->assertCombinedParcelSchemaReady();
+
+        return DB::transaction(function () use ($sellerOrder, $targetItem, $actor, $groupKey): Shipment {
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['order.address', 'items.productVariant', 'shipments.events', 'shipments.transferLegs.originLogisticsCenter', 'shipments.transferLegs.destinationLogisticsCenter'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            $targetItem = OrderItem::query()->whereKey($targetItem->id)->lockForUpdate()->firstOrFail();
+            $actor->loadMissing('sellerProfile');
+
+            if ($actor->account_type !== User::TYPE_SELLER
+                || $actor->status !== User::STATUS_ACTIVE
+                || (int) $sellerOrder->seller_profile_id !== (int) $actor->sellerProfile?->id) {
+                throw new RuntimeException('Only the active seller who owns this order may combine its parcels.');
+            }
+            if ((int) $targetItem->seller_order_id !== (int) $sellerOrder->id || $sellerOrder->status !== 'PREPARING') {
+                throw new RuntimeException('Combine eligible product or promotion parcels while the order is being prepared.');
+            }
+
+            $selectedGroup = OrderItemParcelGroups::forItems($sellerOrder->items)
+                ->first(fn (array $group): bool => $group['key'] === $groupKey
+                    && $group['items']->contains(fn (OrderItem $item): bool => (int) $item->id === (int) $targetItem->id));
+            if (! $selectedGroup) {
+                throw new RuntimeException('These items are not eligible to share a parcel. Only the same product or items in the same Bundle / Buy X Get Y offer can be combined.');
+            }
+            $groupItems = $selectedGroup['items'];
+            $groupItemIds = $groupItems->pluck('id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
+
+            $this->ensureItemShipments($sellerOrder, $actor);
+            $sellerOrder->unsetRelation('shipments');
+            $sellerOrder->load(['items.productVariant', 'shipments.events', 'shipments.transferLegs.originLogisticsCenter', 'shipments.transferLegs.destinationLogisticsCenter']);
+            $sources = $sellerOrder->shipments->whereIn('order_item_id', $groupItemIds)->sortBy('id')->values();
+            $existingGroupParcel = $sellerOrder->shipments->first(fn (Shipment $shipment): bool => $shipment->combined_order_items
+                && collect($shipment->combined_order_item_ids ?? [])->map(fn ($id): int => (int) $id)->intersect($groupItemIds)->isNotEmpty());
+            $mappedItemIds = $sources->pluck('order_item_id')->filter()->map(fn ($id): int => (int) $id)->sort()->values()->all();
+
+            if ($existingGroupParcel) {
+                throw new RuntimeException('These items are already packed under one parcel label.');
+            }
+            if ($sources->count() !== count($groupItemIds) || $mappedItemIds !== $groupItemIds) {
+                throw new RuntimeException('Combine is available when each item has exactly one parcel. Separate any split item parcels first.');
+            }
+
+            $routingFields = [
+                'logistics_center_id', 'origin_logistics_center_id', 'destination_logistics_center_id', 'service_area_id',
+                'origin_province_code', 'origin_province_name',
+                'origin_municipality_code', 'origin_municipality_name',
+                'origin_barangay_code', 'origin_barangay_name',
+                'destination_province_code', 'destination_province_name',
+                'destination_municipality_code', 'destination_municipality_name',
+                'destination_barangay_code', 'destination_barangay_name',
+            ];
+            $referenceRoute = $sources->first()->only($routingFields);
+            foreach ($sources as $source) {
+                if ($source->current_status !== 'PREPARING'
+                    || $this->hasSellerPackedCheckpoint($source)
+                    || $source->parcel_weight_kg !== null
+                    || $source->parcel_volume_liters !== null
+                    || $source->parcel_length_cm !== null
+                    || $source->parcel_width_cm !== null
+                    || $source->parcel_height_cm !== null
+                    || $source->scans()->exists()
+                    || $source->waybills()->exists()
+                    || $source->riderAssignments()->exists()
+                    || $source->pickupRequests()->exists()
+                    || $source->returnWorkflow()->exists()
+                    || $source->returnRefundRequestItems()->exists()) {
+                    throw new RuntimeException('Combine parcels before saving dimensions, printing labels, scanning, or handing them to Logistics.');
+                }
+                if ($source->only($routingFields) !== $referenceRoute) {
+                    throw new RuntimeException('These parcels have different saved Logistics routes and cannot share one parcel label.');
+                }
+
+                foreach ($source->transferLegs as $leg) {
+                    if ($leg->status !== ShipmentTransferLeg::PLANNED || $leg->manifestItems()->exists()) {
+                        throw new RuntimeException('Combine parcels before a cross-center transfer enters a manifest.');
+                    }
+                }
+
+                if (Schema::hasTable('cod_collections')) {
+                    $collection = CodCollection::query()->where('shipment_id', $source->id)->lockForUpdate()->first();
+                    if ($collection && $collection->status !== CodCollection::PENDING) {
+                        throw new RuntimeException('These parcels cannot be combined after COD collection has started.');
+                    }
+                }
+            }
+
+            $referenceLegs = $sources->first()->transferLegs
+                ->map(fn (ShipmentTransferLeg $leg): array => [(int) $leg->origin_logistics_center_id, (int) $leg->destination_logistics_center_id])
+                ->values()->all();
+            foreach ($sources->skip(1) as $source) {
+                $routeLegs = $source->transferLegs
+                    ->map(fn (ShipmentTransferLeg $leg): array => [(int) $leg->origin_logistics_center_id, (int) $leg->destination_logistics_center_id])
+                    ->values()->all();
+                if ($routeLegs !== $referenceLegs) {
+                    throw new RuntimeException('These parcels do not share the same cross-center route.');
+                }
+            }
+
+            $totalQuantity = (int) $groupItems->sum('quantity');
+            $combined = Shipment::query()->create([
+                ...$referenceRoute,
+                'seller_order_id' => $sellerOrder->id,
+                'order_item_id' => null,
+                'parcel_quantity' => $totalQuantity,
+                'combined_order_items' => true,
+                'combined_source_shipment_ids' => $sources->pluck('id')->map(fn ($id): int => (int) $id)->all(),
+                'combined_order_item_ids' => $groupItemIds,
+                'tracking_number' => $this->newTrackingNumber(),
+                'current_status' => 'PREPARING',
+            ]);
+
+            foreach ($sources->first()->transferLegs as $leg) {
+                if (! $leg->originLogisticsCenter || ! $leg->destinationLogisticsCenter) {
+                    throw new RuntimeException('A saved cross-center route is incomplete, so these parcels cannot be combined safely.');
+                }
+                $this->transfers->createPlannedLeg($combined, $leg->originLogisticsCenter, $leg->destinationLogisticsCenter);
+            }
+
+            foreach ($sources as $source) {
+                $source->update([
+                    'superseded_at' => now(),
+                    'superseded_by_shipment_id' => $combined->id,
+                ]);
+                if (Schema::hasTable('cod_collections')) {
+                    CodCollection::query()->where('shipment_id', $source->id)->where('status', CodCollection::PENDING)->update([
+                        'status' => CodCollection::VOID,
+                        'notes' => DB::raw("CONCAT(COALESCE(notes, ''), ' Parcel merged into {$combined->tracking_number}.')"),
+                    ]);
+                }
+            }
+
+            $groupDescription = $selectedGroup['type'] === 'promotion'
+                ? 'items from the same '.$selectedGroup['name'].' promotion'
+                : 'variants of one product';
+            $this->recordEvent($combined, 'PREPARING', $actor, 'Seller combined '.count($groupItemIds).' '.$groupDescription.' into one package. Source parcel histories are retained.');
+            if (Schema::hasTable('cod_collections')) {
+                app(CodCollectionService::class)->initializeForShipment($combined->load('sellerOrder.order', 'sellerOrder.items', 'orderItem'));
+            }
+
+            return $combined->refresh();
+        });
+    }
+
+    public function separateCombinedOrderParcel(SellerOrder $sellerOrder, OrderItem $targetItem, User $actor): Collection
+    {
+        $this->assertCombinedParcelSchemaReady();
+
+        return DB::transaction(function () use ($sellerOrder, $targetItem, $actor): Collection {
+            $sellerOrder = SellerOrder::query()
+                ->whereKey($sellerOrder->id)
+                ->with(['order', 'items', 'shipments.events'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            $targetItem = OrderItem::query()->whereKey($targetItem->id)->lockForUpdate()->firstOrFail();
+            $actor->loadMissing('sellerProfile');
+
+            if ($actor->account_type !== User::TYPE_SELLER
+                || $actor->status !== User::STATUS_ACTIVE
+                || (int) $sellerOrder->seller_profile_id !== (int) $actor->sellerProfile?->id) {
+                throw new RuntimeException('Only the active seller who owns this order may separate its parcel.');
+            }
+            if ((int) $targetItem->seller_order_id !== (int) $sellerOrder->id || $sellerOrder->status !== 'PREPARING') {
+                throw new RuntimeException('Separate parcels while the order is still being prepared.');
+            }
+
+            $combined = $sellerOrder->shipments->first(fn (Shipment $shipment): bool => $shipment->combined_order_items
+                && in_array((int) $targetItem->id, array_map('intval', $shipment->combined_order_item_ids ?? []), true));
+            if (! $combined) {
+                throw new RuntimeException('This product does not have a combined parcel to separate.');
+            }
+            if ($combined->current_status !== 'PREPARING'
+                || $this->hasSellerPackedCheckpoint($combined)
+                || $combined->parcel_weight_kg !== null
+                || $combined->parcel_volume_liters !== null
+                || $combined->parcel_length_cm !== null
+                || $combined->parcel_width_cm !== null
+                || $combined->parcel_height_cm !== null
+                || $combined->scans()->exists()
+                || $combined->waybills()->exists()
+                || $combined->riderAssignments()->exists()
+                || $combined->pickupRequests()->exists()) {
+                throw new RuntimeException('Separate the parcel before saving dimensions, printing a label, scanning, or handing it to Logistics.');
+            }
+
+            $sourceIds = collect($combined->combined_source_shipment_ids ?? [])->map(fn ($id): int => (int) $id)->filter()->unique()->values();
+            $sources = Shipment::withSuperseded()
+                ->where('seller_order_id', $sellerOrder->id)
+                ->whereIn('id', $sourceIds)
+                ->where('superseded_by_shipment_id', $combined->id)
+                ->with('orderItem')
+                ->lockForUpdate()
+                ->get()
+                ->sortBy('id')
+                ->values();
+            $expectedItemIds = collect($combined->combined_order_item_ids ?? [])->map(fn ($id): int => (int) $id)->sort()->values()->all();
+            $restoredItemIds = $sources->pluck('order_item_id')->filter()->map(fn ($id): int => (int) $id)->sort()->values()->all();
+            if ($sourceIds->isEmpty() || ! in_array((int) $targetItem->id, $expectedItemIds, true)
+                || $sources->count() !== $sourceIds->count() || $restoredItemIds !== $expectedItemIds) {
+                throw new RuntimeException('The original parcel set is incomplete. Contact support before changing this shipment.');
+            }
+
+            if (Schema::hasTable('cod_collections')) {
+                $collection = CodCollection::query()->where('shipment_id', $combined->id)->lockForUpdate()->first();
+                if ($collection && $collection->status !== CodCollection::PENDING) {
+                    throw new RuntimeException('This parcel cannot be separated after COD collection has started.');
+                }
+            }
+
+            $combined->update(['superseded_at' => now()]);
+            $sources->each(fn (Shipment $source) => $source->update([
+                'superseded_at' => null,
+                'superseded_by_shipment_id' => null,
+            ]));
+
+            if (Schema::hasTable('cod_collections')) {
+                CodCollection::query()->where('shipment_id', $combined->id)->where('status', CodCollection::PENDING)->update([
+                    'status' => CodCollection::VOID,
+                    'notes' => DB::raw("CONCAT(COALESCE(notes, ''), ' Combined parcel separated back into source parcels.')"),
+                ]);
+                foreach ($sources as $source) {
+                    $amount = OrderItemParcelAmount::forShipment($sellerOrder, $source)['total'];
+                    CodCollection::query()->where('shipment_id', $source->id)->where('status', CodCollection::VOID)->update([
+                        'expected_amount' => number_format($amount, 2, '.', ''),
+                        'status' => CodCollection::PENDING,
+                        'notes' => DB::raw("CONCAT(COALESCE(notes, ''), ' Source parcel restored after separation.')"),
+                    ]);
+                }
+            }
+
+            return Shipment::query()->where('seller_order_id', $sellerOrder->id)->whereIn('id', $sourceIds)->orderBy('id')->get();
+        });
+    }
+
+    private function assertCombinedParcelSchemaReady(): void
+    {
+        if (! Schema::hasColumns('shipments', [
+            'parcel_quantity', 'combined_order_items', 'combined_source_shipment_ids', 'combined_order_item_ids', 'superseded_at', 'superseded_by_shipment_id',
+        ])) {
+            throw new RuntimeException('Combine and separate parcel options are not available until the latest shipment update is applied.');
+        }
     }
 
     /** @param list<int> $quantities */
@@ -1464,6 +1784,10 @@ class ShipmentWorkflowService
 
     private function confirmSellerOrder(SellerOrder $sellerOrder, Collection $shipments, User $actor): void
     {
+        $sellerOrder->loadMissing('items');
+        if ($sellerOrder->items->count() > 1) {
+            throw new RuntimeException('Accept each product line separately so the Seller can make an independent decision for every product.');
+        }
         $this->requireSellerOrderParcelsStatus($sellerOrder, $shipments, 'PLACED', 'confirm the order');
         $sellerOrder->update(['status' => 'CONFIRMED']);
         $this->syncParentOrderProgress($sellerOrder->order);
@@ -1859,6 +2183,186 @@ class ShipmentWorkflowService
                 $parentOrder->update(['status' => 'PARTIALLY_CANCELLED']);
             } elseif ($parentOrder->status !== 'PROCESSING') {
                 $parentOrder->update(['status' => 'PROCESSING']);
+            }
+        }
+    }
+
+    private function cancelSellerOrderItem(
+        SellerOrder $sellerOrder,
+        OrderItem $item,
+        Collection $itemShipments,
+        Collection $allShipments,
+        User $actor,
+        string $reason,
+    ): void {
+        $reason = trim($reason);
+        if ($reason === '' || mb_strlen($reason) > 500) {
+            throw new RuntimeException('Enter a cancellation reason of 1 to 500 characters.');
+        }
+        if (! in_array($sellerOrder->status, ['PLACED', 'CONFIRMED'], true)
+            || $itemShipments->contains(fn (Shipment $shipment): bool => ! in_array($shipment->current_status, ['PLACED', 'CONFIRMED'], true))) {
+            throw new RuntimeException('A product can only be cancelled before preparation begins.');
+        }
+        if ($sellerOrder->order?->payments()->where('method', 'ONLINE')->where('status', 'PAID')->exists()) {
+            throw new RuntimeException('A paid online order must use the approved refund workflow before cancelling a product.');
+        }
+        if (! $sellerOrder->order?->payments()->where('method', 'COD')->exists()) {
+            throw new RuntimeException('Individual product cancellation is currently available for COD orders only.');
+        }
+
+        $order = $sellerOrder->order;
+        $discountedOrder = FinancialRules::cents($sellerOrder->voucher_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->seller_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->platform_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->platform_shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->reward_points_discount ?? 0) > 0
+            || FinancialRules::cents($sellerOrder->promotion_discount_total ?? 0) > 0
+            || FinancialRules::cents($order?->discount_total ?? 0) > 0
+            || FinancialRules::cents($order?->platform_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order?->shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($order?->reward_points_discount ?? 0) > 0
+            || FinancialRules::cents($item->discount_amount ?? 0) > 0
+            || FinancialRules::cents($item->promotion_discount_amount ?? 0) > 0
+            || FinancialRules::cents($item->seller_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($item->platform_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($item->platform_shipping_voucher_discount ?? 0) > 0
+            || FinancialRules::cents($item->reward_points_discount ?? 0) > 0
+            || ! empty($item->promotion_snapshot);
+        if ($discountedOrder) {
+            throw new RuntimeException('This product is part of a discounted or promotional order. Cancel the full order or use the approved refund workflow so the discount is recalculated safely.');
+        }
+
+        if (! $item->product_variant_id) {
+            throw new RuntimeException('The purchased variant record is unavailable, so inventory cannot be restored safely.');
+        }
+        $variant = ProductVariant::query()->whereKey($item->product_variant_id)->lockForUpdate()->first();
+        if (! $variant) {
+            throw new RuntimeException('The purchased variant record is unavailable, so inventory cannot be restored safely.');
+        }
+
+        $shipmentIds = $itemShipments->pluck('id')->map(fn ($id): int => (int) $id)->all();
+        $assignments = RiderAssignment::query()
+            ->whereIn('shipment_id', $shipmentIds)
+            ->where('assignment_type', 'PICKUP')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+        if ($assignments->contains(fn (RiderAssignment $assignment): bool => in_array($assignment->status, ['IN_PROGRESS', 'COMPLETED'], true))) {
+            throw new RuntimeException('This product can no longer be cancelled after a rider pickup has started.');
+        }
+        if (PickupRequest::query()->whereIn('shipment_id', $shipmentIds)->whereIn('status', ['PENDING', 'APPROVED'])->exists()) {
+            throw new RuntimeException('Cancel this product before submitting its pickup request to Logistics.');
+        }
+        if (Schema::hasTable('cod_collections')) {
+            $collected = CodCollection::query()->whereIn('shipment_id', $shipmentIds)->lockForUpdate()
+                ->whereIn('status', [CodCollection::COLLECTED, CodCollection::REMITTED, CodCollection::REMITTED_RIDER_TOPUP, CodCollection::DISCREPANCY])
+                ->exists();
+            if ($collected) {
+                throw new RuntimeException('This product can no longer be cancelled after COD collection has been recorded.');
+            }
+        }
+
+        $sellerOrder->loadMissing('items.shipments');
+        $amounts = OrderItemParcelAmount::forItem($sellerOrder, $item);
+        $itemTotalCents = (int) $amounts['product_amount_cents'];
+        $protectionCents = (int) $amounts['protection_amount_cents'];
+        $isLastActiveLine = $allShipments
+            ->reject(fn (Shipment $shipment): bool => $shipment->current_status === 'CANCELLED' || $itemShipments->contains('id', $shipment->id))
+            ->isEmpty();
+        $shippingToRemoveCents = $isLastActiveLine ? FinancialRules::cents($sellerOrder->shipping_fee) : 0;
+        $lineReductionCents = $itemTotalCents + $protectionCents + $shippingToRemoveCents;
+
+        $variant->increment('stock', (int) $item->quantity);
+        $flashSaleUnits = min((int) $item->flash_sale_quantity, (int) $variant->flash_sale_sold);
+        if ($flashSaleUnits > 0) {
+            $variant->decrement('flash_sale_sold', $flashSaleUnits);
+        }
+
+        foreach ($assignments as $assignment) {
+            if (in_array($assignment->status, ['ASSIGNED', 'ACCEPTED'], true)) {
+                $assignment->update([
+                    'status' => 'CANCELLED',
+                    'cancelled_at' => now(),
+                    'rejection_reason' => 'Product line cancelled by Seller: '.$reason,
+                ]);
+                $this->localTrips->syncAssignment($assignment->refresh());
+            }
+        }
+        PickupRequest::query()->whereIn('shipment_id', $shipmentIds)
+            ->whereIn('status', ['PENDING', 'APPROVED'])
+            ->update(['status' => 'CANCELLED', 'rejection_reason' => 'Product line cancelled by Seller: '.$reason]);
+
+        if (Schema::hasTable('cod_collections')) {
+            CodCollection::query()->whereIn('shipment_id', $shipmentIds)->where('status', CodCollection::PENDING)->update([
+                'status' => CodCollection::VOID,
+                'notes' => DB::raw("CONCAT(COALESCE(notes, ''), ' Product line cancelled by Seller.')"),
+            ]);
+        }
+
+        foreach ($itemShipments as $shipment) {
+            $shipment->update(['current_status' => 'CANCELLED']);
+            $this->recordEvent($shipment, 'CANCELLED', $actor, 'SELLER_ORDER_ITEM_CANCELLED: '.$reason);
+        }
+
+        $sellerOrder->update([
+            'item_subtotal' => FinancialRules::amount(max(0, FinancialRules::cents($sellerOrder->item_subtotal) - $itemTotalCents)),
+            'protection_total' => FinancialRules::amount(max(0, FinancialRules::cents($sellerOrder->protection_total ?? 0) - $protectionCents)),
+            'shipping_fee' => FinancialRules::amount(max(0, FinancialRules::cents($sellerOrder->shipping_fee) - $shippingToRemoveCents)),
+            'grand_total' => FinancialRules::amount(max(0, FinancialRules::cents($sellerOrder->grand_total) - $lineReductionCents)),
+        ]);
+
+        $activeShipments = $allShipments->reject(fn (Shipment $shipment): bool => $shipment->current_status === 'CANCELLED');
+        $activeStatuses = $activeShipments->pluck('current_status');
+        $nextStatus = $activeShipments->isEmpty()
+            ? 'CANCELLED'
+            : ($activeStatuses->contains('PLACED')
+                ? 'PLACED'
+                : ($activeStatuses->contains('CONFIRMED') ? 'CONFIRMED' : $sellerOrder->status));
+        $sellerOrder->update(['status' => $nextStatus]);
+
+        if ($order) {
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->first();
+            if ($lockedOrder) {
+                $lockedOrder->update([
+                    'subtotal' => FinancialRules::amount(max(0, FinancialRules::cents($lockedOrder->subtotal) - $itemTotalCents)),
+                    'protection_total' => FinancialRules::amount(max(0, FinancialRules::cents($lockedOrder->protection_total ?? 0) - $protectionCents)),
+                    'shipping_total' => FinancialRules::amount(max(0, FinancialRules::cents($lockedOrder->shipping_total) - $shippingToRemoveCents)),
+                    'grand_total' => FinancialRules::amount(max(0, FinancialRules::cents($lockedOrder->grand_total) - $lineReductionCents)),
+                ]);
+                $lockedOrder->payments()->where('method', 'COD')->where('status', 'PENDING')->update([
+                    'amount' => $lockedOrder->grand_total,
+                ]);
+
+                $sellerOrders = SellerOrder::query()->where('order_id', $lockedOrder->id)->lockForUpdate()->get();
+                $allCancelled = $sellerOrders->every(fn (SellerOrder $candidate): bool => $candidate->status === 'CANCELLED');
+                $allFinal = $sellerOrders->every(fn (SellerOrder $candidate): bool => in_array($candidate->status, ['CANCELLED', 'COMPLETED'], true));
+                if ($allCancelled) {
+                    $lockedOrder->update([
+                        'status' => 'CANCELLED',
+                        'payment_status' => 'CANCELLED',
+                        'cancelled_at' => now(),
+                        'cancellation_reason' => $reason,
+                    ]);
+                } elseif ($allFinal) {
+                    $lockedOrder->update(['status' => 'PARTIALLY_CANCELLED']);
+                } elseif ($lockedOrder->status !== 'PROCESSING') {
+                    $lockedOrder->update(['status' => 'PROCESSING']);
+                }
+                $this->syncParentOrderProgress($lockedOrder);
+            }
+        }
+
+        if ($nextStatus === 'CANCELLED') {
+            app(SellerPromotionUsageService::class)->releaseForSellerOrder($sellerOrder, $sellerOrder->items);
+            app(\App\Services\Finance\PlatformCampaignBudgetService::class)->releaseForSellerOrder($sellerOrder, $actor);
+            app(\App\Services\Finance\SellerVoucherBudgetService::class)->releaseForSellerOrder($sellerOrder, $actor);
+        } else {
+            $sellerOrder->load('items.shipments');
+            foreach ($activeShipments as $shipment) {
+                if (Schema::hasTable('cod_collections')) {
+                    app(CodCollectionService::class)->initializeForShipment($shipment->refresh());
+                }
             }
         }
     }

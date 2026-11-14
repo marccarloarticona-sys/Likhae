@@ -10,10 +10,14 @@ use Symfony\Component\HttpFoundation\Response;
 
 class AuthenticateApiToken
 {
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, string $mode = 'required'): Response
     {
         $token = $request->bearerToken();
         if (! $token) {
+            if ($mode === 'optional') {
+                return $next($request);
+            }
+
             return response()->json(['success' => false, 'message' => 'A bearer token is required.'], 401);
         }
 

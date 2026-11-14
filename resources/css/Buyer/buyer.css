@@ -8880,7 +8880,7 @@ html.dark .lk-search .lk-search-dropdown__option.is-active {
     }
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1280px) {
     .lk-store-filter-grid {
         grid-template-columns: repeat(4, minmax(0, 1fr));
     }
@@ -9186,6 +9186,35 @@ html.dark .lk-search .lk-search-dropdown__option.is-active {
 }
 
 /* Dark theme for the recently added order progress and live tracking panels. */
+html.dark .lk-order-page .lk-order-status-tabs {
+    border-color: var(--lk-border);
+    background: var(--lk-card);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.24);
+}
+
+html.dark .lk-order-page .lk-order-status-tab:not(.is-active) {
+    color: var(--lk-muted) !important;
+}
+
+html.dark .lk-order-page .lk-order-status-tab:not(.is-active):hover {
+    border-color: var(--lk-border-strong);
+    background: var(--lk-bg-alt);
+    color: var(--lk-text) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+html.dark .lk-order-page .lk-order-status-tab.is-active {
+    border-color: #7a3028;
+    background: #7a3028;
+    color: #fff !important;
+    box-shadow: 0 5px 14px rgba(0, 0, 0, 0.25);
+}
+
+html.dark .lk-order-page .lk-order-status-count {
+    background: var(--lk-bg-alt);
+    color: var(--lk-muted);
+}
+
 html.dark .lk-order-page .lk-order-progress-heading > div > span,
 html.dark .lk-order-page .lk-order-map-panel__eyebrow { color: var(--lk-muted, #c8b7ad); }
 
@@ -9470,16 +9499,6 @@ body.lk-buyer-body .lk-shell {
     border-radius: 11px;
 }
 
-.lk-buyer-theme-toggle .lk-theme-toggle-icon--light,
-.lk-buyer-theme-toggle .lk-theme-toggle-icon--dark {
-    display: none !important;
-}
-
-html:not(.dark) .lk-buyer-theme-toggle .lk-theme-toggle-icon--dark,
-html.dark .lk-buyer-theme-toggle .lk-theme-toggle-icon--light {
-    display: block !important;
-}
-
 .lk-header.is-buyer .lk-profile-container {
     min-height: 36px;
     gap: 7px;
@@ -9741,11 +9760,11 @@ html.dark .lk-buyer-nav-link.is-active {
 /* Buyer header: one desktop row with tools after the text navigation. */
 .lk-header.is-buyer {
     grid-template-columns: minmax(116px, 132px) minmax(0, 1fr) auto;
-    grid-template-rows: minmax(58px, auto);
+    grid-template-rows: minmax(50px, auto);
     min-height: 58px;
     align-items: center;
     gap: clamp(8px, 1vw, 16px);
-    padding-block: 6px;
+    padding-block: 4px;
 }
 
 .lk-buyer-header-brand {
@@ -10026,6 +10045,10 @@ html.dark .lk-buyer-nav-link.is-active {
     box-shadow: none;
 }
 
+.lk-buyer-nav-link.is-active > span:first-child {
+    color: var(--lk-maroon);
+}
+
 .lk-buyer-nav-link > .lk-buyer-nav-count {
     min-width: 0;
     height: auto;
@@ -10053,6 +10076,10 @@ html.dark .lk-buyer-nav-link.is-active {
     color: #eba99d;
     background: transparent;
     border-color: transparent;
+}
+
+html.dark .lk-buyer-nav-link.is-active > span:first-child {
+    color: #e08778;
 }
 
 html.dark .lk-buyer-nav-link.is-active .lk-buyer-nav-count {
@@ -10092,8 +10119,8 @@ html.dark .lk-buyer-notification-count {
 }
 
 .lk-buyer-header-search.is-expanded {
-    width: 260px;
-    flex-basis: 260px;
+    width: min(400px, 25vw);
+    flex-basis: min(400px, 25vw);
 }
 
 .lk-buyer-header-search-form[hidden] {
@@ -10116,15 +10143,15 @@ html.dark .lk-buyer-notification-count {
 
 @media (max-width: 1279px) and (min-width: 901px) {
     .lk-buyer-header-search.is-expanded {
-        width: 220px;
-        flex-basis: 220px;
+        width: 270px;
+        flex-basis: 270px;
     }
 }
 
 @media (max-width: 900px) and (min-width: 641px) {
     .lk-buyer-header-search.is-expanded {
-        width: 220px;
-        flex-basis: 220px;
+        width: 250px;
+        flex-basis: 250px;
     }
 }
 
@@ -10135,8 +10162,8 @@ html.dark .lk-buyer-notification-count {
     }
 
     .lk-buyer-header-search.is-expanded {
-        width: clamp(150px, 42vw, 210px);
-        flex-basis: clamp(150px, 42vw, 210px);
+        width: clamp(160px, 52vw, 240px);
+        flex-basis: clamp(160px, 52vw, 240px);
     }
 }
 
@@ -10150,7 +10177,7 @@ html.dark .lk-buyer-notification-count {
 }
 
 html.dark .lk-header.is-buyer .lk-buyer-theme-toggle {
-    color: #fff8f2 !important;
+    color: var(--lk-muted) !important;
     background: #352923 !important;
     border-color: #715144 !important;
 }
@@ -10259,56 +10286,57 @@ html:not(.dark) .lk-header.is-buyer .lk-buyer-theme-toggle {
 /* Give the desktop buyer header more room and clearer tap targets. */
 @media (min-width: 1200px) {
     .lk-header.is-buyer {
-        grid-template-columns: minmax(150px, 180px) minmax(0, 1fr) auto;
-        min-height: 70px;
-        gap: clamp(12px, 1.4vw, 22px);
-        padding-block: 8px;
+        grid-template-columns: minmax(132px, 150px) minmax(0, 1fr) auto;
+        grid-template-rows: minmax(50px, auto);
+        min-height: 58px;
+        gap: clamp(8px, 1vw, 14px);
+        padding-block: 4px;
     }
 
     .likhae-logo--buyer-header img,
     .likhae-logo--buyer-header .likhae-logo__image {
-        height: 32px;
-        max-width: 152px;
+        height: 27px;
+        max-width: 132px;
     }
 
     .lk-buyer-nav {
-        gap: clamp(4px, .55vw, 9px);
+        gap: clamp(3px, .45vw, 7px);
     }
 
     .lk-buyer-nav-link {
-        min-height: 42px;
-        padding-inline: clamp(9px, .8vw, 14px);
-        font-size: 13px;
+        min-height: 34px;
+        padding-inline: clamp(7px, .6vw, 11px);
+        font-size: 11px;
     }
 
     .lk-header.is-buyer .lk-header-primary {
-        gap: 10px;
+        gap: 8px;
     }
 
     .lk-header.is-buyer .lk-icon-btn {
-        width: 40px;
-        height: 40px;
-        flex-basis: 40px;
-        border-radius: 12px;
-    }
-
-    .lk-header.is-buyer .lk-profile-container {
-        min-height: 40px;
-        gap: 8px;
-        padding: 3px 8px;
-    }
-
-    .lk-header.is-buyer .lk-profile-avatar {
         width: 34px;
         height: 34px;
         flex-basis: 34px;
+        border-radius: 10px;
     }
 
-    .lk-header.is-buyer .lk-profile-info strong { font-size: 12px; }
-    .lk-header.is-buyer .lk-profile-info small { font-size: 10px; }
+    .lk-header.is-buyer .lk-profile-container {
+        min-height: 34px;
+        gap: 7px;
+        padding: 2px 6px;
+    }
+
+    .lk-header.is-buyer .lk-profile-avatar {
+        width: 30px;
+        height: 30px;
+        flex-basis: 30px;
+    }
+
+    .lk-header.is-buyer .lk-profile-info strong { font-size: 11px; }
+    .lk-header.is-buyer .lk-profile-info small { font-size: 9px; }
 }
 
 @media (min-width: 1500px) {
-    .lk-buyer-nav-link { font-size: 14px; }
+    .lk-buyer-nav-link { font-size: 12px; }
 }
 

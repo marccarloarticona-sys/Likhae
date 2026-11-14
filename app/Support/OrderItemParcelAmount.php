@@ -45,7 +45,11 @@ final class OrderItemParcelAmount
     /** @return array{product_amount: float, discount_amount: float, shipping_fee: float, shipping_discount: float, protection_amount: float, total: float, product_amount_cents: int, discount_amount_cents: int, shipping_fee_cents: int, shipping_discount_cents: int, protection_amount_cents: int, total_cents: int} */
     public static function forItem(SellerOrder $sellerOrder, OrderItem $target): array
     {
-        $items = $sellerOrder->items->values();
+        $sellerOrder->loadMissing('items.shipments');
+        $items = $sellerOrder->items
+            ->filter(fn (OrderItem $item): bool => $item->shipments->isEmpty()
+                || $item->shipments->contains(fn (Shipment $shipment): bool => $shipment->current_status !== 'CANCELLED'))
+            ->values();
         $targetIndex = $items->search(fn (OrderItem $item): bool => (int) $item->id === (int) $target->id);
 
         if ($targetIndex === false || $items->isEmpty()) {
@@ -142,15 +146,26 @@ final class OrderItemParcelAmount
     /** @return array<string, float|int> */
     public static function forShipment(SellerOrder $sellerOrder, Shipment $shipment): array
     {
+        if ($shipment->combined_order_items) {
+            $sellerOrder->loadMissing('items');
+            $amounts = null;
+            $itemIds = array_map('intval', $shipment->combined_order_item_ids ?? []);
+            foreach ($sellerOrder->items->whereIn('id', $itemIds) as $item) {
+                $itemAmounts = self::forItem($sellerOrder, $item);
+                if ($amounts === null) {
+                    $amounts = array_fill_keys(array_keys($itemAmounts), 0);
+                }
+                foreach ($itemAmounts as $key => $value) {
+                    $amounts[$key] += $value;
+                }
+            }
+
+            return $amounts ?? self::emptyAmounts();
+        }
+
         $item = $shipment->orderItem;
         if (! $item) {
-            return [
-                'product_amount' => 0.0, 'discount_amount' => 0.0, 'shipping_fee' => 0.0,
-                'shipping_discount' => 0.0, 'protection_amount' => 0.0, 'total' => 0.0,
-                'product_amount_cents' => 0, 'discount_amount_cents' => 0,
-                'shipping_fee_cents' => 0, 'shipping_discount_cents' => 0,
-                'protection_amount_cents' => 0, 'total_cents' => 0,
-            ];
+            return self::emptyAmounts();
         }
 
         $amounts = self::forItem($sellerOrder, $item);
@@ -204,6 +219,22 @@ final class OrderItemParcelAmount
         $amounts['total'] = $amounts['total_cents'] / 100;
 
         return $amounts;
+    }
+
+    /** @return array<string, float|int> */
+    private static function emptyAmounts(): array
+    {
+        return [
+            'product_amount' => 0.0, 'discount_amount' => 0.0,
+            'seller_voucher_discount' => 0.0, 'platform_voucher_discount' => 0.0,
+            'reward_points_discount' => 0.0, 'seller_promotion_discount' => 0.0,
+            'shipping_fee' => 0.0, 'shipping_discount' => 0.0,
+            'platform_shipping_voucher_discount' => 0.0, 'protection_amount' => 0.0,
+            'total' => 0.0, 'product_amount_cents' => 0,
+            'discount_amount_cents' => 0, 'shipping_fee_cents' => 0,
+            'shipping_discount_cents' => 0, 'protection_amount_cents' => 0,
+            'total_cents' => 0,
+        ];
     }
 
     /** @param array<int, int> $weights

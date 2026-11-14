@@ -150,12 +150,17 @@ class BuyerAiController extends Controller
             return 'You can open Cart from your Buyer navigation. In Cart, you can review items, adjust quantity, apply eligible vouchers, and continue to checkout.';
         }
 
+        if (preg_match('/\b(where|find|view|see|access)\b/', $question)
+            && preg_match('/\b(vouchers?|coupons?|promo codes?)\b/', $question)) {
+            return 'Tap Account in the bottom navigation, then open Vouchers. You can also open Home and tap Vouchers. Apply eligible vouchers in Cart before checkout.';
+        }
+
         if (preg_match('/\b(checkout|place order|payment method|payment)\b/', $question)) {
             return 'To check out, add products to your cart, open Cart, and continue to checkout. Review your delivery details, apply an eligible voucher or discount, choose a payment method, then place your order.';
         }
 
         if (preg_match('/\b(voucher|discount)\b/', $question)) {
-            return 'You can apply an eligible voucher or discount while reviewing your cart before checkout. Available vouchers can also be reviewed in Rewards.';
+            return 'Open Account and choose Vouchers, or open Home and tap Vouchers. You can apply an eligible voucher or discount in Cart before checkout.';
         }
 
         if (preg_match('/\b(search|find).*(product|item)|\b(product|item).*(search|find)\b/', $question)) {
@@ -183,7 +188,7 @@ class BuyerAiController extends Controller
         }
 
         if (preg_match('/\b(reward|points|cashback)\b/', $question)) {
-            return 'Open Rewards from your Buyer navigation to review available vouchers, voucher history, and reward points.';
+            return 'Tap Account in the bottom navigation, then open Vouchers. You can also open Home and tap Vouchers to review vouchers, voucher history, and points.';
         }
 
         $statusExplanations = [
@@ -219,9 +224,18 @@ class BuyerAiController extends Controller
 
         $requestedNumber = $this->orderNumberFrom($message);
         if ($requestedNumber !== null) {
-            $order = $orders->first(fn (Order $order): bool => strcasecmp($order->order_number, $requestedNumber) === 0);
+            $requestedReference = $this->normalizeOrderReference($requestedNumber);
+            $order = $orders->first(function (Order $order) use ($requestedReference): bool {
+                if ($this->normalizeOrderReference($order->order_number) === $requestedReference) {
+                    return true;
+                }
+
+                return $order->sellerOrders->contains(fn ($sellerOrder): bool =>
+                    $this->normalizeOrderReference($sellerOrder->seller_order_number) === $requestedReference
+                );
+            });
             if (! $order) {
-                return ['reply' => "I can't verify that order from your account right now."];
+                return ['reply' => "I couldn't match that reference to an order in your Buyer account. Check the number in Orders, or contact the seller or support if it still doesn't match."];
             }
 
             return ['reply' => $this->describeOrder($order, $message)];
@@ -300,11 +314,21 @@ class BuyerAiController extends Controller
 
     private function orderNumberFrom(string $message): ?string
     {
-        if (! preg_match('/\b(LK|LH|SO)[-\s]?(\d+)\b/i', $message, $match)) {
+        // Current marketplace references include a date and random suffix,
+        // for example LK-20261105-KPJUPZNB. Keep every segment so an order
+        // option sent by the assistant can be matched to the buyer's order.
+        if (! preg_match('/\b(LK|LH|SO)[-\s]?([A-Z0-9]+(?:-[A-Z0-9]+)*)\b/i', $message, $match)) {
             return null;
         }
 
-        return strtoupper($match[1]).'-'.$match[2];
+        $reference = preg_replace('/[-\s]+/', '-', $match[2]);
+
+        return strtoupper($match[1].'-'.$reference);
+    }
+
+    private function normalizeOrderReference(?string $reference): string
+    {
+        return strtoupper((string) preg_replace('/[^A-Z0-9]/i', '', trim((string) $reference)));
     }
 
     /** @param array{title:string,features:array<int,string>} $context */

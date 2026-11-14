@@ -12,6 +12,7 @@ use App\Models\Seller\SellerPickupRequest;
 use App\Models\Seller\SellerPickupRequestShipment;
 use App\Models\Seller\SellerProfile;
 use App\Models\User;
+use App\Services\Maps\ApproximateAddressCoordinates;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -34,6 +35,8 @@ final class SellerPickupRequestService
         ?int $preferredLogisticsCenterId = null,
         array $preferredDestinationCenterIds = [],
         bool $sellerSelectedFallback = false,
+        bool $sellerManualCenterOverride = false,
+        ?int $retryPickupRequestId = null,
     ): SellerPickupRequest
     {
         $ids = array_map('intval', array_values($shipmentIds));
@@ -42,16 +45,52 @@ final class SellerPickupRequestService
             throw new RuntimeException('Select 1 to 10 different ready parcels for one pickup request.');
         }
 
-        return DB::transaction(function () use ($actor, $pickupAddressId, $ids, $sellerOrderIds, $preferredLogisticsCenterId, $preferredDestinationCenterIds, $sellerSelectedFallback): SellerPickupRequest {
+        return DB::transaction(function () use ($actor, $pickupAddressId, $ids, $sellerOrderIds, $preferredLogisticsCenterId, $preferredDestinationCenterIds, $sellerSelectedFallback, $sellerManualCenterOverride, $retryPickupRequestId): SellerPickupRequest {
             $seller = $this->sellerFor($actor);
+            if ($sellerManualCenterOverride !== ($retryPickupRequestId !== null)) {
+                throw new RuntimeException('Start a manual hub override from a returned pickup request.');
+            }
+            if ($sellerManualCenterOverride && $preferredLogisticsCenterId === null) {
+                throw new RuntimeException('Choose another Logistics center before retrying this pickup.');
+            }
+            if ($retryPickupRequestId !== null) {
+                $previousRequest = SellerPickupRequest::query()
+                    ->whereKey($retryPickupRequestId)
+                    ->where('seller_profile_id', $seller->id)
+                    ->with('memberships')
+                    ->lockForUpdate()
+                    ->first();
+                if (! $previousRequest
+                    || $previousRequest->status !== 'RETURNED_TO_SELLER'
+                    || (int) $previousRequest->pickup_address_id !== $pickupAddressId) {
+                    throw new RuntimeException('This pickup request is no longer available for a manual hub retry. Refresh the page and try again.');
+                }
+                $previousShipmentIds = $previousRequest->memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->all();
+                if (array_diff($ids, $previousShipmentIds) !== []) {
+                    throw new RuntimeException('A manual hub retry can include only parcels from the returned pickup request.');
+                }
+                $triedCenterOffers = $previousRequest->centerOffers();
+                if (Schema::hasColumn('seller_pickup_center_offers', 'leg_type')) {
+                    $triedCenterOffers->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP);
+                }
+                $triedCenterIds = $triedCenterOffers->pluck('logistics_center_id')->map(fn ($id): int => (int) $id)->all();
+                if ($previousRequest->preferred_logistics_center_id) {
+                    $triedCenterIds[] = (int) $previousRequest->preferred_logistics_center_id;
+                }
+                if (in_array((int) $preferredLogisticsCenterId, $triedCenterIds, true)) {
+                    throw new RuntimeException('Choose a different Logistics center than the one that already reviewed this request.');
+                }
+            }
+            $approximateCoordinates = app(ApproximateAddressCoordinates::class);
             $address = Address::query()->whereKey($pickupAddressId)->lockForUpdate()->first();
             if (! $address
                 || (int) $address->user_id !== (int) $seller->user_id) {
                 throw new RuntimeException('Choose a pickup address saved to your Seller account.');
             }
+            $approximateCoordinates->resolve($address);
             if ($preferredLogisticsCenterId === null
                 && (! is_numeric($address->latitude) || ! is_numeric($address->longitude))) {
-                throw new RuntimeException('Confirm the map pin for your pickup address before requesting automatic Logistics matching.');
+                throw new RuntimeException('The pickup address could not be located from its saved barangay and city. Add a map pin or complete the address details.');
             }
             $preferredCenter = null;
             if ($preferredLogisticsCenterId !== null) {
@@ -64,6 +103,9 @@ final class SellerPickupRequestService
                     ->with('address')
                     ->lockForUpdate()
                     ->first();
+                if ($preferredCenter?->address) {
+                    $approximateCoordinates->resolve($preferredCenter->address);
+                }
                 if (! $preferredCenter
                     || ! is_numeric($address->latitude)
                     || ! is_numeric($address->longitude)
@@ -72,7 +114,7 @@ final class SellerPickupRequestService
                     || ! is_numeric($preferredCenter->address->longitude)
                     || (! app(LogisticsSchemaReadiness::class)->automaticSellerPickupMatchingReady()
                         && ! $this->areaEligibility->centerAuthorizesAddress($preferredCenter, $address))) {
-                    throw new RuntimeException('Choose an active Logistics center with approved coverage for this pinned pickup address.');
+                    throw new RuntimeException('Choose an active Logistics center with approved coverage and a usable address location.');
                 }
             }
             $shipments = Shipment::query()
@@ -99,8 +141,8 @@ final class SellerPickupRequestService
                         ->where('status', User::STATUS_ACTIVE))
                     ->with('address')
                     ->get()
-                    ->filter(fn (LogisticsCenter $center): bool => is_numeric($center->address?->latitude)
-                        && is_numeric($center->address?->longitude))
+                    ->filter(fn (LogisticsCenter $center): bool => $center->address
+                        && $approximateCoordinates->resolve($center->address) !== null)
                     ->values()
                 : collect();
             $hasLocalCenter = function (object $destination) use ($localCenters): bool {
@@ -110,6 +152,14 @@ final class SellerPickupRequestService
                     && $this->areaEligibility->centerAuthorizesAddress($candidate, $destination));
             };
             $sellerHasLocalCenter = $automaticMatching ? $hasLocalCenter($address) : null;
+            if ($sellerManualCenterOverride && $sellerHasLocalCenter && $preferredCenter
+                && ! $localCenters->contains(fn (LogisticsCenter $candidate): bool =>
+                    (int) $candidate->id === (int) $preferredCenter->id
+                    && trim((string) $candidate->address?->province_code) === trim((string) $address->province_code)
+                    && trim((string) $candidate->address?->municipality_code) === trim((string) $address->municipality_code)
+                    && $this->areaEligibility->centerAuthorizesAddress($candidate, $address))) {
+                throw new RuntimeException('Choose another approved Logistics center with pickup coverage for this address.');
+            }
             $buyerHasLocalCenterByShipment = [];
             $uncoveredBuyerCount = 0;
             if ($automaticMatching) {
@@ -118,6 +168,7 @@ final class SellerPickupRequestService
                     if (! $buyerAddress) {
                         throw new RuntimeException('A selected parcel is missing its saved Buyer delivery address.');
                     }
+                    $approximateCoordinates->resolve($buyerAddress);
                     $buyerHasLocalCenterByShipment[(int) $shipment->id] = $hasLocalCenter($buyerAddress);
                     $uncoveredBuyerCount += (int) ! $buyerHasLocalCenterByShipment[(int) $shipment->id];
                 }
@@ -128,7 +179,7 @@ final class SellerPickupRequestService
                         ? 'This pickup includes a location without local Logistics coverage. Refresh the page to choose the fallback hub route.'
                         : 'This pickup has local Logistics coverage at both ends and must keep the existing automatic route.');
                 }
-                if ($sellerHasLocalCenter && $preferredCenter) {
+                if ($sellerHasLocalCenter && $preferredCenter && ! $sellerManualCenterOverride) {
                     throw new RuntimeException('This Seller pickup location already has local Logistics coverage. Keep its origin route automatic.');
                 }
             }
@@ -140,7 +191,7 @@ final class SellerPickupRequestService
                 if (! $sellerHasLocalCenter && ! $preferredCenter) {
                     throw new RuntimeException('Choose an approved origin Logistics center for this uncovered Seller pickup location.');
                 }
-                if ($sellerHasLocalCenter && $preferredCenter) {
+                if ($sellerHasLocalCenter && $preferredCenter && ! $sellerManualCenterOverride) {
                     throw new RuntimeException('This Seller pickup location already has local Logistics coverage. Keep its origin route automatic.');
                 }
 
@@ -164,14 +215,17 @@ final class SellerPickupRequestService
                             ->with('address')
                             ->first()
                         : null;
+                    if ($destinationCenter?->address) {
+                        $approximateCoordinates->resolve($destinationCenter->address);
+                    }
                     if (! is_numeric($shipment->sellerOrder?->order?->address?->latitude)
                         || ! is_numeric($shipment->sellerOrder?->order?->address?->longitude)) {
-                        throw new RuntimeException('The Buyer delivery address needs a confirmed map pin before a fallback destination hub can be selected.');
+                        throw new RuntimeException('The Buyer delivery address could not be located from its saved barangay and city. Add a map pin or complete the address details.');
                     }
                     if (! $destinationCenter
                         || ! is_numeric($destinationCenter->address?->latitude)
                         || ! is_numeric($destinationCenter->address?->longitude)) {
-                        throw new RuntimeException('Choose an active approved destination Logistics center with a confirmed location for each uncovered Buyer address.');
+                        throw new RuntimeException('Choose an active approved destination Logistics center with a usable address location for each uncovered Buyer address.');
                     }
 
                     $fallbackDestinations[$shipmentId] = (int) $destinationCenter->id;
@@ -275,14 +329,22 @@ final class SellerPickupRequestService
                 ->with(['memberships.shipment', 'sellerProfile', 'pickupAddress'])
                 ->lockForUpdate()
                 ->firstOrFail();
+            $acceptedFallbackRoute = (bool) $pickupRequest->seller_selected_fallback
+                && $pickupRequest->hasAcceptedOriginCenter((int) $center->id);
             $isDirectPendingPickup = $automaticDispatch && $pickupRequest->status === 'PENDING';
-            if ($pickupRequest->status !== 'REQUESTED' && ! $isDirectPendingPickup) {
+            $isAcceptedFallbackWaiting = $automaticDispatch
+                && $pickupRequest->status === 'WAITING_FOR_RESPONSE'
+                && $acceptedFallbackRoute;
+            if ($pickupRequest->status !== 'REQUESTED' && ! $isDirectPendingPickup && ! $isAcceptedFallbackWaiting) {
                 throw new RuntimeException('Only a requested or pending Seller pickup can be assigned.');
             }
-            if ($isDirectPendingPickup && Schema::hasTable('seller_pickup_center_offers')
+            if (($isDirectPendingPickup || $isAcceptedFallbackWaiting)
+                && Schema::hasTable('seller_pickup_center_offers')
                 && $pickupRequest->centerOffers()
                     ->where('status', 'OFFERED')
                     ->where('expires_at', '>', now())
+                    ->when(app(LogisticsSchemaReadiness::class)->sellerPickupLegOffersReady(), fn ($offers) => $offers
+                        ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP))
                     ->exists()) {
                 throw new RuntimeException('A Logistics center is already reviewing this pickup offer. Wait for its response before assigning a Rider.');
             }
@@ -301,55 +363,6 @@ final class SellerPickupRequestService
                     || ! $pickupRequest->hasAcceptedOriginCenter((int) $center->id))) {
                 throw new RuntimeException('This Logistics center must accept the Seller fallback route before assigning a pickup Rider.');
             }
-            if ((bool) $pickupRequest->seller_selected_fallback
-                && app(LogisticsSchemaReadiness::class)->sellerPickupLegOffersReady()) {
-                $pickupRequest->loadMissing('memberships.shipment.sellerOrder.order.address');
-                $requiredDeliveryGroups = $pickupRequest->memberships
-                    ->filter(fn (SellerPickupRequestShipment $membership): bool => (int) $membership->preferred_destination_logistics_center_id > 0)
-                    ->groupBy(function (SellerPickupRequestShipment $membership): string {
-                        $address = $membership->shipment?->sellerOrder?->order?->address;
-
-                        return implode('|', [
-                            trim((string) $address?->province_code),
-                            trim((string) $address?->municipality_code),
-                            trim((string) $address?->barangay_code),
-                            (string) ((int) $membership->preferred_destination_logistics_center_id),
-                        ]);
-                    })
-                    ->map(function (Collection $memberships): ?array {
-                        $first = $memberships->first();
-                        $address = $first?->shipment?->sellerOrder?->order?->address;
-                        if (! $first || ! $address) {
-                            return null;
-                        }
-                        $shipmentIds = $memberships->pluck('shipment_id')->map(fn ($id): int => (int) $id)->sort()->values()->all();
-                        $psgc = implode('|', [
-                            trim((string) $address->province_code),
-                            trim((string) $address->municipality_code),
-                            trim((string) $address->barangay_code),
-                        ]);
-
-                        return [
-                            'key' => hash('sha256', $psgc.'|'.implode(',', $shipmentIds)),
-                            'center_id' => (int) $first->preferred_destination_logistics_center_id,
-                        ];
-                    })
-                    ->filter()
-                    ->values();
-                if ($requiredDeliveryGroups->isNotEmpty()) {
-                    $acceptedDeliveryOffers = $pickupRequest->centerOffers()
-                        ->where('leg_type', SellerPickupCenterOffer::LEG_DELIVERY)
-                        ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
-                        ->get();
-                    $allDeliveryHubsAccepted = $requiredDeliveryGroups->every(fn (array $group): bool => $acceptedDeliveryOffers
-                        ->contains(fn (SellerPickupCenterOffer $offer): bool => data_get($offer->route_snapshot, 'delivery_group_key') === $group['key']
-                            && (int) data_get($offer->route_snapshot, 'delivery_center_id') === $group['center_id']));
-                    if (! $allDeliveryHubsAccepted) {
-                        throw new RuntimeException('Every selected Buyer delivery hub must accept its offer before pickup Rider assignment.');
-                    }
-                }
-            }
-
             $memberships = $pickupRequest->memberships->sortBy('shipment_id')->values();
             $count = $memberships->count();
             if ($count < 1 || $count > 10 || $memberships->contains(fn ($membership): bool => $membership->active_slot !== true)) {
@@ -419,6 +432,14 @@ final class SellerPickupRequestService
             if ($locked->status !== 'REQUESTED') {
                 throw new RuntimeException('Only an unassigned Seller pickup request can be rejected.');
             }
+            if (Schema::hasTable('seller_pickup_center_offers')
+                && Schema::hasColumn('seller_pickup_center_offers', 'leg_type')
+                && $locked->centerOffers()
+                    ->where('leg_type', SellerPickupCenterOffer::LEG_PICKUP)
+                    ->where('status', SellerPickupCenterOffer::STATUS_ACCEPTED)
+                    ->exists()) {
+                throw new RuntimeException('This pickup route is already accepted. Assign a pickup Rider instead of rejecting it.');
+            }
             if (Schema::hasColumn('seller_pickup_requests', 'preferred_logistics_center_id')
                 && $locked->preferred_logistics_center_id === null) {
                 throw new RuntimeException('This older pickup request has no Seller-selected Logistics center. Ask the Seller to cancel it and create a new request.');
@@ -444,8 +465,8 @@ final class SellerPickupRequestService
             if ((int) $locked->seller_profile_id !== (int) $seller->id) {
                 abort(404);
             }
-            if (! in_array($locked->status, ['REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING'], true)) {
-                throw new RuntimeException('A pickup can only be cancelled before Logistics assigns a Rider.');
+            if (! in_array($locked->status, ['REQUESTED', 'MATCHING', 'WAITING_FOR_RESPONSE', 'PENDING', 'RETURNED_TO_SELLER'], true)) {
+                throw new RuntimeException('Only a pickup that has not been assigned to a Rider can be cancelled.');
             }
             if (Schema::hasTable('seller_pickup_center_offers')) {
                 $locked->centerOffers()->where('status', 'OFFERED')->update([
@@ -482,6 +503,9 @@ final class SellerPickupRequestService
             $progressRelations[] = 'memberships.preferredDestinationLogisticsCenter.address';
         }
         $pickupRequest->loadMissing($progressRelations);
+        $allDelivered = $pickupRequest->memberships->isNotEmpty()
+            && $pickupRequest->memberships->every(fn (SellerPickupRequestShipment $membership): bool =>
+                $membership->shipment?->current_status === 'DELIVERED');
 
         $trip = $pickupRequest->riderLocalTrip;
         $offersTableReady = Schema::hasTable('seller_pickup_center_offers');
@@ -491,6 +515,15 @@ final class SellerPickupRequestService
             : collect();
         $currentOffer = $centerOffers->first(fn ($offer): bool => $offer->status === 'OFFERED' && $offer->expires_at?->isFuture());
         $latestCenterOffer = $centerOffers->first();
+        $latestPickupOffer = $legOffersReady
+            ? $centerOffers->first(fn ($offer): bool => $offer->leg_type === SellerPickupCenterOffer::LEG_PICKUP)
+            : $latestCenterOffer;
+        $hasAcceptedPickupOffer = $legOffersReady && $centerOffers->contains(fn ($offer): bool =>
+            $offer->leg_type === SellerPickupCenterOffer::LEG_PICKUP
+            && $offer->status === SellerPickupCenterOffer::STATUS_ACCEPTED);
+        $routeAccepted = $trip === null
+            && $pickupRequest->status === 'REQUESTED'
+            && $hasAcceptedPickupOffer;
         $routeOffers = $legOffersReady
             ? $centerOffers
                 ->groupBy(fn ($offer): string => $offer->leg_type === 'DELIVERY'
@@ -563,7 +596,7 @@ final class SellerPickupRequestService
                     'center_address' => $hub?->address?->formatted(),
                     'delivery_address' => $address->formatted(),
                     'attempt' => 0,
-                    'status' => 'MATCHING',
+                    'status' => $hasAcceptedPickupOffer ? 'MATCHING' : 'WAITING_FOR_PICKUP_ACCEPTANCE',
                     'expires_at' => null,
                     'active' => false,
                 ];
@@ -642,17 +675,28 @@ final class SellerPickupRequestService
             : [];
 
         $selectedCenterName = $hasSelectedCenterColumn ? $pickupRequest->preferredLogisticsCenter?->business_name : null;
+        $triedPickupCenterIds = $centerOffers
+            ->filter(fn ($offer): bool => ! $legOffersReady || $offer->leg_type === SellerPickupCenterOffer::LEG_PICKUP)
+            ->pluck('logistics_center_id')
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+        if ($pickupRequest->preferred_logistics_center_id) {
+            $triedPickupCenterIds[] = (int) $pickupRequest->preferred_logistics_center_id;
+        }
         $returnMessage = $pickupRequest->status === 'RETURNED_TO_SELLER'
-            ? match ($latestCenterOffer?->status) {
-                'EXPIRED' => 'No response from '.($selectedCenterName ?: 'the selected Logistics center').' within 15 minutes. Your parcels are available again; choose a covered center above to request pickup again.',
+            ? match ($latestPickupOffer?->status) {
+                'EXPIRED' => 'No response from '.($latestPickupOffer->logisticsCenter?->business_name ?: $selectedCenterName ?: 'the selected Logistics center').' within '.max(1, (int) config('likhae.seller_pickup_offer_response_minutes', 30)).' minutes. Your parcels are available again; choose a different covered center above to request pickup again.',
                 'DECLINED' => ($selectedCenterName ?: 'The selected Logistics center').' declined the request. Your parcels are available again; choose a covered center above to request pickup again.',
-                'NO_CAPACITY' => 'The selected center could not confirm route and Rider capacity within 15 minutes. Your parcels are available again; choose a covered center above to request pickup again.',
+                'NO_CAPACITY' => 'The selected center could not confirm route and Rider capacity within '.max(1, (int) config('likhae.seller_pickup_offer_response_minutes', 30)).' minutes. Your parcels are available again; choose a covered center above to request pickup again.',
                 default => 'The selected Logistics center did not accept the request. Your parcels are available again; choose a covered Logistics center above to request pickup again.',
             }
             : null;
 
         return [
             'status' => (string) $pickupRequest->status,
+            'all_delivered' => $allDelivered,
             'automatic_matching' => $automaticMatching,
             'seller_selected_fallback' => $sellerSelectedFallback,
             'destination_hubs' => $destinationHubs,
@@ -661,9 +705,10 @@ final class SellerPickupRequestService
                 'name' => (string) $trip->logisticsCenter->business_name,
                 'address' => $trip->logisticsCenter->address?->formatted(),
             ] : null,
+            'route_accepted' => $routeAccepted,
             'requires_center_selection' => $requiresCenterSelection,
             'status_label' => $requiresCenterSelection ? 'Center choice required' : match ($pickupRequest->status) {
-                'REQUESTED' => 'Waiting for Logistics',
+                'REQUESTED' => $routeAccepted ? 'Waiting for pickup Rider assignment' : 'Waiting for Logistics',
                 'MATCHING' => $automaticMatching ? 'Matching nearby Logistics centers' : 'Finding Logistics',
                 'WAITING_FOR_RESPONSE' => 'Waiting for a Logistics center',
                 'PENDING' => 'Pending Logistics follow-up',
@@ -672,8 +717,8 @@ final class SellerPickupRequestService
                 default => str($pickupRequest->status)->replace('_', ' ')->title()->toString(),
             },
             'return_message' => $returnMessage,
-            'response_due_at' => ! $automaticMatching && $selectedCenterName && in_array($pickupRequest->status, ['REQUESTED', 'PENDING'], true)
-                ? $pickupRequest->updated_at?->copy()->addMinutes(15)->toIso8601String()
+            'response_due_at' => ! $routeAccepted && ! $automaticMatching && $selectedCenterName && in_array($pickupRequest->status, ['REQUESTED', 'PENDING'], true)
+                ? $pickupRequest->updated_at?->copy()->addMinutes(max(1, (int) config('likhae.seller_pickup_offer_response_minutes', 30)))->toIso8601String()
                 : null,
             'route_offers' => $routeOffers,
             'current_offer' => $currentOffer ? [
@@ -685,6 +730,7 @@ final class SellerPickupRequestService
                 'attempt' => (int) $currentOffer->attempt_number,
                 'estimate_method' => (string) $currentOffer->estimate_method,
             ] : null,
+            'tried_pickup_center_ids' => array_values(array_unique($triedPickupCenterIds)),
             'rider' => $trip?->rider?->user?->name,
             'collected' => $parcels->where('collected', true)->count(),
             'total' => $parcels->count(),

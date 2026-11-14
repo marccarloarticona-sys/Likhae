@@ -95,6 +95,9 @@ Route::prefix('seller')
         Route::get('/orders/refunds/payouts/{payout}/proof', [SellerReturnRefundController::class, 'payoutProof'])->name('orders.refunds.payout-proof');
         Route::get('/orders/refunds/evidence/{evidence}', [SellerReturnRefundController::class, 'evidence'])->name('orders.refunds.evidence');
         Route::patch('/orders/{sellerOrder}/status', [SellerOrderController::class, 'transition'])->name('orders.status');
+        Route::post('/orders/{sellerOrder}/items/{orderItem}/decision', [SellerOrderController::class, 'decideItem'])->name('orders.items.decision');
+        Route::post('/orders/{sellerOrder}/items/{orderItem}/parcels/combine', [SellerOrderController::class, 'combineParcels'])->name('orders.parcels.combine');
+        Route::post('/orders/{sellerOrder}/items/{orderItem}/parcels/separate', [SellerOrderController::class, 'separateCombinedParcel'])->name('orders.parcels.separate');
         Route::post('/orders/{sellerOrder}/items/{orderItem}/split', [SellerOrderController::class, 'splitParcels'])->name('orders.parcels.split');
         Route::post('/orders/{sellerOrder}/parcels/{shipment}/dimensions', [SellerOrderController::class, 'saveParcelDimensions'])->name('orders.parcels.dimensions');
         Route::post('/orders/{sellerOrder}/parcels', [SellerOrderController::class, 'ensureParcels'])->name('orders.parcels.ensure');

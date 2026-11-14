@@ -7,6 +7,43 @@
     @if(session('status'))<div class="border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">{{ session('status') }}</div>@endif
     @if($errors->any())<div class="border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{{ $errors->first() }}</div>@endif
     <x-shared.parcel-scanner :action="route('logistics.parcels.receive.scan')" :tracking="old('tracking', request('tracking', ''))" :method="old('scan_method', request('scan_method', 'MANUAL'))" title="Scan Incoming Parcel" description="Scan a waybill QR code or barcode for a seller drop-off, rider pickup, or arriving hub-transfer parcel. A valid hub-transfer scan records destination receipt and sends the parcel to sorting for local delivery assignment." button="Receive Parcel" form-method="POST" input-name="tracking" input-label="Parcel tracking number" input-placeholder="Scan QR / barcode or enter tracking number" />
+    <section id="incoming-seller-routes" class="space-y-4 scroll-mt-24">
+        <div><h2 class="text-lg font-bold text-ink">Incoming Seller-Selected Parcel Routes</h2><p class="mt-1 text-sm text-muted">Review each route selected for this destination hub. Capacity and transfer availability are checked when you accept. The Seller pickup hub must wait until every selected Buyer destination hub accepts before assigning a pickup Rider.</p></div>
+        @forelse($incomingSellerDeliveryOffers as $offer)
+            @php($incomingRequest = $offer->pickupRequest)
+            @php($offerShipmentIds = collect((array) data_get($offer->route_snapshot, 'delivery_shipment_ids', []))->map(fn ($id) => (int) $id))
+            @php($offerMemberships = $incomingRequest?->memberships->filter(fn ($membership) => $offerShipmentIds->contains((int) $membership->shipment_id))->values() ?? collect())
+            @php($originHub = $incomingRequest?->centerOffers->first(fn ($originOffer) => $originOffer->leg_type === 'PICKUP' && $originOffer->status === 'ACCEPTED')?->logisticsCenter)
+            <article class="space-y-4 border border-line bg-surface p-5">
+                <header class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wide text-primary">Pickup request #{{ $incomingRequest?->id }}</p>
+                        <h3 class="mt-1 font-bold text-ink">{{ $incomingRequest?->sellerProfile?->business_name ?? 'Seller' }}</h3>
+                        <p class="mt-1 text-sm text-muted">From {{ $originHub?->business_name ?? 'Seller pickup hub' }} | {{ $offerMemberships->count() }} parcel{{ $offerMemberships->count() === 1 ? '' : 's' }}</p>
+                        <p class="mt-1 text-sm text-muted">Buyer destination: {{ data_get($offer->route_snapshot, 'delivery_address', 'Address unavailable') }}</p>
+                    </div>
+                    <span class="shrink-0 border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">Response due {{ $offer->expires_at?->timezone(config('app.timezone'))->format('M j, g:i A') }}</span>
+                </header>
+                <ul class="divide-y divide-line border-y border-line">
+                    @foreach($offerMemberships as $membership)
+                        <li class="py-2 text-sm"><strong class="text-primary">{{ $membership->shipment?->tracking_number }}</strong><span class="text-muted"> | {{ $membership->shipment?->orderItem?->product_name ?? 'Parcel' }}</span></li>
+                    @endforeach
+                </ul>
+                <div class="flex flex-wrap gap-3">
+                    <form method="POST" action="{{ route('logistics.pickups.requests.offers.accept', [$incomingRequest, $offer->id]) }}" data-confirm-title="Accept this incoming parcel route?" data-confirm-message="Accepting confirms that your Logistics hub can receive these parcels. Each selected destination hub must accept within its offer time frame before the Seller pickup hub can assign a pickup Rider." data-confirm-label="Accept incoming route">
+                        @csrf
+                        <button class="min-h-11 rounded-lg bg-primary px-5 py-3 text-sm font-semibold text-white">Accept incoming route</button>
+                    </form>
+                    <form method="POST" action="{{ route('logistics.pickups.requests.offers.decline', [$incomingRequest, $offer->id]) }}" data-confirm-title="Decline this incoming parcel route?" data-confirm-message="The Seller-selected destination hub offer will be declined and can be reviewed again after the retry window." data-confirm-label="Decline route">
+                        @csrf
+                        <button class="min-h-11 rounded-lg border border-line px-5 py-3 text-sm font-semibold text-muted">Decline route</button>
+                    </form>
+                </div>
+            </article>
+        @empty
+            <div class="border border-dashed border-line bg-surface p-6 text-sm text-muted">No Seller-selected parcel routes are waiting for this hub.</div>
+        @endforelse
+    </section>
     <section class="space-y-4">
         <div><h2 class="text-lg font-bold text-ink">Incoming Hub Transfer Parcels</h2><p class="mt-1 text-sm text-muted">Scan these parcels with the incoming scanner above. The first valid scan also records the manifest arrival.</p></div>
         @forelse($incomingTransferItems as $item)

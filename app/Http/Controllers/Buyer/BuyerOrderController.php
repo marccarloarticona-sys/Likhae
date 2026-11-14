@@ -33,6 +33,7 @@ use App\Services\Media\ImageOptimizationService;
 use App\Services\Maps\MapDataService;
 use App\Services\Marketplace\BuyerOrderActionService;
 use App\Services\Marketplace\BuyerOrderTabService;
+use App\Services\Marketplace\ProductCancellationWarningService;
 use App\Services\Marketplace\CartService;
 use App\Support\AddressCoordinateValidator;
 use App\Services\RefundProofStorageService;
@@ -520,7 +521,12 @@ class BuyerOrderController extends Controller
         return redirect()->route('buyer.messages', ['seller' => 'conversation-'.$conversation->id]);
     }
 
-    public function cancel(Request $request, Order $order, BuyerRiskMonitor $riskMonitor): RedirectResponse|JsonResponse
+    public function cancel(
+        Request $request,
+        Order $order,
+        BuyerRiskMonitor $riskMonitor,
+        ProductCancellationWarningService $cancellationWarnings,
+    ): RedirectResponse|JsonResponse
     {
         abort_unless((int) $order->buyer_user_id === (int) $request->user()->id, 403);
         $order->loadMissing('sellerOrders.shipments', 'payments');
@@ -655,6 +661,7 @@ class BuyerOrderController extends Controller
         $order->refresh();
         if (! $alreadyCancelled) {
             $riskMonitor->recordBuyerRiskSignals($request->user());
+            $cancellationWarnings->checkThreshold($request->user());
         }
 
         if ($request->expectsJson()) {
@@ -748,11 +755,13 @@ class BuyerOrderController extends Controller
                 $active = $this->activeReturnRefundForShipment($order, $buyerId, $shipment);
                 $items = $shipment->order_item_id !== null
                     ? collect([$shipment->orderItem])->filter()
-                    : $sellerOrder->items;
+                    : ($shipment->combined_order_items
+                        ? $sellerOrder->items->whereIn('id', array_map('intval', $shipment->combined_order_item_ids ?? []))->values()
+                        : $sellerOrder->items);
                 $returnableItems = $active ? collect() : $items->map(function (OrderItem $item) use ($shipment, $returnWorkflow): ?array {
                     $claimed = $returnWorkflow->activeClaimedQuantity((int) $item->id);
                     $claimedForShipment = $returnWorkflow->activeClaimedQuantityForShipment((int) $item->id, (int) $shipment->id);
-                    $parcelCapacity = $shipment->order_item_id !== null
+                    $parcelCapacity = $shipment->order_item_id !== null && ! $shipment->combined_order_items
                         ? (int) $shipment->parcel_quantity
                         : (int) $item->quantity;
                     $available = max(0, min((int) $item->quantity - $claimed, $parcelCapacity - $claimedForShipment));
@@ -918,12 +927,14 @@ class BuyerOrderController extends Controller
         foreach ($itemIds as $itemId) {
             $item = $items->get($itemId);
             abort_unless((int) $item->seller_order_id === (int) $selectedShipment->seller_order_id
-                && ($selectedShipment->order_item_id === null || (int) $selectedShipment->order_item_id === (int) $item->id),
+                && ($selectedShipment->combined_order_items
+                    ? in_array((int) $item->id, array_map('intval', $selectedShipment->combined_order_item_ids ?? []), true)
+                    : ($selectedShipment->order_item_id === null || (int) $selectedShipment->order_item_id === (int) $item->id)),
                 422, 'Choose products that belong to the selected parcel.');
             $quantity = (int) ($data['quantities'][$itemId] ?? 0);
             $claimed = $workflow->activeClaimedQuantity((int) $item->id);
             $claimedForShipment = $workflow->activeClaimedQuantityForShipment((int) $item->id, $shipmentId);
-            $parcelCapacity = $selectedShipment->order_item_id !== null
+            $parcelCapacity = $selectedShipment->order_item_id !== null && ! $selectedShipment->combined_order_items
                 ? (int) $selectedShipment->parcel_quantity
                 : (int) $item->quantity;
             $remaining = max(0, min((int) $item->quantity - $claimed, $parcelCapacity - $claimedForShipment));
@@ -971,12 +982,14 @@ class BuyerOrderController extends Controller
             foreach ($itemIds as $itemId) {
                 $freshItem = $lockedItems->get($itemId);
                 abort_unless((int) $freshItem->seller_order_id === (int) $lockedShipment->seller_order_id
-                    && ($lockedShipment->order_item_id === null || (int) $lockedShipment->order_item_id === (int) $freshItem->id),
+                    && ($lockedShipment->combined_order_items
+                        ? in_array((int) $freshItem->id, array_map('intval', $lockedShipment->combined_order_item_ids ?? []), true)
+                        : ($lockedShipment->order_item_id === null || (int) $lockedShipment->order_item_id === (int) $freshItem->id)),
                     422, 'One or more selected products do not belong to this parcel.');
                 $quantity = (int) ($data['quantities'][$itemId] ?? 0);
                 $claimed = $workflow->activeClaimedQuantity((int) $freshItem->id);
                 $claimedForShipment = $workflow->activeClaimedQuantityForShipment((int) $freshItem->id, $shipmentId);
-                $parcelCapacity = $lockedShipment->order_item_id !== null
+                $parcelCapacity = $lockedShipment->order_item_id !== null && ! $lockedShipment->combined_order_items
                     ? (int) $lockedShipment->parcel_quantity
                     : (int) $freshItem->quantity;
                 $remaining = max(0, min((int) $freshItem->quantity - $claimed, $parcelCapacity - $claimedForShipment));

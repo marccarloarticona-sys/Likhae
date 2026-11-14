@@ -112,7 +112,7 @@
                         <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}">@csrf @method('PATCH')<input type="hidden" name="action" value="start"><button class="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white">Start Delivery</button></form>
                     @endif
                 @elseif($parcel['status'] === 'IN_PROGRESS')
-                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-expected-tracking="{{ $parcel['tracking'] }}">
+                    <form method="POST" action="{{ route('rider.shipments.transition', $delivery) }}" enctype="multipart/form-data" class="grid gap-3" data-delivery-proof-form data-expected-tracking="{{ $parcel['tracking'] }}" data-rider-name="{{ auth()->user()->name }}">
                         @csrf @method('PATCH')
                         <input type="hidden" name="action" value="delivery_success">
                         <section class="grid gap-3 rounded-2xl border border-line bg-page-secondary p-4" aria-labelledby="delivery-scan-heading">
@@ -139,7 +139,7 @@
                         <label class="grid gap-2 text-sm font-semibold text-ink">
                             <span class="text-xs font-bold uppercase tracking-wider text-primary">Step 2 · Proof of delivery photo</span>
                             <input type="file" name="proof_file" accept="image/jpeg,image/png,image/webp" capture="environment" required class="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm" data-delivery-proof-input>
-                            <small class="font-normal text-muted">Take a clear photo of the delivered parcel. LIKHAE uses this device's location, including a recent live GPS fix when available, and stamps the photo with the coordinates and reported accuracy.</small>
+                            <small class="font-normal text-muted">Take a clear photo of the delivered parcel. LIKHAE stamps the photo with your name, capture time, GPS coordinates, location, and reported accuracy.</small>
                             <span class="hidden rounded-lg border border-line bg-page-secondary px-3 py-2 text-xs font-medium text-muted" aria-live="polite" data-delivery-proof-status></span>
                             <button type="button" class="hidden w-fit rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-ink" data-delivery-location-retry>Retry GPS and stamp photo</button>
                         </label>
@@ -190,6 +190,7 @@
 <script>
     (() => {
         const form = document.querySelector('[data-delivery-proof-form]');
+        const riderName = String(form?.dataset.riderName || 'Delivery rider').trim();
         const input = form?.querySelector('[data-delivery-proof-input]');
         const status = form?.querySelector('[data-delivery-proof-status]');
         const submit = form?.querySelector('[data-delivery-proof-submit]');
@@ -207,7 +208,7 @@
         const confirmedTracking = confirmDialog?.querySelector('[data-confirm-delivery-tracking]');
         const confirmButton = confirmDialog?.querySelector('[data-delivery-confirm-submit]');
         const cancelConfirm = confirmDialog?.querySelector('[data-delivery-confirm-cancel]');
-        const targetBytes = 1536 * 1024;
+        const targetBytes = 5 * 1024 * 1024;
         let optimizing = false;
         let stampedProofReady = false;
         let selectedPhoto = null;
@@ -426,9 +427,11 @@
                 const lineHeight = Math.round(fontSize * 1.35);
                 const textWidth = width - padding * 2;
                 context.font = `600 ${fontSize}px Arial, sans-serif`;
+                const riderLines = wrapText(context, `Rider: ${riderName}`, textWidth);
                 const locationLines = wrapText(context, `Location: ${place}`, textWidth);
                 const lines = [
                     'LIKHAE  |  DELIVERY PROOF',
+                    ...riderLines,
                     `Photo time: ${formatManilaTime(capturedAt)}`,
                     `GPS fix: ${formatManilaTime(gpsFixAt)}`,
                     `Latitude: ${latitude.toFixed(6)}   Longitude: ${longitude.toFixed(6)}`,

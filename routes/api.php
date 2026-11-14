@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\BuyerApiController;
+use App\Http\Controllers\Api\BuyerHomeApiController;
 use App\Http\Controllers\Api\LookupApiController;
 use App\Http\Controllers\Api\LogisticsApiController;
 use App\Http\Controllers\Api\MapProxyController;
@@ -19,6 +20,7 @@ use App\Http\Controllers\Communication\MessagePresenceController;
 use App\Http\Controllers\Buyer\BuyerAiController;
 use App\Http\Controllers\Auth\PhilippineAddressController;
 use App\Http\Controllers\Buyer\BuyerOrderController;
+use App\Http\Controllers\Buyer\TrackingController;
 use App\Http\Controllers\PolicyAcceptanceController;
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Http\Middleware\RequireApiPolicyAcceptance;
@@ -65,7 +67,9 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/events', [PlatformEventApiController::class, 'index'])->name('api.v1.events.index');
 
     Route::get('/products', [ProductApiController::class, 'index'])->name('api.v1.products.index');
-    Route::get('/products/{slug}', [ProductApiController::class, 'show'])->name('api.v1.products.show');
+    Route::get('/products/{slug}', [ProductApiController::class, 'show'])
+        ->middleware(AuthenticateApiToken::class.':optional')
+        ->name('api.v1.products.show');
     Route::get('/stores/{seller}', [ProductApiController::class, 'store'])->name('api.v1.stores.show');
 
     Route::get('/tracking/{trackingNumber}', [TrackingApiController::class, 'show'])->name('api.v1.tracking.show');
@@ -83,9 +87,15 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/auth/me', [MobileAuthController::class, 'me'])->name('api.v1.auth.me');
         Route::post('/auth/logout', [MobileAuthController::class, 'logout'])->name('api.v1.auth.logout');
         Route::get('/buyer/following-stores', [BuyerApiController::class, 'followingStores'])->name('api.v1.buyer.following-stores.index');
+        Route::get('/buyer/home/featured-products', [BuyerHomeApiController::class, 'featured'])->name('api.v1.buyer.home.featured-products');
+        Route::get('/buyer/home/recommendations', [BuyerHomeApiController::class, 'recommendations'])->name('api.v1.buyer.home.recommendations');
+        Route::post('/buyer/product-views', [BuyerHomeApiController::class, 'recordView'])->name('api.v1.buyer.product-views.store');
+        Route::get('/buyer/recently-viewed', [BuyerApiController::class, 'recentlyViewed'])->name('api.v1.buyer.recently-viewed.index');
+        Route::get('/buyer/tracking/{trackingCode}/map', [TrackingController::class, 'live'])->name('api.v1.buyer.tracking.map');
         Route::get('/buyer/cart', [BuyerApiController::class, 'cart'])->name('api.v1.buyer.cart.index');
         Route::post('/buyer/cart', [BuyerApiController::class, 'addCartItem'])->name('api.v1.buyer.cart.store');
         Route::post('/buyer/cart/buy-now', [BuyerApiController::class, 'buyNow'])->name('api.v1.buyer.cart.buy-now');
+        Route::post('/buyer/checkout/buy-now', [BuyerApiController::class, 'buyNow'])->name('api.v1.buyer.checkout.buy-now');
         Route::patch('/buyer/cart/items/{item}', [BuyerApiController::class, 'updateCartItem'])->name('api.v1.buyer.cart.update');
         Route::delete('/buyer/cart/items/{item}', [BuyerApiController::class, 'removeCartItem'])->name('api.v1.buyer.cart.destroy');
         Route::get('/buyer/orders', [BuyerApiController::class, 'orders'])->name('api.v1.buyer.orders.index');
@@ -219,6 +229,7 @@ Route::prefix('v1')->group(function (): void {
             ->whereNumber('item')
             ->name('api.v1.logistics.incoming-transfers.items.receive');
         Route::patch('/seller/orders/{sellerOrder}', [WorkflowApiController::class, 'sellerOrder'])->name('api.v1.seller.orders.transition');
+        Route::post('/seller/orders/{sellerOrder}/items/{orderItem}/decision', [WorkflowApiController::class, 'sellerOrderItem'])->name('api.v1.seller.orders.items.decision');
         Route::patch('/rider/assignments/{assignment}', [WorkflowApiController::class, 'riderAssignment'])->name('api.v1.rider.assignments.transition');
         Route::post('/logistics/shipments/{shipment}/receive', [WorkflowApiController::class, 'receiveParcel'])->name('api.v1.logistics.shipments.receive');
         Route::post('/logistics/shipments/{shipment}/sort', [WorkflowApiController::class, 'sortParcel'])->name('api.v1.logistics.shipments.sort');
